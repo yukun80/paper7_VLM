@@ -1,0 +1,97 @@
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# 本地系统与编辑器文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# 本地 Codex/Agent 配置与临时状态
+.codex/
+.agents/
+
+# 原始数据集与派生 benchmark 产物
+datasets/
+benchmark/
+
+# 遥感影像、图片、标签可视化与 GIS 栅格数据
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.bmp
+*.webp
+*.gif
+*.vrt
+*.ovr
+*.aux.xml
+*.tfw
+*.jgw
+*.pgw
+*.wld
+
+# 遥感/机器学习大体量数据格式
+*.nc
+*.h5
+*.hdf
+*.hdf5
+*.zarr/
+*.npy
+*.npz
+*.parquet
+*.arrow
+*.feather
+*.pkl
+*.pickle
+
+# 压缩包与下载临时文件
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.7z
+*.rar
+*.part
+*.tmp
+
+# 训练输出、模型权重与实验日志
+runs/
+outputs/
+checkpoints/
+wandb/
+tensorboard/
+lightning_logs/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.bin
+
+# 日志、报告缓存与临时表格
+*.log
+*.out
+*.err
+*.cache
+*.sqlite
+*.sqlite3
+
+# Windows 下载残留
+Zone.Identifier
+*:Zone.Identifier
+*.pdf
