@@ -262,14 +262,15 @@ def hillshade(dem: np.ndarray) -> np.ndarray:
 
 def split_from_gdcld_path(path: Path) -> str:
     lowered = [p.lower() for p in path.parts]
-    if any(p in {"test", "test_data", "test_dataset"} for p in lowered):
-        return "test"
-    if any(p in {"val", "valid", "validation", "val_dataset", "val_data"} for p in lowered):
-        return "val"
-    if any(p in {"train", "train_dataset", "train_data"} for p in lowered):
-        return "train"
-    if "future work" in "/".join(lowered):
+    path_text = "/".join(lowered)
+    if "future work" in path_text:
         return "test_candidate"
+    if any(p in {"test", "test_data", "test_label", "test_dataset"} for p in lowered):
+        return "test"
+    if any(p in {"val", "valid", "validation", "val_dataset", "val_data", "val_label", "valid_label", "validation_label"} for p in lowered):
+        return "val"
+    if any(p in {"train", "train_dataset", "train_data", "train_label"} for p in lowered):
+        return "train"
     return "train"
 
 
