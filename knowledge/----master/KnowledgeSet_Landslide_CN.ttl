@@ -1,0 +1,4004 @@
+@prefix : <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@base <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/> .
+
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8> rdf:type owl:Ontology ;
+                                                                          rdfs:comment """滑坡阶段预测往往不会有明确定量指标，常见的方法都是依据滑坡变形阶段曲线，运用不同的插值，参数，模型进行估计预测。甚至大多数区域的滑坡需要做到一地一模型，一地一数据，这都是因为滑坡存在十分大的变异性，哪怕是符合地理学第三定义，几乎同样环境下孕育的滑坡，其发育状态，诱发因素，破坏程度往往也不尽相同。滑坡的发生，强度，数据的因素往往是多种多样，仅仅是一个初步的内因就是多种地质，地形，水文等多种因素，以某种十分复杂的因素叠加成型，甚至关于十分重要的外部诱因对于一场滑坡真正发生到底起到了多大的因素都是一个什么困扰的难题。
+
+本项目期翼以知识图谱的方式整理出滑坡通用性的演化基础，孕灾环境，以及相关因子之间的相互影响关系。能够对研究滑坡，防治滑坡，乃至预测滑坡尝试性贡献一份力量出来。
+
+但是实际也往往是出于先验阶段。实际的监测预警还是离不开实地的物理器械。甚至处于何种发展阶段，以及后期滑坡继续演化的实际发展方向，还是主要取决于专家的经验。不只是滑坡领域，甚至所有自然灾害预测领域，是与“天”斗。"""@zh-cn .
+
+#################################################################
+#    Annotation properties
+#################################################################
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#渗透系数k（cm/s）
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#渗透系数k（cm/s）> rdf:type owl:AnnotationProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/原理简介
+:原理简介 rdf:type owl:AnnotationProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/说明
+:说明 rdf:type owl:AnnotationProperty .
+
+
+#################################################################
+#    Object Properties
+#################################################################
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/冲刷侵蚀1
+:冲刷侵蚀1 rdf:type owl:ObjectProperty ;
+       rdfs:subPropertyOf :语义关系 ;
+       rdfs:domain :地下水 ,
+                   :地表水 ;
+       rdfs:range :地层岩土 ,
+                  :地层岩土强度 ,
+                  :斜坡结构 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/决定
+:决定 rdf:type owl:ObjectProperty ;
+    rdfs:subPropertyOf owl:topObjectProperty ;
+    rdf:type owl:TransitiveProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/基本条件
+:基本条件 rdf:type owl:ObjectProperty ;
+      rdfs:subPropertyOf :语义关系 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/影响
+:影响 rdf:type owl:ObjectProperty ;
+    rdfs:subPropertyOf owl:topObjectProperty ;
+    rdf:type owl:TransitiveProperty ;
+    rdfs:comment "底层概念之间确有相关关系，但无法确定对于滑坡发生这一本体事件属于正向或负向。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/必备参数
+:必备参数 rdf:type owl:ObjectProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/构造
+:构造 rdf:type owl:ObjectProperty ;
+    rdfs:subPropertyOf :语义关系 ;
+    rdfs:domain :地表水 ;
+    rdfs:range :节理 ,
+               :裂隙 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/次生灾害
+:次生灾害 rdf:type owl:ObjectProperty ;
+      rdfs:subPropertyOf :语义关系 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/正向促进
+:正向促进 rdf:type owl:ObjectProperty ;
+      rdfs:subPropertyOf owl:topObjectProperty ;
+      owl:inverseOf :负向降低 ;
+      rdf:type owl:TransitiveProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡内因
+:滑坡内因 rdf:type owl:ObjectProperty ;
+      rdfs:subPropertyOf owl:topObjectProperty ;
+      rdf:type owl:InverseFunctionalProperty ,
+               owl:AsymmetricProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡诱因
+:滑坡诱因 rdf:type owl:ObjectProperty ;
+      rdfs:subPropertyOf owl:topObjectProperty ;
+      rdf:type owl:TransitiveProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/相互作用
+:相互作用 rdf:type owl:ObjectProperty ,
+               owl:TransitiveProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/破坏
+:破坏 rdf:type owl:ObjectProperty ;
+    rdfs:subPropertyOf :语义关系 ;
+    rdfs:domain :坡面侵蚀度 ;
+    rdfs:range :斜坡结构 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/语义关系
+:语义关系 rdf:type owl:ObjectProperty ,
+               owl:TransitiveProperty ;
+      rdfs:comment "语义关系是底层概念之间的相互影响关系，数量众多，种类复杂。大多是属于在诱因之间的相互关系。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/负向降低
+:负向降低 rdf:type owl:ObjectProperty ;
+      rdfs:subPropertyOf owl:topObjectProperty ;
+      rdf:type owl:TransitiveProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/软化泥化1
+:软化泥化1 rdf:type owl:ObjectProperty ;
+       rdfs:subPropertyOf :语义关系 ;
+       rdfs:domain <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> ,
+                   :地下水 ,
+                   :地表水 ;
+       rdfs:range :地层岩土 .
+
+
+#################################################################
+#    Data properties
+#################################################################
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#坡度（°）
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#坡度（°）> rdf:type owl:DatatypeProperty ;
+                                                                               rdfs:subPropertyOf :滑坡基本参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑坡体体积（万m³）
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑坡体体积（万m³）> rdf:type owl:DatatypeProperty ;
+                                                                                    rdfs:subPropertyOf :滑坡基本参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑坡速度（m/h）
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑坡速度（m/h）> rdf:type owl:DatatypeProperty ;
+                                                                                   rdfs:subPropertyOf :滑坡基本参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/其他损失
+:其他损失 rdf:type owl:DatatypeProperty ;
+      rdfs:subPropertyOf :滑坡损失 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/受伤人数（人）
+:受伤人数（人） rdf:type owl:DatatypeProperty ;
+         rdfs:subPropertyOf :滑坡损失 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/威胁人数（人）
+:威胁人数（人） rdf:type owl:DatatypeProperty ;
+         rdfs:subPropertyOf :滑坡损失 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/死亡人数（人）
+:死亡人数（人） rdf:type owl:DatatypeProperty ;
+         rdfs:subPropertyOf :滑坡损失 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/毁损土地（亩）
+:毁损土地（亩） rdf:type owl:DatatypeProperty ;
+         rdfs:subPropertyOf :滑坡损失 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/毁损房屋（间）
+:毁损房屋（间） rdf:type owl:DatatypeProperty ;
+         rdfs:subPropertyOf :滑坡损失 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/海拔（m）
+:海拔（m） rdf:type owl:DatatypeProperty ;
+       rdfs:subPropertyOf :滑坡基本参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡体厚度（m）
+:滑坡体厚度（m） rdf:type owl:DatatypeProperty ;
+          rdfs:subPropertyOf :滑坡基本参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡基本参数
+:滑坡基本参数 rdf:type owl:DatatypeProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡损失
+:滑坡损失 rdf:type owl:DatatypeProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/潜在经济损失（万元）
+:潜在经济损失（万元） rdf:type owl:DatatypeProperty ;
+            rdfs:subPropertyOf :险情分级 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/灾情分级
+:灾情分级 rdf:type owl:DatatypeProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/灾情死亡人数
+:灾情死亡人数 rdf:type owl:DatatypeProperty ;
+        rdfs:subPropertyOf :灾情分级 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/直接经济损失（万元）
+:直接经济损失（万元） rdf:type owl:DatatypeProperty ;
+            rdfs:subPropertyOf :滑坡损失 ,
+                               :灾情分级 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/转移人数（人）
+:转移人数（人） rdf:type owl:DatatypeProperty ;
+         rdfs:subPropertyOf :滑坡损失 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/险情分级
+:险情分级 rdf:type owl:DatatypeProperty .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/险情威胁人数
+:险情威胁人数 rdf:type owl:DatatypeProperty ;
+        rdfs:subPropertyOf :险情分级 .
+
+
+#################################################################
+#    Classes
+#################################################################
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#1.既有破坏阶段
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#1.既有破坏阶段> rdf:type owl:Class ;
+                                                                                  rdfs:subClassOf :b.破坏阶段 ;
+                                                                                  :说明 "1.2.3过程局部再破坏阶段，连续模型至非连续模型演化过程" ,
+                                                                                      """发现初始状态
+	1.2 连续部分，固体力学理论""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#2.局部再破坏阶段
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#2.局部再破坏阶段> rdf:type owl:Class ;
+                                                                                   rdfs:subClassOf :b.破坏阶段 ;
+                                                                                   :说明 "1.2 连续部分，固体力学理论" ,
+                                                                                       "1.2.3过程局部再破坏阶段，连续模型至非连续模型演化过程" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#3.贯穿性破坏阶段
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#3.贯穿性破坏阶段> rdf:type owl:Class ;
+                                                                                   rdfs:subClassOf :b.破坏阶段 ;
+                                                                                   :说明 "3.4 结构面接近断裂面，强度准则，断裂力学" ,
+                                                                                       """贯穿整个区域结构面
+	1.2.3过程局部再破坏阶段，连续模型至非连续模型演化过程""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#4.碎裂性破坏阶
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#4.碎裂性破坏阶> rdf:type owl:Class ;
+                                                                                  rdfs:subClassOf :b.破坏阶段 ;
+                                                                                  :说明 "4.5 质点、刚体系统理论" ,
+                                                                                      """将滑欲滑局部滑状态
+	3.4 结构面接近断裂面，强度准则，断裂力学""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#5.运动性破坏阶段
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#5.运动性破坏阶段> rdf:type owl:Class ;
+                                                                                   rdfs:subClassOf :b.破坏阶段 ;
+                                                                                   :说明 "4.5 质点、刚体系统理论" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> rdf:type owl:Class ;
+                                                                               rdfs:subClassOf :二.水文学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#塑流—拉裂
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#塑流—拉裂> rdf:type owl:Class ;
+                                                                               rdfs:subClassOf :e.滑动机理 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#弯曲—拉裂
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#弯曲—拉裂> rdf:type owl:Class ;
+                                                                               rdfs:subClassOf :e.滑动机理 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑移—弯曲
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑移—弯曲> rdf:type owl:Class ;
+                                                                               rdfs:subClassOf :e.滑动机理 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑移—拉裂
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#滑移—拉裂> rdf:type owl:Class ;
+                                                                               rdfs:subClassOf :e.滑动机理 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#蠕滑—拉裂
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#蠕滑—拉裂> rdf:type owl:Class ;
+                                                                               rdfs:subClassOf :e.滑动机理 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Bishop模型
+:Bishop模型 rdf:type owl:Class ;
+          rdfs:subClassOf :经验模型 ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :内摩擦角
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :剪切模量
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :抗切强度
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :抗剪强度
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :抗压强度
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :材料参数
+                          ] ;
+          :原理简介 """1.	受力平衡原理： Bishop模型基于受力平衡原理，考虑了滑坡体在稳定状态下的受力情况。在模型中，滑坡体受到的主要力包括自重、支撑力和抗剪强度。通过分析这些力的平衡关系，可以评估滑坡体的稳定性。
+2.	摩擦角和抗剪强度： 模型中考虑了滑坡体材料的内摩擦角和抗剪强度，这些参数反映了土体抗剪性能的基本特征。通过对这些参数的合理估计和选择，可以评估土体在不同条件下的稳定性。
+3.	水力因素： 在Bishop模型中通常也会考虑水力因素对滑坡稳定性的影响。水分对土体力学性质的影响以及水压力对滑坡体稳定性的影响会被纳入模型考虑范围。
+4.	滑动面形状： 模型中通常会对滑动面的形状和位置进行合理假设，并根据这些假设计算滑动面上的剪切应力和抗剪强度，以评估滑坡的稳定性。
+5.	参数选择和拟合： 使用Bishop模型需要对相关参数进行合理的选择和拟合，通常需要依据现场勘察数据、实验室试验结果或者其他工程经验来确定这些参数的数值。""" ;
+          :说明 "Bishop模型是一种基于切线法的经验性模型，用于分析边坡的稳定性。该模型假设边坡表面为刚性平面，并通过切线法考虑土体的剪切强度和稳定性条件" ,
+              "毕夏普模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Cam-clay模型
+:Cam-clay模型 rdf:type owl:Class ;
+            rdfs:subClassOf :本构模型 ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :内摩擦角
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :剪切模量
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :压缩模量
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :孔隙水压
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :渗透率
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :渗透系数
+                            ] ;
+            :原理简介 """1.	塑性流动规则： Cam-Clay模型采用了一种特定的塑性流动规则来描述土体的压缩和膨胀行为。在该模型中，土体被视作一种可塑性材料，其变形受到塑性流动准则的控制。这个塑性流动规则通常基于有效应力状态下的土体强度和变形性质。
+2.	应力-应变关系： Cam-Clay模型建立了应力与应变之间的关系，考虑了土体在不同应力状态下的变形特性。模型通常包括了土体的压缩指数、膨胀指数等参数，以描述土体在加载和卸载过程中的力学响应。
+3.	模型参数： Cam-Clay模型的参数包括了土体的一些基本性质参数，例如初始压缩指数、初始膨胀指数、压缩模量等。这些参数通常需要通过实验室试验或者现场勘测来确定。
+4.	孔隙水压力效应： Cam-Clay模型还考虑了孔隙水压力对土体强度和变形特性的影响，因此在分析饱和土体和非饱和土体时能够较好地描述土体的力学响应。""" ;
+            :说明 "Cam-Clay模型是一种广泛应用的土体本构模型，主要用于描述粘性土的非线性本构行为，包括细粒土和软土的压缩和剪切特性。" ,
+                "卡姆-克雷模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Culmann图法
+:Culmann图法 rdf:type owl:Class ;
+           rdfs:subClassOf :经验模型 ;
+           :原理简介 """1.	切线法： Culmann图法首先采用切线法确定滑坡体上各个切线的方向。切线是指与滑坡面切线相切的直线，可以表示滑坡体内部的应力和应变状态。在Culmann图中，每个切线都表示了一个内部应力状态。
+2.	平衡法： Culmann图法基于平衡法对滑坡体进行力学分析。根据力学平衡的原理，滑坡体上的水平力和垂直力必须保持平衡。通过平衡法，可以计算滑坡体上各个切线的剪切力和正应力，以及支撑力和阻力的大小。
+3.	Culmann图： 在Culmann图中，横轴表示滑坡体的高度或深度，纵轴表示滑坡体上各个切线的剪切力和正应力。根据切线法和平衡法的结果，可以在Culmann图中绘制出各个切线的力学状态和力的大小。通过分析Culmann图，可以评估滑坡体的稳定性。
+4.	参数选择和拟合： 在使用Culmann图法时，需要选择合适的参数，并进行拟合和调整。参数的选择通常依赖于现场勘察数据、实验室试验结果或其他工程经验。""" ;
+           :说明 "Culmann图法是一种基于图解法的经验性方法，用于分析和设计边坡和坡面的稳定性。" ,
+               "库尔曼图法" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/DEM
+:DEM rdf:type owl:Class ;
+     rdfs:subClassOf :坡度、坡向、高程 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Drucker-Prager模型
+:Drucker-Prager模型 rdf:type owl:Class ;
+                  rdfs:subClassOf :本构模型 ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :内摩擦角
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :压缩模量
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :抗切强度
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :抗剪强度
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :抗压强度
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :材料参数
+                                  ] ;
+                  :原理简介 """1.	屈服准则： Drucker-Prager模型采用了一种基于正应力和剪应力状态的屈服准则。在该模型中，材料的屈服条件被描述为一个线性的判据，即当材料的等效应力（von Mises应力）达到一定的屈服准则时，材料开始发生塑性变形。
+2.	应力空间： 与von Mises模型不同，Drucker-Prager模型采用了一种特定的应力空间形状来描述材料的强度条件。具体来说，Drucker-Prager模型假设材料的强度条件在应力空间中呈现为一个圆锥体，这个圆锥体的形状由内聚角（cohesion angle）和摩擦角（friction angle）来确定。
+3.	应力-应变关系： 一旦材料达到屈服准则，Drucker-Prager模型会根据材料的强度条件和应变状态来确定塑性应变的大小。在模型中，通常会考虑正应力和剪应力对材料变形的影响，并在此基础上建立应力-应变关系。
+4.	模型参数： Drucker-Prager模型的两个关键参数是内聚角和摩擦角，它们分别描述了材料的内聚性质和摩擦特性。这些参数通常需要通过试验或者其他手段来确定。""" ;
+                  :说明 "与Mohr-Coulomb模型相似，Drucker-Prager模型是一种常用的塑性本构模型，它引入了流动规则以更准确地描述土体的非线性和塑性变形。" ,
+                      "德鲁克-普拉格模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Fellenius模型
+:Fellenius模型 rdf:type owl:Class ;
+             rdfs:subClassOf :经验模型 ,
+                             [ rdf:type owl:Restriction ;
+                               owl:onProperty :必备参数 ;
+                               owl:someValuesFrom :内摩擦角
+                             ] ,
+                             [ rdf:type owl:Restriction ;
+                               owl:onProperty :必备参数 ;
+                               owl:someValuesFrom :剪切模量
+                             ] ,
+                             [ rdf:type owl:Restriction ;
+                               owl:onProperty :必备参数 ;
+                               owl:someValuesFrom :孔隙水压
+                             ] ,
+                             [ rdf:type owl:Restriction ;
+                               owl:onProperty :必备参数 ;
+                               owl:someValuesFrom :抗切强度
+                             ] ,
+                             [ rdf:type owl:Restriction ;
+                               owl:onProperty :必备参数 ;
+                               owl:someValuesFrom :抗压强度
+                             ] ;
+             :原理简介 """1.	受力平衡原理： Fellenius模型基于受力平衡原理，考虑了滑坡体在稳定状态下的受力情况。模型中会对滑坡体受到的各种力进行平衡分析，包括自重、支撑力、抗剪强度以及水力因素对滑坡的影响。
+2.	土体抗剪强度： 模型中会考虑土体材料的抗剪强度特性，通过确定土体的抗剪强度参数，对滑坡体在不同条件下的抗剪能力进行评估。常用的抗剪强度参数包括内摩擦角和凝聚力。
+3.	水力因素： Fellenius模型同样会考虑水力因素对滑坡稳定性的影响，包括降雨引起的饱和度增加、水压力增大等因素。模型中会根据水力条件对土体的抗剪强度进行修正，以考虑水力条件对滑坡稳定性的影响。
+4.	土体变形特性： 模型中会考虑土体的变形特性对滑坡稳定性的影响，包括土体的压缩特性、剪切变形等因素。通过合理的参数选择和估计，可以评估土体在不同变形状态下的稳定性。
+5.	参数选择和拟合： 在使用Fellenius模型时需要选择合适的参数，并进行拟合和调整。参数的选择通常依赖于现场勘察数据、实验室试验结果或其他工程经验。""" ;
+             :说明 "Fellenius模型是一种用于测定桩基承载力的经验性模型。它考虑了桩的侧向承载能力和端部承载能力，并通过经验公式提供对桩基承载力的估算。" ,
+                 "费伦尼乌斯模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Hardening-Soil模型
+:Hardening-Soil模型 rdf:type owl:Class ;
+                  rdfs:subClassOf :本构模型 ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :内摩擦角
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :孔隙水压
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :弹性模量
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :材料参数
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :泊松比
+                                  ] ;
+                  :原理简介 """1.	弹塑性行为： Hardening-Soil模型将土体视为一种弹塑性材料，同时考虑了土体的弹性和塑性行为。在模型中，土体的弹性行为由背景网格上的节点承载，而塑性行为则通过卸载重新加载算法来模拟。
+2.	本构关系： Hardening-Soil模型使用了一组本构方程来描述土体的应力-应变关系。这些本构方程通常包括弹性本构方程和塑性本构方程。弹性本构方程用于描述土体在弹性阶段的行为，而塑性本构方程用于描述土体在塑性阶段的行为。
+3.	强度增加和损伤： Hardening-Soil模型考虑了土体的强度增加和损伤过程。在模型中，土体的强度随着塑性变形的增加而增加，这反映了土体的硬化行为。同时，模型还考虑了土体的损伤过程，即在应力超过一定阈值时，土体可能会发生破裂和剪切带形成。
+4.	模型参数： Hardening-Soil模型的参数包括弹性模量、剪切模量、背景网格的参数等。这些参数需要通过实验室试验或者现场观测来确定，以使模型能够准确地描述土体的力学性质。""" ;
+                  :说明 "Hardening-Soil模型是一种用于考虑土体强度和变形硬化的本构模型，广泛用于边坡稳定性和地基基础的分析。" ,
+                      "硬化土模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Hoek-Brown模型
+:Hoek-Brown模型 rdf:type owl:Class ;
+              rdfs:subClassOf :本构模型 ;
+              :原理简介 """1.	强度准则： Hoek-Brown模型采用了一种基于岩石内部应力状态和岩石材料特性的强度准则。在该模型中，岩石的破坏被描述为一个基于岩石强度参数和应力状态的判据，即当岩石的等效应力达到一定的强度准则时，岩石开始发生破坏。
+2.	岩石特性： Hoek-Brown模型考虑了岩石的一些重要特性，包括岩石的内聚力（cohesion）和摩擦角（friction angle），以及与岩石结构和断裂面相关的一些参数。这些参数可以通过实验或者经验公式来确定。
+3.	应力-应变关系： 一旦岩石达到破坏准则，Hoek-Brown模型会根据岩石的强度条件和应变状态来确定岩石的塑性应变大小。在模型中，会考虑正应力和剪应力对岩石变形的影响，并在此基础上建立应力-应变关系。
+4.	模型参数： Hoek-Brown模型的关键参数包括内聚力、摩擦角和一些与岩石结构相关的参数，如岩石结构面的强度特性等。这些参数通常需要通过试验、现场观测或者其他手段来确定。""" ;
+              :说明 "Hoek-Brown模型是一种用于岩石工程领域的本构模型，考虑了岩石的完整性、变形特性和破坏准则，用于描述岩石滑坡体的稳定性和破坏特性。" ,
+                  "霍克-布朗模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Hyperbolic模型
+:Hyperbolic模型 rdf:type owl:Class ;
+              rdfs:subClassOf :本构模型 ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :弹性模量
+                              ] ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :材料参数
+                              ] ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :泊松比
+                              ] ;
+              :原理简介 """该模型用于描述土体的应力-应变关系，特别适用于弹塑性材料的行为分析。双曲线模型考虑了土体的非线性弹性和塑性行为，以及土体在加载和卸载过程中的应力松弛效应。
+
+双曲线模型基于弹塑性理论，在应力状态达到一定水平时，土体进入塑性变形阶段。该模型使用一条双曲线来描述土体的应力-应变关系，其中包括弹性部分和塑性部分。双曲线模型通过定义判据和流动规则，可以预测土体的破坏准则、塑性区域和应力-应变曲线等参数。""" ;
+              :说明 "Hyperbolic模型是一种用于描述土体非线性行为的本构模型，适用于考虑土体在高应力水平下的弹塑性和蠕变行为。" ,
+                  "双曲线模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Janbu模型
+:Janbu模型 rdf:type owl:Class ;
+         rdfs:subClassOf :经验模型 ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :必备参数 ;
+                           owl:someValuesFrom :内摩擦角
+                         ] ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :必备参数 ;
+                           owl:someValuesFrom :剪切模量
+                         ] ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :必备参数 ;
+                           owl:someValuesFrom :弹性模量
+                         ] ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :必备参数 ;
+                           owl:someValuesFrom :抗切强度
+                         ] ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :必备参数 ;
+                           owl:someValuesFrom :抗压强度
+                         ] ;
+         :原理简介 """1.	受力平衡原理： Janbu模型同样基于受力平衡原理，考虑了滑坡体在稳定状态下的受力情况。模型中会对滑坡体受到的各种力进行平衡分析，包括自重、支撑力、抗剪强度以及水力因素对滑坡的影响。
+2.	土体抗剪强度： 模型中会考虑土体材料的抗剪强度特性，通过确定土体的抗剪强度参数，对滑坡体在不同条件下的抗剪能力进行评估。
+3.	水力因素： Janbu模型同样会考虑水力因素对滑坡稳定性的影响，包括降雨引起的季节性变化、地下水位变化等因素。模型中会根据水力条件对土体的抗剪强度进行修正，以考虑水力条件对滑坡稳定性的影响。
+4.	土体变形特性： 模型中也会考虑土体的变形特性对滑坡稳定性的影响，包括土体的压缩特性、剪切变形等因素。通过合理的参数选择和估计，可以评估土体在不同变形状态下的稳定性。
+5.	参数选择和拟合： 同样需要对相关参数进行合理的选择和拟合，通常需要依据现场勘察数据、实验室试验结果或者其他工程经验来确定这些参数的数值。""" ;
+         :说明 "Janbu模型是另一种用于边坡稳定性分析的经验性模型，它考虑了土体的强度和剪切变形特性，并根据土体的应力状态提供稳定性分析结果。" ,
+             "扬布模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Modified_Cam-clay模型
+:Modified_Cam-clay模型 rdf:type owl:Class ;
+                     rdfs:subClassOf :本构模型 ,
+                                     [ rdf:type owl:Restriction ;
+                                       owl:onProperty :必备参数 ;
+                                       owl:someValuesFrom :内摩擦角
+                                     ] ,
+                                     [ rdf:type owl:Restriction ;
+                                       owl:onProperty :必备参数 ;
+                                       owl:someValuesFrom :剪切模量
+                                     ] ,
+                                     [ rdf:type owl:Restriction ;
+                                       owl:onProperty :必备参数 ;
+                                       owl:someValuesFrom :压缩模量
+                                     ] ,
+                                     [ rdf:type owl:Restriction ;
+                                       owl:onProperty :必备参数 ;
+                                       owl:someValuesFrom :孔隙水压
+                                     ] ;
+                     :原理简介 """1.	塑性势函数： 修改的Cam-Clay模型采用了一个特定的塑性势函数来描述土体的塑性行为。这个塑性势函数通常包括了关于土体应力状态的一些参数，如有效应力、孔隙比等，用于描述土体在不同应力状态下的变形特性。
+2.	应力-应变关系： 修改的Cam-Clay模型建立了应力与应变之间的关系，考虑了土体在加载和卸载过程中的力学响应。模型通常包括了土体的压缩指数、膨胀指数等参数，以描述土体在不同应力状态下的变形特性。
+3.	模型参数： 修改的Cam-Clay模型的参数与经典Cam-Clay模型相似，包括了土体的初始压缩指数、初始膨胀指数、压缩模量等。这些参数通常需要通过实验室试验或者现场勘测来确定。
+4.	孔隙水压力效应： 与经典Cam-Clay模型一样，修改的Cam-Clay模型也考虑了孔隙水压力对土体强度和变形特性的影响。这使得模型能够较好地描述饱和土体和非饱和土体的力学响应。""" ;
+                     :说明 "对传统Cam-clay模型的改进，通过引入额外的参数，可以更好地模拟土体在压缩过程中的非线性行为" ,
+                         "改进-卡姆-克雷模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Mohr-Coulomb模型
+:Mohr-Coulomb模型 rdf:type owl:Class ;
+                rdfs:subClassOf :本构模型 ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :内摩擦角
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :内聚力
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :坡度、坡向、高程
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :抗剪强度
+                                ] ;
+                :原理简介 """1.	应力状态： Mohr-Coulomb模型基于应力状态来描述土体的行为。在二维平面内，考虑主应力σ1和剪应力τ，可以构建Mohr应力圆来表示土体的应力状态。
+2.	强度准则： Mohr-Coulomb模型使用线性切线法则来描述土体的强度。强度准则通过一个线性切线来限制土体的剪切行为。在Mohr应力圆上，强度准则由一条斜率为tan(φ)的线和一个截距为c的线组成。
+3.	黏聚力c： 黏聚力c是Mohr-Coulomb模型中的一个参数，表示土体内部的吸力和粘结力。它是指在没有剪切应力作用时，土体仍然具有一定的强度。
+4.	内摩擦角φ： 内摩擦角φ是Mohr-Coulomb模型中的另一个参数，表示土体的抗剪切性能。它是指当土体开始发生剪切破坏时，主应力和剪应力之间的夹角。
+5.	破坏准则： 根据Mohr-Coulomb模型，土体会发生破坏当且仅当剪应力超过了强度准则所定义的上界。在Mohr应力圆上，破坏准则对应于切线与最大主应力轴的交点。""" ;
+                :说明 "Mohr-Coulomb模型基于摩擦角和内聚力来描述岩土材料的强度和变形特性，常用于分析岩土体的稳定性和预测可能的滑动行为。" ,
+                    "莫尔-库伦模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Plastic-Damage模型
+:Plastic-Damage模型 rdf:type owl:Class ;
+                  rdfs:subClassOf :本构模型 ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :弹性模量
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :材料参数
+                                  ] ,
+                                  [ rdf:type owl:Restriction ;
+                                    owl:onProperty :必备参数 ;
+                                    owl:someValuesFrom :泊松比
+                                  ] ;
+                  :原理简介 """1.	塑性行为： Plastic-Damage模型将土体视为一种塑性材料，具有塑性变形能力。在模型中，土体的塑性行为由塑性应变率控制，并根据材料的屈服准则来确定塑性应变。常用的塑性准则包括Mohr-Coulomb准则、Drucker-Prager准则等。
+2.	损伤行为： Plastic-Damage模型考虑了土体的损伤行为，即土体在加载过程中可能发生的微裂纹扩展和破坏。损伤通常通过损伤变量来表示，其值范围从0（无损伤）到1（完全破坏）。损伤变量的演化方程可以根据实验数据或经验公式确定。
+3.	本构关系： Plastic-Damage模型使用一组本构方程来描述土体的应力-应变关系。这些本构方程通常包括塑性本构方程和损伤本构方程。塑性本构方程用于描述土体的塑性行为，而损伤本构方程用于描述土体的损伤行为。通过将这两个本构方程结合起来，可以模拟土体在滑坡过程中的塑性变形和损伤演化。
+4.	模型参数： Plastic-Damage模型的参数包括塑性参数、损伤参数等。这些参数需要通过实验室试验或现场观测来确定，以使模型能够准确地描述土体的力学性质和损伤行为。""" ;
+                  :说明 "一种结合了塑性变形和损伤演化的本构模型，适用于描述土体的弹塑性和损伤行为。对于模拟土体在加载过程中的破裂和损伤是非常有用" ,
+                      "塑性损伤模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/RQD值
+:RQD值 rdf:type owl:Class ;
+      rdfs:subClassOf :岩体结构 ;
+      :说明 "岩芯完整度，10cm岩芯累计长度与每次进尺度比值" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Spencer模型
+:Spencer模型 rdf:type owl:Class ;
+           rdfs:subClassOf :经验模型 ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :内摩擦角
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :剪切模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :孔隙水压
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :弹性模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :抗切强度
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :抗压强度
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :泊松比
+                           ] ;
+           :原理简介 """1.	受力平衡原理： Spencer模型同样基于受力平衡原理，考虑了滑坡体在稳定状态下的受力情况。模型中会对滑坡体受到的各种力进行平衡分析，包括自重、支撑力、抗剪强度以及水力因素对滑坡的影响。
+2.	土体强度参数： 模型中会考虑土体材料的内摩擦角、剪切强度等参数，这些参数反映了土体的抗剪特性。通过合理的参数选择和估计，可以评估土体在不同条件下的稳定性。
+3.	水文因素： Spencer模型也会考虑水文因素对滑坡稳定性的影响，包括降雨引起的季节性变化、地下水位变化等因素，这些因素会对土体的稳定性产生重要影响。
+4.	地形因素： 模型中通常也会考虑地形因素对滑坡稳定性的影响，例如坡度、地貌等因素会被纳入模型的考虑范围。
+5.	参数选择和拟合： 同样需要对相关参数进行合理的选择和拟合，通常需要依据现场勘察数据、实验室试验结果或者其他工程经验来确定这些参数的数值。""" ;
+           :说明 "Spencer模型是用于边坡稳定性分析的经验性模型之一。该模型考虑了边坡的形状、土体的性质以及边坡表面的荷载条件，通过考虑这些因素来评估边坡的稳定性。" ,
+               "斯宾塞模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/Terzaghi-Wegman模型
+:Terzaghi-Wegman模型 rdf:type owl:Class ;
+                   rdfs:subClassOf :经验模型 ,
+                                   [ rdf:type owl:Restriction ;
+                                     owl:onProperty :必备参数 ;
+                                     owl:someValuesFrom :内摩擦角
+                                   ] ,
+                                   [ rdf:type owl:Restriction ;
+                                     owl:onProperty :必备参数 ;
+                                     owl:someValuesFrom :压缩模量
+                                   ] ,
+                                   [ rdf:type owl:Restriction ;
+                                     owl:onProperty :必备参数 ;
+                                     owl:someValuesFrom :抗切强度
+                                   ] ,
+                                   [ rdf:type owl:Restriction ;
+                                     owl:onProperty :必备参数 ;
+                                     owl:someValuesFrom :抗剪强度
+                                   ] ,
+                                   [ rdf:type owl:Restriction ;
+                                     owl:onProperty :必备参数 ;
+                                     owl:someValuesFrom :抗压强度
+                                   ] ,
+                                   [ rdf:type owl:Restriction ;
+                                     owl:onProperty :必备参数 ;
+                                     owl:someValuesFrom :材料参数
+                                   ] ;
+                   :原理简介 """Terzaghi-Wegman模型假设土体具有塑性流动性质，在承载过程中，土体的应变状态沿着一个半径为45度的等效应力圆筒面上产生。由于土体的塑性变形，会在等效应力圆筒面上产生一些空间应力，这些应力可以被分解为法向应力和剪切应力。在Terzaghi-Wegman模型中，摩擦力和端阻力的计算分别考虑了这些应力分量。
+
+具体地，Terzaghi-Wegman模型中，摩擦力由两部分组成：侧面摩擦力和端面摩擦力。侧面摩擦力是由土体与基础侧面之间的摩擦力产生的，计算公式为：f = Nc * σ' * tan(φ)，其中Nc、σ'和φ分别表示土体的无侧限抗压强度系数、有效应力和内摩擦角。端面摩擦力是由土体在基础端面上的摩擦力产生的，计算公式为：q = Nq * σ' * tan(φ)，其中Nq表示土体的无侧限抗剪强度系数。
+
+端阻力是由土体在基础下部的变形所引起的，计算公式为：p = Nc * σ'，其中Nc和σ'同上。这个公式假设土体在承载过程中呈现一个线性应力-应变关系，即当应力增加时，土体的应变也会随之增加，但增长速率是一定的。
+
+总承载力等于摩擦力和端阻力的和，即：qult = f + p。Terzaghi-Wegman模型适用于均质、各向同性的土体，并且假设基础表面是平坦的、水平的以及足够硬。""" ;
+                   :说明 "Terzaghi-Wegman模型用于计算土体的孔隙水压力和有效应力，适用于考虑水文条件的滑坡分析。" ,
+                       "特尔扎吉-韦格曼模型" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/a.实地勘查
+:a.实地勘查 rdf:type owl:Class ;
+        rdfs:subClassOf :三.力学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/b.破坏阶段
+:b.破坏阶段 rdf:type owl:Class ;
+        rdfs:subClassOf :三.力学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/c.物理参数
+:c.物理参数 rdf:type owl:Class ;
+        rdfs:subClassOf :三.力学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/d.力学模型
+:d.力学模型 rdf:type owl:Class ;
+        rdfs:subClassOf :三.力学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/e.滑动机理
+:e.滑动机理 rdf:type owl:Class ;
+        rdfs:subClassOf :三.力学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/一.地学
+:一.地学 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/2.滑坡作用机制> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/三.力学
+:三.力学 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/2.滑坡作用机制> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/中型滑坡
+:中型滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :体积类型 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/中型灾情
+:中型灾情 rdf:type owl:Class ;
+      rdfs:subClassOf :灾情等级划分 ;
+      rdfs:comment "死亡人数10>n≥3人，直接经济损失500万>S≥100万" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/中型险情
+:中型险情 rdf:type owl:Class ;
+      rdfs:subClassOf :险情等级划分 ;
+      rdfs:comment "直接威胁人数500>n≥100人，潜在经济损失5000万>S≥500万" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/中易发区
+:中易发区 rdf:type owl:Class ;
+      rdfs:subClassOf :易发区 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/中速滑坡
+:中速滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :速度类型 ;
+      :说明 "距离坡脚一定距离固定建筑能够幸免；位于滑体上部的建筑破坏极其严重" ;
+      rdfs:comment "距离坡脚一定距离固定建筑能够幸免；位于滑体上部的建筑破坏极其严重" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/临空区
+:临空区 rdf:type owl:Class ;
+     rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/二.水文学
+:二.水文学 rdf:type owl:Class ;
+       rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/2.滑坡作用机制> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/低易发区
+:低易发区 rdf:type owl:Class ;
+      rdfs:subClassOf :易发区 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/体积类型
+:体积类型 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/倾斜剪切试验
+:倾斜剪切试验 rdf:type owl:Class ;
+        rdfs:subClassOf :抗剪强度 ;
+        :原理简介 "倾斜剪切试验：倾斜剪切试验是一种常用的实验方法，通过倾斜式加载，在岩石样本上施加剪切力，同时施加垂直于剪切面的正向压力，从而模拟实际工程中的应力状态。通过测量岩石样本的剪切强度和摩擦角等参数，可以计算得到岩石的抗剪强度。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/内摩擦角
+:内摩擦角 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "内摩擦角是描述岩石抗剪切性能的参数" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/内聚力
+:内聚力 rdf:type owl:Class ;
+     rdfs:subClassOf :c.物理参数 ;
+     :说明 "内聚力是指岩土颗粒之间的相互吸引力或结合力。在无黏聚力的情况下，内聚力是使岩土体保持整体结构稳定的主要力量。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/冲刷力
+:冲刷力 rdf:type owl:Class ;
+     rdfs:subClassOf :水文力 ;
+     :说明 "地表或地下水流对周围侵蚀，冲刷" ;
+     rdfs:comment "地表或地下水流对周围侵蚀，冲刷"@zh-cn ,
+                  "" ,
+                  "地表或地下水流对周围侵蚀，冲刷" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/几何形状
+:几何形状 rdf:type owl:Class ;
+      rdfs:subClassOf :勘查地貌 ;
+      :说明 "山谷河谷临空，滑坡几何" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/出露数量
+:出露数量 rdf:type owl:Class ;
+      rdfs:subClassOf :泉水出露 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/出露流量
+:出露流量 rdf:type owl:Class ;
+      rdfs:subClassOf :泉水出露 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/切层滑坡
+:切层滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :层面关系 ;
+      :说明 "滑坡面切过岩层面，呈圆柱形，或对数螺旋曲线" ;
+      rdfs:comment "滑坡面切过岩层面，呈圆柱形，或对数螺旋曲线" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/划分地层
+:划分地层 rdf:type owl:Class ;
+      rdfs:subClassOf :地质雷达 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/刚体极限平衡法（RLEM）
+:刚体极限平衡法（RLEM） rdf:type owl:Class ;
+               rdfs:subClassOf :数值模拟模型 ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :内摩擦角
+                               ] ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :内聚力
+                               ] ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :坡度、坡向、高程
+                               ] ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :抗切强度
+                               ] ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :抗剪强度
+                               ] ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :抗压强度
+                               ] ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :材料参数
+                               ] ,
+                               [ rdf:type owl:Restriction ;
+                                 owl:onProperty :必备参数 ;
+                                 owl:someValuesFrom :边界参数
+                               ] ;
+               :原理简介 """1.	刚体假设： 刚体极限平衡法假设滑坡体为刚体，即忽略了滑坡体内部的变形和位移，将其简化为由多个刚体组成的系统。这一假设使得分析和计算变得相对简单，适用于对整体稳定性进行初步评估。
+2.	平衡条件： 根据静力学平衡原理，对于每一个刚体，刚体极限平衡法考虑了重力、支持力和滑动阻力之间的平衡关系。在平衡状态下，滑坡体的受力状况应满足力矩平衡和受力平衡的条件。
+3.	摩擦角和抗剪强度： 为了进行稳定性分析，需要确定滑坡体材料的内摩擦角和抗剪强度等参数。这些参数可以通过实地勘察和室内试验等手段获取，用于计算滑坡体内部的滑动面及其上的剪应力。
+4.	可能滑动面搜索： 在刚体极限平衡法中，需要对可能出现的滑动面进行搜索和评估。一般来说，滑动面通常是沿着岩土体内部的薄弱带或者已有的裂缝面，刚体极限平衡法通过搜索可能的滑动面来评估滑坡体的稳定性。
+5.	稳定性判据： 利用刚体极限平衡法计算得到各个可能滑动面上的剪应力和抗剪强度之间的关系，从而确定滑坡体的稳定性。当计算得到的安全系数小于1时，表示该滑坡存在失稳的危险。""" ;
+               :说明 "刚体极限平衡法是一种基于刚体力学和平衡条件的分析方法。它假设滑坡体为刚体，通过平衡方程来估算滑坡体的稳定性和可能的滑动面。这种方法通常适用于研究较小规模的滑坡或简化的稳定性问题。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/剪切模量
+:剪切模量 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "也称剪切弹性模量或剪切模数，是描述固体材料抵抗剪切变形能力的物理量。在材料力学中，剪切模量表示单位面积内受到单位切变应力时，材料产生的单位切变应变。剪切模量通常用符号G表示" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/剪切试验
+:剪切试验 rdf:type owl:Class ;
+      rdfs:subClassOf :内摩擦角 ,
+                      :内聚力 ,
+                      :剪切模量 ,
+                      :弹性模量 ,
+                      :抗剪强度 ,
+                      :摩擦系数 ;
+      :原理简介 "剪切试验（ Shear Test）：剪切试验是一种常用的实验方法，用于测定土壤或岩石的剪切强度参数，包括内聚力和摩擦角。在直剪试验中，通过施加水平和垂直荷载，以及记录土壤或岩石试样的应变和位移，可以计算出内聚力的数值。" ,
+            "剪切试验（Shear Test）：剪切试验可用于测定土壤或岩石的剪切强度和弹性模量。在剪切试验中，施加水平和垂直荷载，并记录材料的应变和位移，可以计算出弹性模量的数值。" ,
+            "剪切试验（Shear Test）：在剪切试验中，使用适当的试样形状和试验装置，在岩石表面施加水平剪切力，测量垂直方向的法向力。通过改变剪切力和法向力的比值，可以计算岩石表面的摩擦系数。" ,
+            "剪切试验（Shear Test）：常用的一种方法是进行直剪试验或三轴剪切试验。在直剪试验中，将岩石样品裁剪成适当的几何形状，然后施加水平方向上的剪切应力，测量垂直方向上的正应力，通过改变剪切应力和正应力的比值，可以确定内摩擦角。" ,
+            "剪切试验：在剪切试验中，将岩石样本置于剪切试验机中，施加垂直于剪切面的剪切力，并测量应变。通过实验数据计算得到岩石的剪切模量。" ,
+            "剪切试验：在剪切试验中，将岩石样本置于剪切试验机中，施加垂直于剪切面的剪切力，直到岩石样本发生破裂。通过测量岩石样本的最大剪切强度，可以得到岩石的抗剪强度。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/动态剪切试验
+:动态剪切试验 rdf:type owl:Class ;
+        rdfs:subClassOf :抗剪强度 ;
+        :原理简介 "动态剪切试验：动态剪切试验通常使用冲击波或超声波等技术，通过在岩石样本上施加动态加载，测量岩石样本的动态剪切应力和动态剪切应变，从而计算出岩石的抗剪强度。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/动态压缩试验
+:动态压缩试验 rdf:type owl:Class ;
+        rdfs:subClassOf :压缩模量 ;
+        :原理简介 "动态压缩试验：动态压缩试验通常使用冲击波或超声波等技术，通过测量岩石样本在动态加载下的速度和应变关系，来计算岩石的压缩模量。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/动水压力
+:动水压力 rdf:type owl:Class ;
+      rdfs:subClassOf :水文力 ;
+      :说明 """动水压力的主要特点包括：
+侵蚀作用：地下水流动会对土体或岩石表面产生冲刷和侵蚀作用，长期作用可能导致土体的破坏和稳定性问题。
+孔隙水压力：地下水流动导致土体或岩石内部孔隙水压力的变化，这会直接影响土体或岩石的强度和变形特性。
+地下水位变化：地下水流动会引起地下水位的变化，从而间接影响土体或岩石的应力状态，进而影响工程稳定性。""" ,
+          "地下水流动对土体或岩石产生的压力" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/勘查地表
+:勘查地表 rdf:type owl:Class ;
+      rdfs:subClassOf :地质勘查 ;
+      :说明 "滑坡地质灾害发生前或发生过程中的伴生现象，是对滑坡研究案例中比较典型的表征，为观察灾变过程中现象，是地质专家进行灾害类比预警预测的重要依据" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/勘查地貌
+:勘查地貌 rdf:type owl:Class ;
+      rdfs:subClassOf :地质勘查 ;
+      :说明 "地貌踏勘可以为滑坡力学分析提供几何形状和灾变状态" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/勘查岩性
+:勘查岩性 rdf:type owl:Class ;
+      rdfs:subClassOf :地质勘查 ;
+      :说明 "为力学分析提供岩层几何结构面的空间分布与结构面强度" ,
+          "给定滑动模式：结构崩塌or顺层滑坡等" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/勘查构造
+:勘查构造 rdf:type owl:Class ;
+      rdfs:subClassOf :地质勘查 ;
+      :说明 "为建立力学模型提供地层和岩体结构基本倾向、走向以及结构面间距" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/勘查水文
+:勘查水文 rdf:type owl:Class ;
+      rdfs:subClassOf :地质勘查 ;
+      :说明 "根据水文地质情况推测含水层情况，分析地下水的补给径流与排泄、水文地质结构参数及地下水化学成分，从而分析水文地质条件对滑坡稳定性的影响" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/单位吸水量
+:单位吸水量 rdf:type owl:Class ;
+       rdfs:subClassOf :压水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/历史滑坡数据
+:历史滑坡数据 rdf:type owl:Class ;
+        rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/历史记录
+:历史记录 rdf:type owl:Class ;
+      rdfs:subClassOf :历史滑坡数据 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/压剪试验
+:压剪试验 rdf:type owl:Class ;
+      rdfs:subClassOf :剪切模量 ,
+                      :抗切强度 ;
+      :原理简介 "压剪试验：压剪试验也可以用于测定岩石的抗拉强度。在试验中，将岩石样本置于压剪试验机中，施加垂直于剪切面的正向压力，同时施加剪切力，直到岩石样本发生破坏。通过测量岩石样本的最大剪切强度，可以估算岩石的抗拉强度。" ,
+            "压剪试验：压剪试验是一种常用的实验方法，通过在岩石样本上施加轴向压力和垂直于轴向的剪切力，同时测量应力和应变，从而计算得到岩石的剪切模量。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/压水试验
+:压水试验 rdf:type owl:Class ;
+      rdfs:subClassOf :地下水实验 ;
+      :说明 "钻孔压水实验设备：压水系统，量测系统和止水系统。  主要参数：稳定流量（压入耗水量），压力阶段，压力值。   计算得透水率和渗透系数" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/压缩模量
+:压缩模量 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "压缩模量是指岩石在受压应力下的弹性变形特性。它描述了岩石在受压过程中的应力-应变关系，单位兆帕斯（MPa）" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/压缩试验
+:压缩试验 rdf:type owl:Class ;
+      rdfs:subClassOf :内摩擦角 ,
+                      :内聚力 ,
+                      :弹性模量 ,
+                      :黏聚力 ;
+      :原理简介 "压缩试验（Compression Test）：压缩试验可以用于测定岩石或某些特殊类型的土壤的抗压强度和黏聚力。在压缩试验中，施加垂直荷载并记录材料的变形和应力，可以计算出黏聚力的数值。" ,
+            "压缩试验（Compression Test）：压缩试验是一种常用的实验方法，用于测定土壤或岩石的抗压强度和弹性模量。在压缩试验中，施加垂直荷载并记录材料的变形和应力，可以计算出弹性模量的数值。" ,
+            "压缩试验（Compression Test）：在压缩试验中，通过施加垂直荷载并记录土壤或岩石试样的变形和应力，可以得到内聚力的信息。这种方法通常适用于具有一定粘聚性的土壤或岩石。" ,
+            "压缩试验（Compression Test）：通过压缩试验，可以测定岩石在受压力作用下的变形特性和强度参数。在三轴压缩试验中，施加垂直方向上的压力，同时测量水平方向上的剪切力，通过改变水平剪切力和垂直压力的比值，可以计算内摩擦角。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/发生区
+:发生区 rdf:type owl:Class ;
+     rdfs:subClassOf :地理位置 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/受力形式
+:受力形式 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/变化自由边界
+:变化自由边界 rdf:type owl:Class ;
+        rdfs:subClassOf :勘查地貌 ;
+        :说明 "河流侵蚀" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含水层互补关系
+:含水层互补关系 rdf:type owl:Class ;
+         rdfs:subClassOf :勘查水文 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含水层水文地质参数
+:含水层水文地质参数 rdf:type owl:Class ;
+           rdfs:subClassOf :勘查水文 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含水层结构
+:含水层结构 rdf:type owl:Class ;
+       rdfs:subClassOf :勘查水文 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含水量
+:含水量 rdf:type owl:Class ;
+     rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/围压渗透实验
+:围压渗透实验 rdf:type owl:Class ;
+        rdfs:subClassOf :孔隙水压 ;
+        :原理简介 "围压渗透实验：在施加不同围压条件下进行渗透实验，观察孔隙水的渗透性随围压变化的情况，可以得到孔隙水压与围压之间的关系。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/土层密实度
+:土层密实度 rdf:type owl:Class ;
+       rdfs:subClassOf :地层岩土 ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :决定 ;
+                         owl:someValuesFrom :土层渗透性
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层>
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地下水埋深
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地层岩土厚度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地层岩土强度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地表水入渗
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :坡度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :坡形
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :坡面侵蚀度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :斜坡类型
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :斜坡结构
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :水层分布
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :节理
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/水层类型>
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :相互作用 ;
+                         owl:someValuesFrom :地层岩土含水率
+                       ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/土层渗透性
+:土层渗透性 rdf:type owl:Class ;
+       rdfs:subClassOf :地层岩土 ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层>
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地下水埋深
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地层岩土强度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地表水入渗
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地表水冲刷
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :地表水径流
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :水层分布
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/含/水层透水性>
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :相互作用 ;
+                         owl:someValuesFrom :土层密实度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :相互作用 ;
+                         owl:someValuesFrom :地层岩土含水率
+                       ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/土槽模型
+:土槽模型 rdf:type owl:Class ;
+      rdfs:subClassOf :物理模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :内摩擦角
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :剪切模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :坡度、坡向、高程
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :抗切强度
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :材料参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透率
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透系数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :边界参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :黏聚力
+                      ] ;
+      :原理简介 """几何相似性原理： 土槽模型在尺寸上与实际滑坡区域具有一定的比例关系，以保持几何相似性。尺寸缩放比例通常是根据Froude相似性或Reynolds相似性等原理确定。
+
+材料相似性原理： 土槽模型所使用的土体材料应与实际滑坡区域的土体材料具有相似的物理和力学性质。通常使用的土体材料可以是粘土、砂土、模拟土等。
+
+边界条件的设定： 土槽模型需要设置适当的边界条件来模拟实际滑坡条件。边界条件可以包括斜坡的坡度和坡向、土体的初始状态、水文条件、地下水位等。
+
+模拟加载： 在土槽模型中，通过施加适当的加载方式来模拟实际滑坡事件中的外部力作用。加载方式可以是重力加载、水力加载、振动加载等。
+
+观测与测量： 在土槽模型实验过程中，通过安装传感器和测量设备来实时监测和记录土体位移、变形、应力等参数的变化。常用的观测手段包括位移计、应变计、压力计、测斜仪等。""" ;
+      :说明 "使用大型土槽来模拟实际边坡或坡地的物理模型。这些模型可以在实验室环境中进行，通过倾斜土槽来观察土体的运动和滑坡的发生过程。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/土质滑坡
+:土质滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :物质类型 ;
+      :说明 """土质滑坡
+	粗粒土滑坡
+		堆积层滑坡
+		残坡积层滑坡
+		人工堆积层滑坡 
+		冰水（碛）堆积物滑坡
+	细粒土滑坡
+		黄土滑坡
+		黏性土滑坡
+		软土滑坡
+		膨胀土滑坡
+		其它细粒土滑坡""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水
+:地下水 rdf:type owl:Class ;
+     rdfs:subClassOf :二.水文学 ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :正向促进 ;
+                       owl:someValuesFrom :动水压力
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :正向促进 ;
+                       owl:someValuesFrom :坡重
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :负向降低 ;
+                       owl:someValuesFrom :地层岩土强度
+                     ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水动力场
+:地下水动力场 rdf:type owl:Class ;
+        rdfs:subClassOf :勘查水文 ;
+        :说明 "地下水升降" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水参数
+:地下水参数 rdf:type owl:Class ;
+       rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水埋深
+:地下水埋深 rdf:type owl:Class ;
+       rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水实验
+:地下水实验 rdf:type owl:Class ;
+       rdfs:subClassOf :地质钻探 ;
+       :说明 "地下水是斜坡稳定的重要因素，水是滑坡诱发的重要因素。处于水下透水斜坡将承受浮托力作用；不透水斜坡坡面将承受静水压力；冲水的张开裂缝将承受裂隙水静水压力的作用；地下水渗流会对斜坡产生动水压力。水还对斜坡滑带岩土体产生软化作用，使岩土体的抗剪强度降低【工程地质学，陆兆臻】" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水排泄
+:地下水排泄 rdf:type owl:Class ;
+       rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水探查
+:地下水探查 rdf:type owl:Class ;
+       rdfs:subClassOf :电法勘探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水模拟实验
+:地下水模拟实验 rdf:type owl:Class ;
+         rdfs:subClassOf :孔隙水压 ;
+         :原理简介 "地下水模拟实验：模拟地下水对岩石产生的压力情况，通过实验得到在不同地下水条件下的孔隙水压力。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水水化学性质（ph）
+:地下水水化学性质（ph） rdf:type owl:Class ;
+              rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水流向
+:地下水流向 rdf:type owl:Class ;
+       rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水流量
+:地下水流量 rdf:type owl:Class ;
+       rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水类型
+:地下水类型 rdf:type owl:Class ;
+       rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水补给
+:地下水补给 rdf:type owl:Class ;
+       rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地下水重力
+:地下水重力 rdf:type owl:Class ;
+       rdfs:subClassOf :水文力 ;
+       :说明 "地下水整体因重力作用对水体下接触面的压力,一定情况下与静水压力相等" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层划分
+:地层划分 rdf:type owl:Class ;
+      rdfs:subClassOf :电法勘探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层厚度
+:地层厚度 rdf:type owl:Class ;
+      rdfs:subClassOf :地层钻探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层土体类型
+:地层土体类型 rdf:type owl:Class ;
+        rdfs:subClassOf :地层岩土 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :土层密实度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :土层渗透性
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :地层岩土含水率
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :地层岩土强度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :岩土颗粒组分
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :斜坡类型
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :斜坡结构
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地下水
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地表水入渗
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :坡形
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :坡面侵蚀度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :斜坡类型
+                        ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层地貌
+:地层地貌 rdf:type owl:Class ;
+      rdfs:subClassOf :一.地学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层地震波
+:地层地震波 rdf:type owl:Class ;
+       rdfs:subClassOf :地质探测 ;
+       :说明 "利用地层地震波勘探地下介质弹性与密度差异推断地下岩层性质与形态" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层富水性
+:地层富水性 rdf:type owl:Class ;
+       rdfs:subClassOf :抽水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层岩土
+:地层岩土 rdf:type owl:Class ;
+      rdfs:subClassOf :地层地貌 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层岩土厚度
+:地层岩土厚度 rdf:type owl:Class ;
+        rdfs:subClassOf :地层岩土 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地层岩土含水率
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :坡形
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :岩土颗粒组分
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :斜坡结构
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :节理
+                        ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层岩土含水率
+:地层岩土含水率 rdf:type owl:Class ;
+         rdfs:subClassOf :地层岩土 ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :影响 ;
+                           owl:someValuesFrom :岩土颗粒组分
+                         ] ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :相互作用 ;
+                           owl:someValuesFrom :土层密实度
+                         ] ,
+                         [ rdf:type owl:Restriction ;
+                           owl:onProperty :相互作用 ;
+                           owl:someValuesFrom :土层渗透性
+                         ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层岩土强度
+:地层岩土强度 rdf:type owl:Class ;
+        rdfs:subClassOf :地层岩土 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :斜坡结构
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :临空区
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :土层渗透性
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地层土体类型
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地层岩土含水率
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地表水入渗
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :坡度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :岩土颗粒组分
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :水层分布
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :裂隙
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/含/水层透水性>
+                        ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层岩性
+:地层岩性 rdf:type owl:Class ;
+      rdfs:subClassOf :地层钻探 ;
+      :说明 "地学与力学结合，..系..组；..色..岩" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层岩石类型
+:地层岩石类型 rdf:type owl:Class ;
+        rdfs:subClassOf :地层岩土 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :地层土体类型
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :地层岩土强度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :岩土颗粒组分
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :决定 ;
+                          owl:someValuesFrom :斜坡类型
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层>
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地表水入渗
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :岩土矿物成分
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :斜坡结构
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :裂隙
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/含/水层透水性>
+                        ] ;
+        :说明 """地层岩石类型
+	碎屑岩建造34.7%  极
+		括砂岩、泥岩和砾岩等颗粒状岩石
+	岩浆岩建造21.4%  高
+		花岗岩，安山岩，玄武岩等岩浆制坚硬岩石
+	变质岩建造21.7%  高
+		片麻岩、云母片岩、似云母片岩、石英片岩、千枚岩、页岩和绿泥石岩等
+	碳酸盐岩建造19%  中
+		石灰岩，白云石岩，钙质岩，方解石岩等""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层渗透性
+:地层渗透性 rdf:type owl:Class ;
+       rdfs:subClassOf :抽水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层物质组成
+:地层物质组成 rdf:type owl:Class ;
+        rdfs:subClassOf :地层钻探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层组合
+:地层组合 rdf:type owl:Class ;
+      rdfs:subClassOf :勘查岩性 ;
+      :说明 "（...系...组）" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层透水率
+:地层透水率 rdf:type owl:Class ;
+       rdfs:subClassOf :压水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层透水系数
+:地层透水系数 rdf:type owl:Class ;
+        rdfs:subClassOf :压水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地层钻探
+:地层钻探 rdf:type owl:Class ;
+      rdfs:subClassOf :地质钻探 ;
+      :说明 "确定滑坡体地层岩性、厚度、物质组成和滑动面的个数等，为滑坡体后续稳定性评价及数值分析提依据 ，根据地质编录绘制钻孔柱状图" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地形海拔
+:地形海拔 rdf:type owl:Class ;
+      rdfs:subClassOf :地貌特征 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :影响 ;
+                        owl:someValuesFrom :坡面侵蚀度
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :影响 ;
+                        owl:someValuesFrom :坡高
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :正向促进 ;
+                        owl:someValuesFrom :临空区
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :正向促进 ;
+                        owl:someValuesFrom :坡度
+                      ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地理位置
+:地理位置 rdf:type owl:Class ;
+      rdfs:subClassOf :地层地貌 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表位移
+:地表位移 rdf:type owl:Class ;
+      rdfs:subClassOf :表征力学量 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表水
+:地表水 rdf:type owl:Class ;
+     rdfs:subClassOf :二.水文学 ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :负向降低 ;
+                       owl:someValuesFrom :地层岩土强度
+                     ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表水入渗
+:地表水入渗 rdf:type owl:Class ;
+       rdfs:subClassOf :地表水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表水冲刷
+:地表水冲刷 rdf:type owl:Class ;
+       rdfs:subClassOf :地表水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表水径流
+:地表水径流 rdf:type owl:Class ;
+       rdfs:subClassOf :地表水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表水文
+:地表水文 rdf:type owl:Class ;
+      rdfs:subClassOf :勘查水文 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表破裂程度
+:地表破裂程度 rdf:type owl:Class ;
+        rdfs:subClassOf :表征力学量 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地表表面转角
+:地表表面转角 rdf:type owl:Class ;
+        rdfs:subClassOf :表征力学量 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地裂缝空间分布
+:地裂缝空间分布 rdf:type owl:Class ;
+         rdfs:subClassOf :表征力学量 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地貌特征
+:地貌特征 rdf:type owl:Class ;
+      rdfs:subClassOf :地层地貌 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地质勘查
+:地质勘查 rdf:type owl:Class ;
+      rdfs:subClassOf :a.实地勘查 ;
+      :说明 "调查清滑坡发育范围，边界条件，环境影响因素与滑坡稳定阶段，对滑坡性质类型做定性分析，为力学建模提供稳定的地质成因与稳定演化依据" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地质探测
+:地质探测 rdf:type owl:Class ;
+      rdfs:subClassOf :a.实地勘查 ;
+      :说明 "获得滑坡三维边界与地质结构信息，为滑坡力学建模提供更加准确的几何边界条件和地层结构参数" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地质构造
+:地质构造 rdf:type owl:Class ;
+      rdfs:subClassOf :一.地学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地质钻探
+:地质钻探 rdf:type owl:Class ;
+      rdfs:subClassOf :a.实地勘查 ;
+      :说明 "为滑坡建模提供边界条件，地层结构，节理裂隙分布和岩土力学参数" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地质雷达
+:地质雷达 rdf:type owl:Class ;
+      rdfs:subClassOf :地质探测 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地震
+:地震 rdf:type owl:Class ;
+    rdfs:subClassOf :地质构造 ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水径流
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :岩土颗粒组分
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :水层分布
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :临空区
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :土层渗透性
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :地形海拔
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :坡面侵蚀度
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :孔隙水压力
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :斜坡结构
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :裂隙
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :地层岩土强度
+                    ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地震波传播试验
+:地震波传播试验 rdf:type owl:Class ;
+         rdfs:subClassOf :弹性模量 ;
+         :原理简介 "地震波传播试验（Seismic Wave Propagation Test）：地震波传播试验用于测定土壤或岩石的动力特性，包括弹性模量。通过在材料中引入地震波并记录波传播速度和振动特性，可以获得弹性模量的估计值。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/地震波速度测定
+:地震波速度测定 rdf:type owl:Class ;
+         rdfs:subClassOf :压缩模量 ,
+                         :泊松比 ;
+         :原理简介 "地震波速度测定：利用地震波速度测定技术，可以通过在岩石体上布设检波器和激发器，测定地震波在岩石中的传播速度，从而反推岩石的弹性参数，包括压缩模量。" ,
+               "地震波速度测定：利用地震波速度测定技术，通过测定地震波在岩石中的纵波速度和横波速度，可以计算得到岩石的泊松比。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/均质滑坡
+:均质滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :层面关系 ;
+      :说明 "均质的没有明显层理，滑面圆柱形或二次曲线形" ;
+      rdfs:comment "均质的没有明显层理，滑面圆柱形或二次曲线形" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/块状结构滑坡
+:块状结构滑坡 rdf:type owl:Class ;
+        rdfs:subClassOf :结构分类 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/块裂状结构滑坡
+:块裂状结构滑坡 rdf:type owl:Class ;
+         rdfs:subClassOf :结构分类 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/坡向
+:坡向 rdf:type owl:Class ;
+    rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/坡度
+:坡度 rdf:type owl:Class ;
+    rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/坡度、坡向、高程
+:坡度、坡向、高程 rdf:type owl:Class ;
+          rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/坡形
+:坡形 rdf:type owl:Class ;
+    rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/坡重
+:坡重 rdf:type owl:Class ;
+    rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/坡面侵蚀度
+:坡面侵蚀度 rdf:type owl:Class ;
+       rdfs:subClassOf :地层岩土 ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :决定 ;
+                         owl:someValuesFrom :岩土颗粒组分
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :影响 ;
+                         owl:someValuesFrom :斜坡结构
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :临空区
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :土层渗透性
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :地层岩土厚度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :地层岩土强度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :地形海拔
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :坡度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :易发区
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :正向促进 ;
+                         owl:someValuesFrom :裂隙
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :负向降低 ;
+                         owl:someValuesFrom :土层密实度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :负向降低 ;
+                         owl:someValuesFrom :地层岩土含水率
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :负向降低 ;
+                         owl:someValuesFrom :地层岩土强度
+                       ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/坡高
+:坡高 rdf:type owl:Class ;
+    rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/基岩埋深
+:基岩埋深 rdf:type owl:Class ;
+      rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/堰塞湖
+:堰塞湖 rdf:type owl:Class ;
+     rdfs:subClassOf :次生灾害 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/填充程度
+:填充程度 rdf:type owl:Class ;
+      rdfs:subClassOf :岩芯 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/大型滑坡
+:大型滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :体积类型 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/大型灾情
+:大型灾情 rdf:type owl:Class ;
+      rdfs:subClassOf :灾情等级划分 ;
+      rdfs:comment "死亡人数30>n≥10人，直接经济损失1000万>S≥500万" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/大型险情
+:大型险情 rdf:type owl:Class ;
+      rdfs:subClassOf :险情等级划分 ;
+      rdfs:comment "直接威胁人数1000>n≥500人，潜在经济损失1亿>S≥5000万" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/孔隙水压
+:孔隙水压 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "指存在于岩层或土壤中的水分所产生的压力。当岩层或土壤中存在水分时，水分会填充岩层或土壤的孔隙空间，形成孔隙水。由于重力作用以及孔隙结构的影响，孔隙水会产生一定的压力，称之为孔隙水压。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/孔隙水压力
+:孔隙水压力 rdf:type owl:Class ;
+       rdfs:subClassOf :水文力 ;
+       :说明 """孔隙水压力的大小取决于多个因素：
+水头差：孔隙水压力随着水头差的变化而变化，水头差越大，孔隙水压力越大。
+孔隙结构：孔隙的形状、大小和分布会影响孔隙水压力的传递和分布。
+孔隙水的体积变化：当孔隙水受到挤压或者受到外部应力作用时，孔隙水的体积会发生变化，进而引起孔隙水压力的变化。
+渗流：孔隙水的流动也会对孔隙水压力产生影响，特别是在地下水流动或排水作用下。""" ,
+           "当土体或岩石中存在水时，水分子对孔隙壁施加的压力称为孔隙水压力。影响土体或岩石的强度和变形特性" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/实地观测
+:实地观测 rdf:type owl:Class ;
+      rdfs:subClassOf :地下水参数 ,
+                      :坡度、坡向、高程 ,
+                      :材料参数 ,
+                      :植被参数 ,
+                      :边界参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/室内实验
+:室内实验 rdf:type owl:Class ;
+      rdfs:subClassOf :材料参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/小型滑坡
+:小型滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :体积类型 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/小型灾情
+:小型灾情 rdf:type owl:Class ;
+      rdfs:subClassOf :灾情等级划分 ;
+      rdfs:comment "死亡人数n<3人，直接经济损失S≤100万" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/小型险情
+:小型险情 rdf:type owl:Class ;
+      rdfs:subClassOf :险情等级划分 ;
+      rdfs:comment "直接威胁人数n＜100人，潜在经济损失S＜500万" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/小范围坍滑，位移加剧
+:小范围坍滑，位移加剧 rdf:type owl:Class ;
+            rdfs:subClassOf :勘查地表 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/层状结构滑坡
+:层状结构滑坡 rdf:type owl:Class ;
+        rdfs:subClassOf :结构分类 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/层面关系
+:层面关系 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/山体内部结构
+:山体内部结构 rdf:type owl:Class ;
+        rdfs:subClassOf :勘查地貌 ;
+        :说明 "斜坡倾向，内部结构，背斜，向斜等" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩体动剪变模量
+:岩体动剪变模量 rdf:type owl:Class ;
+         rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩体动弹性模量
+:岩体动弹性模量 rdf:type owl:Class ;
+         rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩体动泊松比
+:岩体动泊松比 rdf:type owl:Class ;
+        rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩体结构
+:岩体结构 rdf:type owl:Class ;
+      rdfs:subClassOf :地层钻探 ;
+      :说明 "岩体中结构体与结构面排列组合，岩芯完整度-岩石完整度-岩体破裂程度表征。通过数学的方法，在假设的条件下“重构”岩体内部结构，而获得岩体内部结构信息还需力学反演" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩土层渗透性
+:岩土层渗透性 rdf:type owl:Class ;
+        rdfs:subClassOf :压水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩土层裂隙性
+:岩土层裂隙性 rdf:type owl:Class ;
+        rdfs:subClassOf :压水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩土桩基模型
+:岩土桩基模型 rdf:type owl:Class ;
+        rdfs:subClassOf :物理模型 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :内摩擦角
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :剪切模量
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :坡度、坡向、高程
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :弹性模量
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :抗剪强度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :材料参数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :泊松比
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :渗透率
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :渗透系数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :边界参数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :黏聚力
+                        ] ;
+        :原理简介 """1.	模型制备： 在岩土桩基模型实验中，首先需要按照实际工程的比例和几何形状制备模型。通常使用缩尺模型，即将实际情况缩小到适当的比例，以便在实验室中进行。模型制备包括选择合适的材料，如土体、桩材等，并按照设计要求进行堆积或安装。
+2.	加载条件模拟： 在岩土桩基模型实验中，通过施加合适的荷载条件来模拟实际工程中的加载情况。可以施加垂直荷载、水平荷载、倾斜荷载等，以模拟滑坡过程中的不同受力情况。同时，还可以考虑模拟地震、侧向地下水压力等外部力的作用。
+3.	仪器监测与数据采集： 在实验过程中，通过仪器监测和数据采集系统，实时记录和监测模型中土体和桩基的位移、应力、应变等参数的变化。这些数据可用于后续的分析和研究。
+4.	结果分析与评估： 根据实验数据，可以进行对岩土桩基模型的结果进行分析和评估。通过对位移、应力分布等数据的解读，可以了解滑坡过程中土体和桩基之间的相互作用，以及桩基在防止滑坡中的作用机理。""" ;
+        :说明 "用于模拟桩基承载行为和地下结构的物理模型。这些模型可以通过模拟岩土条件来评估桩基的稳定性和荷载传递性能。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩土混合滑坡
+:岩土混合滑坡 rdf:type owl:Class ;
+        rdfs:subClassOf :物质类型 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩土矿物成分
+:岩土矿物成分 rdf:type owl:Class ;
+        rdfs:subClassOf :地层岩土 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :土层渗透性
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地下水水化学性质（ph）
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地层岩土含水率
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/水层类型>
+                        ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩土覆盖厚度
+:岩土覆盖厚度 rdf:type owl:Class ;
+        rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩土颗粒组分
+:岩土颗粒组分 rdf:type owl:Class ;
+        rdfs:subClassOf :地层岩土 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :土层密实度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地层岩土厚度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地表水入渗
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :地表水冲刷
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :斜坡类型
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :节理
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom :裂隙
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :影响 ;
+                          owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/含/水层透水性>
+                        ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩性
+:岩性 rdf:type owl:Class ;
+    rdfs:subClassOf :勘查岩性 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩石三轴试验
+:岩石三轴试验 rdf:type owl:Class ;
+        rdfs:subClassOf :抗压强度 ;
+        :原理简介 "岩石三轴试验：岩石三轴试验是一种常用的实验方法，可以同时施加轴向压力和两个垂直方向的应力，从而使岩石样本在三个方向上受到应力，最终导致岩石样本的破裂。通过测量岩石样本的应力应变关系，可以得到岩石的抗压强度。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩石侧压试验
+:岩石侧压试验 rdf:type owl:Class ;
+        rdfs:subClassOf :抗压强度 ;
+        :原理简介 "岩石侧压试验：在岩石侧压试验中，岩石样本受到侧向压力，从而引起岩石的破裂。通过测量岩石样本的侧压强度，可以间接得到岩石的抗压强度。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩系节理
+:岩系节理 rdf:type owl:Class ;
+      rdfs:subClassOf :勘查岩性 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩系裂隙
+:岩系裂隙 rdf:type owl:Class ;
+      rdfs:subClassOf :勘查岩性 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩芯
+:岩芯 rdf:type owl:Class ;
+    rdfs:subClassOf :地层钻探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩芯产状
+:岩芯产状 rdf:type owl:Class ;
+      rdfs:subClassOf :岩芯 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩芯岩性
+:岩芯岩性 rdf:type owl:Class ;
+      rdfs:subClassOf :岩芯 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩芯长度
+:岩芯长度 rdf:type owl:Class ;
+      rdfs:subClassOf :岩芯 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/岩质滑坡
+:岩质滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :物质类型 ;
+      :说明 """岩质滑坡
+	破碎岩石滑坡
+	岩石滑坡""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/巨型滑坡
+:巨型滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :体积类型 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/平移式滑坡
+:平移式滑坡 rdf:type owl:Class ;
+       rdfs:subClassOf :受力形式 ;
+       :说明 "多点位同时滑动" ;
+       rdfs:comment "多点位同时滑动" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/应力-渗透试验
+:应力-渗透试验 rdf:type owl:Class ;
+         rdfs:subClassOf :渗透率 ,
+                         :渗透系数 ;
+         :原理简介 "应力-渗透试验：在施加不同应力条件下进行渗透实验，观察渗透速率随应力变化的情况，从而得到渗透系数与应力之间的关系。" ,
+               "应力-渗透试验：在施加不同应变条件下进行渗透实验，观察渗透速率随应变变化的情况，从而得到渗透率与应变之间的关系。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/应力波法
+:应力波法 rdf:type owl:Class ;
+      rdfs:subClassOf :压缩模量 ,
+                      :泊松比 ;
+      :原理简介 "应力波法：应力波法也可以用于测定岩石的泊松比。通过观察冲击波或超声波在岩石中传播的特性，可以间接计算得到岩石的泊松比。" ,
+            "应力波法：应力波法是一种利用冲击波或超声波在岩石中传播的特性来测定岩石弹性参数的方法，通过对冲击波传播时间和岩石样本尺寸等进行测量和分析，可以间接计算出岩石的压缩模量。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/弯曲试验
+:弯曲试验 rdf:type owl:Class ;
+      rdfs:subClassOf :弹性模量 ;
+      :原理简介 "弯曲试验（Flexural Test）：弯曲试验适用于测定岩石、混凝土等材料的弯曲强度和弹性模量。在弯曲试验中，施加弯矩荷载并记录材料的变形和应力，可以计算出弹性模量的数值。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/弹性模型
+:弹性模型 rdf:type owl:Class ;
+      rdfs:subClassOf :本构模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :剪切模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :弹性模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :泊松比
+                      ] ;
+      :原理简介 """1.	胡克定律： 弹性模型假设土体服从胡克定律，即应力与应变之间呈线性关系。根据胡克定律，土体的应力（应力张量）与应变（应变张量）之间存在线性比例关系，比例常数即为土体的弹性模量。
+2.	线性弹性本构方程： 弹性模型使用线性弹性本构方程来描述土体的力学响应。这些方程将应力和应变之间的关系表示为矩阵形式，其中应力与应变之间的关系可以通过弹性模量和泊松比来确定。对于各向同性的土体，弹性模型通常使用线性胡克本构方程。
+3.	模型参数： 弹性模型的参数主要包括弹性模量和泊松比。弹性模量反映了土体的刚度，泊松比则描述了土体在受力作用下的体积变化情况。这些参数可以通过实验室试验或现场观测来确定。""" ;
+      :说明 "弹性模型是最简单的本构模型之一，假设土体在弹性阶段具有线弹性行为，即应力与应变成正比。这包括Hooke定律描述的线弹性模型，以及更复杂的弹性模型如弹塑性模型。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/弹性模量
+:弹性模量 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "弹性模量描述了岩石在受力后恢复原状的能力" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/弹性波速度法
+:弹性波速度法 rdf:type owl:Class ;
+        rdfs:subClassOf :剪切模量 ;
+        :原理简介 "弹性波速度法：利用超声波或地震波等技术，在岩石样本中传播波动，测量波速，通过岩石的密度和波速计算得到剪切模量。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/影响半径
+:影响半径 rdf:type owl:Class ;
+      rdfs:subClassOf :水文地质参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/快速滑坡
+:快速滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :速度类型 ;
+      :说明 "有时间进行逃生和疏散；房屋、财产和设备被滑体所破坏" ;
+      rdfs:comment "有时间进行逃生和疏散；房屋、财产和设备被滑体所破坏" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/悬崖模型
+:悬崖模型 rdf:type owl:Class ;
+      rdfs:subClassOf :物理模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :内摩擦角
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :剪切模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :坡度、坡向、高程
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :抗切强度
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :材料参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透率
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透系数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :边界参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :黏聚力
+                      ] ;
+      :原理简介 """1.	地形模拟： 在悬崖模型实验中，首先需要根据实际地形特征制备模型。通常采用缩尺模型，将实际的悬崖地形按照一定比例缩小制作。模型制备需要考虑地形的倾斜角度、土壤类型、植被覆盖等因素，以保证模型的相似性。
+2.	模拟荷载： 在悬崖模型实验中，可以通过施加不同类型的荷载来模拟悬崖滑坡的触发条件。可以模拟自然降雨、地震等外部荷载，也可以通过模拟悬崖脚部的侵蚀等内部荷载，以研究滑坡的触发机理。
+3.	监测与记录： 实验过程中，需要使用合适的仪器和传感器来监测模型中土体的位移、应力、应变等参数的变化。这些数据可以帮助研究人员了解滑坡过程中不同部位的响应情况，从而推断滑坡的发展趋势和机制。
+4.	结果分析与预测： 通过对实验数据的分析，可以得出悬崖滑坡发展的规律和机制。研究人员可以根据实验结果对悬崖滑坡进行预测和评估，为悬崖滑坡的防治和管理提供科学依据。""" ;
+      :说明 "使用小型或大型悬崖模型来研究悬崖和陡坡的稳定性。这些模型可以在实验室中或野外设置，通过控制坡度、土体性质和水文条件来观察悬崖的变化和滑坡的发生。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/慢速及更慢速滑坡
+:慢速及更慢速滑坡 rdf:type owl:Class ;
+          rdfs:subClassOf :速度类型 ;
+          :说明 "一些永久建筑未产生破坏，即使因滑动产生破裂也是可修复的，大型维修措施，道路与固定建筑可以得到保留，事先采取了防护措施的建筑不会产生破坏" ;
+          rdfs:comment "一些永久建筑未产生破坏，即使因滑动产生破裂也是可修复的" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/抗切强度
+:抗切强度 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "抗拉强度是指岩石在受拉应力作用下所能承受的最大应力值，单位兆帕斯（MPa）" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/抗剪强度
+:抗剪强度 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "岩石在剪切应力作用下所能承受的最大应力值" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/抗压强度
+:抗压强度 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "抗压强度是指岩石在受压应力作用下所能承受的最大应力值，单位兆帕斯（MPa）" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/抽水试验
+:抽水试验 rdf:type owl:Class ;
+      rdfs:subClassOf :地下水实验 ;
+      :说明 "单孔抽水，多孔抽水，群孔干扰抽水，实验性开采抽水" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/拉伸试验
+:拉伸试验 rdf:type owl:Class ;
+      rdfs:subClassOf :弹性模量 ,
+                      :摩擦系数 ;
+      :原理简介 "拉伸试验（Tensile Test）：在拉伸试验中，施加拉伸力来破坏岩石试样。在断裂前的阶段，测量岩石表面的剪切力和法向力，从而计算摩擦系数。" ,
+            "拉伸试验（Tensile Test）：拉伸试验适用于测定金属材料、纤维材料等的抗拉强度和弹性模量。在拉伸试验中，施加拉伸荷载并记录材料的变形和应力，可以得到弹性模量的信息。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/拉拔试验
+:拉拔试验 rdf:type owl:Class ;
+      rdfs:subClassOf :内聚力 ;
+      :原理简介 "拉拔试验（Tensile Strength Test）：对一些特殊类型的土壤或岩石，如黏土、软弱泥岩等，可以进行拉拔试验来测定其抗拉强度和内聚力。通过施加拉拔荷载并记录材料的变形和破坏情况，可以获得内聚力的信息。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/探查地下空腔
+:探查地下空腔 rdf:type owl:Class ;
+        rdfs:subClassOf :地质雷达 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/探查构造
+:探查构造 rdf:type owl:Class ;
+      rdfs:subClassOf :电法勘探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/探查滑坡面
+:探查滑坡面 rdf:type owl:Class ;
+       rdfs:subClassOf :地质雷达 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/推移式滑坡
+:推移式滑坡 rdf:type owl:Class ;
+       rdfs:subClassOf :受力形式 ;
+       :说明 "上部滑动，挤压下部" ;
+       rdfs:comment "上部滑动，挤压下部" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/提取试验
+:提取试验 rdf:type owl:Class ;
+      rdfs:subClassOf :黏聚力 ;
+      :原理简介 "提取试验（Extraction Test）：对于一些特殊类型的土壤，如粘土、淤泥等，可以进行提取试验来测定其抗拉强度和黏聚力。通过在试验装置中施加拉伸荷载并记录变形和破坏情况，可以得到黏聚力的估计值。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/摩擦系数
+:摩擦系数 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "是描述岩石颗粒或岩体表面之间相互抵抗滑动的能力的一个参数" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/数值模拟模型
+:数值模拟模型 rdf:type owl:Class ;
+        rdfs:subClassOf :d.力学模型 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :剪切模量
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :坡度、坡向、高程
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :孔隙水压
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :弹性模量
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :材料参数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :植被参数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :降雨参数
+                        ] ;
+        :说明 """地质参数：地质参数是模拟滑坡过程中最重要的参数之一。它们描述了土壤或岩石的力学特性和水文特性，包括土壤的弹性模量、剪切强度、孔隙水压等。这些参数可以通过实地勘察、地质勘探和室内试验来获取。
+
+地形参数：地形参数描述了滑坡发生区域的地形特征，如坡度、坡向、高程等。这些参数可以通过地形测量和数字高程模型（DEM）来获取。
+
+降雨参数：降雨是引发滑坡的主要因素之一。降雨参数包括降雨强度、降雨持续时间和频率等。这些参数可以通过气象记录和降雨观测数据来获取。
+
+植被参数：植被对滑坡稳定性有重要影响。植被参数包括根系抗剪强度、根系分布等。这些参数可以通过植被调查和实地观测来获取。
+
+边界条件参数：边界条件参数定义了模拟区域的边界状态，如初始应力状态、水位等。这些参数可以通过现场测量和监测数据来获取。
+
+材料参数：材料参数描述了模拟中使用的材料的特性，如土壤类型、颗粒大小、密度等。这些参数可以通过实验室试验和野外取样来获取。""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/文献资料
+:文献资料 rdf:type owl:Class ;
+      rdfs:subClassOf :历史滑坡数据 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/斜坡类型
+:斜坡类型 rdf:type owl:Class ;
+      rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/斜坡结构
+:斜坡结构 rdf:type owl:Class ;
+      rdfs:subClassOf :地貌特征 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/断裂带
+:断裂带 rdf:type owl:Class ;
+     rdfs:subClassOf :地质构造 ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层>
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :地层土体类型
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :地层岩土厚度
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :地层岩石类型
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :岩土矿物成分
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :岩土颗粒组分
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :裂隙
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :正向促进 ;
+                       owl:someValuesFrom :临空区
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :正向促进 ;
+                       owl:someValuesFrom :土层渗透性
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :正向促进 ;
+                       owl:someValuesFrom :地形海拔
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :正向促进 ;
+                       owl:someValuesFrom :地貌特征
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :正向促进 ;
+                       owl:someValuesFrom :易发区
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :负向降低 ;
+                       owl:someValuesFrom :地层岩土强度
+                     ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/易发区
+:易发区 rdf:type owl:Class ;
+     rdfs:subClassOf :地理位置 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/有限体积法（FVM）
+:有限体积法（FVM） rdf:type owl:Class ;
+            rdfs:subClassOf :数值模拟模型 ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :剪切模量
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :弹性模量
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :抗剪强度
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :泊松比
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :渗透率
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :渗透系数
+                            ] ;
+            :原理简介 """1.	网格划分：首先，需要将滑坡区域进行网格划分，将整个问题域分解成许多小的控制容积，每个控制容积都包含一个或多个离散点。
+2.	守恒方程：针对守恒形式的物理方程（如质量守恒、动量守恒、能量守恒等），在每个控制容积内对它们进行积分，从而得到离散化后的守恒方程。
+3.	通量计算：在有限体积法中，对每个控制容积的边界上需要计算通量，通量表示了相邻控制容积之间的物理量传递情况，通常使用通量插值的方法来计算。
+4.	数值求解：通过求解离散化后的守恒方程，可以得到每个控制容积上的物理量（如密度、速度、压力等）随时间的演化过程。""" ;
+            :说明 "有限体积法将求解域划分为离散的控制体积，通过在每个控制体积中对质量、动量和能量进行守恒方程的积分，求解物理场的变化。在滑坡研究中，有限体积法常用于模拟滑坡体的渗流和质量输运等过程。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/有限元法（FEM）
+:有限元法（FEM） rdf:type owl:Class ;
+           rdfs:subClassOf :数值模拟模型 ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :剪切模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :弹性模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :抗剪强度
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :材料参数
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :泊松比
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :渗透系数
+                           ] ;
+           :原理简介 """1.	离散化： 针对要研究的滑坡区域，将其离散化为许多小的有限元单元。每个有限元单元可以是点、线或面元素，通过这些小单元的组合来近似整个滑坡区域的力学性质。
+2.	建立方程： 根据弹性力学理论和材料本身的力学性质，建立相应的力学方程。通常采用平衡方程和材料本构关系来描述滑坡体的受力和变形情况。
+3.	边界条件： 确定滑坡模型的边界条件，包括受力边界和位移边界条件。这些边界条件反映了滑坡体与外界环境或支撑结构之间的相互作用关系。
+4.	数值解： 通过数值方法求解建立的力学方程，通常采用有限元法可以将原始微分方程离散化成一个方程组，然后通过数值求解方法（如迭代法）求得方程组的近似解。
+5.	结果分析： 根据数值模拟的结果，可以获得滑坡体在不同条件下的应力、应变、位移等力学参数，进而分析滑坡体的稳定性、变形特征以及可能发生的破坏形式。""" ;
+           :说明 "有限元法将复杂的结构或地质体离散化为有限个单元，并建立一个由节点和单元组成的网格。通过在每个单元上建立适当的插值函数和强度准则，利用数值计算方法求解力学方程，从而模拟滑坡体的变形和稳定性。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/有限差分法（FDM）
+:有限差分法（FDM） rdf:type owl:Class ;
+            rdfs:subClassOf :数值模拟模型 ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :剪切模量
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :弹性模量
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :抗剪强度
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :材料参数
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :泊松比
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :渗透率
+                            ] ,
+                            [ rdf:type owl:Restriction ;
+                              owl:onProperty :必备参数 ;
+                              owl:someValuesFrom :渗透系数
+                            ] ;
+            :原理简介 """1.	离散化：首先，将滑坡区域划分成一个个小的单元或网格，以便于对连续问题进行离散化处理。在有限差分法中，通常使用网格来表示空间上的离散点，而时间上则通过时间步长的离散化来处理。
+2.	方程建立：在每个离散点上，建立描述滑坡体力学行为的方程，比如动量平衡方程、运动方程等。这些方程可以根据实际情况选择合适的材料模型和边界条件。
+3.	差分逼近：将微分方程中的导数项用有限差分逼近代替，例如利用中心差分、向前差分或向后差分来逼近微分项，从而将微分方程转化为差分方程。
+4.	时间积分：有限差分法通常使用显式或隐式的时间积分方法来模拟时间上的演化过程。显式方法中，下一个时间步的解可以直接由当前时间步的解计算得到；而隐式方法中，需要通过求解一个方程组来获得下一个时间步的解。
+5.	边界条件：在模拟中需要考虑施加在滑坡体边界上的边界条件，这些条件可以包括外部施加的力、位移边界条件等。
+6.	求解方程：通过对离散化后的差分方程进行求解，可以得到各个离散点上的位移、速度、应力等信息。""" ;
+            :说明 "有限差分法将求解域离散化为网格，通过近似微分方程中的导数项，将连续问题转化为离散问题。在滑坡研究中，有限差分法常用于模拟滑坡体的变形、渗流和热传导等物理过程。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/本构模型
+:本构模型 rdf:type owl:Class ;
+      rdfs:subClassOf :d.力学模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :内摩擦角
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :剪切模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :压缩模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :孔隙水压
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :弹性模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :抗剪强度
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :摩擦系数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :材料参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :泊松比
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透率
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透系数
+                      ] ;
+      :说明 """在滑坡研究等领域，本构模型可以涉及到描述土体、岩石等不同材料的弹性、塑性、蠕变、损伤等方面的模型
+土壤或岩石力学参数： 这些参数描述了土壤或岩石的力学特性，包括弹性模量、泊松比、抗剪强度等。这些参数可以通过室内试验、室外试验或已有文献和数据库中的数据获取。
+
+孔隙水参数： 孔隙水参数描述了土壤或岩石中的水分特性，包括饱和度、渗透系数、孔隙水压等。这些参数可以通过水文观测、水文试验或已有文献和数据库中的数据获取。
+
+摩擦参数： 摩擦参数描述了土壤或岩石的内摩擦特性，包括内摩擦角、摩擦系数等。这些参数可以通过室内试验、室外试验或已有文献和数据库中的数据获取。
+
+渗流参数： 渗流参数描述了土壤或岩石中水流的特性，包括渗透率、渗透能力等。这些参数可以通过水文观测、水文试验或已有文献和数据库中的数据获取。
+
+材料密度参数： 材料密度参数描述了土壤或岩石的密度特性。这些参数可以通过实地采样、室内试验或已有文献和数据库中的数据获取。
+
+变形参数： 变形参数描述了土壤或岩石的应变特性，包括压缩模量、剪切模量等。这些参数可以通过室内试验、室外试验或已有文献和数据库中的数据获取。""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/材料参数
+:材料参数 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/松散层覆盖厚度
+:松散层覆盖厚度 rdf:type owl:Class ;
+         rdfs:subClassOf :电法勘探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/查明断层破碎带
+:查明断层破碎带 rdf:type owl:Class ;
+         rdfs:subClassOf :地质雷达 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/格拉稀因有限元法（XFEM）
+:格拉稀因有限元法（XFEM） rdf:type owl:Class ;
+                rdfs:subClassOf :数值模拟模型 ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :剪切模量
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :弹性模量
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :抗剪强度
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :泊松比
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :渗透率
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :渗透系数
+                                ] ;
+                :原理简介 """1.	有限元法： 格拉希因有限元法基于有限元法，是一种广泛应用于结构分析和土力学领域的数值分析方法。有限元法将连续物体离散为有限数量的单元，每个单元内的物理行为可以通过节点上的位移和应力来描述。在滑坡力学中，格拉希因有限元法利用有限元网格对滑坡体进行离散化，以模拟滑坡的变形和破坏过程。
+2.	格拉希因模型： 格拉希因有限元法采用了格拉希因模型，即考虑重力作用的理想弹塑性模型。该模型假设土体为弹性-完全塑性材料，在计算中包括弹性阶段和塑性阶段。弹性阶段通过线性弹性理论来描述，而塑性阶段则采用摩尔—库仑准则或摩尔—库仑—德布斯准则来描述土体的塑性行为。
+3.	重力作用： 格拉希因有限元法考虑了滑坡体内部土体颗粒之间的重力相互作用。通过在模型中引入重力荷载，可以模拟滑坡体受到的外部重力作用，并对滑坡体的稳定性进行分析。
+4.	边界条件和初始条件： 在进行格拉希因有限元法分析时，需要给定适当的边界条件和初始条件。边界条件包括约束和荷载条件，用于模拟滑坡体与周围环境的相互作用。初始条件则描述了滑坡体在开始时的应力和位移状态。
+5.	数值求解： 格拉希因有限元法使用数值方法对模型进行求解。通过离散化滑坡体，建立有限元网格，并基于格拉希因模型和相应的边界条件，通过迭代计算每个单元内的位移和应力等物理量。通过数值求解，可以获得滑坡体的应力、应变和位移等信息，进而评估滑坡体的稳定性和变形行为。""" ;
+                :说明 "格拉稀因有限元法是有限元法的一种扩展，通过引入额外的自由度来处理裂缝和界面等不规则的几何形状。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/格点法（GM）
+:格点法（GM） rdf:type owl:Class ;
+         rdfs:subClassOf :数值模拟模型 ;
+         :原理简介 """1.	网格划分： 首先，滑坡区域被划分为规则的网格或格点，每个格点代表一个离散的位置。网格可以是二维的（平面模拟）或三维的（体积模拟），具体取决于问题的要求。
+2.	方程建立： 在每个格点上，建立描述滑坡体力学行为的方程，如动量平衡、应力-应变关系等。这些方程可以根据不同的模型和假设进行选择和设定，例如弹性模型、塑性模型等。
+3.	边界条件： 在模拟中，需要设定边界条件来描述滑坡体与外界环境的相互作用。边界条件可以包括施加的外力、位移边界条件等。
+4.	数值求解： 格点法通常使用数值方法对方程进行离散化和求解。离散化将连续的方程转化为离散的差分或积分形式，然后使用数值方法（如有限差分法、有限元法等）求解得到每个格点上的位移、速度和应力等信息。
+5.	结果分析： 通过对模拟结果的分析，可以获得滑坡体的位移、速度、应力分布等信息，从而评估滑坡的稳定性和预测可能的滑坡行为。""" ;
+         :说明 "格点法是一种将区域离散化为规则或不规则网格，通过在网格节点上建立代表物理量的方程，然后通过数值求解方法得到近似解的方法。在滑坡模拟中，可以用于考虑土体的变形和位移。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/植被
+:植被 rdf:type owl:Class ;
+    rdfs:subClassOf :环境因素 ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :土层渗透性
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :地层岩土含水率
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :地表水
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :坡重
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :孔隙水压力
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :斜坡结构
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :地层岩土强度
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :坡面侵蚀度
+                    ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/植被参数
+:植被参数 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/植被调查
+:植被调查 rdf:type owl:Class ;
+      rdfs:subClassOf :植被参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/楔体滑坡
+:楔体滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :层面关系 ;
+      :说明 "在花岗岩、厚层灰岩等整体结构岩体中，沿多组弱面切割成" ;
+      rdfs:comment "在花岗岩、厚层灰岩等整体结构岩体中，沿多组弱面切割成" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/模拟坡地斜坡
+:模拟坡地斜坡 rdf:type owl:Class ;
+        rdfs:subClassOf :物理模型 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :内摩擦角
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :剪切模量
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :坡度、坡向、高程
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :抗切强度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :材料参数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :渗透率
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :渗透系数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :边界参数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :黏聚力
+                        ] ;
+        :原理简介 """1.	几何相似性原理： 实验模型的几何形状与实际斜坡相似，即保持比例关系。通常采用尺寸缩放比例来确保几何相似性。
+2.	材料相似性原理： 使用与实际斜坡相似的土体材料进行实验。土体材料的物理和力学性质应与实际斜坡的土壤或岩石相似。常见的材料包括粘土、砂土、岩石模拟材料等。
+3.	边界条件的设定： 在实验模型中，需要设定适当的边界条件来模拟实际斜坡的情况。这些边界条件可以包括斜坡的坡度、坡向、土壤的初始状态、水文条件等。
+4.	加载方式： 实验中需要施加适当的加载方式来模拟斜坡滑坡的外部力作用。加载方式可以是重力加载、水力加载、振动加载等，以模拟实际滑坡事件中的力学过程。
+5.	观测与测量： 在实验过程中，通过安装传感器和测量设备来实时监测和记录土体位移、变形、应力等参数的变化。常用的观测手段包括位移计、应变计、压力计、测斜仪等。""" ;
+        :说明 "在实验室或野外设置模拟坡地，通过操纵土体的性质、坡度和水分等因素，观察坡面的稳定性和滑坡的发生情况。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/次生崩塌
+:次生崩塌 rdf:type owl:Class ;
+      rdfs:subClassOf :次生灾害 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/次生滑坡
+:次生滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :次生灾害 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/次生灾害
+:次生灾害 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/气候
+:气候 rdf:type owl:Class ;
+    rdfs:subClassOf :环境因素 ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :土层渗透性
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地下水流量
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地层岩土含水率
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水入渗
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水冲刷
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水径流
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :坡形
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :斜坡结构
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :植被
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :地层岩土
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :坡面侵蚀度
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :裂隙
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :地层岩土强度
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :岩土颗粒组分
+                    ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/气象记录
+:气象记录 rdf:type owl:Class ;
+      rdfs:subClassOf :降雨参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/水头法
+:水头法 rdf:type owl:Class ;
+     rdfs:subClassOf :渗透率 ,
+                     :渗透系数 ;
+     :原理简介 "水头法：通过在岩石样本上设置不同高度的水头，测量孔隙中的水渗出速率，并应用达西定律等理论公式计算渗透率。" ,
+           "水头法：通过测量在岩石样本上设置不同高度水头条件下的流体渗出速率，利用达西定律和渗透流动理论，可以计算得到渗透系数。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/水层分布
+:水层分布 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :影响 ;
+                        owl:someValuesFrom :土层渗透性
+                      ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/水层结构
+:水层结构 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/水文力
+:水文力 rdf:type owl:Class ;
+     rdfs:subClassOf :二.水文学 ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :土层渗透性
+                     ] ,
+                     [ rdf:type owl:Restriction ;
+                       owl:onProperty :影响 ;
+                       owl:someValuesFrom :地层岩土强度
+                     ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/水文地质参数
+:水文地质参数 rdf:type owl:Class ;
+        rdfs:subClassOf :抽水试验 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/水文实验
+:水文实验 rdf:type owl:Class ;
+      rdfs:subClassOf :地下水参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/水文调查
+:水文调查 rdf:type owl:Class ;
+      rdfs:subClassOf :地下水参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/泉水出露
+:泉水出露 rdf:type owl:Class ;
+      rdfs:subClassOf :地下水 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/泊松比
+:泊松比 rdf:type owl:Class ;
+     rdfs:subClassOf :c.物理参数 ;
+     :说明 "泊松比是描述岩石体积变形特性的参数" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/注水实验
+:注水实验 rdf:type owl:Class ;
+      rdfs:subClassOf :孔隙水压 ,
+                      :渗透率 ,
+                      :渗透系数 ;
+      :原理简介 "注水实验：通过在岩石样本中注入水，并监测孔隙水压力和渗透速率的变化，可以计算得到渗透系数。" ,
+            "注水实验：通过在岩石样本中注入水，并监测孔隙水的压力变化，可以了解孔隙水在不同条件下的压力响应。" ,
+            "注水实验：通过在岩石样本中注入水，并监测孔隙水的压力和渗透速率的变化，从而得到渗透率的相关信息。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/浮托力
+:浮托力 rdf:type owl:Class ;
+     rdfs:subClassOf :水文力 ;
+     :说明 "土体或岩石内部的孔隙水提供了一部分支撑力" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/液限试验
+:液限试验 rdf:type owl:Class ;
+      rdfs:subClassOf :黏聚力 ;
+      :原理简介 "液限试验（Liquid Limit Test）：液限试验是一种常用的土壤黏聚力测试方法，主要适用于粘性土壤。在液限试验中，通过逐渐加水并搅拌土壤样品，观察土壤在不同水含量下的变形特性，从而确定液限（Liquid Limit）和塑性指数（Plasticity Index）。通过计算塑性指数，可以获得土壤的黏聚力近似值。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/混合式滑坡
+:混合式滑坡 rdf:type owl:Class ;
+       rdfs:subClassOf :受力形式 ;
+       :说明 "多种滑动形式混合滑坡" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/混合有限元法（MFEM）
+:混合有限元法（MFEM） rdf:type owl:Class ;
+              rdfs:subClassOf :数值模拟模型 ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :剪切模量
+                              ] ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :弹性模量
+                              ] ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :抗剪强度
+                              ] ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :泊松比
+                              ] ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :渗透率
+                              ] ,
+                              [ rdf:type owl:Restriction ;
+                                owl:onProperty :必备参数 ;
+                                owl:someValuesFrom :渗透系数
+                              ] ;
+              :原理简介 """1.	变量选择： 传统的有限元法通常只使用位移作为主要变量来描述结构或土体的变形行为，但在滑坡力学中，仅使用位移作为唯一变量可能会导致计算误差较大。因此，混合有限元法引入了位移和应力两个变量，以更准确地描述滑坡体的力学行为。
+2.	离散化： 类似于传统的有限元法，混合有限元法将滑坡体离散为有限数量的单元，并通过节点上的位移和应力来描述每个单元内的物理行为。不同的是，混合有限元法使用了不同类型的元素，如位移元素和应力元素，来分别描述位移和应力的分布情况。
+3.	变分原理： 混合有限元法基于变分原理，通过最小化能量泛函来推导出离散化后的方程组。利用拉格朗日乘子法，将位移和应力两个变量联系起来，建立耦合的方程组。
+4.	基函数和插值： 在混合有限元法中，位移和应力的分布通常使用不同类型的基函数进行插值。位移变量通常使用连续性较高的基函数，如线性或二次基函数，而应力变量则使用不连续的基函数，如常量或线性基函数。通过选择适当的基函数，可以更好地逼近滑坡体的真实行为。
+5.	数值求解： 混合有限元法使用数值方法对离散化后的方程组进行求解。常见的求解方法包括迭代法、矩阵求逆法等。通过迭代计算每个单元内的位移和应力，可以得到滑坡体的变形和力学响应。""" ;
+              :说明 "混合有限元法用于同时求解位移和应力场，适用于涉及不可压缩流体和固体相互作用的问题。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/渗流-固结耦合模型
+:渗流-固结耦合模型 rdf:type owl:Class ;
+           rdfs:subClassOf :本构模型 ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :压缩模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :孔隙水压
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :抗压强度
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :渗透率
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :渗透系数
+                           ] ;
+           :原理简介 """1.	孔隙水压力与有效应力： 在土体内部，孔隙空间中存在着水分，并且水分的存在会对土体的力学性质产生影响。渗流-固结耦合模型考虑了孔隙水压力对土体有效应力的影响，即孔隙水压力会降低土体的有效应力，从而影响土体的强度和变形特性。
+2.	渗流方程： 渗流-固结耦合模型通过渗流方程描述了土体内部水分的运移规律。这通常包括了达西定律或者更为复杂的渗流方程，用来描述水分在土体孔隙中的流动情况。
+3.	固结变形： 土体在承受外部荷载或水力荷载作用下会发生固结变形。固结变形是由于孔隙水压力、土体颗粒重新排列等因素引起的，这些因素会影响土体的体积变化和力学性质。渗流-固结耦合模型考虑了水分运移对土体固结变形的影响，以及土体固结变形对水分运移的影响。
+4.	耦合关系： 渗流-固结耦合模型通过建立孔隙水压力与有效应力之间的关系，以及水分运移与土体变形之间的关系，来描述水分和土体力学性质之间的相互作用。这种耦合关系使得水分运移和土体固结能够相互影响，从而更准确地描述土体的力学和水文响应。""" ;
+           :说明 "一种用于描述滑坡或边坡稳定性的模型，它考虑了水流对土体的渗流和土体固结效应的影响。该模型将渗流方程和固结方程耦合在一起，以综合考虑水流和固结对滑坡稳定性的影响。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/渗流压力
+:渗流压力 rdf:type owl:Class ;
+      rdfs:subClassOf :水文力 ;
+      :说明 "地下水对土体或岩石内部产生的压力，影响土体或岩石的强度和变形特性。" ,
+          """渗流压力的主要特点包括：
+孔隙水压力变化：地下水的渗流导致土体或岩石内部孔隙水压力的变化，这种压力的变化会直接影响土体或岩石的强度和变形特性。
+渗流速度影响：地下水的渗流速度会影响渗流压力的大小，较大的渗流速度通常会导致较大的渗流压力。
+支持作用与稳定性：在一些工程中，适度的渗流压力可以提供一定程度的支持作用，但过大的渗流压力可能导致土体或岩石的破坏和不稳定性问题。""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/渗透实验
+:渗透实验 rdf:type owl:Class ;
+      rdfs:subClassOf :孔隙水压 ,
+                      :渗透率 ,
+                      :渗透系数 ;
+      :原理简介 "渗透实验：利用渗透仪器施加一定压力，观察水在岩石样本中的渗透速率，从而计算得到渗透率。" ,
+            "渗透实验：通过施加外部压力，观察孔隙中水的渗透行为，可以获取孔隙水的渗透性和渗透压力，从而得到孔隙水压的相关信息。" ,
+            "渗透试验：在渗透仪器中施加一定压力，观察流体在岩石样本中的渗透速率。根据达西定律和渗透流动理论，可以计算得到渗透系数。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/渗透率
+:渗透率 rdf:type owl:Class ;
+     rdfs:subClassOf :c.物理参数 ;
+     :说明 "描述岩石、土壤等多孔介质对流体（通常为水）渗透能力的物理量。它衡量了流体在多孔介质中传导的能力，即单位时间内单位面积上的流体通过多孔介质的量。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/渗透系数
+:渗透系数 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 ;
+      :说明 "渗透系数通常指的是土壤或岩石对水分的渗透性，即水分在土壤或岩石中传播的能力" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑动模式层
+:滑动模式层 rdf:type owl:Class ;
+       rdfs:subClassOf :勘查岩性 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑动面数量
+:滑动面数量 rdf:type owl:Class ;
+       rdfs:subClassOf :地层钻探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡体前缘后缘裂缝
+:滑坡体前缘后缘裂缝 rdf:type owl:Class ;
+           rdfs:subClassOf :勘查地表 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡体解体程度
+:滑坡体解体程度 rdf:type owl:Class ;
+         rdfs:subClassOf :表征力学量 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡易发构造类型
+:滑坡易发构造类型 rdf:type owl:Class ;
+          rdfs:subClassOf :勘查构造 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/滑坡本体
+:滑坡本体 rdf:type owl:Class .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/灾情等级划分
+:灾情等级划分 rdf:type owl:Class ;
+        rdfs:subClassOf :等级判定 ;
+        rdfs:comment "地质灾害灾情等级﹐应根据人员伤亡和经济损失的大小" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/物理模型
+:物理模型 rdf:type owl:Class ;
+      rdfs:subClassOf :d.力学模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :内摩擦角
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :剪切模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :坡度、坡向、高程
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :孔隙水压
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :弹性模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :抗剪强度
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :摩擦系数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :泊松比
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透率
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透系数
+                      ] ;
+      :说明 """土壤或岩石力学参数： 包括弹性模量、泊松比、抗剪强度等。这些参数可以通过室内试验、室外试验或已有文献和数据库中的数据获取。
+
+孔隙水参数： 包括饱和度、渗透系数、孔隙水压等。这些参数可以通过水文观测、水文试验或已有文献和数据库中的数据获取。
+
+摩擦参数： 包括内摩擦角、摩擦系数等。这些参数可以通过室内试验、室外试验或已有文献和数据库中的数据获取。
+
+渗流参数： 包括渗透率、渗透能力等。这些参数可以通过水文观测、水文试验或已有文献和数据库中的数据获取。
+
+材料密度参数： 描述了土壤或岩石的密度特性。这些参数可以通过实地采样、室内试验或已有文献和数据库中的数据获取。
+
+变形参数： 描述了土壤或岩石的应变特性，包括压缩模量、剪切模量等。这些参数可以通过室内试验、室外试验或已有文献和数据库中的数据获取。""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/物理模型台
+:物理模型台 rdf:type owl:Class ;
+       rdfs:subClassOf :物理模型 ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :内摩擦角
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :剪切模量
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :坡度、坡向、高程
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :抗切强度
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :材料参数
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :渗透率
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :渗透系数
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :边界参数
+                       ] ,
+                       [ rdf:type owl:Restriction ;
+                         owl:onProperty :必备参数 ;
+                         owl:someValuesFrom :黏聚力
+                       ] ;
+       :原理简介 """1.	相似性原理： 物理模型台的设计基于相似性原理，即将实际滑坡系统缩小比例构建成模型。这需要确保在几何尺寸、应力状态、材料特性等方面的相似性。通过合理选择模型和实际系统的尺寸比例，可以使模型中的应力场和变形行为与实际情况相似。
+2.	材料模拟： 为了模拟土体的力学性质，常用的方法是使用物理模型台上的模型土代替实际土体。模型土通常采用一种具有与实际土体相似的物理性质的材料，如粉状物质、砂土、黏土等。模型土的密度、粒径分布、黏聚力和内摩擦角等参数需要根据实际土体特性进行选择和调整。
+3.	加载条件模拟： 在物理模型台上，需要施加适当的加载条件来模拟实际滑坡环境中的力学作用。这可能包括自重、水力压力、地震荷载等。通过施加合适的荷载和边界条件，可以模拟出实际滑坡中的力学响应，如土体的位移、应力分布和变形形态。
+4.	测量与观测： 物理模型台上配备有传感器和测量设备，用于监测实验过程中的各种参数变化。这些参数包括位移、应力、应变等。通过实时测量和记录这些数据，并结合模型台上的实际观察，可以获得关于滑坡行为和破坏机制的信息。""" ;
+       :说明 "物理模型台是专门设计的实验设备，用于模拟地质结构和边坡的力学行为。它可以包括模拟土体、水流和坡地表面的各种元素。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/物质类型
+:物质类型 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/牵引式滑坡
+:牵引式滑坡 rdf:type owl:Class ;
+       rdfs:subClassOf :受力形式 ;
+       :说明 "下部滑动，上部缺少支撑滑动" ;
+       rdfs:comment "下部滑动，上部缺少支撑滑动" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/特大型滑坡
+:特大型滑坡 rdf:type owl:Class ;
+       rdfs:subClassOf :体积类型 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/特大型灾情
+:特大型灾情 rdf:type owl:Class ;
+       rdfs:subClassOf :灾情等级划分 ;
+       rdfs:comment "死亡人数≥30人，直接经济损失≥1000万" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/特大型险情
+:特大型险情 rdf:type owl:Class ;
+       rdfs:subClassOf :险情等级划分 ;
+       rdfs:comment "直接威胁人数n≥1000人，潜在经济损失S≥1亿" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/环境
+:环境 rdf:type owl:Class ;
+    rdfs:subClassOf :环境因素 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/环境因素
+:环境因素 rdf:type owl:Class ;
+      rdfs:subClassOf :一.地学 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/电法勘探
+:电法勘探 rdf:type owl:Class ;
+      rdfs:subClassOf :地质探测 ;
+      :说明 "岩土的种类、成分、结构、湿度和温度等因素不同而具有不同的电学性质不同" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/监测数据
+:监测数据 rdf:type owl:Class ;
+      rdfs:subClassOf :边界参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/矿物成分
+:矿物成分 rdf:type owl:Class ;
+      rdfs:subClassOf :岩芯 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/破碎带
+:破碎带 rdf:type owl:Class ;
+     rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/确定岩性
+:确定岩性 rdf:type owl:Class ;
+      rdfs:subClassOf :电法勘探 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/磨损试验
+:磨损试验 rdf:type owl:Class ;
+      rdfs:subClassOf :摩擦系数 ;
+      :原理简介 "磨损试验（Abrasion Test）：通过模拟实际工程或自然环境中的磨损情况，测量岩石颗粒或岩体表面之间的摩擦力和法向力，以得到摩擦系数。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/离心模型
+:离心模型 rdf:type owl:Class ;
+      rdfs:subClassOf :物理模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :内摩擦角
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :剪切模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :坡度、坡向、高程
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :抗切强度
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :材料参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透率
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透系数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :边界参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :黏聚力
+                      ] ;
+      :原理简介 """1.	离心力原理： 离心模式利用了离心力的原理，通过将实验模型放置在离心机上，利用高速旋转产生的离心加速度来模拟地震或其他外部荷载作用下土体的响应。离心力可以使模型中的重力场加倍、五倍甚至更多倍增加，从而加快模型中的地质过程，使实验时间大大缩短。
+2.	尺度效应的控制： 在离心模式中，通过合适的缩尺处理，模型中的长度、时间和力比例得以保持，以确保实验模型与实际情况之间的相似性。这意味着模型中的土体颗粒受到的应力、变形等效应与实际情况具有一定的相似性。
+3.	模型土体的选择： 在离心模式中，需要选择合适的模型土体来代替实际土体，通常使用细颗粒材料如粉状物质、砂土等。模型土的物理性质需要与实际土体相似，同时要求材料具有较好的可压缩性和可量测性。
+4.	加载条件模拟： 离心模式下，通过调整离心机的转速和加载方式，可以模拟出不同的地震或其他外部荷载条件，如施加水压力、模拟地震波等。这样可以模拟实际滑坡过程中的多种复杂力学作用。
+5.	数据获取与分析： 离心模式通常配备有传感器和数据采集系统，用于实时监测模型中土体的位移、应力、应变等参数的变化。通过对实验数据的分析和解读，可以获取关于滑坡行为和机理的详细信息。""" ;
+      :说明 "离心模型是一种通过高速旋转模型台来模拟真实地质条件的方法。这种模型可以模拟较大规模的滑坡或地质灾害，并观察在模型中土体的运动。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/离散元法（DEM）
+:离散元法（DEM） rdf:type owl:Class ;
+           rdfs:subClassOf :数值模拟模型 ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :内摩擦角
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :弹性模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :材料参数
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :边界参数
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :黏聚力
+                           ] ;
+           :原理简介 """1.	颗粒离散化： 离散元法将颗粒材料或岩土体看作由大量个离散颗粒或单元组成的离散体系，每个颗粒或单元都具有一定的质量、形状和相互作用力。
+2.	建立颗粒间相互作用模型： 对于每对颗粒之间的相互作用力进行建模，这些相互作用力可以包括颗粒之间的弹性力、摩擦力、凝聚力等。这些相互作用力模型可以根据颗粒材料的特性和实际情况进行设定。
+3.	时间积分： 通过数值积分方法（如显式或隐式积分）来模拟颗粒体系在时间上的演化过程，计算每个时刻颗粒的位置、速度和受到的力。
+4.	碰撞和接触： 在离散元法中，需要考虑颗粒之间的碰撞和接触情况，根据碰撞模型和接触力模型来计算颗粒间的相互作用力。
+5.	结果分析： 通过模拟得到的颗粒体系的演化过程，可以获得颗粒的位移、速度、应力分布等信息，从而分析滑坡的形成机理和发展规律。""" ;
+           :说明 "离散元法通过模拟颗粒体的运动和相互作用，考虑滑坡体内部颗粒之间的接触和摩擦，用于分析滑坡体的力学行为和滑动机制。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/等级判定
+:等级判定 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> ;
+      rdfs:comment "根据《地质灾害分类分级标准（试行）2018》判定" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/简单量纲分析
+:简单量纲分析 rdf:type owl:Class ;
+        rdfs:subClassOf :d.力学模型 ;
+        :说明 """地形参数： 包括坡度、坡向、高程等。这些参数可以通过地形测量数据、数字高程模型（DEM）或卫星遥感图像等获取。
+
+土壤或岩石力学参数： 包括抗剪强度、弹性模量、泊松比等。这些参数可以通过室内试验、室外试验或已有文献和数据库中的数据获取。
+
+水文参数： 包括降雨量、降雨强度、降雨时长等。这些参数可以通过气象观测数据、气象记录或相关的水文数据获取。
+
+水文地质参数： 包括渗透率、渗透系数等。这些参数可以通过水文观测、水文试验或已有文献和数据库中的数据获取。
+
+植被参数： 包括植被覆盖率、根系特性等。这些参数可以通过植被调查、遥感图像解译或相关文献资料获取。
+
+地下水参数： 包括地下水位、水文条件等。这些参数可以通过水文观测、水文调查或相关的水文数据获取。
+
+滑坡历史数据： 包括滑坡发生的位置、规模、影响等。这些数据可以通过历史记录、卫星遥感图像或相关的灾害报告和文献资料获得。""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/细观-宏观耦合模型
+:细观-宏观耦合模型 rdf:type owl:Class ;
+           rdfs:subClassOf :本构模型 ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :内摩擦角
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :孔隙水压
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :弹性模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :抗压强度
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :材料参数
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :渗透率
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :渗透系数
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :黏聚力
+                           ] ;
+           :原理简介 """1.	多尺度建模： 细观-宏观耦合模型同时考虑了细观尺度和宏观尺度两个层面上的物理过程。在细观尺度上，采用细观本构模型来描述土体颗粒的微观行为；在宏观尺度上，采用宏观本构模型来描述土体的宏观力学响应。
+2.	耦合方法： 细观-宏观耦合模型通过耦合方法将细观尺度和宏观尺度的计算结果相互关联。通常采用界面元素或子区域方法等技术，在细观尺度和宏观尺度之间建立相应的耦合关系。这样可以保留细观尺度的细节，同时考虑到宏观尺度上的整体力学行为。
+3.	参数传递与校正： 细观-宏观耦合模型需要将细观尺度和宏观尺度的参数进行传递和校正。在细观尺度上，通过实验室试验或数值模拟获取颗粒级别的材料参数；然后通过界面元素或子区域方法将这些参数传递到宏观尺度上，以获得宏观本构模型的参数。同时，根据宏观尺度上的响应结果对细观尺度的模型进行校正和修正。""" ;
+           :说明 "结合了岩土材料的微观结构和宏观力学行为的本构模型，用于更准确地模拟边坡的力学性能和变形特性。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/细观本构模型
+:细观本构模型 rdf:type owl:Class ;
+        rdfs:subClassOf :本构模型 ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :剪切模量
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :弹性模量
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :抗切强度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :抗剪强度
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :材料参数
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :泊松比
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :渗透率
+                        ] ,
+                        [ rdf:type owl:Restriction ;
+                          owl:onProperty :必备参数 ;
+                          owl:someValuesFrom :渗透系数
+                        ] ;
+        :原理简介 """1.	颗粒尺度模拟： 细观本构模型将土体视为由许多颗粒组成的离散介质，通过模拟颗粒之间的相互作用来描述土体的力学行为。每个颗粒在模型中被看作一个单独的实体，具有质量、形状和力学性质。
+2.	颗粒间相互作用： 细观本构模型考虑了颗粒之间的接触力和摩擦力，以及可能存在的粘聚力等力学行为。这些相互作用力可以通过力学公式或经验关系来描述，通常使用弹簧-阻尼模型或接触力模型来表示。
+3.	颗粒运动方程： 细观本构模型基于牛顿定律，通过求解颗粒的运动方程来模拟土体的力学响应。这些方程考虑了质量、惯性力、外力和相互作用力等因素，可以通过数值方法（如离散元法）进行求解。
+4.	模型参数： 细观本构模型的参数包括颗粒的质量、形状、材料性质以及相互作用力模型的参数等。这些参数需要通过实验室试验或颗粒尺度模拟来确定，以使模型能够准确地描述土体的微观力学行为。""" ;
+        :说明 "细观本构模型尝试从土体微观结构出发，通过考虑土粒间的相互作用来描述土体的宏观力学行为，如离散元模型、有限元模型等。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/经验模型
+:经验模型 rdf:type owl:Class ;
+      rdfs:subClassOf :d.力学模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :内摩擦角
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :历史滑坡数据
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :地下水参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :坡度、坡向、高程
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :弹性模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :植被参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :边界参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :降雨参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :黏聚力
+                      ] ;
+      :说明 """在滑坡边坡力学研究中，一些经验性模型也被广泛用于估算土体的强度和变形特性。这些模型通常基于实地调查和试验结果，以经验公式的形式提供对土体行为的近似描述
+降雨特征参数： 包括雨量、雨强、雨时和雨型等。这些参数可以通过气象观测数据获取，也可以根据历史降雨记录和气象资料进行估算。
+
+地形特征参数： 包括坡度、坡向、地形起伏等。这些参数可以通过地形测量数据、数字高程模型（DEM）或卫星遥感图像等获取。
+
+土壤特性参数： 包括土壤类型、颗粒分布、含水量等。这些参数可以通过现地勘察、室内试验或已有的土壤数据库和地质图等获取。
+
+植被覆盖参数： 包括植被类型、覆盖率、根系特性等。这些参数可以通过植被调查、遥感图像解译或相关文献资料获取。
+
+历史滑坡数据： 包括历史滑坡发生的位置、规模、影响等。这些数据可以通过历史记录、卫星遥感图像或相关的灾害报告和文献资料获得。
+
+地下水情况： 包括地下水位、水文条件等。这些参数可以通过水文观测、水文调查或相关的水文数据获取。""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/结构分类
+:结构分类 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/给水度
+:给水度 rdf:type owl:Class ;
+     rdfs:subClassOf :水文地质参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/节理
+:节理 rdf:type owl:Class ;
+    rdfs:subClassOf :地质构造 ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层>
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地下水埋深
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地下水流量
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地层岩土含水率
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地层岩土强度
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地层岩石类型
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水入渗
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水冲刷
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :地表水径流
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :岩土颗粒组分
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :土层渗透性
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :土层密实度
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :地层岩土强度
+                    ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/融合离散与连续法（CDCM）
+:融合离散与连续法（CDCM） rdf:type owl:Class ;
+                rdfs:subClassOf :数值模拟模型 ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :地下水参数
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :坡度、坡向、高程
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :孔隙水压
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :弹性模量
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :材料参数
+                                ] ,
+                                [ rdf:type owl:Restriction ;
+                                  owl:onProperty :必备参数 ;
+                                  owl:someValuesFrom :边界参数
+                                ] ;
+                :原理简介 """1.	离散模型： 融合离散与连续法将滑坡体看作是由离散的颗粒或者块体组成的系统。每个颗粒或块体都有自己的几何形状、物理性质和相互作用关系。离散模型通过描述和追踪每个颗粒或块体的运动和相互作用来模拟滑坡体的变形和破坏过程。
+2.	连续模型： 同时，融合离散与连续法也考虑了滑坡体的连续性特征。通过在离散模型中引入连续介质的概念，例如土体的应力和应变场，可以用来描述滑坡体内部的连续性行为。连续模型通常使用弹性力学或弹塑性力学等连续介质力学理论进行建模。
+3.	耦合关系： 融合离散与连续法的关键在于建立离散模型和连续模型之间的耦合关系。通过将离散颗粒或块体的运动和相互作用与连续介质的应力和应变联系起来，可以实现离散与连续之间的信息传递和能量平衡。
+4.	数值求解： 融合离散与连续法使用数值方法对模型进行求解。离散模型通常使用离散元法（Discrete Element Method，DEM）或者颗粒流体模拟法（Particle-Fluid Simulation，PFS）等方法进行求解，而连续模型则使用有限元法（Finite Element Method，FEM）或者边界元法（Boundary Element Method，BEM）等方法进行求解。通过将离散模型和连续模型进行耦合，可以得到滑坡体内部的应力、应变和位移等物理量的分布情况。""" ;
+                :说明 "融合离散与连续法将滑坡体分为离散颗粒和连续介质两部分，并考虑它们之间的相互作用。离散部分使用离散元法描述颗粒的运动和相互作用，而连续部分使用有限元法或有限差分法描述连续介质的变形和渗流过程。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/表征力学量
+:表征力学量 rdf:type owl:Class ;
+       rdfs:subClassOf :勘查地表 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/裂缝密集带
+:裂缝密集带 rdf:type owl:Class ;
+       rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/裂隙
+:裂隙 rdf:type owl:Class ;
+    rdfs:subClassOf :地质构造 ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :影响 ;
+                      owl:someValuesFrom :水层分布
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :地下水流量
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :地表水入渗
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :坡面侵蚀度
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom :斜坡结构
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :正向促进 ;
+                      owl:someValuesFrom <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/含/水层透水性>
+                    ] ,
+                    [ rdf:type owl:Restriction ;
+                      owl:onProperty :负向降低 ;
+                      owl:someValuesFrom :地层岩土强度
+                    ] .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/角度内摩擦试验
+:角度内摩擦试验 rdf:type owl:Class ;
+         rdfs:subClassOf :内摩擦角 ;
+         :原理简介 "角度内摩擦试验（Angle of Repose Test）：该试验通常用于颗粒状的岩石材料，如砂土和碎石。在角度内摩擦试验中，将岩石颗粒沿一个平面倾斜，测量颗粒自由堆积时的最大坡面角度，这个角度即为内摩擦角。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/超高速滑坡
+:超高速滑坡 rdf:type owl:Class ;
+       rdfs:subClassOf :速度类型 ;
+       :说明 "破坏力巨大，地表建筑完全毁灭，滑体的冲击或崩解造成巨大人员伤亡" ;
+       rdfs:comment "破坏力巨大，地表建筑完全毁灭，滑体的冲击或崩解造成巨大人员伤亡" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/边界元法（BEM）
+:边界元法（BEM） rdf:type owl:Class ;
+           rdfs:subClassOf :数值模拟模型 ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :剪切模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :弹性模量
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :抗剪强度
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :泊松比
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :渗透率
+                           ] ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :必备参数 ;
+                             owl:someValuesFrom :渗透系数
+                           ] ;
+           :原理简介 """1.	问题离散化： 边界元法将问题的整个区域分为两部分，一部分是求解区域的边界，另一部分是区域内部。问题的边界通常是问题的关键部分，因此在这里进行离散化。
+2.	基本解和积分方程： 对于弹性力学问题，边界元法使用基本解（fundamental solution）来表示位势或位移。基本解是满足问题的椭圆形微分方程的解。通过使用基本解，可以得到一个积分方程，该积分方程描述了问题的边界上的位势或位移与边界上给定的边界条件之间的关系。
+3.	离散化和求解： 在边界上选取一系列的节点，然后使用这些节点来近似积分方程。通过将积分方程离散化为一个线性方程组，可以求解节点上的未知位势或位移。
+4.	结果分析： 通过求解得到的位势或位移，可以计算出与问题相关的应力、应变以及其他力学参数。这些参数对于分析滑坡的稳定性和行为具有重要意义。""" ;
+           :说明 "边界元法通过在问题域的边界上求解积分方程，得到内部区域的位移和应力场，用于分析滑坡体的稳定性和滑动行为。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/边界参数
+:边界参数 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/近水平层状滑坡
+:近水平层状滑坡 rdf:type owl:Class ;
+         rdfs:subClassOf :层面关系 ;
+         :说明 "滑动面倾角≤10°" ;
+         rdfs:comment "滑动面倾角≤10o" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/逆层滑坡
+:逆层滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :层面关系 ;
+      :说明 "岩层倾向山内，滑动面与岩层层面相反。" ;
+      rdfs:comment "岩层倾向山内，滑动面与岩层层面相反。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/速度类型
+:速度类型 rdf:type owl:Class ;
+      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/遥感解译
+:遥感解译 rdf:type owl:Class ;
+      rdfs:subClassOf :历史滑坡数据 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/醉汉林，马刀树
+:醉汉林，马刀树 rdf:type owl:Class ;
+         rdfs:subClassOf :勘查地表 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/降雨参数
+:降雨参数 rdf:type owl:Class ;
+      rdfs:subClassOf :c.物理参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/降雨观测
+:降雨观测 rdf:type owl:Class ;
+      rdfs:subClassOf :降雨参数 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/险情等级划分
+:险情等级划分 rdf:type owl:Class ;
+        rdfs:subClassOf :等级判定 ;
+        rdfs:comment "地质灾害险情等级,应根据直接威胁人数和潜在经济损失的大小" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/隔水层起伏
+:隔水层起伏 rdf:type owl:Class ;
+       rdfs:subClassOf :勘查水文 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/静态压缩试验
+:静态压缩试验 rdf:type owl:Class ;
+        rdfs:subClassOf :压缩模量 ,
+                        :抗压强度 ,
+                        :泊松比 ;
+        :原理简介 "静态压缩试验：在进行静态压缩试验时，也可以测定岩石的泊松比。在试验中，通过施加轴向压力并测量垂直方向的侧向应变，同样可以计算得到岩石的泊松比。" ,
+              "静态压缩试验：在静态压缩试验中，将岩石样本置于专用的压缩试验机中，施加逐渐增大的轴向压力，并测量相应的轴向应变。通过绘制应力-应变曲线并进行斜率分析，可以得到岩石的压缩模量。" ,
+              "静态压缩试验：在静态压缩试验中，将岩石样本置于压缩试验机中，施加逐渐增大的轴向压力，直到岩石样本发生破裂。通过测量岩石样本的最大承载力和变形情况，可以计算得到岩石的抗压强度。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/静态拉伸试验
+:静态拉伸试验 rdf:type owl:Class ;
+        rdfs:subClassOf :泊松比 ;
+        :原理简介 "静态拉伸试验：在静态拉伸试验中，将岩石样本置于拉伸试验机中，施加逐渐增大的轴向拉伸力，并同时测量岩石样本的横向应变。通过计算得到的应力-应变关系，可以得到岩石的泊松比。" ,
+              "静态拉伸试验：在静态拉伸试验中，将岩石样本置于拉伸试验机中，施加逐渐增大的轴向拉伸力，直到岩石样本发生破裂。通过测量岩石样本的断裂应力和断裂应变，可以计算得到岩石的抗拉强度。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/静水压力
+:静水压力 rdf:type owl:Class ;
+      rdfs:subClassOf :水文力 ;
+      :说明 "静止不动的地下水所施加在土体或岩石上的压力" ,
+          """静水压力的主要特点包括：
+地下水位影响：地下水位的高低直接影响着静水压力的大小，因此地下水位的变化会引起静水压力的变化。
+支持作用：静水压力可以提供一定程度的支持作用，特别是在挖掘、基础工程等方面，对于土体或岩石的稳定性有一定的影响。
+渗流压力：静水压力也包括了由于地下水渗流引起的压力，这种压力是由孔隙水在土体或岩石中的渗流引起的。""" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/非易发区
+:非易发区 rdf:type owl:Class ;
+      rdfs:subClassOf :易发区 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/非线性弹塑性模型
+:非线性弹塑性模型 rdf:type owl:Class ;
+          rdfs:subClassOf :本构模型 ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :剪切模量
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :孔隙水压
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :抗剪强度
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :抗压强度
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :材料参数
+                          ] ,
+                          [ rdf:type owl:Restriction ;
+                            owl:onProperty :必备参数 ;
+                            owl:someValuesFrom :渗透系数
+                          ] ;
+          :原理简介 """1.	弹性行为： 在小应变范围内，土体表现出线弹性行为，即应变与应力成正比。这可以用胡克定律来描述，其中应力张量与应变张量之间的关系是线性的。在滑坡力学中，通常采用线弹性模型来描述土体在小应变范围内的行为。
+2.	塑性行为： 当土体受到超过其弹性极限的应力时，就会发生塑性变形。塑性变形是非可逆的，即使减小应力，土体仍会保持塑性变形。塑性行为通常使用流动规则（流动准则）来描述，其中应力张量的演化与应变张量的演化相关。
+3.	破坏行为： 当土体受到超过其强度极限的应力时，就会发生破坏。破坏通常通过破坏准则来描述，该准则定义了土体的破坏条件和破坏模式。
+4.	非线性行为： 非线性弹塑性模型考虑了土体的非线性行为，即在加载和卸载过程中，土体的应力-应变关系是非线性的。这要求采用适当的本构关系来描述土体的非线性响应，如Mohr-Coulomb模型、Drucker-Prager模型和Cam-Clay模型等。""" ;
+          :说明 "针对某些特定的岩土材料，在滑坡边坡模拟中可能需要使用更复杂的本构模型，例如考虑材料的非线性弹塑性行为，以更准确地描述边坡在受力过程中的行为。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/顺层滑坡
+:顺层滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :层面关系 ;
+      :说明 "沿着岩层层面发生滑动" ;
+      rdfs:comment "沿着岩层层面发生滑动" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/风化带
+:风化带 rdf:type owl:Class ;
+     rdfs:subClassOf :地层地震波 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/风化程度
+:风化程度 rdf:type owl:Class ;
+      rdfs:subClassOf :岩芯 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/风洞模型
+:风洞模型 rdf:type owl:Class ;
+      rdfs:subClassOf :物理模型 ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :内摩擦角
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :剪切模量
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :抗切强度
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :材料参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透率
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :渗透系数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :边界参数
+                      ] ,
+                      [ rdf:type owl:Restriction ;
+                        owl:onProperty :必备参数 ;
+                        owl:someValuesFrom :黏聚力
+                      ] ;
+      :原理简介 """1.	模拟地形和结构： 风洞模型需要根据实际情况选择合适的地形和结构物进行模拟。对于滑坡研究，可以模拟不同地形的坡面，以及可能受到风影响的植被、岩石或土壤等。此外，也可以模拟建筑物或其他人造结构，以研究风对这些结构的影响。
+2.	模拟风场： 在风洞模型中，通过控制风机或其他装置来模拟不同风速和风向的风场。通过调整风速和方向，可以模拟不同气象条件下的风对地形和结构的作用，包括风速、风向的变化等。
+3.	测量与分析： 实验过程中需要安装传感器和测量设备，用于监测风对地形和结构的影响。这些设备可以记录地表风速、压力分布、结构物振动等参数，从而帮助研究人员分析风的作用机理。
+4.	数据分析与应用： 通过对实验数据的分析，可以了解风对地形和结构的影响规律，包括风对地表颗粒的运动、植被的扭曲变形、建筑物的受力情况等。这些数据可以为相关工程设计和防灾减灾提供科学依据。""" ;
+      :说明 "风洞模型可用于模拟风对边坡的作用，特别是在高架桥梁或悬崖等地形中。通过在模型中模拟风流，可以研究风对边坡稳定性的影响。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/高易发区
+:高易发区 rdf:type owl:Class ;
+      rdfs:subClassOf :易发区 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/高速滑坡
+:高速滑坡 rdf:type owl:Class ;
+      rdfs:subClassOf :速度类型 ;
+      :说明 "灾害破坏力大，因速度快而无法转移所有人员，造成部分伤亡" ;
+      rdfs:comment "灾害破坏力大，因速度快而无法转移所有人员，造成部分伤亡" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/黏土胶结试验
+:黏土胶结试验 rdf:type owl:Class ;
+        rdfs:subClassOf :黏聚力 ;
+        :原理简介 "黏土胶结试验（Cohesive Soil Bonding Test）：这是一种特殊的实验方法，用于测定黏土类型土壤的粘结强度和黏聚力。在该试验中，使用黏土样品和胶结剂进行试验，并记录材料的变形和抗拉强度，从而获得黏聚力参数。" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/黏聚力
+:黏聚力 rdf:type owl:Class ;
+     rdfs:subClassOf :c.物理参数 ;
+     :说明 "黏聚力是指岩土颗粒表面之间的吸引力或附着力。黏聚力是由于颗粒表面存在吸附水分、离子、电荷等因素而产生的。黏聚力是影响岩土体内部颗粒间结合力的一个因素，特别是在含有粘土矿物的土壤中" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/1.滑坡基本信息> rdf:type owl:Class ;
+                                                                                  rdfs:subClassOf :滑坡本体 ;
+                                                                                  rdfs:comment "滑坡体的长宽厚以及次生灾害等" .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/2.滑坡作用机制
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/2.滑坡作用机制> rdf:type owl:Class ;
+                                                                                  rdfs:subClassOf :滑坡本体 .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/水层状态
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/水层状态> rdf:type owl:Class ;
+                                                                                rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/水层类型
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/水层类型> rdf:type owl:Class ;
+                                                                                  rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/han/水层岩质
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/han/水层岩质> rdf:type owl:Class ;
+                                                                                      rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> .
+
+
+###  http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/含/水层透水性
+<http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8/含/含/含/水层透水性> rdf:type owl:Class ;
+                                                                                     rdfs:subClassOf <http://www.semanticweb.org/94180/ontologies/2023/3/untitled-ontology-8#含/隔水层> .
+
+
+###  http://www.w3.org/2002/07/owl#Thing
+owl:Thing rdfs:subClassOf owl:Thing .
+
+
+#################################################################
+#    General axioms
+#################################################################
+
+[ rdf:type owl:AllDisjointClasses ;
+  owl:members ( :中易发区
+                :低易发区
+                :非易发区
+                :高易发区
+              )
+] .
+
+
+[ rdf:type owl:AllDisjointClasses ;
+  owl:members ( :堰塞湖
+                :次生崩塌
+                :次生滑坡
+              )
+] .
+
+
+###  Generated by the OWL API (version 4.5.25.2023-02-15T19:15:49Z) https://github.com/owlcs/owlapi
