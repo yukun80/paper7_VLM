@@ -23,9 +23,13 @@ Thumbs.db
 .codex/
 .agents/
 
-# 原始数据集与派生 benchmark 产物
+# 原始数据集、派生 benchmark 与本地手动推理输入
 datasets/
+datasets/**
 benchmark/
+benchmark/**
+inputs/
+inputs/**
 
 # 遥感影像、图片、标签可视化与 GIS 栅格数据
 *.png
@@ -70,26 +74,52 @@ benchmark/
 *.tmp
 
 # 训练输出、模型权重与实验日志
+models/
+models/**
+external/
+external/**
 runs/
+runs/**
 outputs/
+outputs/**
 checkpoints/
+checkpoints/**
 wandb/
+wandb/**
 tensorboard/
+tensorboard/**
 lightning_logs/
+lightning_logs/**
+hf_cache/
+hf_cache/**
+.cache/
+.cache/**
+accelerate_state.yaml
+ds_config*.json
 *.ckpt
 *.pt
 *.pth
 *.safetensors
 *.onnx
 *.bin
+*.gguf
+*.adapter
+adapter_model.*
+pytorch_model*.bin
+model-*.safetensors
 
 # 日志、报告缓存与临时表格
 *.log
+build_*.log
 *.out
 *.err
 *.cache
 *.sqlite
 *.sqlite3
+events.out.tfevents.*
+trainer_state.json
+global_step*/
+checkpoint-*/
 
 # Windows 下载残留
 Zone.Identifier
