@@ -1,372 +1,136 @@
-# GeoHazard-HalluGround V2
+# Multi-Source Qwen-PSALM-Seg
 
-本仓库用于把 Sen12Landslides 和 GDCLD 整理成 Qwen3-VL 可用的滑坡 VLM benchmark，并准备 Qwen3-VL-2B LoRA 微调数据。
+本仓库用于开展面向任意模态组合的多源遥感滑坡指令分割研究。当前研究目标、技术路线和交付要求以 [docs/Task_Introduction.md](docs/Task_Introduction.md) 为准。
 
-## 环境安装
+研究主线是构建统一的多源滑坡分割 benchmark，并在此基础上设计 Multi-Source Qwen-PSALM-Seg 原型模型。模型目标是支持高分辨率光学、Sentinel-2 多光谱、Sentinel-1 SAR、DEM、InSAR 形变速率以及灾前灾后影像等不同输入条件，在模态缺失、图像尺寸不一致、空间分辨率不同的情况下完成滑坡 mask 分割。
 
-默认训练环境为 `qwen3vl`：
-
-```bash
-conda create -n qwen3vl python=3.11 -y
-conda activate qwen3vl
-
-cd /home/yukun/codes/paper7_VLM
-git clone https://github.com/2U1/Qwen-VL-Series-Finetune.git external/Qwen-VL-Series-Finetune
-cd external/Qwen-VL-Series-Finetune
-```
-
-安装 PyTorch CUDA 12.8 版本：
-
-```bash
-pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
-  --index-url https://download.pytorch.org/whl/cu128
-```
-
-安装训练基础依赖：
-
-```bash
-pip install -r requirements.txt -f https://download.pytorch.org/whl/cu128
-pip install qwen-vl-utils
-```
-
-如果 `av` 或 `decord` 因 FFmpeg 报错，且当前只训练图像样本，可先跳过视频相关依赖。
-
-WSL2 + Ubuntu 20.04 下建议使用 CUDA Toolkit 12.8：
-
-```bash
-export CUDA_HOME=/usr/local/cuda-12.8.0
-export PATH=$CUDA_HOME/bin:$PATH
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64:${LD_LIBRARY_PATH:-}
-
-which nvcc
-nvcc --version
-```
-
-## flash-attn
-
-Ubuntu 20.04 的 glibc 通常是 2.31，预编译 `flash-attn` wheel 可能报 `GLIBC_2.32 not found`。需要强制源码编译，并降低 WSL2 编译资源占用：
-
-```bash
-cd /home/yukun/codes/paper7_VLM
-conda activate qwen3vl
-
-pip uninstall -y flash-attn flash_attn
-pip cache remove flash-attn || true
-rm -rf /tmp/pip-* ~/.cache/pip/wheels/*flash* 2>/dev/null || true
-
-export CUDA_HOME=/usr/local/cuda-12.8.0
-export PATH=$CUDA_HOME/bin:$PATH
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64:${LD_LIBRARY_PATH:-}
-
-mkdir -p /home/yukun/codes/paper7_VLM/tmp_build
-export TMPDIR=/home/yukun/codes/paper7_VLM/tmp_build
-export TORCH_EXTENSIONS_DIR=/home/yukun/codes/paper7_VLM/tmp_build/torch_extensions
-
-export TORCH_CUDA_ARCH_LIST=$(python - <<'PY'
-import torch
-major, minor = torch.cuda.get_device_capability(0)
-print(f"{major}.{minor}")
-PY
-)
-echo "TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
-
-export FLASH_ATTENTION_FORCE_BUILD=TRUE
-export MAX_JOBS=1
-export NVCC_THREADS=1
-
-pip install flash-attn==2.8.3.post1 \
-  --no-build-isolation \
-  --no-cache-dir \
-  --no-binary=flash-attn \
-  -v 2>&1 | tee build_flash_attn.log
-```
-
-如果安装日志出现 `Guessing wheel URL`，说明仍可能在尝试预编译 wheel；正确源码编译应看到大量 `nvcc` 和 `.cu` 编译输出。
-
-不使用 `flash-attn` 也可以训练，保持：
-
-```bash
-DISABLE_FLASH_ATTN2=True
-```
-
-该配置已完成 100 step smoke。
-
-## 环境检查
-
-基础环境检查不强制导入 `flash_attn`：
-
-```bash
-conda activate qwen3vl
-
-python - <<'PY'
-import torch, transformers, deepspeed, peft, qwen_vl_utils
-print("torch", torch.__version__)
-print("torch cuda", torch.version.cuda)
-print("cuda", torch.cuda.is_available())
-print("gpu", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")
-PY
-
-nvidia-smi
-```
-
-`flash-attn` 安装完成后单独检查：
-
-```bash
-python - <<'PY'
-import torch, flash_attn
-print("torch", torch.__version__)
-print("torch cuda", torch.version.cuda)
-print("flash_attn", flash_attn.__version__)
-print("cuda", torch.cuda.is_available())
-PY
-```
-
-## 模型权重
-
-下载 Qwen3-VL-2B 权重到本地：
-
-```bash
-cd /home/yukun/codes/paper7_VLM
-hf download Qwen/Qwen3-VL-2B-Instruct \
-  --local-dir models/Qwen3-VL-2B-Instruct
-```
-
-训练时使用绝对路径，避免 wrapper 进入外部训练仓库后相对路径失效：
-
-```bash
-MODEL_ID=/home/yukun/codes/paper7_VLM/models/Qwen3-VL-2B-Instruct
-```
-
-## 目录
+## Repository Layout
 
 ```text
 datasets/
-  Sen12Landslides/
-  GDCLD/extracted/
 benchmark/
+Multi-Source_Landslides_seg/
 scripts/
-docs/geohazard_benchmark.md
+external/
+models/
+docs/
+参考文献/
 ```
 
-GDCLD 全量数据需解压到：
+### `datasets/`
+
+存放不同论文来源的开源原始数据集。该目录用于保留原始数据、解压后的数据结构和必要的数据来源材料，不作为统一训练格式的输出位置。
+
+当前已整理的数据来源包括但不限于：
 
 ```text
-datasets/GDCLD/extracted/
-  train_data/
-  train_label/
-  val_data/
-  val_label/
-  test_data/
-  test_label/
+datasets/DisasterM3/
+datasets/GDCLD/
+datasets/LMHLD/
+datasets/LandslideBench_agent/
+datasets/Sen12Landslides/
+datasets/landslide4sense/
+datasets/multimodal-landslide-dataset/
 ```
 
-## 数据构建
+原则上不要在数据处理脚本中直接改写原始数据；如需清洗、裁剪、重采样或统一索引，应将派生产物输出到 `benchmark/`。
 
-一键构建 V2 benchmark：
+### `benchmark/`
 
-```bash
-cd /home/yukun/codes/paper7_VLM
-bash scripts/run_geohazard_v2_pipeline.sh
-```
+用于存放整合后的目标格式数据，供模型训练、推理、评估和可视化使用。该目录应承载统一样本索引、处理后的 patch、mask、任务指令、数据划分、统计报告和评估结果。
 
-默认输出：
+后续统一格式应围绕 instruction segmentation 设计，至少记录图像路径、mask 路径、可用模态、空间分辨率、图像尺寸、任务类型、区域/事件标识和 split 信息。
+
+### `Multi-Source_Landslides_seg/`
+
+用于放置当前多源遥感 VLM 分割模型构建代码，包括 Multi-Source Qwen-PSALM-Seg 的模型结构、训练入口、数据读取器、loss、评估接口和实验配置。
+
+本研究自己的核心模型代码优先放在该目录，而不是混入外部参考代码目录。
+
+### `scripts/`
+
+用于放置数据处理、格式转换、统计和可视化脚本。当前保留的脚本主要来自旧数据管线中仍可复用的数据侧能力：
 
 ```text
-benchmark/geohazard_halluground_v2_full/
+scripts/1-1_scan_sources.py
+scripts/1-2_prepare_sen12_views.py
+scripts/1-3_prepare_gdcld_tiles.py
+scripts/1-4_merge_annotations.py
+scripts/1-6_validate_and_summarize.py
+scripts/geohazard_common.py
 ```
 
-可用环境变量覆盖参数：
+这些脚本后续需要围绕新的多源滑坡 instruction segmentation 格式继续改造。旧的 Qwen 文本 SFT、bbox-only grounding 和临时训练评估入口已经不再作为主线。
 
-```bash
-OUT_DIR=benchmark/geohazard_halluground_v2_full \
-GDCLD_TILE_SIZE=512 \
-GDCLD_STRIDE=512 \
-GDCLD_NEGATIVE_RATIO=1.0 \
-AUDIT_SAMPLES=100 \
-bash scripts/run_geohazard_v2_pipeline.sh
-```
+### `external/`
 
-如需加入 GDCLD `Future work` 候选测试集：
+存放来自其他研究的开源代码，用于参考、复现实验或局部复用。外部代码应尽量保持原始结构，必要适配应写在本仓库自己的模型代码或脚本中。
 
-```bash
-INCLUDE_FUTURE_WORK=1 bash scripts/run_geohazard_v2_pipeline.sh
-```
-
-构建成功后检查：
-
-```bash
-cat benchmark/geohazard_halluground_v2_full/validation_report.json
-cat benchmark/geohazard_halluground_v2_full/summary.json
-```
-
-`validation_report.json` 中 `errors` 应为空。
-
-分阶段脚本：
+当前外部参考代码包括：
 
 ```text
-scripts/1-1_scan_sources.py           扫描 Sen12 和 GDCLD 源数据
-scripts/1-2_prepare_sen12_views.py    生成 Sen12 VLM RGB 视图和 mask
-scripts/1-3_prepare_gdcld_tiles.py    生成 GDCLD 512x512 tile、mask、bbox
-scripts/1-4_merge_annotations.py      合并 metadata 并生成 split
-scripts/1-5_export_training_files.py  导出 qwen_vl_sft.jsonl 和 COCO bbox
-scripts/1-6_validate_and_summarize.py 校验输出并生成统计和抽查图
+external/DisasterM3-master/
+external/LandslideAgent-main/
+external/PSALM/
+external/Qwen-VL-Series-Finetune/
 ```
 
-共享逻辑在 `scripts/geohazard_common.py`。
+### `models/`
 
-## 微调数据导出
+存放从 Hugging Face 等来源下载的开源模型权重和处理器文件。模型权重通常体积较大，不应提交到 Git。
 
-不要直接用总文件 `qwen_vl_sft.jsonl` 训练，因为它包含 train/val/test。
-
-512 条 smoke 数据：
-
-```bash
-python scripts/2-1_export_qwen_splits.py \
-  --out-dir benchmark/geohazard_halluground_v2_full \
-  --max-train-samples 512
-
-python scripts/2-2_convert_qwen_to_llava.py \
-  --out-dir benchmark/geohazard_halluground_v2_full \
-  --check-images
-```
-
-完整 train 数据：
-
-```bash
-python scripts/2-1_export_qwen_splits.py \
-  --out-dir benchmark/geohazard_halluground_v2_full
-
-python scripts/2-2_convert_qwen_to_llava.py \
-  --out-dir benchmark/geohazard_halluground_v2_full \
-  --check-images
-```
-
-默认只导出 `classification,grounding`。如需加入质量判断任务：
-
-```bash
-python scripts/2-1_export_qwen_splits.py \
-  --out-dir benchmark/geohazard_halluground_v2_full \
-  --tasks classification,grounding,quality
-```
-
-输出文件：
+示例：
 
 ```text
-llava_train.json
-llava_val.json
-llava_test.json
+models/Qwen3-VL-2B-Instruct/
 ```
 
-## Smoke 训练
+### `docs/`
 
-脚本直接调用 `external/Qwen-VL-Series-Finetune/src/train/train_sft.py`。默认适配 RTX 4070 12GB：
+存放研究计划、任务说明和后续工程文档。当前核心文档是：
 
 ```text
-BATCH_SIZE=1
-GRAD_ACCUM=8
-LORA_RANK=8
-IMAGE_MIN_PIXELS=100352
-IMAGE_MAX_PIXELS=200704
+docs/Task_Introduction.md
 ```
 
-不使用 `flash-attn` 的稳定 smoke：
+该文档描述当前研究背景、目标、方法路线、实验设计、评价指标和最终交付物。
 
-```bash
-cd /home/yukun/codes/paper7_VLM
-conda activate qwen3vl
+### `参考文献/`
 
-DATA_PATH=benchmark/geohazard_halluground_v2_full/llava_train.json \
-MODEL_ID=/home/yukun/codes/paper7_VLM/models/Qwen3-VL-2B-Instruct \
-OUTPUT_DIR=outputs/qwen3vl2b_smoke_lora \
-MAX_STEPS=100 \
-DISABLE_FLASH_ATTN2=True \
-bash scripts/train_qwen3vl2b_lora.sh
-```
+存放本研究参考的论文、报告和相关材料。可按研究主题继续划分，例如多模态大模型、VLM 分割、benchmark 数据集等。
 
-`flash-attn` 验证通过后可测试加速：
+## Current Research Direction
 
-```bash
-DATA_PATH=benchmark/geohazard_halluground_v2_full/llava_train.json \
-MODEL_ID=/home/yukun/codes/paper7_VLM/models/Qwen3-VL-2B-Instruct \
-OUTPUT_DIR=outputs/qwen3vl2b_smoke_lora_flash \
-MAX_STEPS=100 \
-DISABLE_FLASH_ATTN2=False \
-bash scripts/train_qwen3vl2b_lora.sh
-```
+当前第一阶段聚焦真实 mask 监督的滑坡分割任务，优先完成以下工作：
 
-脚本默认只做 LoRA，并冻结 vision tower、LLM 和 merger。
+1. 整理多源滑坡数据清单，明确每个数据集的模态、尺寸、空间分辨率、标签格式和区域来源。
+2. 建立统一样本格式，将不同数据集组织为 instruction segmentation 任务。
+3. 保留真实 mask 作为主监督信号，bbox 只作为可选派生信息。
+4. 设计可处理缺失模态、不同图像尺寸和不同 GSD 的数据读取与模型接口。
+5. 实现传统分割 baseline 和 Multi-Source Qwen-PSALM-Seg 原型。
+6. 按数据集、模态组合、任务类型、缺失模态条件和跨区域/跨数据集设置报告 IoU、Dice/F1、Precision、Recall 和 Boundary F1。
 
-## 全量训练
+当前不再沿用旧的纯文本视觉问答微调、普通 LoRA 文本 SFT 或 bbox-only grounding 主线。第一阶段也不把区域描述、灾害报告生成或完整地灾大模型作为主任务。
 
-smoke 成功后先重新导出完整 train，再开始第一阶段训练：
+## Development Principles
 
-```bash
-python scripts/2-1_export_qwen_splits.py \
-  --out-dir benchmark/geohazard_halluground_v2_full
+- `datasets/` 保留原始数据和论文来源数据结构，不在处理过程中直接覆盖。
+- `benchmark/` 存放统一训练、推理和评估格式的派生产物。
+- `Multi-Source_Landslides_seg/` 存放本研究核心模型代码。
+- `scripts/` 存放可复用的数据处理、统计和可视化工具。
+- `external/` 存放外部开源代码，避免把本研究改动直接混入第三方仓库。
+- `models/` 存放本地模型权重，不提交大模型文件。
+- 新增脚本和模型接口应优先服务真实 mask 分割、任意模态组合、尺度信息记录和跨数据集评估。
 
-python scripts/2-2_convert_qwen_to_llava.py \
-  --out-dir benchmark/geohazard_halluground_v2_full \
-  --check-images
-```
+## Expected Outputs
 
-正式第一阶段 LoRA：
+后续项目产物应逐步包括：
 
-```bash
-SAVE_STEPS=1000 \
-DATA_PATH=benchmark/geohazard_halluground_v2_full/llava_train.json \
-MODEL_ID=/home/yukun/codes/paper7_VLM/models/Qwen3-VL-2B-Instruct \
-OUTPUT_DIR=outputs/qwen3vl2b_stage1_lora \
-MAX_STEPS=-1 \
-EPOCHS=1 \
-DISABLE_FLASH_ATTN2=True \
-bash scripts/train_qwen3vl2b_lora.sh 2>&1 | tee outputs/qwen3vl2b_stage1_lora.log
-```
-
-如果 `flash-attn` 已验证通过，将最后一段改为：
-
-```bash
-DISABLE_FLASH_ATTN2=False
-```
-
-## Zero-Shot 推理
-
-Dry run 检查输入和图像路径：
-
-```bash
-python scripts/eval_qwen3vl2b_zero_shot.py \
-  --input benchmark/geohazard_halluground_v2_full/llava_test.json \
-  --output outputs/qwen3vl2b_zeroshot/raw_predictions.jsonl \
-  --max-samples 10 \
-  --dry-run
-```
-
-实际推理：
-
-```bash
-python scripts/eval_qwen3vl2b_zero_shot.py \
-  --input benchmark/geohazard_halluground_v2_full/llava_test.json \
-  --output outputs/qwen3vl2b_zeroshot/raw_predictions.jsonl \
-  --max-samples 100
-```
-
-该脚本只保存 raw response，指标解析后续单独实现。
-
-## 主要输出
-
-```text
-benchmark/<run>/metadata.jsonl
-benchmark/<run>/qwen_vl_sft.jsonl
-benchmark/<run>/qwen_sft_train.jsonl
-benchmark/<run>/qwen_sft_val.jsonl
-benchmark/<run>/qwen_sft_test.jsonl
-benchmark/<run>/llava_train.json
-benchmark/<run>/llava_val.json
-benchmark/<run>/llava_test.json
-benchmark/<run>/detection_coco.json
-benchmark/<run>/validation_report.json
-benchmark/<run>/summary.json
-outputs/qwen3vl2b_smoke_lora/
-outputs/qwen3vl2b_stage1_lora/
-```
-
-更多分阶段细节见 `docs/geohazard_benchmark.md`。
+- 原始数据清单和数据来源说明。
+- 统一的 train/val/test 样本索引。
+- 数据清洗报告，包括 nodata、空 mask、错位 mask、尺寸差异和缺失模态处理说明。
+- 多源 instruction segmentation 数据样例。
+- Baseline 分割模型结果。
+- Multi-Source Qwen-PSALM-Seg 原型模型、训练脚本和评估脚本。
+- 按数据集、模态组合和任务类型汇总的指标表。
+- 参数设置表、消融实验表、失败案例分析和可视化图表。
