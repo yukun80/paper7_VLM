@@ -1,0 +1,626 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""步骤 1-4：真实预处理并物化自包含 benchmark 数据。
+
+脚本作用：对应 Task_Introduction.md 的“步骤 3”，读取 source 索引中的
+datasets/ 原始路径，按模态规则生成 benchmark 内部 .npy 数据，并写出最终
+训练索引，保证训练阶段不再读取 datasets/。
+主要输入：indexes/source_all.jsonl 与 datasets/ 原始数据文件。
+主要输出：data/{split}/{dataset_name}/{sample_id}/ 下的 .npy 数据、
+indexes/all.jsonl、train.jsonl、val.jsonl、test.jsonl、unlabeled.jsonl。
+是否改写原始数据：不会改写 datasets/；只在 benchmark/ 后缀目录内写物化数据。
+典型用法：python scripts/1-benchmark/1-4_preprocess_samples.py --benchmark-dir benchmark/multisource_landslide_v1_small --strategy materialize
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import h5py
+import numpy as np
+import rasterio
+import xarray as xr
+import yaml
+from PIL import Image
+from PIL import ImageDraw
+from tqdm import tqdm
+
+from geohazard_benchmark_common import (
+    DEFAULT_BENCHMARK_ROOT,
+    choose_bucket,
+    ensure_dir,
+    final_index_paths,
+    is_tif_path,
+    resolve_repo_path,
+    source_index_paths,
+    to_repo_rel,
+    write_json,
+    write_jsonl,
+    write_split_indexes,
+)
+
+
+PREVIEW_MAX_SIDE = 1024
+PREVIEW_TILE_SIDE = 320
+
+
+def build_preprocess_config() -> dict[str, Any]:
+    """生成结构化预处理配置，再由 PyYAML 写出。"""
+    return {
+        "version": "multisource_landslide_v1",
+        "storage": {
+            "data_format": "npy",
+            "layout": "data/{split}/{dataset_name}/{sample_id}/",
+            "modalities_dir": "modalities",
+            "mask_dir": "mask",
+        },
+        "mask": {
+            "binarize_rule": "mask > 0",
+            "dtype": "uint8",
+            "shape_policy": "2D mask 保存为 [1,H,W]",
+        },
+        "size_policy": {
+            "strategy": "keep_original_then_bucket_metadata",
+            "buckets": [32, 64, 128, 224, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+            "write_valid_pixel_mask": False,
+        },
+        "preview": {
+            "enabled": True,
+            "max_side": PREVIEW_MAX_SIDE,
+            "tile_side": PREVIEW_TILE_SIDE,
+            "files": ["visual.png", "mask.png", "overlay.png", "modalities.png"],
+            "note": "preview 仅用于人工质检，不作为训练输入。",
+        },
+        "normalization": {
+            "optical_rgb": {"dtype": "uint8", "method": "preserve_rgb_values"},
+            "optical_multiband": {"dtype": "float32", "method": "per_array_float32"},
+            "multispectral": {"dtype": "float32", "method": "clip_0_10000_if_needed_then_scale"},
+            "slope": {"dtype": "float32", "method": "robust_percentile_scale"},
+            "sar_asc": {"dtype": "float32", "method": "clip_-50_10_then_scale"},
+            "sar_dsc": {"dtype": "float32", "method": "clip_-50_10_then_scale"},
+            "dem": {"dtype": "float32", "method": "robust_percentile_scale"},
+            "insar_vel": {"dtype": "float32", "method": "signed_symmetric_robust_clip"},
+        },
+    }
+
+
+def source_path(path_ref: str | None) -> tuple[Path, int | None]:
+    """解析 path 或 path::index 引用。"""
+    if not path_ref:
+        raise ValueError("源路径为空")
+    path_part, _, idx_part = path_ref.partition("::")
+    path = resolve_repo_path(path_part)
+    if path is None:
+        raise ValueError(f"无法解析源路径: {path_ref}")
+    return path, int(idx_part) if idx_part else None
+
+
+def read_raster_array(path: Path, indexes: int | list[int] | None = None) -> Any:
+    """使用 rasterio 读取 tif/tiff/geotiff 栅格。"""
+    with rasterio.open(path) as src:
+        if indexes is None:
+            return src.read()
+        return src.read(indexes)
+
+
+def to_chw(array: Any) -> Any:
+    """把常见 HWC/HW 数组整理为 CHW。"""
+    arr = np.asarray(array)
+    if arr.ndim == 2:
+        return arr[np.newaxis, :, :]
+    if arr.ndim == 3:
+        # 如果最后一维看起来是通道，则转成 CHW；否则保持原状。
+        if arr.shape[-1] <= 32 and arr.shape[0] > 32 and arr.shape[1] > 32:
+            return np.transpose(arr, (2, 0, 1))
+        return arr
+    return arr
+
+
+def read_hdf5_array(path: Path, internal_key: Any) -> Any:
+    with h5py.File(path, "r") as f:
+        if not isinstance(internal_key, str) or internal_key not in f:
+            raise KeyError(f"{path} 缺少 HDF5 dataset: {internal_key}")
+        data = f[internal_key][()]
+    return data
+
+
+def sen12_time_index(ds: Any) -> int:
+    """优先取事件后时间片；失败时取中间时间片。"""
+    time_len = int(ds.sizes.get("time", 1))
+    raw = ds.attrs.get("pre_post_dates")
+    if raw:
+        try:
+            parsed = ast.literal_eval(str(raw))
+            post = int(parsed.get("post"))
+            if 0 <= post < time_len:
+                return post
+        except Exception:
+            pass
+    return max(0, min(time_len - 1, time_len // 2))
+
+
+def read_netcdf_vars(path: Path, keys: list[str]) -> Any:
+    arrays = []
+    with xr.open_dataset(path) as ds:
+        t = sen12_time_index(ds)
+        for key in keys:
+            if key not in ds:
+                continue
+            var = ds[key]
+            if "time" in var.dims:
+                var = var.isel(time=t)
+            arrays.append(np.asarray(var.values))
+    if not arrays:
+        raise ValueError(f"NetCDF 中未找到变量: {keys}")
+    return np.stack(arrays, axis=0)
+
+
+def split_landslide4sense_array(path: Path, raw: Any, name: str) -> Any:
+    """严格按官方 B1-B12/slope/DEM 通道顺序拆分 Landslide4Sense。"""
+    arr = to_chw(raw)
+    if arr.ndim != 3 or arr.shape[0] != 14:
+        raise ValueError(f"Landslide4Sense img 必须是 14 通道，当前 {path} -> shape={arr.shape}")
+    if name == "multispectral":
+        return arr[:12, :, :]
+    if name == "slope":
+        return arr[12:13, :, :]
+    if name == "dem":
+        return arr[13:14, :, :]
+    raise ValueError(f"Landslide4Sense 不支持的模态名: {name}")
+
+
+def read_modality_array(sample: dict[str, Any], name: str, info: dict[str, Any]) -> Any:
+    fmt = str(info.get("format"))
+    path, idx = source_path(info.get("path"))
+    if is_tif_path(path) or fmt in {"geotiff", "geotiff_or_image"}:
+        arr = read_raster_array(path)
+        if fmt == "geotiff_or_image":
+            if arr.shape[0] >= 3:
+                return arr[:3]
+            if arr.shape[0] == 1:
+                return np.repeat(arr, 3, axis=0)
+        return arr
+    if fmt in {"image", "png"}:
+        with Image.open(path) as img:
+            return to_chw(img.convert("RGB"))
+    if fmt == "npy":
+        arr = np.load(path, mmap_mode="r")
+        return np.asarray(arr[idx]) if idx is not None else np.asarray(arr)
+    if fmt == "hdf5":
+        raw = read_hdf5_array(path, info.get("internal_key"))
+        if sample.get("dataset_name") == "landslide4sense":
+            return split_landslide4sense_array(path, raw, name)
+        return to_chw(raw)
+    if fmt == "netcdf":
+        keys = info.get("internal_key")
+        if isinstance(keys, str):
+            keys = [keys]
+        return read_netcdf_vars(path, list(keys or []))
+    raise ValueError(f"暂不支持的模态格式: {fmt}")
+
+
+def read_mask_array(info: dict[str, Any]) -> Any:
+    fmt = str(info.get("format"))
+    path, idx = source_path(info.get("path"))
+    if is_tif_path(path) or fmt == "geotiff":
+        arr = read_raster_array(path, 1)
+    elif fmt in {"png", "image"}:
+        with Image.open(path) as img:
+            arr = np.asarray(img.convert("L"))
+    elif fmt == "npy":
+        src = np.load(path, mmap_mode="r")
+        arr = np.asarray(src[idx]) if idx is not None else np.asarray(src)
+    elif fmt == "hdf5":
+        arr = read_hdf5_array(path, info.get("internal_key"))
+    elif fmt == "netcdf":
+        arr = read_netcdf_vars(path, [str(info.get("internal_key") or "MASK")])
+    else:
+        raise ValueError(f"暂不支持的 mask 格式: {fmt}")
+    arr = np.asarray(arr)
+    if arr.ndim == 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    elif arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[:, :, 0]
+    return (arr > 0).astype(np.uint8)[np.newaxis, :, :]
+
+
+def robust_scale(arr: Any, low: float = 1.0, high: float = 99.0) -> Any:
+    arr = arr.astype(np.float32, copy=False)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return np.zeros_like(arr, dtype=np.float32)
+    lo, hi = np.percentile(finite, [low, high])
+    if math.isclose(float(lo), float(hi)):
+        return np.zeros_like(arr, dtype=np.float32)
+    arr = np.clip(arr, lo, hi)
+    return ((arr - lo) / (hi - lo)).astype(np.float32)
+
+
+def normalize_modality(name: str, arr: Any) -> tuple[Any, str]:
+    arr = np.asarray(arr)
+    if name == "optical_rgb":
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        return arr, "preserve_rgb_values"
+    if name in {"multispectral", "optical_multiband"}:
+        arr = arr.astype(np.float32, copy=False)
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            return np.zeros_like(arr, dtype=np.float32), "clip_0_10000_if_needed_then_scale"
+        if np.nanmax(finite) > 1.5:
+            arr = np.clip(arr, 0, 10000) / 10000.0
+        return arr.astype(np.float32), "clip_0_10000_if_needed_then_scale"
+    if name == "slope":
+        return robust_scale(arr), "slope_robust_percentile"
+    if name in {"sar_asc", "sar_dsc"}:
+        arr = np.clip(arr.astype(np.float32), -50, 10)
+        return ((arr + 50) / 60.0).astype(np.float32), "clip_-50_10_then_scale"
+    if name == "dem":
+        return robust_scale(arr), "terrain_robust_percentile"
+    if name == "insar_vel":
+        arr = arr.astype(np.float32, copy=False)
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            return np.zeros_like(arr, dtype=np.float32), "signed_symmetric_robust_clip"
+        bound = float(np.percentile(np.abs(finite), 98))
+        if bound <= 0:
+            return np.zeros_like(arr, dtype=np.float32), "signed_symmetric_robust_clip"
+        return (np.clip(arr, -bound, bound) / bound).astype(np.float32), "signed_symmetric_robust_clip"
+    return arr.astype(np.float32), "float32_no_extra_normalization"
+
+
+def bbox_from_binary_mask(mask: Any) -> tuple[list[int] | None, str, int, bool]:
+    arr = np.asarray(mask)
+    if arr.ndim == 3:
+        arr2 = arr[0]
+    else:
+        arr2 = arr
+    ys, xs = np.where(arr2 > 0)
+    positive = int(xs.size)
+    if positive == 0:
+        return None, "empty_mask", 0, True
+    return [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())], "derived", positive, False
+
+
+def stretch_uint8(arr: Any, low: float = 2.0, high: float = 98.0) -> Any:
+    """把单通道或多通道数组按分位数拉伸到 uint8。"""
+    data = np.asarray(arr, dtype=np.float32)
+    out = np.zeros_like(data, dtype=np.float32)
+    if data.ndim == 2:
+        finite = data[np.isfinite(data)]
+        if finite.size == 0:
+            return np.zeros(data.shape, dtype=np.uint8)
+        lo, hi = np.percentile(finite, [low, high])
+        if math.isclose(float(lo), float(hi)):
+            return np.zeros(data.shape, dtype=np.uint8)
+        return np.clip((data - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
+    for idx in range(data.shape[0]):
+        out[idx] = stretch_uint8(data[idx], low, high)
+    return out.astype(np.uint8)
+
+
+def chw_to_hwc_rgb(arr: Any) -> Any:
+    """把 CHW/HW 数组转为 HWC RGB uint8。"""
+    data = np.asarray(arr)
+    if data.ndim == 2:
+        gray = stretch_uint8(data)
+        return np.stack([gray, gray, gray], axis=-1)
+    if data.ndim == 3:
+        if data.shape[0] == 1:
+            gray = stretch_uint8(data[0])
+            return np.stack([gray, gray, gray], axis=-1)
+        rgb = data[:3]
+        if rgb.dtype == np.uint8 and rgb.max(initial=0) > 1:
+            rgb8 = rgb
+        else:
+            rgb8 = stretch_uint8(rgb)
+        return np.transpose(rgb8[:3], (1, 2, 0))
+    raise ValueError(f"无法转为 RGB preview: shape={data.shape}")
+
+
+def preview_multispectral_rgb(arr: Any, band_names: list[str]) -> Any:
+    """按 Sentinel-2 真彩组合生成多光谱 RGB preview。"""
+    data = np.asarray(arr)
+    names = [name.lower() for name in band_names]
+    if {"b4", "b3", "b2"}.issubset(set(names)):
+        idxs = [names.index("b4"), names.index("b3"), names.index("b2")]
+    elif {"b04", "b03", "b02"}.issubset(set(names)):
+        idxs = [names.index("b04"), names.index("b03"), names.index("b02")]
+    else:
+        idxs = list(range(min(3, data.shape[0])))
+    while len(idxs) < 3:
+        idxs.append(idxs[-1] if idxs else 0)
+    return chw_to_hwc_rgb(data[idxs[:3]])
+
+
+def preview_for_modality(name: str, arr: Any, meta: dict[str, Any]) -> Any:
+    """生成单个模态的 RGB preview。"""
+    if name == "multispectral":
+        return preview_multispectral_rgb(arr, meta.get("band_names") or [])
+    if name in {"optical_rgb", "optical_multiband"}:
+        return chw_to_hwc_rgb(arr)
+    data = np.asarray(arr)
+    if data.ndim == 3:
+        data = np.nanmean(data, axis=0)
+    gray = stretch_uint8(data)
+    return np.stack([gray, gray, gray], axis=-1)
+
+
+def resize_preview(image: Any, max_side: int = PREVIEW_MAX_SIDE) -> Image.Image:
+    """按最大边缩小 preview，避免超大 PNG。"""
+    pil = Image.fromarray(np.asarray(image, dtype=np.uint8))
+    width, height = pil.size
+    side = max(width, height)
+    if side <= max_side:
+        return pil
+    scale = max_side / float(side)
+    size = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+    return pil.resize(size, Image.Resampling.BILINEAR)
+
+
+def save_preview_png(path: Path, image: Any, max_side: int = PREVIEW_MAX_SIDE) -> str:
+    ensure_dir(path.parent)
+    resize_preview(image, max_side=max_side).save(path)
+    return to_repo_rel(path) or path.as_posix()
+
+
+def mask_preview_rgb(mask: Any) -> Any:
+    arr = np.asarray(mask)
+    if arr.ndim == 3:
+        arr = arr[0]
+    binary = (arr > 0).astype(np.uint8) * 255
+    return np.stack([binary, binary, binary], axis=-1)
+
+
+def overlay_preview(visual: Any, mask: Any) -> Any:
+    base = np.asarray(visual, dtype=np.uint8)
+    mask_arr = np.asarray(mask)
+    if mask_arr.ndim == 3:
+        mask_arr = mask_arr[0]
+    height = min(base.shape[0], mask_arr.shape[0])
+    width = min(base.shape[1], mask_arr.shape[1])
+    base = base[:height, :width].copy()
+    binary = mask_arr[:height, :width] > 0
+    red = np.zeros_like(base)
+    red[..., 0] = 255
+    base[binary] = (0.55 * base[binary] + 0.45 * red[binary]).astype(np.uint8)
+    return base
+
+
+def labeled_tile(name: str, image: Any) -> Image.Image:
+    tile = resize_preview(image, max_side=PREVIEW_TILE_SIDE).convert("RGB")
+    canvas = Image.new("RGB", (tile.width, tile.height + 24), color=(0, 0, 0))
+    canvas.paste(tile, (0, 24))
+    draw = ImageDraw.Draw(canvas)
+    draw.text((6, 5), name, fill=(255, 255, 255))
+    return canvas
+
+
+def save_modalities_grid(path: Path, tiles: list[tuple[str, Any]]) -> str | None:
+    if not tiles:
+        return None
+    pil_tiles = [labeled_tile(name, image) for name, image in tiles]
+    cols = min(3, len(pil_tiles))
+    rows = int(math.ceil(len(pil_tiles) / cols))
+    cell_w = max(tile.width for tile in pil_tiles)
+    cell_h = max(tile.height for tile in pil_tiles)
+    grid = Image.new("RGB", (cell_w * cols, cell_h * rows), color=(20, 20, 20))
+    for idx, tile in enumerate(pil_tiles):
+        x = (idx % cols) * cell_w
+        y = (idx // cols) * cell_h
+        grid.paste(tile, (x, y))
+    ensure_dir(path.parent)
+    grid.save(path)
+    return to_repo_rel(path) or path.as_posix()
+
+
+def choose_visual_for_preview(arrays: dict[str, Any], metas: dict[str, dict[str, Any]]) -> Any | None:
+    """选择一个主视觉底图，优先 RGB，其次多光谱真彩。"""
+    if "optical_rgb" in arrays:
+        return preview_for_modality("optical_rgb", arrays["optical_rgb"], metas["optical_rgb"])
+    if "multispectral" in arrays:
+        return preview_for_modality("multispectral", arrays["multispectral"], metas["multispectral"])
+    if arrays:
+        first_name = next(iter(arrays))
+        return preview_for_modality(first_name, arrays[first_name], metas[first_name])
+    return None
+
+
+def build_previews(sample: dict[str, Any], sample_dir: Path, arrays: dict[str, Any], metas: dict[str, dict[str, Any]], mask: Any | None) -> tuple[dict[str, str], list[str]]:
+    """写出 visual/mask/overlay/modalities preview；失败只记录，不影响物化样本。"""
+    preview_dir = ensure_dir(sample_dir / "preview")
+    paths: dict[str, str] = {}
+    errors: list[str] = []
+    visual = None
+    try:
+        visual = choose_visual_for_preview(arrays, metas)
+        if visual is not None:
+            paths["visual"] = save_preview_png(preview_dir / "visual.png", visual)
+    except Exception as exc:
+        errors.append(f"visual preview 失败: {exc}")
+
+    try:
+        tiles = []
+        for name, arr in arrays.items():
+            tiles.append((name, preview_for_modality(name, arr, metas[name])))
+        grid_path = save_modalities_grid(preview_dir / "modalities.png", tiles)
+        if grid_path:
+            paths["modalities"] = grid_path
+    except Exception as exc:
+        errors.append(f"modalities preview 失败: {exc}")
+
+    if mask is not None:
+        try:
+            paths["mask"] = save_preview_png(preview_dir / "mask.png", mask_preview_rgb(mask))
+        except Exception as exc:
+            errors.append(f"mask preview 失败: {exc}")
+        try:
+            if visual is not None:
+                paths["overlay"] = save_preview_png(preview_dir / "overlay.png", overlay_preview(visual, mask))
+        except Exception as exc:
+            errors.append(f"overlay preview 失败: {exc}")
+    return paths, errors
+
+
+def materialize_sample(sample: dict[str, Any], benchmark_dir: Path) -> dict[str, Any]:
+    sample_dir = benchmark_dir / "data" / sample["split"] / sample["dataset_name"] / sample["sample_id"]
+    modality_dir = ensure_dir(sample_dir / "modalities")
+    mask_dir = ensure_dir(sample_dir / "mask")
+    ensure_dir(sample_dir / "preview")
+
+    final_modalities: dict[str, dict[str, Any]] = {}
+    preview_arrays: dict[str, Any] = {}
+    for name, info in sample.get("source_modalities", {}).items():
+        arr = read_modality_array(sample, name, info)
+        arr, norm = normalize_modality(name, arr)
+        out_path = modality_dir / f"{name}.npy"
+        np.save(out_path, arr)
+        final_modalities[name] = {
+            "path": to_repo_rel(out_path),
+            "format": "npy",
+            "internal_key": None,
+            "band_names": info.get("band_names") or [],
+            "shape": list(arr.shape),
+            "dtype": str(arr.dtype),
+            "gsd_m": info.get("gsd_m"),
+            "available": True,
+            "role": info.get("role"),
+            "source": info.get("source"),
+            "normalization": norm,
+        }
+        preview_arrays[name] = arr
+
+    source_mask = sample.get("source_mask")
+    final_mask = None
+    materialized_mask = None
+    if sample.get("supervision", "mask") == "mask" and source_mask:
+        mask = read_mask_array(source_mask)
+        bbox, bbox_status, positive, empty_mask = bbox_from_binary_mask(mask)
+        mask_path = mask_dir / "mask.npy"
+        np.save(mask_path, mask.astype(np.uint8))
+        materialized_mask = mask
+        final_mask = {
+            "path": to_repo_rel(mask_path),
+            "format": "npy",
+            "internal_key": None,
+            "label_type": "binary_landslide",
+            "shape": list(mask.shape),
+            "dtype": "uint8",
+            "positive_pixels": positive,
+            "empty_mask": empty_mask,
+            "bbox_xyxy": bbox,
+            "bbox_status": bbox_status,
+            "binarize_rule": "mask > 0",
+        }
+
+    sizes = [m["shape"][-2:] for m in final_modalities.values() if len(m.get("shape") or []) >= 2]
+    if final_mask and len(final_mask.get("shape") or []) >= 2:
+        sizes.append(final_mask["shape"][-2:])
+    original_size = sizes[0] if sizes else None
+    shape_mismatch = len({tuple(size) for size in sizes if size}) > 1
+
+    final = dict(sample)
+    final.pop("source_modalities", None)
+    final.pop("source_mask", None)
+    final["modalities"] = final_modalities
+    final["mask"] = final_mask
+    final["spatial"] = {
+        **(sample.get("spatial") or {}),
+        "original_size": original_size,
+        "bucket_size": choose_bucket(original_size),
+        "valid_pixel_mask_required": False,
+        "valid_pixel_mask": {"path": None, "status": "not_materialized_no_padding_applied"},
+    }
+    if shape_mismatch:
+        final["spatial"]["shape_mismatch_warning"] = {
+            "message": "模态或 mask 尺寸不完全一致，训练 dataloader 需要按任务策略裁剪或 padding。",
+            "shapes": sizes,
+        }
+    flags = set(final.get("quality_flags") or [])
+    flags.add("materialized_to_benchmark_npy")
+    if shape_mismatch:
+        flags.add("shape_mismatch_warning")
+    preview_paths, preview_errors = build_previews(final, sample_dir, preview_arrays, final_modalities, materialized_mask)
+    if preview_errors:
+        flags.add("preview_failed")
+    final["quality_flags"] = sorted(flags)
+    final["preview"] = {
+        "max_side": PREVIEW_MAX_SIDE,
+        "paths": preview_paths,
+        "errors": preview_errors,
+    }
+    final["provenance"] = {
+        "source_modalities": sample.get("source_modalities", {}),
+        "source_mask": sample.get("source_mask"),
+        "source_key": sample.get("source_key"),
+        "materialized_dir": to_repo_rel(sample_dir),
+    }
+    write_json(sample_dir / "sample_meta.json", final)
+    return final
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="物化自包含 benchmark 数据，并生成最终训练索引。")
+    parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
+    parser.add_argument("--strategy", choices=["materialize"], default="materialize", help="预处理输出策略；当前默认并只支持 materialize。")
+    parser.add_argument("--max-failures", type=int, default=20, help="允许跳过的单样本失败数量；超过后停止。")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    source_all_path = source_index_paths(args.benchmark_dir)["all"]
+    source_samples = [json.loads(line) for line in source_all_path.read_text(encoding="utf-8").splitlines() if line.strip()] if source_all_path.exists() else []
+    if not source_samples:
+        raise SystemExit(f"未找到源索引: {source_all_path}")
+
+    (args.benchmark_dir / "preprocess_config.yaml").write_text(
+        yaml.safe_dump(build_preprocess_config(), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    final_samples: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    progress = tqdm(source_samples, desc="物化样本", unit="sample")
+    for sample in progress:
+        try:
+            final_samples.append(materialize_sample(sample, args.benchmark_dir))
+        except Exception as exc:
+            failures.append({"sample_id": sample.get("sample_id"), "dataset_name": sample.get("dataset_name"), "error": str(exc)})
+            if len(failures) > args.max_failures:
+                break
+        progress.set_postfix({"成功": len(final_samples), "失败": len(failures)})
+
+    if failures:
+        write_jsonl(args.benchmark_dir / "reports" / "materialize_failures.jsonl", failures)
+    if len(failures) > args.max_failures:
+        raise SystemExit(f"物化失败数量超过 --max-failures={args.max_failures}，请查看 reports/materialize_failures.jsonl")
+
+    write_split_indexes(args.benchmark_dir, final_samples)
+    materialized_files = list((args.benchmark_dir / "data").glob("**/*.npy"))
+    preview_files = list((args.benchmark_dir / "data").glob("**/preview/*.png"))
+    preview_failures = [sample for sample in final_samples if "preview_failed" in (sample.get("quality_flags") or [])]
+    total_bytes = sum(path.stat().st_size for path in materialized_files)
+    report = {
+        "说明": "最终索引已指向 benchmark 内部 data/ 下的 .npy 文件，训练阶段不需要读取 datasets/。",
+        "strategy": args.strategy,
+        "num_source_samples": len(source_samples),
+        "num_final_samples": len(final_samples),
+        "num_failures": len(failures),
+        "num_npy_files": len(materialized_files),
+        "num_preview_files": len(preview_files),
+        "num_preview_failures": len(preview_failures),
+        "materialized_bytes": total_bytes,
+        "preprocess_config": to_repo_rel(args.benchmark_dir / "preprocess_config.yaml"),
+        "final_index": to_repo_rel(final_index_paths(args.benchmark_dir)["all"]),
+    }
+    write_json(args.benchmark_dir / "reports" / "preprocess_report.json", report)
+    print(f"物化完成: 成功 {len(final_samples)} 条，失败 {len(failures)} 条 -> {to_repo_rel(final_index_paths(args.benchmark_dir)['all'])}")
+
+
+if __name__ == "__main__":
+    main()
