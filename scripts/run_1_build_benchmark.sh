@@ -2,12 +2,12 @@
 # 批运行脚本：构建多源滑坡 benchmark。
 #
 # 脚本作用：按固定顺序运行 1-1 到 1-7，完成数据清单、统一索引、
-# source 校验、真实物化预处理、final 校验、split、指代表达构建、
-# referring 校验和统计报告构建。
+# source 校验、真实物化预处理、final 校验、split、指代目标构建、
+# referring_target 校验和统计报告构建。
 # 主要输入：datasets/ 原始数据目录，以及 MODE=small/full/both。
 # 主要输出：benchmark/multisource_landslide_v1_<mode>/ 下的自包含 .npy 数据、索引和报告。
 # 是否改写原始数据：不会改写 datasets/，只写 benchmark/ 派生产物。
-# 特别说明：1-6 不读取 datasets/，只基于已物化的 benchmark/data/**/mask.npy 生成指代表达。
+# 特别说明：1-6 不读取 datasets/，只基于已物化的 benchmark/data/**/mask.npy 生成结构化指代目标；训练文本由 2-instruction 生成。
 # 环境变量覆盖：SMALL_LIMIT 默认 1000，可用 SMALL_LIMIT=100 临时降低；
 # DATASETS_ROOT、BENCHMARK_PREFIX、SEED、PYTHON_BIN、USE_EXTENDED_POOL 也可覆盖；
 # 默认 PYTHON_BIN=python，建议先 conda activate qwen3vl。
@@ -70,14 +70,14 @@ run_one_mode() {
   "${PYTHON_BIN}" scripts/1-benchmark/1-5_build_splits.py \
     --benchmark-dir "${out_dir}"
 
-  echo "==> [1-6] 基于已物化数据构建指代表达: ${mode}"
-  "${PYTHON_BIN}" scripts/1-benchmark/1-6_build_referring_expressions.py \
+  echo "==> [1-6] 基于已物化数据构建指代目标: ${mode}"
+  "${PYTHON_BIN}" scripts/1-benchmark/1-6_build_referring_targets.py \
     --benchmark-dir "${out_dir}"
 
-  echo "==> [1-3/referring] 验证指代表达训练索引质量: ${mode}"
+  echo "==> [1-3/referring_target] 验证指代目标索引质量: ${mode}"
   "${PYTHON_BIN}" scripts/1-benchmark/1-3_validate_index.py \
     --benchmark-dir "${out_dir}" \
-    --stage referring
+    --stage referring_target
 
   echo "==> [1-7] 汇总统计与清洗报告: ${mode}"
   "${PYTHON_BIN}" scripts/1-benchmark/1-7_summarize_benchmark.py \

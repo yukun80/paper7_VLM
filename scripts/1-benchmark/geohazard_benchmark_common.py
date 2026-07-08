@@ -406,24 +406,6 @@ def mask_entry(
     }
 
 
-def instruction_for(task_type: str, modality_names: Iterable[str]) -> dict[str, str]:
-    """第一阶段使用稳定短指令，避免自然语言模板过度发散。"""
-    mods = sorted(set(modality_names))
-    if task_type == "negative_landslide_segmentation":
-        text = "Segment all landslide regions. If there is no landslide, output an empty mask."
-        template = "negative_aware_landslide_v1"
-    elif "insar_vel" in mods:
-        text = "Segment landslide regions using optical, DEM, SAR, or InSAR deformation evidence."
-        template = "multisource_evidence_landslide_v1"
-    elif "sar_asc" in mods or "sar_dsc" in mods or "dem" in mods:
-        text = "Segment landslide regions using the available multisource remote sensing evidence."
-        template = "multisource_landslide_v1"
-    else:
-        text = "Segment all landslide regions."
-        template = "generic_landslide_v1"
-    return {"language": "en", "template_id": template, "text": text}
-
-
 def make_sample(
     *,
     dataset_name: str,
@@ -449,7 +431,6 @@ def make_sample(
         sizes.append(mask["shape"][-2:])
     original_size = sizes[0] if sizes else None
     sample_id = make_sample_id(dataset_name, subset or "main", source_key)
-    instruction = instruction_for(task_type, modalities.keys())
     return {
         "sample_id": sample_id,
         "dataset_name": dataset_name,
@@ -463,7 +444,6 @@ def make_sample(
         "event_id": event_id,
         "modalities": modalities,
         "mask": mask,
-        "instruction": instruction,
         "spatial": {
             "original_size": original_size,
             "bucket_size": choose_bucket(original_size),
@@ -513,16 +493,16 @@ def final_index_paths(benchmark_dir: Path) -> dict[str, Path]:
     }
 
 
-def referring_index_paths(benchmark_dir: Path) -> dict[str, Path]:
-    """指代表达训练索引路径：每一行对应一条 expression-level 监督样本。"""
+def referring_target_index_paths(benchmark_dir: Path) -> dict[str, Path]:
+    """指代目标索引路径：每一行对应一条 expression-level target mask。"""
     index_dir = benchmark_dir / "indexes"
     return {
-        "all": index_dir / "referring_all.jsonl",
-        "train": index_dir / "referring_train.jsonl",
-        "val": index_dir / "referring_val.jsonl",
-        "test": index_dir / "referring_test.jsonl",
-        "unlabeled": index_dir / "referring_unlabeled.jsonl",
-        "extended_pool": index_dir / "referring_extended_pool.jsonl",
+        "all": index_dir / "referring_target_all.jsonl",
+        "train": index_dir / "referring_target_train.jsonl",
+        "val": index_dir / "referring_target_val.jsonl",
+        "test": index_dir / "referring_target_test.jsonl",
+        "unlabeled": index_dir / "referring_target_unlabeled.jsonl",
+        "extended_pool": index_dir / "referring_target_extended_pool.jsonl",
     }
 
 
@@ -547,46 +527,47 @@ def write_split_indexes(benchmark_dir: Path, samples: list[dict[str, Any]]) -> N
         write_jsonl(paths[split], sorted(rows, key=lambda row: row["sample_id"]))
 
 
-def make_referring_training_sample(parent: dict[str, Any], expression: dict[str, Any]) -> dict[str, Any]:
-    """把父样本中的一条指代表达展开成可直接训练的 segmentation 样本。"""
+def make_referring_target_sample(parent: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    """把父样本中的一条结构化指代目标展开成独立 target 索引行。"""
     parent_id = str(parent.get("sample_id"))
-    expression_id = str(expression.get("expression_id"))
+    target_id = str(target.get("target_id"))
     item = copy.deepcopy(parent)
-    item["sample_id"] = f"{parent_id}__{expression_id}"
+    item["sample_id"] = f"{parent_id}__{target_id}"
     item["parent_sample_id"] = parent_id
     item["parent_task_type"] = parent.get("task_type")
-    item["task_type"] = "referring_landslide_segmentation"
-    item["source_key"] = f"{parent.get('source_key')}/{expression_id}"
-    item["instruction"] = {
-        "language": "en",
-        "template_id": f"referring_{expression.get('category')}_{expression.get('subtype')}_v1",
-        "text": expression.get("text"),
-        "text_zh": expression.get("text_zh"),
-    }
-    item["mask"] = copy.deepcopy(expression.get("target_mask"))
-    item["referring_expression"] = copy.deepcopy(expression)
-    item.pop("referring_expressions", None)
+    item["task_type"] = "referring_landslide_target"
+    item["source_key"] = f"{parent.get('source_key')}/{target_id}"
+    item["category"] = target.get("category")
+    item["subtype"] = target.get("subtype")
+    item["target_mask"] = copy.deepcopy(target.get("target_mask"))
+    item["grounding"] = copy.deepcopy(target.get("grounding") or {})
+    item["confidence"] = target.get("confidence")
+    item.pop("mask", None)
+    item.pop("instruction", None)
+    item.pop("template_id", None)
+    item.pop("task_family", None)
+    item.pop("referring_targets", None)
 
     flags = set(item.get("quality_flags") or [])
-    flags.update(expression.get("quality_flags") or [])
-    flags.add("referring_expression_rule_generated")
+    flags.update(target.get("quality_flags") or [])
+    flags.add("referring_target_rule_generated")
     item["quality_flags"] = sorted(flags)
-    item["supervision"] = "mask"
+    item["supervision"] = "referring_target"
     return item
 
 
-def flatten_referring_samples(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """从最终样本索引展开所有指代表达样本。"""
+def flatten_referring_target_samples(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """从样本元数据中的 referring_targets 展开所有指代目标样本。"""
     rows: list[dict[str, Any]] = []
     for sample in samples:
-        for expression in sample.get("referring_expressions") or []:
-            rows.append(make_referring_training_sample(sample, expression))
+        for target in sample.get("referring_targets") or []:
+            rows.append(make_referring_target_sample(sample, target))
     return sorted(rows, key=lambda row: str(row.get("sample_id", "")))
 
 
-def write_referring_split_indexes(benchmark_dir: Path, samples: list[dict[str, Any]]) -> None:
-    """写出指代表达 all/train/val/test JSONL。"""
-    paths = referring_index_paths(benchmark_dir)
+def write_referring_target_split_indexes(benchmark_dir: Path, samples: list[dict[str, Any]]) -> None:
+    """写出指代目标 all/train/val/test JSONL。"""
+    paths = referring_target_index_paths(benchmark_dir)
     write_jsonl(paths["all"], sorted(samples, key=lambda row: row["sample_id"]))
     for split in ["train", "val", "test", "unlabeled", "extended_pool"]:
         rows = [row for row in samples if row.get("split") == split]

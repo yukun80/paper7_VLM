@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""多源滑坡 benchmark 指代表达公共规则库。
+"""多源滑坡 benchmark 指代目标公共规则库。
 
-脚本作用：集中维护方位、尺度、形态、数量四类 rule-based referring
-segmentation 表达生成规则，供 1-6_build_referring_expressions.py 调用。
+脚本作用：集中维护方位、尺度、形态、数量四类 rule-based referring target
+生成规则，供 1-6_build_referring_targets.py 调用。
 主要输入：已物化的二值 mask、父样本元数据和可选 preview 底图。
-主要输出：referring_expressions、expression-level mask.npy 和 referring preview。
+主要输出：referring_targets、target-level mask.npy 和 referring preview。
 是否改写原始数据：不会读取或改写 datasets/；只由调用方传入 benchmark 输出目录。
-典型用法：由 1-6_build_referring_expressions.py import 后复用，不建议单独运行。
+典型用法：由 1-6_build_referring_targets.py import 后复用，不建议单独运行。
 """
 
 from __future__ import annotations
@@ -53,13 +53,13 @@ REFERRING_POSITION_ZH = {
 
 
 def build_referring_config() -> dict[str, Any]:
-    """返回可写入 preprocess_config.yaml 的指代表达规则配置。"""
+    """返回可写入 preprocess_config.yaml 的指代目标规则配置。"""
     return {
         "enabled": True,
-        "max_expressions_per_sample": REFERRING_MAX_EXPRESSIONS,
+        "max_targets_per_sample": REFERRING_MAX_EXPRESSIONS,
         "component_connectivity": "8-neighborhood",
         "large_scene_component_pixel_limit": REFERRING_SCENE_COMPONENT_PIXEL_LIMIT,
-        "position_rule": "连通域质心落入 3x3 网格后生成方位指代表达，每样本最多保留面积最大的 4 个方位组。",
+        "position_rule": "连通域质心落入 3x3 网格后生成方位指代目标，每样本最多保留面积最大的 4 个方位组。",
         "scale_rules": {
             "large_landslide": "largest_area / image_area >= 0.005 或 largest_area / total_landslide_area >= 0.5",
             "small_landslide_patches": "area <= 0.25 * largest_area 且至少 2 个小斑块",
@@ -74,8 +74,7 @@ def build_referring_config() -> dict[str, Any]:
             "multiple_landslides": "2 <= component_count <= 6",
             "many_landslides": "component_count > 6",
         },
-        "languages": ["en", "zh"],
-        "note": "指代表达 mask 是 expression-level 目标，不等同于父样本全局 mask。",
+        "note": "指代 target mask 是局部监督目标，不等同于父样本全局 mask；训练文本由 scripts/2-instruction 统一渲染。",
     }
 
 
@@ -159,11 +158,11 @@ def component_key(label_ids: list[int]) -> str:
 
 
 def target_mask_from_key(binary: Any, labels: Any | None, target_key: str) -> Any:
-    """根据 target_key 生成 expression-level 目标 mask。"""
+    """根据 target_key 生成 target-level 目标 mask。"""
     if target_key == "full":
         return binary[np.newaxis, :, :].astype(np.uint8)
     if labels is None or not target_key.startswith("components:"):
-        raise ValueError(f"无法解析指代表达目标: {target_key}")
+        raise ValueError(f"无法解析指代目标: {target_key}")
     ids = [int(part) for part in target_key.split(":", 1)[1].split(",") if part]
     return np.isin(labels, ids).astype(np.uint8)[np.newaxis, :, :]
 
@@ -172,20 +171,16 @@ def make_referring_candidate(
     *,
     category: str,
     subtype: str,
-    text: str,
-    text_zh: str,
     target_key: str,
     grounding: dict[str, Any],
     confidence: str,
     priority: int,
     quality_flags: list[str] | None = None,
 ) -> dict[str, Any]:
-    """构造待筛选的指代表达候选。"""
+    """构造待筛选的结构化指代目标候选。"""
     return {
         "category": category,
         "subtype": subtype,
-        "text": text,
-        "text_zh": text_zh,
         "target_key": target_key,
         "grounding": grounding,
         "confidence": confidence,
@@ -242,8 +237,6 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
         candidates.append(make_referring_candidate(
             category="position",
             subtype=pos,
-            text=f"Segment the landslide regions in the {pos} part of the image.",
-            text_zh=f"分割图像{REFERRING_POSITION_ZH[pos]}的滑坡区域。",
             target_key=component_key(group["labels"]),
             grounding={
                 "rule": "component_centroid_3x3_grid",
@@ -261,8 +254,6 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
     candidates.append(make_referring_candidate(
         category="scale",
         subtype="largest_landslide",
-        text="Segment the largest landslide region.",
-        text_zh="分割最大的滑坡区域。",
         target_key=largest_key,
         grounding={
             "rule": "largest_connected_component",
@@ -279,8 +270,6 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
         candidates.append(make_referring_candidate(
             category="scale",
             subtype="large_landslide",
-            text="Segment the large landslide region.",
-            text_zh="分割大块滑坡区域。",
             target_key=largest_key,
             grounding={
                 "rule": "large_component_threshold",
@@ -298,8 +287,6 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
         candidates.append(make_referring_candidate(
             category="scale",
             subtype="small_landslide_patches",
-            text="Segment the small landslide patches.",
-            text_zh="分割小型滑坡斑块。",
             target_key=component_key(labels_small),
             grounding={
                 "rule": "small_components_relative_to_largest",
@@ -316,8 +303,6 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
         candidates.append(make_referring_candidate(
             category="morphology",
             subtype="compact_landslide",
-            text="Segment the compact main landslide region.",
-            text_zh="分割紧凑的主体滑坡区域。",
             target_key=largest_key,
             grounding={
                 "rule": "largest_component_fill_ratio",
@@ -332,8 +317,6 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
         candidates.append(make_referring_candidate(
             category="morphology",
             subtype="fragmented_landslides",
-            text="Segment the fragmented landslide patches.",
-            text_zh="分割稀碎分布的滑坡斑块。",
             target_key="full",
             grounding={
                 "rule": "many_components_with_limited_largest_share",
@@ -347,8 +330,6 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
         candidates.append(make_referring_candidate(
             category="morphology",
             subtype="elongated_landslide",
-            text="Segment the elongated landslide region.",
-            text_zh="分割狭长形滑坡区域。",
             target_key=largest_key,
             grounding={
                 "rule": "largest_component_bbox_aspect_ratio",
@@ -363,21 +344,13 @@ def build_component_referring_candidates(binary: Any, labels: Any, components: l
     comp_count = len(components)
     if comp_count == 1:
         subtype = "single_landslide"
-        text = "Segment the single landslide region."
-        text_zh = "分割唯一的滑坡区域。"
     elif comp_count <= 6:
         subtype = "multiple_landslides"
-        text = f"Segment the {comp_count} landslide regions."
-        text_zh = f"分割这 {comp_count} 个滑坡区域。"
     else:
         subtype = "many_landslides"
-        text = "Segment the many landslide regions."
-        text_zh = "分割数量较多的滑坡区域。"
     candidates.append(make_referring_candidate(
         category="count",
         subtype=subtype,
-        text=text,
-        text_zh=text_zh,
         target_key="full",
         grounding={
             "rule": "connected_component_count",
@@ -401,8 +374,6 @@ def build_large_scene_referring_candidates(binary: Any, final_mask: dict[str, An
     return [make_referring_candidate(
         category="position",
         subtype=pos,
-        text=f"Segment the landslide regions in the {pos} part of the image.",
-        text_zh=f"分割图像{REFERRING_POSITION_ZH[pos]}的滑坡区域。",
         target_key="full",
         grounding={"rule": "global_bbox_3x3_grid_large_scene", "grid": pos, "bbox_xyxy": bbox},
         confidence="rule_medium",
@@ -459,11 +430,11 @@ def labeled_tile(name: str, image: Any) -> Image.Image:
     return canvas
 
 
-def save_referring_preview(path: Path, visual: Any | None, expression_targets: list[tuple[str, Any]]) -> str | None:
-    """保存指代表达 target mask 拼图，便于人工核查文本和目标区域是否一致。"""
-    if visual is None or not expression_targets:
+def save_referring_preview(path: Path, visual: Any | None, referring_targets: list[tuple[str, Any]]) -> str | None:
+    """保存指代 target mask 拼图，便于人工核查目标区域是否合理。"""
+    if visual is None or not referring_targets:
         return None
-    pil_tiles = [labeled_tile(label, overlay_preview_resized(visual, target)) for label, target in expression_targets[:REFERRING_MAX_EXPRESSIONS]]
+    pil_tiles = [labeled_tile(label, overlay_preview_resized(visual, target)) for label, target in referring_targets[:REFERRING_MAX_EXPRESSIONS]]
     cols = min(3, len(pil_tiles))
     rows = int(math.ceil(len(pil_tiles) / cols))
     cell_w = max(tile.width for tile in pil_tiles)
@@ -476,7 +447,7 @@ def save_referring_preview(path: Path, visual: Any | None, expression_targets: l
     return to_repo_rel(path) or path.as_posix()
 
 
-def build_referring_expressions(
+def build_referring_targets(
     sample: dict[str, Any],
     sample_dir: Path,
     visual: Any | None,
@@ -485,7 +456,7 @@ def build_referring_expressions(
     *,
     enable_preview: bool = True,
 ) -> tuple[list[dict[str, Any]], str | None, list[str], list[str]]:
-    """生成指代表达、expression-level mask 和 referring preview。"""
+    """生成结构化指代目标、target-level mask 和 referring preview。"""
     if mask is None or not final_mask or final_mask.get("empty_mask") is True:
         return [], None, [], []
 
@@ -510,9 +481,9 @@ def build_referring_expressions(
     referring_dir = ensure_dir(sample_dir / "referring")
     target_cache: dict[str, dict[str, Any]] = {}
     target_preview_items: list[tuple[str, Any]] = []
-    expressions: list[dict[str, Any]] = []
+    targets: list[dict[str, Any]] = []
 
-    def target_entry_for(target_key: str, expression_id: str) -> tuple[dict[str, Any], Any]:
+    def target_entry_for(target_key: str, target_id: str) -> tuple[dict[str, Any], Any]:
         if target_key in target_cache:
             target_mask = target_mask_from_key(binary, labels, target_key)
             return copy.deepcopy(target_cache[target_key]), target_mask
@@ -523,7 +494,7 @@ def build_referring_expressions(
             entry["target_source"] = "parent_mask"
             entry["area_ratio"] = float(positive / max(binary.size, 1))
         else:
-            out_path = referring_dir / expression_id / "mask.npy"
+            out_path = referring_dir / target_id / "mask.npy"
             ensure_dir(out_path.parent)
             np.save(out_path, target_mask.astype(np.uint8))
             entry = {
@@ -546,22 +517,20 @@ def build_referring_expressions(
         return entry, target_mask
 
     for idx, candidate in enumerate(selected, start=1):
-        expression_id = f"ref_{idx:02d}_{safe_referring_id(candidate['category'])}_{safe_referring_id(candidate['subtype'])}"
-        target_entry, target_mask = target_entry_for(str(candidate["target_key"]), expression_id)
-        expression_flags = sorted(set((candidate.get("quality_flags") or []) + ["referring_expression_rule_generated"]))
-        expressions.append({
-            "expression_id": expression_id,
+        target_id = f"ref_{idx:02d}_{safe_referring_id(candidate['category'])}_{safe_referring_id(candidate['subtype'])}"
+        target_entry, target_mask = target_entry_for(str(candidate["target_key"]), target_id)
+        target_flags = sorted(set((candidate.get("quality_flags") or []) + ["referring_target_rule_generated"]))
+        targets.append({
+            "target_id": target_id,
             "category": candidate["category"],
             "subtype": candidate["subtype"],
-            "text": candidate["text"],
-            "text_zh": candidate["text_zh"],
             "target_mask": target_entry,
             "grounding": {**(candidate.get("grounding") or {}), "generator": "rule_based_mask_components_v1"},
             "confidence": candidate["confidence"],
-            "quality_flags": expression_flags,
+            "quality_flags": target_flags,
         })
         target_preview_items.append((f"{candidate['category']}:{candidate['subtype']}", target_mask))
-        flags.extend(expression_flags)
+        flags.extend(target_flags)
 
     preview_path = None
     if enable_preview:
@@ -570,4 +539,4 @@ def build_referring_expressions(
         except Exception as exc:
             errors.append(f"referring preview 失败: {exc}")
             flags.append("referring_preview_failed")
-    return expressions, preview_path, errors, sorted(set(flags))
+    return targets, preview_path, errors, sorted(set(flags))

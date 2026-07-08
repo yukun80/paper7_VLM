@@ -3,7 +3,7 @@
 """步骤 1-7：汇总 benchmark 统计，生成中文清洗报告。
 
 脚本作用：汇总样本数、数据集分布、模态组合、尺寸 bucket、bbox 状态、
-指代表达分布和质量标记，为论文图表和实验记录准备统计结果。
+指代目标分布和质量标记，为论文图表和实验记录准备统计结果。
 主要输入：benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl。
 主要输出：reports/statistics.json 和 reports/cleaning_report.md。
 是否改写原始数据：不会改写 datasets/，只写 benchmark/ 下的统计报告。
@@ -21,7 +21,7 @@ from geohazard_benchmark_common import (
     DEFAULT_BENCHMARK_ROOT,
     modality_combo,
     read_jsonl,
-    referring_index_paths,
+    referring_target_index_paths,
     split_index_paths,
     to_repo_rel,
     write_json,
@@ -43,35 +43,34 @@ def summarize(samples: list[dict[str, Any]], benchmark_dir: Path) -> dict[str, A
     empty_masks = 0
     bbox_status = Counter()
     quality_flags = Counter()
-    referring_per_parent = []
     for sample in samples:
         by_region[str(sample.get("dataset_name", "unknown"))][str(sample.get("region", "unknown"))] += 1
         mask = sample.get("mask") or {}
         if mask.get("empty_mask") is True:
             empty_masks += 1
         bbox_status[mask.get("bbox_status", "no_mask")] += 1
-        referring_per_parent.append(len(sample.get("referring_expressions") or []))
         for flag in sample.get("quality_flags") or []:
             quality_flags[flag] += 1
     materialized_files = list((benchmark_dir / "data").glob("**/*.npy"))
     preview_files = list((benchmark_dir / "data").glob("**/preview/*.png"))
     referring_preview_files = list((benchmark_dir / "data").glob("**/preview/referring.png"))
-    referring_samples = read_jsonl(referring_index_paths(benchmark_dir)["all"])
-    referring_by_split = Counter(sample.get("split", "unknown") for sample in referring_samples)
-    referring_by_category = Counter((sample.get("referring_expression") or {}).get("category", "unknown") for sample in referring_samples)
+    referring_targets = read_jsonl(referring_target_index_paths(benchmark_dir)["all"])
+    referring_by_split = Counter(sample.get("split", "unknown") for sample in referring_targets)
+    referring_by_category = Counter(sample.get("category", "unknown") for sample in referring_targets)
     referring_by_subtype = Counter(
-        f"{(sample.get('referring_expression') or {}).get('category', 'unknown')}:{(sample.get('referring_expression') or {}).get('subtype', 'unknown')}"
-        for sample in referring_samples
+        f"{sample.get('category', 'unknown')}:{sample.get('subtype', 'unknown')}"
+        for sample in referring_targets
     )
+    referring_by_parent = Counter(sample.get("parent_sample_id", "unknown") for sample in referring_targets)
     referring_flags = Counter()
     target_area_ratios = []
-    for sample in referring_samples:
+    for sample in referring_targets:
         for flag in sample.get("quality_flags") or []:
             if str(flag).startswith("referring_"):
                 referring_flags[flag] += 1
-        mask = sample.get("mask") or {}
-        if mask.get("area_ratio") is not None:
-            target_area_ratios.append(float(mask["area_ratio"]))
+        target_mask = sample.get("target_mask") or {}
+        if target_mask.get("area_ratio") is not None:
+            target_area_ratios.append(float(target_mask["area_ratio"]))
     if target_area_ratios:
         target_area_stats = {
             "min": min(target_area_ratios),
@@ -98,13 +97,13 @@ def summarize(samples: list[dict[str, Any]], benchmark_dir: Path) -> dict[str, A
             "num_preview_files": len(preview_files),
             "num_referring_preview_files": len(referring_preview_files),
         },
-        "referring_expressions": {
-            "num_samples": len(referring_samples),
+        "referring_targets": {
+            "num_samples": len(referring_targets),
             "by_split": counter_dict(referring_by_split),
             "by_category": counter_dict(referring_by_category),
             "by_subtype": counter_dict(referring_by_subtype),
-            "avg_expressions_per_parent": (sum(referring_per_parent) / len(referring_per_parent)) if referring_per_parent else 0.0,
-            "parents_with_expressions": sum(1 for value in referring_per_parent if value > 0),
+            "avg_targets_per_parent": (len(referring_targets) / len(referring_by_parent)) if referring_by_parent else 0.0,
+            "parents_with_targets": len(referring_by_parent),
             "target_area_ratio": target_area_stats,
             "quality_flags": counter_dict(referring_flags),
         },
@@ -122,8 +121,8 @@ def report_markdown(stats: dict[str, Any], benchmark_dir: Path) -> str:
     lines.append(f"- preview PNG 文件数：{stats['materialized_data']['num_preview_files']}")
     lines.append(f"- referring preview PNG 文件数：{stats['materialized_data']['num_referring_preview_files']}")
     lines.append(f"- 物化数据大小：{stats['materialized_data']['bytes']} bytes")
-    lines.append(f"- 指代表达训练样本数量：{stats['referring_expressions']['num_samples']}")
-    lines.append(f"- 平均每个父样本表达数：{stats['referring_expressions']['avg_expressions_per_parent']:.3f}")
+    lines.append(f"- 指代目标样本数量：{stats['referring_targets']['num_samples']}")
+    lines.append(f"- 平均每个父样本 target 数：{stats['referring_targets']['avg_targets_per_parent']:.3f}")
     lines.append("")
     lines.append("## Split 分布")
     for key, value in stats["by_split"].items():
@@ -145,16 +144,16 @@ def report_markdown(stats: dict[str, Any], benchmark_dir: Path) -> str:
     for key, value in stats["bbox_status"].items():
         lines.append(f"- {key}: {value}")
     lines.append("")
-    lines.append("## 指代表达类别分布")
-    for key, value in stats["referring_expressions"]["by_category"].items():
+    lines.append("## 指代目标类别分布")
+    for key, value in stats["referring_targets"]["by_category"].items():
         lines.append(f"- {key}: {value}")
     lines.append("")
-    lines.append("## 指代表达子类分布")
-    for key, value in stats["referring_expressions"]["by_subtype"].items():
+    lines.append("## 指代目标子类分布")
+    for key, value in stats["referring_targets"]["by_subtype"].items():
         lines.append(f"- {key}: {value}")
     lines.append("")
-    lines.append("## 指代表达质量标记")
-    for key, value in stats["referring_expressions"]["quality_flags"].items():
+    lines.append("## 指代目标质量标记")
+    for key, value in stats["referring_targets"]["quality_flags"].items():
         lines.append(f"- {key}: {value}")
     lines.append("")
     lines.append("## 主要质量标记")

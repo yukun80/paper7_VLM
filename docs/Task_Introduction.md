@@ -114,6 +114,13 @@
 输出是什么：U-Net/DeepLab/SegFormer/Mask2Former 等模型结果。
 注意什么：baseline 必须公平，不能只选很弱模型；每个模态组合至少要有一个传统模型对比。
 如何进入下一步：baseline 结果作为新模型性能参照。
+(qwen3vl) yukun80@SARLAB4090:~/codes/paper7_VLM$ /home/yukun80/miniconda3/envs/qwen3vl/bin/qpsalm-train   --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_text_probe.yaml   --device cuda   --batch-size 1   --target-size 128   --num-workers 4   --max-steps 1000
+Loading weights: 100%|███████████████████████████████████████████████████| 625/625 [00:00<00:00, 3350.40it/s]
+step=0 epoch=0 loss=1.5967 lr=4e-05 iou=0.0000 dice=0.0000
+step=1 epoch=0 loss=1.3100 lr=6e-05 iou=0.0000 dice=0.0000
+step=2 epoch=0 loss=1.3026 lr=8e-05 iou=0.0000 dice=0.0000
+step=3 epoch=0 loss=1.2207 lr=0.0001 iou=0.0000 dice=0.0000
+step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 
 步骤 6：实现 Multi-Source Qwen-PSALM-Seg 原型。
 这一步做什么：搭建 Qwen3-VL-2B + modality adapter + PSALM-style mask tokens + mask proposal decoder。

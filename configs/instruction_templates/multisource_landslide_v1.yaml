@@ -1,0 +1,180 @@
+version: multisource_landslide_v1
+description: 多源遥感滑坡 instruction segmentation 第一版稳定短指令模板。
+default_language: en
+templates:
+  - template_id: generic_landslide_v1
+    task_family: global_landslide_segmentation
+    text_en: Segment all landslide regions.
+    text_zh: 分割图像中的所有滑坡区域。
+    applicable_when:
+      supervision: mask
+      empty_mask: false
+    target_mask_policy: parent_mask
+    answer_format: binary_mask
+    quality_flags:
+      - instruction_template_rule_based
+
+  - template_id: negative_aware_landslide_v1
+    task_family: negative_aware_segmentation
+    text_en: Segment all landslide regions. If there is no landslide, output an empty mask.
+    text_zh: 分割图像中的所有滑坡区域；如果没有滑坡，输出空掩膜。
+    applicable_when:
+      supervision: mask
+      empty_mask: true
+    target_mask_policy: parent_mask
+    answer_format: binary_mask
+    quality_flags:
+      - instruction_template_rule_based
+      - negative_aware_instruction
+
+  - template_id: multisource_landslide_v1
+    task_family: multisource_evidence_segmentation
+    text_en: Segment landslide regions using the available multisource remote sensing evidence.
+    text_zh: 利用可用的多源遥感证据分割滑坡区域。
+    applicable_when:
+      supervision: mask
+      min_modalities: 2
+    target_mask_policy: parent_mask
+    answer_format: binary_mask
+    quality_flags:
+      - instruction_template_rule_based
+      - multisource_evidence_instruction
+
+  - template_id: terrain_evidence_landslide_v1
+    task_family: multisource_evidence_segmentation
+    text_en: Segment landslide regions using the available optical and terrain evidence.
+    text_zh: 利用可用的光学和地形证据分割滑坡区域。
+    applicable_when:
+      supervision: mask
+      requires_modalities_any:
+        - optical_rgb
+        - optical_multiband
+        - multispectral
+      requires_modalities_any_terrain:
+        - dem
+        - slope
+    target_mask_policy: parent_mask
+    answer_format: binary_mask
+    quality_flags:
+      - instruction_template_rule_based
+      - terrain_evidence_instruction
+
+  - template_id: sar_terrain_landslide_v1
+    task_family: multisource_evidence_segmentation
+    text_en: Segment landslide regions using the available multispectral, SAR, and terrain evidence.
+    text_zh: 利用可用的多光谱、SAR 和地形证据分割滑坡区域。
+    applicable_when:
+      supervision: mask
+      requires_modalities_any:
+        - multispectral
+      requires_modalities_any_sar:
+        - sar_asc
+        - sar_dsc
+      requires_modalities_any_terrain:
+        - dem
+        - slope
+    target_mask_policy: parent_mask
+    answer_format: binary_mask
+    quality_flags:
+      - instruction_template_rule_based
+      - sar_terrain_evidence_instruction
+
+  - template_id: insar_evidence_landslide_v1
+    task_family: multisource_evidence_segmentation
+    text_en: Segment landslide regions using the available optical, terrain, SAR, and InSAR deformation evidence.
+    text_zh: 利用可用的光学、地形、SAR 和 InSAR 形变证据分割滑坡区域。
+    applicable_when:
+      supervision: mask
+      requires_modalities_any:
+        - optical_rgb
+        - optical_multiband
+        - multispectral
+      requires_modalities_any_sar:
+        - sar_asc
+        - sar_dsc
+      requires_modalities_any_terrain:
+        - dem
+        - slope
+      requires_modalities_all:
+        - insar_vel
+    target_mask_policy: parent_mask
+    answer_format: binary_mask
+    quality_flags:
+      - instruction_template_rule_based
+      - insar_evidence_instruction
+
+  - template_id: referring_rule_based_v1
+    template_id_pattern: referring_*_v1
+    task_family: referring_landslide_segmentation
+    text_en: Render the referring target instruction from referring_templates.
+    text_zh: 根据 referring_templates 渲染指代目标分割指令。
+    applicable_when:
+      task_type: referring_landslide_target
+    target_mask_policy: referring_target_mask
+    answer_format: binary_mask
+    quality_flags:
+      - instruction_template_rule_based
+      - referring_instruction
+
+referring_templates:
+  position:
+    upper-left:
+      text_en: Segment the landslide regions in the upper-left part of the image.
+      text_zh: 分割图像左上部的滑坡区域。
+    upper:
+      text_en: Segment the landslide regions in the upper part of the image.
+      text_zh: 分割图像上部的滑坡区域。
+    upper-right:
+      text_en: Segment the landslide regions in the upper-right part of the image.
+      text_zh: 分割图像右上部的滑坡区域。
+    left:
+      text_en: Segment the landslide regions on the left side of the image.
+      text_zh: 分割图像左侧的滑坡区域。
+    center:
+      text_en: Segment the landslide regions near the center of the image.
+      text_zh: 分割图像中部的滑坡区域。
+    right:
+      text_en: Segment the landslide regions on the right side of the image.
+      text_zh: 分割图像右侧的滑坡区域。
+    lower-left:
+      text_en: Segment the landslide regions in the lower-left part of the image.
+      text_zh: 分割图像左下部的滑坡区域。
+    lower:
+      text_en: Segment the landslide regions in the lower part of the image.
+      text_zh: 分割图像下部的滑坡区域。
+    lower-right:
+      text_en: Segment the landslide regions in the lower-right part of the image.
+      text_zh: 分割图像右下部的滑坡区域。
+
+  scale:
+    largest_landslide:
+      text_en: Segment the largest landslide region.
+      text_zh: 分割最大的滑坡区域。
+    large_landslide:
+      text_en: Segment the large landslide region.
+      text_zh: 分割大块滑坡区域。
+    small_landslide_patches:
+      text_en: Segment the small landslide patches.
+      text_zh: 分割小型滑坡斑块。
+
+  morphology:
+    compact_landslide:
+      text_en: Segment the compact main landslide region.
+      text_zh: 分割紧凑的主体滑坡区域。
+    fragmented_landslides:
+      text_en: Segment the fragmented landslide patches.
+      text_zh: 分割稀碎分布的滑坡斑块。
+    elongated_landslide:
+      text_en: Segment the elongated landslide region.
+      text_zh: 分割狭长形滑坡区域。
+
+  count:
+    single_landslide:
+      text_en: Segment the single landslide region.
+      text_zh: 分割唯一的滑坡区域。
+    multiple_landslides:
+      text_en: Segment the {component_count} landslide regions.
+      text_zh: 分割这 {component_count} 个滑坡区域。
+    many_landslides:
+      text_en: Segment the many landslide regions.
+      text_zh: 分割数量较多的滑坡区域。
