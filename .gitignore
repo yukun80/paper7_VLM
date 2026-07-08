@@ -76,8 +76,6 @@ inputs/**
 # 训练输出、模型权重与实验日志
 models/
 models/**
-external/
-external/**
 runs/
 runs/**
 outputs/
