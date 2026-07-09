@@ -40,6 +40,11 @@ def row(**kwargs: Any) -> dict[str, Any]:
     return {field: kwargs.get(field, "") for field in MANIFEST_FIELDS}
 
 
+def image_number(path: Path) -> str:
+    """解析 Landslide4Sense image_123.h5 / mask_123.h5 的数字 ID。"""
+    return path.stem.split("_", 1)[1]
+
+
 def scan_gdcld(root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not root.exists():
@@ -177,48 +182,47 @@ def scan_landslide4sense(root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not root.exists():
         return [row(dataset_name="landslide4sense", warning=f"目录不存在: {to_repo_rel(root)}")]
-    train_img = sorted((root / "TrainData" / "img").glob("image_*.h5"))
-    train_mask = sorted((root / "TrainData" / "mask").glob("mask_*.h5"))
     image_size = "128x128"
     warning = "官方通道语义：B1-B12=Sentinel-2, B13=slope, B14=DEM"
-    if train_img:
+    first_img = next((root / "TrainData" / "img").glob("image_*.h5"), None)
+    if first_img:
         try:
-            meta = hdf5_dataset_meta(train_img[0], "img")
+            meta = hdf5_dataset_meta(first_img, "img")
             shape = meta["shape"]
             if len(shape) >= 3:
                 image_size = f"{shape[0]}x{shape[1]}"
                 warning = f"{warning}; img shape={shape}, dtype={meta['dtype']}"
         except Exception as exc:
             warning = f"{warning}; HDF5 元数据读取失败: {exc}"
-    rows.append(row(
-        dataset_name="landslide4sense",
-        split="train",
-        subset="official_train",
-        modalities="multispectral+slope+dem",
-        file_format="hdf5",
-        num_samples=min(len(train_img), len(train_mask)),
-        image_size=image_size,
-        gsd_m=10,
-        label_status="supervised_mask",
-        region="mixed",
-        task_type="landslide_segmentation",
-        warning=warning,
-    ))
-    for split, folder in [("val", "ValidData"), ("test", "TestData")]:
-        files = sorted((root / folder / "img").glob("image_*.h5"))
+
+    for split, folder, subset in [
+        ("train", "TrainData", "official_train"),
+        ("val", "ValidData", "official_val"),
+        ("test", "TestData", "official_test"),
+    ]:
+        img = {image_number(p): p for p in (root / folder / "img").glob("image_*.h5")}
+        mask = {image_number(p): p for p in (root / folder / "mask").glob("mask_*.h5")}
+        paired = set(img) & set(mask)
+        if not img and not mask:
+            continue
+        cur_warning = warning
+        missing_mask = len(set(img) - set(mask))
+        missing_image = len(set(mask) - set(img))
+        if missing_mask or missing_image:
+            cur_warning = f"{cur_warning}; 跳过未配对样本 images_without_mask={missing_mask}, masks_without_image={missing_image}"
         rows.append(row(
             dataset_name="landslide4sense",
             split=split,
-            subset=f"official_{split}_images_only",
+            subset=subset,
             modalities="multispectral+slope+dem",
             file_format="hdf5",
-            num_samples=len(files),
+            num_samples=len(paired),
             image_size=image_size,
             gsd_m=10,
-            label_status="unlabeled_or_hidden_label",
+            label_status="supervised_mask",
             region="mixed",
-            task_type="unlabeled_landslide_segmentation",
-            warning="未发现单独 mask 目录，默认进入 unlabeled；官方通道语义同 train",
+            task_type="landslide_segmentation",
+            warning=cur_warning,
         ))
     return rows
 

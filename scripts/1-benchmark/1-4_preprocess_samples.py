@@ -73,13 +73,22 @@ def build_preprocess_config() -> dict[str, Any]:
             "enabled": True,
             "max_side": PREVIEW_MAX_SIDE,
             "tile_side": PREVIEW_TILE_SIDE,
-            "files": ["visual.png", "mask.png", "overlay.png", "modalities.png"],
+            "files": [
+                "visual.png",
+                "mask.png",
+                "overlay.png",
+                "modalities.png",
+                "multispectral_true_color.png",
+                "multispectral_false_color_nir.png",
+                "multispectral_swir.png",
+                "multispectral_band_grid.png",
+            ],
             "note": "preview 仅用于人工质检，不作为训练输入。",
         },
         "normalization": {
-            "optical_rgb": {"dtype": "uint8", "method": "preserve_rgb_values"},
+            "optical_rgb": {"dtype": "uint8_or_float32", "method": "preserve_uint8_else_robust_percentile"},
             "optical_multiband": {"dtype": "float32", "method": "per_array_float32"},
-            "multispectral": {"dtype": "float32", "method": "clip_0_10000_if_needed_then_scale"},
+            "multispectral": {"dtype": "float32", "method": "preserve_0_1_or_clip_0_10000_or_robust_percentile"},
             "slope": {"dtype": "float32", "method": "robust_percentile_scale"},
             "sar_asc": {"dtype": "float32", "method": "clip_-50_10_then_scale"},
             "sar_dsc": {"dtype": "float32", "method": "clip_-50_10_then_scale"},
@@ -241,20 +250,48 @@ def robust_scale(arr: Any, low: float = 1.0, high: float = 99.0) -> Any:
     return ((arr - lo) / (hi - lo)).astype(np.float32)
 
 
-def normalize_modality(name: str, arr: Any) -> tuple[Any, str]:
+def normalize_reflectance_like(arr: Any) -> tuple[Any, str]:
+    """处理已知 Sentinel-2 反射率：兼容 0..1、0..10000 和非标准小范围。"""
+    data = np.asarray(arr, dtype=np.float32)
+    finite = data[np.isfinite(data)]
+    if finite.size == 0:
+        return np.zeros_like(data, dtype=np.float32), "reflectance_all_nonfinite_to_zero"
+    amin = float(np.nanmin(finite))
+    p99 = float(np.percentile(finite, 99))
+    if amin >= 0.0 and p99 <= 1.5:
+        return np.clip(data, 0.0, 1.0).astype(np.float32), "preserve_0_1_reflectance"
+    if p99 >= 1000.0:
+        return (np.clip(data, 0.0, 10000.0) / 10000.0).astype(np.float32), "clip_0_10000_then_scale"
+    return robust_scale_channels(data), "reflectance_robust_percentile_nonstandard_range"
+
+
+def normalize_modality(name: str, arr: Any, sample: dict[str, Any] | None = None, info: dict[str, Any] | None = None) -> tuple[Any, str]:
     arr = np.asarray(arr)
+    dataset_name = str((sample or {}).get("dataset_name") or "")
+    value_encoding = str((info or {}).get("value_encoding") or "")
+
+    if dataset_name == "multimodal-landslide-dataset" and name == "optical_rgb":
+        return robust_scale_channels(arr), "multimodal_sentinel2_rgb_int16_robust_percentile"
+    if dataset_name == "landslide4sense" and name == "multispectral":
+        data, method = normalize_reflectance_like(arr)
+        if method == "reflectance_robust_percentile_nonstandard_range":
+            method = "landslide4sense_s2_robust_percentile_nonstandard_range"
+        else:
+            method = f"landslide4sense_s2_{method}"
+        return data, method
+    if dataset_name == "Sen12Landslides" and name == "multispectral":
+        data, method = normalize_reflectance_like(arr)
+        return data, f"sen12_s2_{method}"
+
     if name == "optical_rgb":
         if arr.dtype != np.uint8:
-            arr = np.clip(arr, 0, 255).astype(np.uint8)
+            if value_encoding:
+                return robust_scale_channels(arr), f"{value_encoding}_robust_percentile"
+            return robust_scale_channels(arr), "rgb_robust_percentile_non_uint8"
         return arr, "preserve_rgb_values"
     if name in {"multispectral", "optical_multiband"}:
-        arr = arr.astype(np.float32, copy=False)
-        finite = arr[np.isfinite(arr)]
-        if finite.size == 0:
-            return np.zeros_like(arr, dtype=np.float32), "clip_0_10000_if_needed_then_scale"
-        if np.nanmax(finite) > 1.5:
-            arr = np.clip(arr, 0, 10000) / 10000.0
-        return arr.astype(np.float32), "clip_0_10000_if_needed_then_scale"
+        data, method = normalize_reflectance_like(arr)
+        return data, f"generic_multispectral_{method}"
     if name == "slope":
         return robust_scale(arr), "slope_robust_percentile"
     if name in {"sar_asc", "sar_dsc"}:
@@ -304,6 +341,23 @@ def stretch_uint8(arr: Any, low: float = 2.0, high: float = 98.0) -> Any:
     return out.astype(np.uint8)
 
 
+def robust_scale_channels(arr: Any, low: float = 2.0, high: float = 98.0) -> Any:
+    """按通道稳健拉伸到 0..1，用于非 uint8 RGB 和非标准多光谱范围。"""
+    data = np.asarray(arr, dtype=np.float32)
+    out = np.zeros_like(data, dtype=np.float32)
+    if data.ndim == 2:
+        finite = data[np.isfinite(data)]
+        if finite.size == 0:
+            return np.zeros(data.shape, dtype=np.float32)
+        lo, hi = np.percentile(finite, [low, high])
+        if math.isclose(float(lo), float(hi)):
+            return np.zeros(data.shape, dtype=np.float32)
+        return np.clip((data - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+    for idx in range(data.shape[0]):
+        out[idx] = robust_scale_channels(data[idx], low, high)
+    return out.astype(np.float32)
+
+
 def chw_to_hwc_rgb(arr: Any) -> Any:
     """把 CHW/HW 数组转为 HWC RGB uint8。"""
     data = np.asarray(arr)
@@ -325,17 +379,47 @@ def chw_to_hwc_rgb(arr: Any) -> Any:
 
 def preview_multispectral_rgb(arr: Any, band_names: list[str]) -> Any:
     """按 Sentinel-2 真彩组合生成多光谱 RGB preview。"""
-    data = np.asarray(arr)
+    return preview_multispectral_composite(arr, band_names, ("B04", "B03", "B02"))
+
+
+def multispectral_band_index(band_names: list[str], band: str) -> int | None:
+    """兼容 B04/B4 等 Sentinel-2 波段命名。"""
     names = [name.lower() for name in band_names]
-    if {"b4", "b3", "b2"}.issubset(set(names)):
-        idxs = [names.index("b4"), names.index("b3"), names.index("b2")]
-    elif {"b04", "b03", "b02"}.issubset(set(names)):
-        idxs = [names.index("b04"), names.index("b03"), names.index("b02")]
-    else:
+    candidates = {band.lower()}
+    if band.upper().startswith("B0"):
+        candidates.add("b" + band.upper()[2:].lstrip("0").lower())
+    elif band.upper().startswith("B"):
+        number = band.upper()[1:]
+        if number.isdigit():
+            candidates.add(f"b{int(number):02d}")
+    for candidate in candidates:
+        if candidate in names:
+            return names.index(candidate)
+    return None
+
+
+def preview_multispectral_composite(arr: Any, band_names: list[str], bands: tuple[str, str, str]) -> Any:
+    """按指定三波段组合生成多光谱 RGB preview。"""
+    data = np.asarray(arr)
+    idxs: list[int] = []
+    for band in bands:
+        idx = multispectral_band_index(band_names, band)
+        if idx is not None and idx < data.shape[0]:
+            idxs.append(idx)
+    if not idxs:
         idxs = list(range(min(3, data.shape[0])))
     while len(idxs) < 3:
         idxs.append(idxs[-1] if idxs else 0)
     return chw_to_hwc_rgb(data[idxs[:3]])
+
+
+def preview_multispectral_composites(arr: Any, band_names: list[str]) -> dict[str, Any]:
+    """生成 Sentinel-2 常用真彩、近红外假彩和 SWIR 组合。"""
+    return {
+        "true_color": preview_multispectral_composite(arr, band_names, ("B04", "B03", "B02")),
+        "false_color_nir": preview_multispectral_composite(arr, band_names, ("B08", "B04", "B03")),
+        "swir": preview_multispectral_composite(arr, band_names, ("B12", "B08", "B04")),
+    }
 
 
 def preview_for_modality(name: str, arr: Any, meta: dict[str, Any]) -> Any:
@@ -419,6 +503,31 @@ def save_modalities_grid(path: Path, tiles: list[tuple[str, Any]]) -> str | None
     return to_repo_rel(path) or path.as_posix()
 
 
+def multispectral_band_grid(arr: Any, band_names: list[str], max_bands: int = 12) -> Any:
+    """把多光谱各波段按灰度小图排成一张质检图。"""
+    data = np.asarray(arr)
+    if data.ndim != 3:
+        raise ValueError(f"多光谱 band grid 需要 CHW，当前 shape={data.shape}")
+    tiles: list[tuple[str, Any]] = []
+    for idx in range(min(data.shape[0], max_bands)):
+        label = band_names[idx] if idx < len(band_names) else f"band_{idx + 1}"
+        gray = stretch_uint8(data[idx])
+        tiles.append((label, np.stack([gray, gray, gray], axis=-1)))
+    if not tiles:
+        raise ValueError("多光谱 band grid 没有可用波段")
+    pil_tiles = [labeled_tile(name, image) for name, image in tiles]
+    cols = min(4, len(pil_tiles))
+    rows = int(math.ceil(len(pil_tiles) / cols))
+    cell_w = max(tile.width for tile in pil_tiles)
+    cell_h = max(tile.height for tile in pil_tiles)
+    grid = Image.new("RGB", (cell_w * cols, cell_h * rows), color=(20, 20, 20))
+    for idx, tile in enumerate(pil_tiles):
+        x = (idx % cols) * cell_w
+        y = (idx // cols) * cell_h
+        grid.paste(tile, (x, y))
+    return np.asarray(grid)
+
+
 def choose_visual_for_preview(arrays: dict[str, Any], metas: dict[str, dict[str, Any]]) -> Any | None:
     """选择一个主视觉底图，优先 RGB，其次多光谱真彩。"""
     if "optical_rgb" in arrays:
@@ -447,7 +556,17 @@ def build_previews(sample: dict[str, Any], sample_dir: Path, arrays: dict[str, A
     try:
         tiles = []
         for name, arr in arrays.items():
-            tiles.append((name, preview_for_modality(name, arr, metas[name])))
+            if name == "multispectral":
+                band_names = metas[name].get("band_names") or []
+                composites = preview_multispectral_composites(arr, band_names)
+                for comp_name, image in composites.items():
+                    paths[f"multispectral_{comp_name}"] = save_preview_png(preview_dir / f"multispectral_{comp_name}.png", image)
+                    tiles.append((f"multispectral_{comp_name}", image))
+                band_grid = multispectral_band_grid(arr, band_names)
+                paths["multispectral_band_grid"] = save_preview_png(preview_dir / "multispectral_band_grid.png", band_grid, max_side=max(PREVIEW_MAX_SIDE, PREVIEW_TILE_SIDE * 4))
+                tiles.append(("multispectral_band_grid", band_grid))
+            else:
+                tiles.append((name, preview_for_modality(name, arr, metas[name])))
         grid_path = save_modalities_grid(preview_dir / "modalities.png", tiles)
         if grid_path:
             paths["modalities"] = grid_path
@@ -477,7 +596,7 @@ def materialize_sample(sample: dict[str, Any], benchmark_dir: Path) -> dict[str,
     preview_arrays: dict[str, Any] = {}
     for name, info in sample.get("source_modalities", {}).items():
         arr = read_modality_array(sample, name, info)
-        arr, norm = normalize_modality(name, arr)
+        arr, norm = normalize_modality(name, arr, sample, info)
         out_path = modality_dir / f"{name}.npy"
         np.save(out_path, arr)
         final_modalities[name] = {
@@ -491,6 +610,8 @@ def materialize_sample(sample: dict[str, Any], benchmark_dir: Path) -> dict[str,
             "available": True,
             "role": info.get("role"),
             "source": info.get("source"),
+            "sensor": info.get("sensor"),
+            "value_encoding": info.get("value_encoding"),
             "normalization": norm,
         }
         preview_arrays[name] = arr

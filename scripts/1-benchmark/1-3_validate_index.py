@@ -19,6 +19,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+from PIL import Image
+
 from geohazard_benchmark_common import (
     DEFAULT_BENCHMARK_ROOT,
     LANDSLIDE4SENSE_MODALITY_SHAPES,
@@ -93,6 +96,21 @@ def validate_landslide4sense_sample(sample: dict[str, Any], *, stage: str, modal
     warnings: list[str] = []
     sid = sample.get("sample_id", "<missing_sample_id>")
     modalities = sample.get(modalities_key) or {}
+    supervision = sample.get("supervision", "mask")
+    flags = set(sample.get("quality_flags") or [])
+    split_source = str(sample.get("split_source") or "")
+    subset = str(sample.get("subset") or "")
+    task_type = str(sample.get("task_type") or "")
+
+    if supervision != "mask":
+        errors.append(f"{sid}: Landslide4Sense 不应作为非监督样本进入 benchmark，当前 supervision={supervision}")
+    if "unlabeled_or_hidden_label" in flags:
+        errors.append(f"{sid}: Landslide4Sense 不应包含 unlabeled_or_hidden_label 标记")
+    if "images_only" in split_source or "images_only" in subset:
+        errors.append(f"{sid}: Landslide4Sense 不应使用 images_only split/subset: split_source={split_source}, subset={subset}")
+    if task_type == "unlabeled_landslide_segmentation":
+        errors.append(f"{sid}: Landslide4Sense 不应使用 unlabeled_landslide_segmentation")
+
     required = {"multispectral", "slope", "dem"}
     missing = sorted(required - set(modalities))
     if missing:
@@ -113,24 +131,110 @@ def validate_landslide4sense_sample(sample: dict[str, Any], *, stage: str, modal
             if item.get("format") != "npy":
                 errors.append(f"{sid}: Landslide4Sense final 模态 {name} 必须物化为 npy")
 
-    flags = set(sample.get("quality_flags") or [])
     if "hdf5_channel_semantics_need_verification" in flags:
         errors.append(f"{sid}: Landslide4Sense 不应再包含 hdf5_channel_semantics_need_verification")
     if "landslide4sense_official_band_mapping_applied" not in flags:
         warnings.append(f"{sid}: 建议记录 landslide4sense_official_band_mapping_applied")
 
-    if sample.get("supervision", "mask") == "mask":
-        mask = sample.get(mask_key)
-        if not isinstance(mask, dict):
-            errors.append(f"{sid}: Landslide4Sense 监督样本缺少 mask")
-        elif stage == "source":
-            if mask.get("format") != "hdf5" or mask.get("internal_key") != "mask":
-                errors.append(f"{sid}: Landslide4Sense source mask 必须使用 hdf5::mask")
-            path = resolve_repo_path(mask.get("path"))
-            if path and path.exists() and not hdf5_has_dataset(path, "mask"):
-                errors.append(f"{sid}: Landslide4Sense HDF5 缺少 mask dataset: {to_repo_rel(path)}")
-        elif mask.get("shape") != [1, 128, 128]:
-            errors.append(f"{sid}: Landslide4Sense final mask shape 应为 [1, 128, 128]，当前 {mask.get('shape')}")
+    mask = sample.get(mask_key)
+    if not isinstance(mask, dict):
+        errors.append(f"{sid}: Landslide4Sense 样本必须包含 mask")
+    elif stage == "source":
+        if mask.get("format") != "hdf5" or mask.get("internal_key") != "mask":
+            errors.append(f"{sid}: Landslide4Sense source mask 必须使用 hdf5::mask")
+        path = resolve_repo_path(mask.get("path"))
+        if path and path.exists() and not hdf5_has_dataset(path, "mask"):
+            errors.append(f"{sid}: Landslide4Sense HDF5 缺少 mask dataset: {to_repo_rel(path)}")
+    elif mask.get("shape") != [1, 128, 128]:
+        errors.append(f"{sid}: Landslide4Sense final mask shape 应为 [1, 128, 128]，当前 {mask.get('shape')}")
+    return errors, warnings
+
+
+def preview_quality_warnings(sid: str, preview_name: str, path_ref: str | None) -> list[str]:
+    """检查 preview 是否明显全白/全黑；只作为 warning，避免误杀低对比遥感图。"""
+    if not path_ref:
+        return []
+    path = resolve_repo_path(path_ref)
+    if path is None or not path.exists():
+        return []
+    try:
+        with Image.open(path) as img:
+            arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    except Exception as exc:
+        return [f"{sid}: preview {preview_name} 无法读取用于质量检查: {exc}"]
+    if arr.size == 0:
+        return [f"{sid}: preview {preview_name} 为空图像"]
+    mean = float(arr.mean())
+    std = float(arr.std())
+    near_white = float((arr >= 250).mean())
+    near_black = float((arr <= 5).mean())
+    warnings: list[str] = []
+    if near_white > 0.98 or (mean > 248.0 and std < 3.0):
+        warnings.append(f"{sid}: preview {preview_name} 疑似全白或严重饱和 mean={mean:.2f} std={std:.2f}")
+    if near_black > 0.98 or (mean < 7.0 and std < 3.0):
+        warnings.append(f"{sid}: preview {preview_name} 疑似全黑或严重低对比 mean={mean:.2f} std={std:.2f}")
+    return warnings
+
+
+def modality_array_quality_warnings(sid: str, name: str, modality: dict[str, Any]) -> list[str]:
+    """检查已物化 Sentinel-2 相关数组是否被归一化成近乎常量。"""
+    if modality.get("format") != "npy":
+        return []
+    sensor = str(modality.get("sensor") or "").lower()
+    source = str(modality.get("source") or "").lower()
+    role = str(modality.get("role") or "").lower()
+    is_s2_like = sensor == "sentinel2" or "sentinel-2" in source or "sentinel2" in role
+    if not is_s2_like:
+        return []
+    path = resolve_repo_path(modality.get("path"))
+    if path is None or not path.exists():
+        return []
+    try:
+        arr = np.asarray(np.load(path, mmap_mode="r"), dtype=np.float32)
+    except Exception as exc:
+        return [f"{sid}: 模态 {name} 无法读取用于质量检查: {exc}"]
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return [f"{sid}: 模态 {name} 全部为非有限值"]
+    if finite.size > 500000:
+        finite = finite[:: max(1, finite.size // 500000)]
+    p01, p99 = np.percentile(finite, [1, 99])
+    std = float(np.std(finite))
+    warnings: list[str] = []
+    if float(p99 - p01) < 1e-4 or std < 1e-4:
+        warnings.append(f"{sid}: 模态 {name} 疑似被归一化为近常量 p01={float(p01):.6f} p99={float(p99):.6f}")
+    if float((finite >= 0.999).mean()) > 0.98:
+        warnings.append(f"{sid}: 模态 {name} 归一化后超过 98% 像素接近 1，可能仍然饱和")
+    return warnings
+
+
+def validate_sen12_sample(sample: dict[str, Any], *, stage: str, modalities_key: str) -> tuple[list[str], list[str]]:
+    """Sen12 以 Sentinel-2 为主模态；缺少 S2 的样本不应进入 benchmark。"""
+    errors: list[str] = []
+    warnings: list[str] = []
+    sid = sample.get("sample_id", "<missing_sample_id>")
+    modalities = sample.get(modalities_key) or {}
+    supervision = sample.get("supervision", "mask")
+    split_source = str(sample.get("split_source") or "")
+    if supervision != "mask":
+        errors.append(f"{sid}: Sen12Landslides annotated=False/无监督样本应在 1-2 阶段跳过，当前 supervision={supervision}")
+    if split_source == "annotated_false":
+        errors.append(f"{sid}: Sen12Landslides 不应再写入 split_source=annotated_false")
+    if "multispectral" not in modalities:
+        errors.append(f"{sid}: Sen12Landslides 样本缺少 S2 multispectral 主模态，应在 1-2 阶段过滤")
+    flags = set(sample.get("quality_flags") or [])
+    if "sen12_without_s2_dem" in flags:
+        errors.append(f"{sid}: Sen12Landslides 样本仍带有 sen12_without_s2_dem 标记，应从 benchmark 中排除")
+    if stage == "final" and "multispectral" in modalities:
+        preview_paths = (sample.get("preview") or {}).get("paths") or {}
+        for required in [
+            "multispectral_true_color",
+            "multispectral_false_color_nir",
+            "multispectral_swir",
+            "multispectral_band_grid",
+        ]:
+            if required not in preview_paths:
+                errors.append(f"{sid}: Sen12Landslides final 样本缺少 preview {required}")
     return errors, warnings
 
 
@@ -160,6 +264,8 @@ def validate_sample(sample: dict[str, Any], *, stage: str, benchmark_dir: Path) 
             errors.append(f"{sid}: 最终模态 {name} 路径不在 benchmark 目录内: {modality.get('path')}")
         if modality.get("format") in {"hdf5", "netcdf"} and not modality.get("internal_key"):
             warnings.append(f"{sid}: 模态 {name} 是 {modality.get('format')}，但 internal_key 为空")
+        if stage == "final":
+            warnings.extend(modality_array_quality_warnings(sid, name, modality))
 
     supervision = sample.get("supervision", "mask")
     mask = sample.get(mask_key)
@@ -194,6 +300,8 @@ def validate_sample(sample: dict[str, Any], *, stage: str, benchmark_dir: Path) 
                 errors.append(f"{sid}: preview {name} {message}")
             if not path_is_inside_benchmark(path_ref, benchmark_dir):
                 errors.append(f"{sid}: preview {name} 路径不在 benchmark 目录内: {path_ref}")
+            if name in {"visual", "multispectral_true_color", "multispectral_false_color_nir", "multispectral_swir"}:
+                warnings.extend(preview_quality_warnings(sid, name, path_ref))
 
     flags = sample.get("quality_flags") or []
     for flag in flags:
@@ -202,6 +310,11 @@ def validate_sample(sample: dict[str, Any], *, stage: str, benchmark_dir: Path) 
 
     if sample.get("dataset_name") == "landslide4sense":
         cur_errors, cur_warnings = validate_landslide4sense_sample(sample, stage=stage, modalities_key=modalities_key, mask_key=mask_key)
+        errors.extend(cur_errors)
+        warnings.extend(cur_warnings)
+
+    if sample.get("dataset_name") == "Sen12Landslides":
+        cur_errors, cur_warnings = validate_sen12_sample(sample, stage=stage, modalities_key=modalities_key)
         errors.extend(cur_errors)
         warnings.extend(cur_warnings)
 

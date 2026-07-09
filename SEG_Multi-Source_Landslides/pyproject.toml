@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qpsalm-seg"
+version = "0.1.0"
+description = "Multi-Source Qwen-PSALM-Seg research prototype for landslide instruction segmentation."
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "Pillow",
+  "PyYAML",
+  "torch",
+  "torchvision",
+  "tqdm",
+]
+
+[project.scripts]
+qpsalm-inspect-data = "qpsalm_seg.cli.inspect_data:main"
+qpsalm-cache-index = "qpsalm_seg.cli.cache_index:main"
+qpsalm-check-env = "qpsalm_seg.cli.check_env:main"
+qpsalm-cache-qwen-embeddings = "qpsalm_seg.cli.cache_qwen_embeddings:main"
+qpsalm-check-qwen-cache = "qpsalm_seg.cli.check_qwen_cache:main"
+qpsalm-train = "qpsalm_seg.cli.train:main"
+qpsalm-eval = "qpsalm_seg.cli.eval:main"
+qpsalm-summarize-run = "qpsalm_seg.cli.summarize_run:main"
+qpsalm-compare-runs = "qpsalm_seg.cli.compare_runs:main"
+qpsalm-diagnose-run = "qpsalm_seg.cli.diagnose_run:main"
+qpsalm-recommend-threshold = "qpsalm_seg.cli.recommend_threshold:main"
+qpsalm-run-phase1 = "qpsalm_seg.cli.run_phase1:main"
+qpsalm-export-tables = "qpsalm_seg.cli.export_tables:main"
+qpsalm-verify-phase1 = "qpsalm_seg.cli.verify_phase1:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qpsalm_seg*"]

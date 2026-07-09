@@ -1,0 +1,76 @@
+# Multi-Source Qwen-PSALM-Seg cached-Qwen box-prior ablation config.
+# 用途：验证 Qwen3-VL-Seg 风格 bbox-guided refinement 对滑坡 mask decoder 的收益。
+# 运行：先生成 Qwen condition cache，再用本配置训练；也可用 CLI 覆盖 boundary_loss_weight。
+benchmark_dir: benchmark/multisource_landslide_v1_small
+output_dir: outputs/qpsalm_small_qwen_cached_box_prior
+train_index: indexes/instruction_train.jsonl
+val_index: indexes/instruction_val.jsonl
+controller: qwen_cache
+qwen_model_path: models_zoo/Qwen3-VL-2B-Instruct
+allow_qwen_cpu: false
+condition_embedding_cache: outputs/qpsalm_qwen_condition_cache.pt
+target_size: 128
+batch_size: 1
+num_workers: 4
+max_steps: 1000
+val_interval: 100
+save_interval: 100
+visualize_interval: 100
+log_interval: 20
+max_val_batches: 0
+num_visualizations: 8
+max_train_samples: null
+max_val_samples: 256
+seed: 42
+train_hflip_prob: 0.5
+train_vflip_prob: 0.5
+lr: 0.0001
+weight_decay: 0.01
+warmup_steps: 20
+grad_clip: 1.0
+grad_accum_steps: 2
+decoder_dim: 256
+num_mask_tokens: 16
+num_decoder_layers: 2
+num_heads: 8
+modality_dropout: 0.2
+use_focal_loss: false
+use_box_prior: true
+boundary_loss_weight: 0.05
+condition_ranking_loss_weight: 0.1
+selection_ranking_loss_weight: 0.2
+foreground_bce_pos_weight: 2.0
+mask_bce_weight: 1.0
+mask_dice_weight: 1.0
+mask_tversky_weight: 0.5
+tversky_alpha: 0.3
+tversky_beta: 0.7
+proposal_cls_weight: 0.2
+condition_cls_weight: 0.2
+proposal_mask_weight: 0.5
+empty_mask_suppression_weight: 0.3
+empty_proposal_suppression_weight: 0.1
+proposal_positive_weight: 4.0
+condition_positive_weight: 4.0
+query_diversity_loss_weight: 0.02
+proposal_mask_diversity_loss_weight: 0.05
+gate_entropy_loss_weight: 0.02
+proposal_soft_target_topk: 3
+proposal_soft_target_temperature: 0.10
+query_usage_balance_loss_weight: 0.02
+selection_proposal_weight: 1.0
+selection_condition_weight: 0.5
+selection_temperature: 1.0
+final_foreground_gate_weight: 0.25
+canonical_combo_loss_weights:
+  dem+s2: 2.5
+  dem+s1+s2: 1.5
+eval_threshold: 0.5
+threshold_sweep: [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7]
+core_templates:
+  - generic_landslide_v1
+  - negative_aware_landslide_v1
+  - multisource_landslide_v1
+  - terrain_evidence_landslide_v1
+  - sar_terrain_landslide_v1
+  - insar_evidence_landslide_v1

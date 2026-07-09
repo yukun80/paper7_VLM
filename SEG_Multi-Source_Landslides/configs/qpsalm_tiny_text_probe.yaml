@@ -1,0 +1,74 @@
+# Multi-Source Qwen-PSALM-Seg tiny CPU smoke config.
+# 用途：在没有 CUDA/Qwen 运行条件时验证 dataloader、decoder、loss、checkpoint 和可视化闭环。
+# 运行：/home/yukun80/miniconda3/envs/qwen3vl/bin/qpsalm-train --config SEG_Multi-Source_Landslides/configs/qpsalm_tiny_text_probe.yaml --device cpu --max-steps 5
+benchmark_dir: benchmark/multisource_landslide_v1_small
+output_dir: outputs/qpsalm_tiny_text_probe
+train_index: indexes/instruction_train.jsonl
+val_index: indexes/instruction_val.jsonl
+controller: text_probe
+qwen_model_path: models_zoo/Qwen3-VL-2B-Instruct
+target_size: 128
+batch_size: 1
+num_workers: 0
+max_steps: 5
+val_interval: 5
+save_interval: 5
+visualize_interval: 5
+log_interval: 5
+max_val_batches: 0
+num_visualizations: 4
+max_train_samples: 32
+max_val_samples: 16
+seed: 42
+train_hflip_prob: 0.0
+train_vflip_prob: 0.0
+lr: 0.0003
+weight_decay: 0.01
+warmup_steps: 1
+grad_clip: 1.0
+grad_accum_steps: 1
+decoder_dim: 64
+num_mask_tokens: 8
+num_decoder_layers: 1
+num_heads: 4
+modality_dropout: 0.1
+use_focal_loss: false
+use_box_prior: false
+boundary_loss_weight: 0.0
+condition_ranking_loss_weight: 0.1
+selection_ranking_loss_weight: 0.2
+foreground_bce_pos_weight: 1.0
+mask_bce_weight: 1.0
+mask_dice_weight: 1.0
+mask_tversky_weight: 0.0
+tversky_alpha: 0.3
+tversky_beta: 0.7
+proposal_cls_weight: 0.2
+condition_cls_weight: 0.2
+proposal_mask_weight: 0.5
+empty_mask_suppression_weight: 0.0
+empty_proposal_suppression_weight: 0.0
+proposal_positive_weight: 1.0
+condition_positive_weight: 1.0
+query_diversity_loss_weight: 0.0
+proposal_mask_diversity_loss_weight: 0.0
+gate_entropy_loss_weight: 0.0
+proposal_soft_target_topk: 1
+proposal_soft_target_temperature: 0.10
+query_usage_balance_loss_weight: 0.0
+selection_proposal_weight: 1.0
+selection_condition_weight: 1.0
+selection_temperature: 1.0
+final_foreground_gate_weight: 0.0
+final_mask_fusion: topk_noisy_or
+final_topk: 3
+final_noisy_or_epsilon: 0.00001
+eval_threshold: 0.5
+threshold_sweep: [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7]
+core_templates:
+  - generic_landslide_v1
+  - negative_aware_landslide_v1
+  - multisource_landslide_v1
+  - terrain_evidence_landslide_v1
+  - sar_terrain_landslide_v1
+  - insar_evidence_landslide_v1

@@ -310,6 +310,15 @@ def sen12_read_annotated(path: Path) -> bool | None:
     return None
 
 
+def sen12_has_mask_variable(path: Path) -> bool | None:
+    """检查 Sen12 NetCDF 是否存在 MASK 变量；读取失败时返回 None。"""
+    try:
+        with Dataset(path) as ds:
+            return "MASK" in ds.variables
+    except Exception:
+        return None
+
+
 def landslide4sense_source_modalities(path: Path) -> dict[str, dict[str, Any]]:
     """按官方 14 通道语义生成 Landslide4Sense 三个源模态。"""
     return {
@@ -322,6 +331,8 @@ def landslide4sense_source_modalities(path: Path) -> dict[str, dict[str, Any]]:
             internal_key="img",
             role="sentinel2_multispectral",
             source="Sentinel-2_B1_B12",
+            sensor="sentinel2",
+            value_encoding="landslide4sense_hdf5_float",
         ),
         "slope": modality_entry(
             path,
@@ -366,6 +377,8 @@ def modality_entry(
     available: bool = True,
     role: str | None = None,
     source: str | None = None,
+    sensor: str | None = None,
+    value_encoding: str | None = None,
 ) -> dict[str, Any]:
     entry = {
         "path": to_repo_rel(path) if path else None,
@@ -379,6 +392,10 @@ def modality_entry(
     }
     if source:
         entry["source"] = source
+    if sensor:
+        entry["sensor"] = sensor
+    if value_encoding:
+        entry["value_encoding"] = value_encoding
     return entry
 
 
@@ -516,7 +533,10 @@ def write_source_split_indexes(benchmark_dir: Path, samples: list[dict[str, Any]
     write_jsonl(paths["all"], sorted(samples, key=lambda row: row["sample_id"]))
     for split in ["train", "val", "test", "unlabeled", "extended_pool"]:
         rows = [row for row in samples if row.get("split") == split]
-        write_jsonl(paths[split], sorted(rows, key=lambda row: row["sample_id"]))
+        if rows or split in {"train", "val", "test"}:
+            write_jsonl(paths[split], sorted(rows, key=lambda row: row["sample_id"]))
+        elif paths[split].exists():
+            paths[split].unlink()
 
 
 def write_split_indexes(benchmark_dir: Path, samples: list[dict[str, Any]]) -> None:
@@ -524,7 +544,10 @@ def write_split_indexes(benchmark_dir: Path, samples: list[dict[str, Any]]) -> N
     write_jsonl(paths["all"], sorted(samples, key=lambda row: row["sample_id"]))
     for split in ["train", "val", "test", "unlabeled", "extended_pool"]:
         rows = [row for row in samples if row.get("split") == split]
-        write_jsonl(paths[split], sorted(rows, key=lambda row: row["sample_id"]))
+        if rows or split in {"train", "val", "test"}:
+            write_jsonl(paths[split], sorted(rows, key=lambda row: row["sample_id"]))
+        elif paths[split].exists():
+            paths[split].unlink()
 
 
 def make_referring_target_sample(parent: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:

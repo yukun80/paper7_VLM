@@ -9,7 +9,7 @@
 # 是否改写原始数据：不会改写 datasets/，只写 benchmark/ 派生产物。
 # 特别说明：1-6 不读取 datasets/，只基于已物化的 benchmark/data/**/mask.npy 生成结构化指代目标；训练文本由 2-instruction 生成。
 # 环境变量覆盖：SMALL_LIMIT 默认 1000，可用 SMALL_LIMIT=100 临时降低；
-# DATASETS_ROOT、BENCHMARK_PREFIX、SEED、PYTHON_BIN、USE_EXTENDED_POOL 也可覆盖；
+# DATASETS_ROOT、BENCHMARK_PREFIX、SEED、PYTHON_BIN、USE_EXTENDED_POOL、SEN12_MODAL_POLICY 也可覆盖；
 # 默认 PYTHON_BIN=python，建议先 conda activate qwen3vl。
 #
 # 用法：
@@ -26,6 +26,7 @@ SEED="${SEED:-42}"
 DATASETS_ROOT="${DATASETS_ROOT:-datasets}"
 BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-benchmark/multisource_landslide_v1}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+SEN12_MODAL_POLICY="${SEN12_MODAL_POLICY:-require_s2}"
 
 run_one_mode() {
   local mode="$1"
@@ -49,6 +50,7 @@ run_one_mode() {
     --seed "${SEED}" \
     --datasets-root "${DATASETS_ROOT}" \
     --out-dir "${out_dir}" \
+    --sen12-modal-policy "${SEN12_MODAL_POLICY}" \
     "${extended_args[@]}"
 
   echo "==> [1-3/source] 验证源索引质量: ${mode}"

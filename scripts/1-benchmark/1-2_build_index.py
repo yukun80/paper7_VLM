@@ -37,6 +37,7 @@ from geohazard_benchmark_common import (
     read_jsonl,
     read_lines,
     sen12_collect,
+    sen12_has_mask_variable,
     sen12_parse_key,
     sen12_read_annotated,
     stable_sample_by_split,
@@ -45,6 +46,9 @@ from geohazard_benchmark_common import (
     write_json,
     write_source_split_indexes,
 )
+
+
+BUILD_DIAGNOSTICS: dict[str, Any] = {}
 
 
 def path_shape_from_probe(path: Path) -> list[int] | None:
@@ -298,50 +302,84 @@ def image_number(path: Path) -> str:
 
 def build_landslide4sense(root: Path, mode: str, small_limit: int, seed: int) -> list[dict[str, Any]]:
     samples: list[dict[str, Any]] = []
-    train_img = {image_number(p): p for p in (root / "TrainData" / "img").glob("image_*.h5")}
-    train_mask = {image_number(p): p for p in (root / "TrainData" / "mask").glob("mask_*.h5")}
-    train_keys = sorted(set(train_img) & set(train_mask), key=lambda item: int(item))
-    train_keys = limit_candidates(train_keys, mode, small_limit, seed + 31, key_func=lambda x: int(x))
-    for key in train_keys:
-        samples.append(make_sample(
-            dataset_name="landslide4sense",
-            split="train",
-            split_source="official_train_only",
-            task_type="landslide_segmentation",
-            source_key=f"train/{key}",
-            subset="official_train",
-            source_level="patch",
-            modalities=landslide4sense_source_modalities(train_img[key]),
-            mask=mask_entry(train_mask[key], fmt="hdf5", shape=[1, 128, 128], internal_key="mask", bbox_status="pending_hdf5_read"),
-            region="mixed",
-            quality_flags=["landslide4sense_official_band_mapping_applied", "needs_optional_derived_split"],
-        ))
-    for split, folder in [("unlabeled", "ValidData"), ("unlabeled", "TestData")]:
-        source_split = "val" if folder == "ValidData" else "test"
-        img_paths = sorted((root / folder / "img").glob("image_*.h5"), key=lambda p: int(image_number(p)))
-        img_paths = limit_candidates(img_paths, mode, small_limit, seed + (32 if folder == "ValidData" else 33), key_func=lambda p: int(image_number(p)))
-        for img_path in img_paths:
-            key = image_number(img_path)
+    split_defs = [
+        ("train", "TrainData", "official_train", seed + 31),
+        ("val", "ValidData", "official_val", seed + 32),
+        ("test", "TestData", "official_test", seed + 33),
+    ]
+    diagnostics: dict[str, dict[str, int]] = {}
+    for split, folder, subset, split_seed in split_defs:
+        img = {image_number(p): p for p in (root / folder / "img").glob("image_*.h5")}
+        mask = {image_number(p): p for p in (root / folder / "mask").glob("mask_*.h5")}
+        keys = sorted(set(img) & set(mask), key=lambda item: int(item))
+        diagnostics[split] = {
+            "num_images": len(img),
+            "num_masks": len(mask),
+            "num_paired": len(keys),
+            "num_images_without_mask": len(set(img) - set(mask)),
+            "num_masks_without_image": len(set(mask) - set(img)),
+        }
+        keys = limit_candidates(keys, mode, small_limit, split_seed, key_func=lambda item: int(item))
+        for key in keys:
             samples.append(make_sample(
                 dataset_name="landslide4sense",
                 split=split,
-                split_source=f"official_{source_split}_images_only",
-                task_type="unlabeled_landslide_segmentation",
-                source_key=f"{source_split}/{key}",
-                subset=f"official_{source_split}_images_only",
+                split_source=f"{subset}_paired_mask",
+                task_type="landslide_segmentation",
+                source_key=f"{split}/{key}",
+                subset=subset,
                 source_level="patch",
-                modalities=landslide4sense_source_modalities(img_path),
-                mask=None,
+                modalities=landslide4sense_source_modalities(img[key]),
+                mask=mask_entry(mask[key], fmt="hdf5", shape=[1, 128, 128], internal_key="mask", bbox_status="pending_hdf5_read"),
                 region="mixed",
-                supervision="none",
-                quality_flags=["unlabeled_or_hidden_label", "landslide4sense_official_band_mapping_applied"],
+                supervision="mask",
+                quality_flags=["landslide4sense_official_band_mapping_applied", "needs_optional_derived_split"],
             ))
-    return apply_mode_limit("landslide4sense", samples, mode, small_limit, seed + 30)
+    sampled = apply_mode_limit("landslide4sense", samples, mode, small_limit, seed + 30)
+    BUILD_DIAGNOSTICS["landslide4sense"] = {
+        "split_pairing": diagnostics,
+        "num_samples_after_sampling": len(sampled),
+        "unlabeled_policy": "disabled_all_landslide4sense_samples_require_mask",
+    }
+    return sampled
 
 
-def build_sen12(root: Path, mode: str, small_limit: int, seed: int) -> list[dict[str, Any]]:
+def sen12_key_allowed(
+    key: tuple[str, str],
+    data: dict[str, dict[tuple[str, str], Path]],
+    modal_policy: str,
+) -> bool:
+    """按研究策略筛选 Sen12 模态组合，避免并集样本污染特定实验。"""
+    has_s2 = key in data["s2"]
+    has_asc = key in data["s1asc"]
+    has_dsc = key in data["s1dsc"]
+    has_sar = has_asc or has_dsc
+    if modal_policy == "union":
+        return True
+    if modal_policy == "require_s2":
+        return has_s2
+    if modal_policy == "require_s2_sar":
+        return has_s2 and has_sar
+    if modal_policy == "strict_all":
+        return has_s2 and has_asc and has_dsc
+    raise ValueError(f"未知 Sen12 modal policy: {modal_policy}")
+
+
+def build_sen12(root: Path, mode: str, small_limit: int, seed: int, modal_policy: str) -> list[dict[str, Any]]:
     data = sen12_collect_limited(root, small_limit) if mode == "small" else sen12_collect(root)
-    keys = sorted(set(data["s2"]) | set(data["s1asc"]) | set(data["s1dsc"]))
+    all_keys = sorted(set(data["s2"]) | set(data["s1asc"]) | set(data["s1dsc"]))
+    keys = sorted(key for key in all_keys if sen12_key_allowed(key, data, modal_policy))
+    BUILD_DIAGNOSTICS["Sen12Landslides"] = {
+        "modal_policy": modal_policy,
+        "num_raw_union_keys": len(all_keys),
+        "num_selected_keys_before_sampling": len(keys),
+        "num_skipped_without_s2": sum(1 for key in all_keys if key not in data["s2"]),
+        "num_skipped_by_policy": len(all_keys) - len(keys),
+        "num_skipped_annotated_false": 0,
+        "num_skipped_missing_mask_variable": 0,
+        "num_kept_annotated_missing_or_unreadable_with_mask": 0,
+        "num_skipped_mask_status_unreadable": 0,
+    }
     if mode == "small":
         split_groups: dict[str, list[tuple[str, str]]] = {"train": [], "val": [], "test": []}
         for key in keys:
@@ -356,18 +394,64 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int) -> list[dict
         modalities: dict[str, dict[str, Any]] = {}
         mask_path = None
         flags = ["netcdf_virtual_multitemporal_sample"]
+        if modal_policy != "union":
+            flags.append(f"sen12_modal_policy_{modal_policy}")
         if (region, sample_no) in data["s2"]:
             p = data["s2"][(region, sample_no)]
-            modalities["multispectral"] = modality_entry(p, fmt="netcdf", band_names=s2_bands, shape=[15, len(s2_bands), 128, 128], gsd_m=10, internal_key=s2_bands, role="sentinel2")
-            modalities["dem"] = modality_entry(p, fmt="netcdf", band_names=["DEM"], shape=[15, 1, 128, 128], gsd_m=10, internal_key="DEM", role="terrain")
+            modalities["multispectral"] = modality_entry(
+                p,
+                fmt="netcdf",
+                band_names=s2_bands,
+                shape=[15, len(s2_bands), 128, 128],
+                gsd_m=10,
+                internal_key=s2_bands,
+                role="sentinel2_multispectral",
+                source="Sentinel-2_B02_B12",
+                sensor="sentinel2",
+                value_encoding="sen12_netcdf_reflectance",
+            )
+            modalities["dem"] = modality_entry(
+                p,
+                fmt="netcdf",
+                band_names=["DEM"],
+                shape=[15, 1, 128, 128],
+                gsd_m=10,
+                internal_key="DEM",
+                role="terrain_dem",
+                source="Sen12Landslides_S2_file_DEM",
+                sensor="dem",
+                value_encoding="sen12_netcdf_dem",
+            )
             mask_path = p
         if (region, sample_no) in data["s1asc"]:
             p = data["s1asc"][(region, sample_no)]
-            modalities["sar_asc"] = modality_entry(p, fmt="netcdf", band_names=["VV", "VH"], shape=[15, 2, 128, 128], gsd_m=10, internal_key=["VV", "VH"], role="sentinel1_ascending")
+            modalities["sar_asc"] = modality_entry(
+                p,
+                fmt="netcdf",
+                band_names=["VV", "VH"],
+                shape=[15, 2, 128, 128],
+                gsd_m=10,
+                internal_key=["VV", "VH"],
+                role="sentinel1_ascending",
+                source="Sentinel-1_ASC_VV_VH",
+                sensor="sentinel1",
+                value_encoding="sen12_netcdf_sar",
+            )
             mask_path = mask_path or p
         if (region, sample_no) in data["s1dsc"]:
             p = data["s1dsc"][(region, sample_no)]
-            modalities["sar_dsc"] = modality_entry(p, fmt="netcdf", band_names=["VV", "VH"], shape=[15, 2, 128, 128], gsd_m=10, internal_key=["VV", "VH"], role="sentinel1_descending")
+            modalities["sar_dsc"] = modality_entry(
+                p,
+                fmt="netcdf",
+                band_names=["VV", "VH"],
+                shape=[15, 2, 128, 128],
+                gsd_m=10,
+                internal_key=["VV", "VH"],
+                role="sentinel1_descending",
+                source="Sentinel-1_DSC_VV_VH",
+                sensor="sentinel1",
+                value_encoding="sen12_netcdf_sar",
+            )
             mask_path = mask_path or p
         if "multispectral" not in modalities:
             flags.append("sen12_without_s2_dem")
@@ -375,25 +459,37 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int) -> list[dict
             flags.append("sen12_missing_one_or_more_sar_tracks")
 
         annotated = sen12_read_annotated(mask_path) if mask_path else None
+        has_mask_variable = sen12_has_mask_variable(mask_path) if mask_path else None
+        if annotated is False:
+            BUILD_DIAGNOSTICS["Sen12Landslides"]["num_skipped_annotated_false"] += 1
+            continue
+        if has_mask_variable is False:
+            BUILD_DIAGNOSTICS["Sen12Landslides"]["num_skipped_missing_mask_variable"] += 1
+            continue
+        if has_mask_variable is None:
+            BUILD_DIAGNOSTICS["Sen12Landslides"]["num_skipped_mask_status_unreadable"] += 1
+            continue
         if annotated is None:
             flags.append("annotated_flag_missing_or_unreadable")
-        split = hash_split(f"Sen12Landslides/{region}/{sample_no}") if annotated is not False else "unlabeled"
-        supervision = "mask" if annotated is not False else "none"
+            BUILD_DIAGNOSTICS["Sen12Landslides"]["num_kept_annotated_missing_or_unreadable_with_mask"] += 1
+        split = hash_split(f"Sen12Landslides/{region}/{sample_no}")
         samples.append(make_sample(
             dataset_name="Sen12Landslides",
             split=split,
-            split_source="derived_hash_from_region_id" if split != "unlabeled" else "annotated_false",
+            split_source="derived_hash_from_region_id",
             task_type="multisource_temporal_landslide_segmentation",
             source_key=f"{region}/{sample_no}",
             subset="aligned_union",
             source_level="patch",
             modalities=modalities,
-            mask=mask_entry(mask_path, fmt="netcdf", shape=[15, 1, 128, 128], internal_key="MASK", bbox_status="pending_netcdf_read") if supervision == "mask" else None,
+            mask=mask_entry(mask_path, fmt="netcdf", shape=[15, 1, 128, 128], internal_key="MASK", bbox_status="pending_netcdf_read"),
             region=region,
-            supervision=supervision,
+            supervision="mask",
             quality_flags=flags,
         ))
-    return apply_mode_limit("Sen12Landslides", samples, mode, small_limit, seed + 40)
+    sampled = apply_mode_limit("Sen12Landslides", samples, mode, small_limit, seed + 40)
+    BUILD_DIAGNOSTICS["Sen12Landslides"]["num_samples_after_sampling"] = len(sampled)
+    return sampled
 
 
 def sen12_collect_limited(root: Path, small_limit: int) -> dict[str, dict[tuple[str, str], Path]]:
@@ -453,7 +549,17 @@ def build_multimodal(root: Path, mode: str, small_limit: int, seed: int, use_ext
                 subset=subset,
                 source_level="patch",
                 modalities={
-                    "optical_rgb": modality_entry(rgb, fmt="geotiff", band_names=["R", "G", "B"], shape=shape_rgb, role="vlm_visual"),
+                    "optical_rgb": modality_entry(
+                        rgb,
+                        fmt="geotiff",
+                        band_names=["R", "G", "B"],
+                        shape=shape_rgb,
+                        gsd_m=10,
+                        role="sentinel2_rgb",
+                        source="Sentinel-2_RGB",
+                        sensor="sentinel2",
+                        value_encoding="multimodal_rgb_int16",
+                    ),
                     "dem": modality_entry(dem, fmt="geotiff", band_names=["DEM"], shape=shape_aux, role="terrain"),
                     "insar_vel": modality_entry(insar, fmt="geotiff", band_names=["insar_velocity"], shape=shape_aux, role="deformation"),
                 },
@@ -472,6 +578,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--small-limit", type=int, default=1000, help="small 模式下每个 dataset_name + split 的最大样本数，默认 1000。")
     parser.add_argument("--seed", type=int, default=42, help="确定性抽样随机种子。")
     parser.add_argument("--use-extended-pool", action="store_true", help="full 模式是否纳入 multimodal-landslide-dataset/完整list。")
+    parser.add_argument(
+        "--sen12-modal-policy",
+        choices=["union", "require_s2", "require_s2_sar", "strict_all"],
+        default="require_s2",
+        help="Sen12 样本配对策略：union 保留任意可用组合；require_s2_sar/strict_all 用于更干净的多源训练。",
+    )
     return parser.parse_args()
 
 
@@ -484,7 +596,7 @@ def main() -> None:
         ("LandslideBench_agent", lambda: build_landslidebench(args.datasets_root / "LandslideBench_agent", args.mode, args.small_limit, args.seed)),
         ("LMHLD", lambda: build_lmhld(args.datasets_root / "LMHLD", args.mode, args.small_limit, args.seed)),
         ("landslide4sense", lambda: build_landslide4sense(args.datasets_root / "landslide4sense", args.mode, args.small_limit, args.seed)),
-        ("Sen12Landslides", lambda: build_sen12(args.datasets_root / "Sen12Landslides", args.mode, args.small_limit, args.seed)),
+        ("Sen12Landslides", lambda: build_sen12(args.datasets_root / "Sen12Landslides", args.mode, args.small_limit, args.seed, args.sen12_modal_policy)),
         ("multimodal-landslide-dataset", lambda: build_multimodal(args.datasets_root / "multimodal-landslide-dataset", args.mode, args.small_limit, args.seed, args.use_extended_pool)),
     ]
     samples: list[dict[str, Any]] = []
@@ -500,6 +612,8 @@ def main() -> None:
         "说明": "源索引由 1-2_build_index.py 生成；其中 source_* 路径允许指向 datasets/，仅供物化阶段读取。",
         "mode": args.mode,
         "small_limit": args.small_limit if args.mode == "small" else None,
+        "sen12_modal_policy": args.sen12_modal_policy,
+        "diagnostics": BUILD_DIAGNOSTICS,
         "num_samples": len(source_samples),
         "num_by_split": {split: sum(1 for row in source_samples if row.get("split") == split) for split in ["train", "val", "test", "unlabeled", "extended_pool"]},
     }
