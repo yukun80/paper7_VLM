@@ -74,8 +74,6 @@ inputs/**
 *.tmp
 
 # 训练输出、模型权重与实验日志
-models/
-models/**
 runs/
 runs/**
 outputs/
