@@ -44,8 +44,11 @@ LOSS_STAGE_PRESETS: dict[str, dict[str, Any]] = {
         "query_usage_balance_loss_weight": 0.0,
         "selection_condition_weight": 0.0,
         "selection_evidence_weight": 0.0,
+        "selection_visual_evidence_weight": 0.0,
         "evidence_cls_weight": 0.0,
         "evidence_ranking_loss_weight": 0.0,
+        "visual_evidence_cls_weight": 0.0,
+        "visual_evidence_ranking_loss_weight": 0.0,
         "final_foreground_gate_weight": 0.0,
         "final_mask_fusion": "weighted_average",
     },
@@ -64,8 +67,11 @@ LOSS_STAGE_PRESETS: dict[str, dict[str, Any]] = {
         "proposal_soft_target_topk": 1,
         "selection_condition_weight": 0.0,
         "selection_evidence_weight": 0.0,
+        "selection_visual_evidence_weight": 0.0,
         "evidence_cls_weight": 0.0,
         "evidence_ranking_loss_weight": 0.0,
+        "visual_evidence_cls_weight": 0.0,
+        "visual_evidence_ranking_loss_weight": 0.0,
         "final_foreground_gate_weight": 0.0,
         "final_mask_fusion": "weighted_average",
     },
@@ -84,8 +90,11 @@ LOSS_STAGE_PRESETS: dict[str, dict[str, Any]] = {
         "proposal_soft_target_topk": 1,
         "selection_condition_weight": 0.5,
         "selection_evidence_weight": 0.0,
+        "selection_visual_evidence_weight": 0.0,
         "evidence_cls_weight": 0.0,
         "evidence_ranking_loss_weight": 0.0,
+        "visual_evidence_cls_weight": 0.0,
+        "visual_evidence_ranking_loss_weight": 0.0,
         "final_foreground_gate_weight": 0.0,
         "final_mask_fusion": "weighted_average",
     },
@@ -104,8 +113,11 @@ LOSS_STAGE_PRESETS: dict[str, dict[str, Any]] = {
         "proposal_soft_target_topk": 1,
         "selection_condition_weight": 0.5,
         "selection_evidence_weight": 0.0,
+        "selection_visual_evidence_weight": 0.0,
         "evidence_cls_weight": 0.0,
         "evidence_ranking_loss_weight": 0.0,
+        "visual_evidence_cls_weight": 0.0,
+        "visual_evidence_ranking_loss_weight": 0.0,
         "final_foreground_gate_weight": 0.0,
         "final_mask_fusion": "weighted_average",
     },
@@ -165,6 +177,7 @@ class QPSalmConfig:
     visual_evidence_cache: str | None = None
     visual_evidence_weight: float = 0.25
     visual_evidence_feature_weight: float = 0.15
+    selection_visual_evidence_weight: float = 0.15
     loss_stage: str = "full"
     use_focal_loss: bool = False
     use_box_prior: bool = False
@@ -193,6 +206,8 @@ class QPSalmConfig:
     query_usage_balance_loss_weight: float = 0.0
     evidence_cls_weight: float = 0.1
     evidence_ranking_loss_weight: float = 0.1
+    visual_evidence_cls_weight: float = 0.05
+    visual_evidence_ranking_loss_weight: float = 0.05
     selection_proposal_weight: float = 1.0
     selection_condition_weight: float = 1.0
     selection_temperature: float = 1.0

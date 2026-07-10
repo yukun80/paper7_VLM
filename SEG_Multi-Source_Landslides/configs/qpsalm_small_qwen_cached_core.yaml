@@ -46,6 +46,7 @@ use_visual_evidence: true
 visual_evidence_cache: null
 visual_evidence_weight: 0.25
 visual_evidence_feature_weight: 0.15
+selection_visual_evidence_weight: 0.15
 loss_stage: full
 use_focal_loss: false
 use_box_prior: false
@@ -74,6 +75,8 @@ proposal_soft_target_temperature: 0.10
 query_usage_balance_loss_weight: 0.02
 evidence_cls_weight: 0.1
 evidence_ranking_loss_weight: 0.1
+visual_evidence_cls_weight: 0.05
+visual_evidence_ranking_loss_weight: 0.05
 selection_proposal_weight: 1.0
 selection_condition_weight: 0.5
 selection_temperature: 1.0

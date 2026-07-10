@@ -42,6 +42,9 @@ from qpsalm_seg.thresholding import recommend_thresholds
 from qpsalm_seg.train_eval import atomic_torch_save, build_model, evaluate, load_checkpoint, resolve_device, train
 
 
+VERIFIER_STAGE_CHOICES = ["condition_only", "evidence_text", "visual_evidence", "evidence_visual"]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run an end-to-end Multi-Source Qwen-PSALM-Seg Phase 1 experiment.")
     parser.add_argument("--config", default="SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml")
@@ -107,6 +110,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-spatial-modality-gate", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--use-query-modality-attention", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--query-modality-feature-weight", type=float, default=None)
+    parser.add_argument(
+        "--verifier-stage",
+        choices=VERIFIER_STAGE_CHOICES,
+        default=None,
+        help="Preset for proposal verifier ablations: condition_only/evidence_text/visual_evidence/evidence_visual.",
+    )
     parser.add_argument("--use-evidence-reasoning", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--evidence-reasoning-weight", type=float, default=None)
     parser.add_argument("--selection-evidence-weight", type=float, default=None)
@@ -143,8 +152,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query-usage-balance-loss-weight", type=float, default=None)
     parser.add_argument("--evidence-cls-weight", type=float, default=None)
     parser.add_argument("--evidence-ranking-loss-weight", type=float, default=None)
+    parser.add_argument("--visual-evidence-cls-weight", type=float, default=None)
+    parser.add_argument("--visual-evidence-ranking-loss-weight", type=float, default=None)
     parser.add_argument("--selection-proposal-weight", type=float, default=None)
     parser.add_argument("--selection-condition-weight", type=float, default=None)
+    parser.add_argument("--selection-visual-evidence-weight", type=float, default=None)
     parser.add_argument("--selection-temperature", type=float, default=None)
     parser.add_argument("--final-foreground-gate-weight", type=float, default=None)
     parser.add_argument(
@@ -430,6 +442,49 @@ def cache_visual_evidence_embeddings(
     }
 
 
+def apply_verifier_stage(config: QPSalmConfig, stage: str | None) -> QPSalmConfig:
+    """应用 proposal verifier 消融预设；后续显式 CLI 覆盖仍可改写具体权重。"""
+    if stage is None:
+        return config
+    stage_name = str(stage).strip().lower()
+    if stage_name not in VERIFIER_STAGE_CHOICES:
+        raise ValueError(f"未知 verifier_stage={stage_name!r}; 可选: {', '.join(VERIFIER_STAGE_CHOICES)}")
+    updates: dict[str, Any] = {}
+    if stage_name == "condition_only":
+        updates.update(
+            use_evidence_reasoning=False,
+            use_visual_evidence=False,
+            selection_evidence_weight=0.0,
+            selection_visual_evidence_weight=0.0,
+            evidence_cls_weight=0.0,
+            evidence_ranking_loss_weight=0.0,
+            visual_evidence_cls_weight=0.0,
+            visual_evidence_ranking_loss_weight=0.0,
+        )
+    elif stage_name == "evidence_text":
+        updates.update(
+            use_evidence_reasoning=True,
+            use_visual_evidence=False,
+            selection_visual_evidence_weight=0.0,
+            visual_evidence_cls_weight=0.0,
+            visual_evidence_ranking_loss_weight=0.0,
+        )
+    elif stage_name == "visual_evidence":
+        updates.update(
+            use_evidence_reasoning=False,
+            use_visual_evidence=True,
+            selection_evidence_weight=0.0,
+            evidence_cls_weight=0.0,
+            evidence_ranking_loss_weight=0.0,
+        )
+    elif stage_name == "evidence_visual":
+        updates.update(
+            use_evidence_reasoning=True,
+            use_visual_evidence=True,
+        )
+    return replace(config, **updates)
+
+
 def apply_common_overrides(config: QPSalmConfig, args: argparse.Namespace) -> QPSalmConfig:
     """应用 runner CLI 中的通用训练覆盖项。"""
     updates: dict[str, Any] = {}
@@ -462,6 +517,7 @@ def apply_common_overrides(config: QPSalmConfig, args: argparse.Namespace) -> QP
         "use_evidence_reasoning",
         "evidence_reasoning_weight",
         "selection_evidence_weight",
+        "selection_visual_evidence_weight",
         "use_visual_evidence",
         "visual_evidence_weight",
         "visual_evidence_feature_weight",
@@ -492,8 +548,11 @@ def apply_common_overrides(config: QPSalmConfig, args: argparse.Namespace) -> QP
         "query_usage_balance_loss_weight",
         "evidence_cls_weight",
         "evidence_ranking_loss_weight",
+        "visual_evidence_cls_weight",
+        "visual_evidence_ranking_loss_weight",
         "selection_proposal_weight",
         "selection_condition_weight",
+        "selection_visual_evidence_weight",
         "selection_temperature",
         "final_foreground_gate_weight",
         "final_mask_fusion",
@@ -565,11 +624,16 @@ def completed_summary_matches(summary: dict[str, Any], config: QPSalmConfig) -> 
         and bool(saved_config.get("use_evidence_reasoning", True)) == bool(config.use_evidence_reasoning)
         and float(saved_config.get("evidence_reasoning_weight", 0.35)) == float(config.evidence_reasoning_weight)
         and float(saved_config.get("selection_evidence_weight", 0.25)) == float(config.selection_evidence_weight)
+        and float(saved_config.get("selection_visual_evidence_weight", 0.15))
+        == float(config.selection_visual_evidence_weight)
         and bool(saved_config.get("use_visual_evidence", True)) == bool(config.use_visual_evidence)
         and (saved_config.get("visual_evidence_cache") or None) == (config.visual_evidence_cache or None)
         and float(saved_config.get("visual_evidence_weight", 0.25)) == float(config.visual_evidence_weight)
         and float(saved_config.get("visual_evidence_feature_weight", 0.15))
         == float(config.visual_evidence_feature_weight)
+        and float(saved_config.get("visual_evidence_cls_weight", 0.05)) == float(config.visual_evidence_cls_weight)
+        and float(saved_config.get("visual_evidence_ranking_loss_weight", 0.05))
+        == float(config.visual_evidence_ranking_loss_weight)
         and int(saved_config.get("keep_recent_checkpoints", 2)) == int(config.keep_recent_checkpoints)
         and float(saved_config.get("boundary_loss_weight", 0.0)) == float(config.boundary_loss_weight)
         and float(saved_config.get("condition_ranking_loss_weight", 0.0))
@@ -869,6 +933,7 @@ def main() -> None:
         args.reuse_embedding_cache = True
         args.reuse_visual_evidence_cache = True
     base_config = load_config(args.config)
+    base_config = apply_verifier_stage(base_config, args.verifier_stage)
     base_config = apply_common_overrides(base_config, args)
     output_root = resolve_repo_path(args.output_root)
     if output_root is None:

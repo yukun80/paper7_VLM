@@ -156,8 +156,10 @@ LOSS_LOG_KEYS = [
     "loss_proposal_cls",
     "loss_condition_cls",
     "loss_evidence_cls",
+    "loss_visual_evidence_cls",
     "loss_condition_rank",
     "loss_evidence_rank",
+    "loss_visual_evidence_rank",
     "loss_selection_rank",
     "loss_proposal_mask",
     "loss_empty_mask",
@@ -192,6 +194,8 @@ def loss_log_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]:
         values["condition_rank_acc"] = scalar_tensor(outputs["condition_rank_acc"])
     if "evidence_rank_acc" in outputs:
         values["evidence_rank_acc"] = scalar_tensor(outputs["evidence_rank_acc"])
+    if "visual_evidence_rank_acc" in outputs:
+        values["visual_evidence_rank_acc"] = scalar_tensor(outputs["visual_evidence_rank_acc"])
     if "selection_rank_acc" in outputs:
         values["selection_rank_acc"] = scalar_tensor(outputs["selection_rank_acc"])
     if "proposal_target_mass" in outputs:
@@ -297,6 +301,20 @@ def training_signal_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]
         values["evidence_logit_scale"] = scalar_tensor(outputs["evidence_logit_scale"])
     if "evidence_embedding_norm" in outputs:
         values["evidence_embedding_norm"] = scalar_tensor(outputs["evidence_embedding_norm"])
+    if "visual_evidence_scores" in outputs:
+        scores = outputs["visual_evidence_scores"].detach().float().cpu()
+        values["visual_evidence_score_mean"] = float(scores.mean().item())
+        values["visual_evidence_score_max"] = float(scores.max().item())
+    if "visual_evidence_cosine_scores" in outputs:
+        scores = outputs["visual_evidence_cosine_scores"].detach().float().cpu()
+        values["visual_evidence_cosine_mean"] = float(scores.mean().item())
+        values["visual_evidence_cosine_max"] = float(scores.max().item())
+    if "visual_evidence_pair_logits" in outputs:
+        scores = outputs["visual_evidence_pair_logits"].detach().float().cpu()
+        values["visual_evidence_pair_logit_mean"] = float(scores.mean().item())
+        values["visual_evidence_pair_logit_max"] = float(scores.max().item())
+    if "visual_evidence_logit_scale" in outputs:
+        values["visual_evidence_logit_scale"] = scalar_tensor(outputs["visual_evidence_logit_scale"])
     if "selection_logits" in outputs:
         scores = outputs["selection_logits"].detach().float().cpu()
         values["selection_logit_mean"] = float(scores.mean().item())
@@ -342,6 +360,7 @@ TRAIN_LOG_KEYS = [
     "best_query_dice",
     "condition_rank_acc",
     "evidence_rank_acc",
+    "visual_evidence_rank_acc",
     "selection_rank_acc",
     "proposal_target_positive_count",
     "query_usage_entropy",
@@ -354,6 +373,8 @@ TRAIN_LOG_KEYS = [
     "query_modality_peak",
     "evidence_score_mean",
     "evidence_score_max",
+    "visual_evidence_score_mean",
+    "visual_evidence_score_max",
     "visual_evidence_attention_mean",
     "visual_evidence_attention_max",
     "active_modality_count",
@@ -391,6 +412,7 @@ def format_train_window(start_step: int, end_step: int, count: int, summary: dic
     optional = [
         ("rank_acc", "condition_rank_acc", ".3f"),
         ("ev_acc", "evidence_rank_acc", ".3f"),
+        ("vis_acc", "visual_evidence_rank_acc", ".3f"),
         ("sel_acc", "selection_rank_acc", ".3f"),
         ("posQ", "proposal_target_positive_count", ".1f"),
         ("qUseH", "query_usage_entropy", ".2f"),
@@ -402,6 +424,7 @@ def format_train_window(start_step: int, end_step: int, count: int, summary: dic
         ("qModH", "query_modality_entropy", ".2f"),
         ("qModP", "query_modality_peak", ".2f"),
         ("evMax", "evidence_score_max", ".2f"),
+        ("visMax", "visual_evidence_score_max", ".2f"),
         ("veMean", "visual_evidence_attention_mean", ".2f"),
         ("veMax", "visual_evidence_attention_max", ".2f"),
         ("activeM", "active_modality_count", ".1f"),
@@ -591,6 +614,31 @@ def _matrix_value(matrix: torch.Tensor | None, row: int, col: int, default: floa
     return float(matrix[row, col].item())
 
 
+def _matrix_argmax(matrix: torch.Tensor | None, row: int) -> int | None:
+    if matrix is None:
+        return None
+    return int(torch.argmax(matrix[row]).item())
+
+
+def _matrix_rank_of_col(matrix: torch.Tensor | None, row: int, col: int) -> float | None:
+    if matrix is None:
+        return None
+    order = torch.argsort(matrix[row], descending=True)
+    ranks = torch.empty_like(order)
+    ranks[order] = torch.arange(order.numel(), dtype=order.dtype)
+    return float(ranks[int(col)].item() + 1)
+
+
+def _scalar_output(outputs: dict[str, torch.Tensor], key: str, default: float = 0.0) -> float:
+    value = outputs.get(key)
+    if value is None:
+        return default
+    try:
+        return float(value.detach().float().mean().cpu().item())
+    except (AttributeError, RuntimeError, ValueError):
+        return default
+
+
 def _safe_float(value: Any) -> float | None:
     try:
         out = float(value)
@@ -700,6 +748,17 @@ def collect_proposal_records(
     evidence_scores = _optional_matrix(outputs, "evidence_scores")
     evidence_cosine = _optional_matrix(outputs, "evidence_cosine_scores")
     evidence_pair = _optional_matrix(outputs, "evidence_pair_logits")
+    visual_evidence_scores = _optional_matrix(outputs, "visual_evidence_scores")
+    visual_evidence_cosine = _optional_matrix(outputs, "visual_evidence_cosine_scores")
+    visual_evidence_pair = _optional_matrix(outputs, "visual_evidence_pair_logits")
+    if _scalar_output(outputs, "evidence_logit_scale") <= 0.0:
+        evidence_scores = None
+        evidence_cosine = None
+        evidence_pair = None
+    if _scalar_output(outputs, "visual_evidence_logit_scale") <= 0.0:
+        visual_evidence_scores = None
+        visual_evidence_cosine = None
+        visual_evidence_pair = None
     final_probs = torch.sigmoid(outputs["final_mask_logits"].detach().float().cpu())
     proposal_mask_probs = torch.sigmoid(pred_masks)
 
@@ -707,6 +766,10 @@ def collect_proposal_records(
     for idx, meta in enumerate(metadata):
         selected = int(selected_query[idx].item())
         best = int(best_query_cpu[idx].item())
+        proposal_top = _matrix_argmax(proposal_prob, idx)
+        condition_top = _matrix_argmax(condition_scores, idx)
+        evidence_top = _matrix_argmax(evidence_scores, idx)
+        visual_top = _matrix_argmax(visual_evidence_scores, idx)
         metrics = sample_metrics[idx] if idx < len(sample_metrics) else {}
         record: dict[str, Any] = {
             "sample_id": meta.get("sample_id", ""),
@@ -726,24 +789,61 @@ def collect_proposal_records(
             "best_query": best,
             "selected_query": selected,
             "selected_matches_best": float(selected == best),
+            "proposal_top_query": proposal_top,
+            "proposal_top_matches_best": float(proposal_top == best) if proposal_top is not None else None,
+            "condition_top_query": condition_top,
+            "condition_top_matches_best": float(condition_top == best) if condition_top is not None else None,
+            "evidence_top_query": evidence_top,
+            "evidence_top_matches_best": float(evidence_top == best) if evidence_top is not None else None,
+            "visual_evidence_top_query": visual_top,
+            "visual_evidence_top_matches_best": float(visual_top == best) if visual_top is not None else None,
             "best_query_dice": float(dice_scores[idx, best].item()),
             "selected_query_dice": float(dice_scores[idx, selected].item()),
+            "proposal_top_query_dice": (
+                float(dice_scores[idx, proposal_top].item()) if proposal_top is not None else None
+            ),
+            "condition_top_query_dice": (
+                float(dice_scores[idx, condition_top].item()) if condition_top is not None else None
+            ),
+            "evidence_top_query_dice": (
+                float(dice_scores[idx, evidence_top].item()) if evidence_top is not None else None
+            ),
+            "visual_evidence_top_query_dice": (
+                float(dice_scores[idx, visual_top].item()) if visual_top is not None else None
+            ),
             "selected_selection_logit": float(selection_logits[idx, selected].item()),
             "best_selection_logit": float(selection_logits[idx, best].item()),
+            "best_query_selection_rank": _matrix_rank_of_col(selection_logits, idx, best),
             "selected_proposal_fg_prob": float(proposal_prob[idx, selected].item()),
             "best_proposal_fg_prob": float(proposal_prob[idx, best].item()),
+            "proposal_top_score": _matrix_value(proposal_prob, idx, proposal_top) if proposal_top is not None else None,
+            "best_query_proposal_rank": _matrix_rank_of_col(proposal_prob, idx, best),
             "selected_condition_score": _matrix_value(condition_scores, idx, selected),
             "best_condition_score": _matrix_value(condition_scores, idx, best),
+            "condition_top_score": _matrix_value(condition_scores, idx, condition_top) if condition_top is not None else None,
+            "best_query_condition_rank": _matrix_rank_of_col(condition_scores, idx, best),
             "selected_condition_cosine": _matrix_value(condition_cosine, idx, selected),
             "best_condition_cosine": _matrix_value(condition_cosine, idx, best),
             "selected_condition_pair_logit": _matrix_value(condition_pair, idx, selected),
             "best_condition_pair_logit": _matrix_value(condition_pair, idx, best),
             "selected_evidence_score": _matrix_value(evidence_scores, idx, selected),
             "best_evidence_score": _matrix_value(evidence_scores, idx, best),
+            "evidence_top_score": _matrix_value(evidence_scores, idx, evidence_top) if evidence_top is not None else None,
+            "best_query_evidence_rank": _matrix_rank_of_col(evidence_scores, idx, best),
             "selected_evidence_cosine": _matrix_value(evidence_cosine, idx, selected),
             "best_evidence_cosine": _matrix_value(evidence_cosine, idx, best),
             "selected_evidence_pair_logit": _matrix_value(evidence_pair, idx, selected),
             "best_evidence_pair_logit": _matrix_value(evidence_pair, idx, best),
+            "selected_visual_evidence_score": _matrix_value(visual_evidence_scores, idx, selected),
+            "best_visual_evidence_score": _matrix_value(visual_evidence_scores, idx, best),
+            "visual_evidence_top_score": (
+                _matrix_value(visual_evidence_scores, idx, visual_top) if visual_top is not None else None
+            ),
+            "best_query_visual_evidence_rank": _matrix_rank_of_col(visual_evidence_scores, idx, best),
+            "selected_visual_evidence_cosine": _matrix_value(visual_evidence_cosine, idx, selected),
+            "best_visual_evidence_cosine": _matrix_value(visual_evidence_cosine, idx, best),
+            "selected_visual_evidence_pair_logit": _matrix_value(visual_evidence_pair, idx, selected),
+            "best_visual_evidence_pair_logit": _matrix_value(visual_evidence_pair, idx, best),
             "final_dice": metrics.get("dice"),
             "final_iou": metrics.get("iou"),
             "final_precision": metrics.get("precision"),
@@ -757,13 +857,37 @@ def collect_proposal_records(
             record["selected_selection_logit"] - record["best_selection_logit"]
         )
         record["dice_gap_selected_minus_best"] = record["selected_query_dice"] - record["best_query_dice"]
+        for prefix in ["proposal", "condition", "evidence", "visual_evidence"]:
+            top_dice = record.get(f"{prefix}_top_query_dice")
+            if isinstance(top_dice, (int, float)):
+                record[f"dice_gap_{prefix}_top_minus_best"] = float(top_dice) - record["best_query_dice"]
+        if isinstance(record.get("proposal_top_score"), (int, float)):
+            record["proposal_score_gap_top_minus_best"] = (
+                float(record["proposal_top_score"]) - float(record["best_proposal_fg_prob"])
+            )
         if isinstance(record.get("selected_evidence_score"), (int, float)) and isinstance(record.get("best_evidence_score"), (int, float)):
             record["evidence_score_gap_selected_minus_best"] = (
                 float(record["selected_evidence_score"]) - float(record["best_evidence_score"])
             )
+        if isinstance(record.get("evidence_top_score"), (int, float)) and isinstance(record.get("best_evidence_score"), (int, float)):
+            record["evidence_score_gap_top_minus_best"] = (
+                float(record["evidence_top_score"]) - float(record["best_evidence_score"])
+            )
+        if isinstance(record.get("selected_visual_evidence_score"), (int, float)) and isinstance(record.get("best_visual_evidence_score"), (int, float)):
+            record["visual_evidence_score_gap_selected_minus_best"] = (
+                float(record["selected_visual_evidence_score"]) - float(record["best_visual_evidence_score"])
+            )
+        if isinstance(record.get("visual_evidence_top_score"), (int, float)) and isinstance(record.get("best_visual_evidence_score"), (int, float)):
+            record["visual_evidence_score_gap_top_minus_best"] = (
+                float(record["visual_evidence_top_score"]) - float(record["best_visual_evidence_score"])
+            )
         if isinstance(record.get("selected_condition_score"), (int, float)) and isinstance(record.get("best_condition_score"), (int, float)):
             record["condition_score_gap_selected_minus_best"] = (
                 float(record["selected_condition_score"]) - float(record["best_condition_score"])
+            )
+        if isinstance(record.get("condition_top_score"), (int, float)) and isinstance(record.get("best_condition_score"), (int, float)):
+            record["condition_score_gap_top_minus_best"] = (
+                float(record["condition_top_score"]) - float(record["best_condition_score"])
             )
         records.append(record)
     return records
@@ -775,20 +899,48 @@ def compute_proposal_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         return {}
     numeric_fields = [
         "selected_matches_best",
+        "proposal_top_matches_best",
+        "condition_top_matches_best",
+        "evidence_top_matches_best",
+        "visual_evidence_top_matches_best",
         "best_query_dice",
         "selected_query_dice",
+        "proposal_top_query_dice",
+        "condition_top_query_dice",
+        "evidence_top_query_dice",
+        "visual_evidence_top_query_dice",
         "selected_selection_logit",
         "best_selection_logit",
+        "best_query_selection_rank",
         "selection_logit_gap_selected_minus_best",
         "dice_gap_selected_minus_best",
+        "dice_gap_proposal_top_minus_best",
+        "dice_gap_condition_top_minus_best",
+        "dice_gap_evidence_top_minus_best",
+        "dice_gap_visual_evidence_top_minus_best",
         "selected_proposal_fg_prob",
         "best_proposal_fg_prob",
+        "proposal_top_score",
+        "best_query_proposal_rank",
+        "proposal_score_gap_top_minus_best",
         "selected_condition_score",
         "best_condition_score",
+        "condition_top_score",
+        "best_query_condition_rank",
         "condition_score_gap_selected_minus_best",
+        "condition_score_gap_top_minus_best",
         "selected_evidence_score",
         "best_evidence_score",
+        "evidence_top_score",
+        "best_query_evidence_rank",
         "evidence_score_gap_selected_minus_best",
+        "evidence_score_gap_top_minus_best",
+        "selected_visual_evidence_score",
+        "best_visual_evidence_score",
+        "visual_evidence_top_score",
+        "best_query_visual_evidence_rank",
+        "visual_evidence_score_gap_selected_minus_best",
+        "visual_evidence_score_gap_top_minus_best",
         "final_dice",
         "final_iou",
         "final_precision",

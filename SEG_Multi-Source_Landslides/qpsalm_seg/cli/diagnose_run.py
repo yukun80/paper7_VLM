@@ -266,6 +266,13 @@ def proposal_records(block: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in records if isinstance(item, dict)] if isinstance(records, list) else []
 
 
+def mean_numeric_field(records: list[dict[str, Any]], field: str) -> float | None:
+    values = [numeric(row.get(field)) for row in records if isinstance(row.get(field), (int, float))]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def check_proposals(block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     records = proposal_records(block)
@@ -285,18 +292,27 @@ def check_proposals(block: dict[str, Any], args: argparse.Namespace) -> list[dic
                     {"top_query": query, "fraction": frac, "num_records": len(selected)},
                 )
             )
-    matches = [numeric(row.get("selected_matches_best")) for row in records if isinstance(row.get("selected_matches_best"), (int, float))]
-    if matches:
-        mean_match = sum(matches) / len(matches)
+    mean_match = mean_numeric_field(records, "selected_matches_best")
+    if mean_match is not None:
         if mean_match < 0.70:
             issues.append(
                 issue(
                     "warning",
-                    "condition_scorer_misses_best_query",
-                    "condition scorer 经常没有选择 Dice 最好的 proposal。",
+                    "combined_selector_misses_best_query",
+                    "combined selector 经常没有选择 Dice 最好的 proposal。",
                     {"mean_selected_matches_best": mean_match},
                 )
             )
+    condition_match = mean_numeric_field(records, "condition_top_matches_best")
+    if condition_match is not None and condition_match < 0.70:
+        issues.append(
+            issue(
+                "info",
+                "condition_verifier_misses_best_query",
+                "condition verifier 单独打分时经常没有把 Dice 最优 query 排在第一。",
+                {"mean_condition_top_matches_best": condition_match},
+            )
+        )
     return issues
 
 
@@ -353,6 +369,86 @@ def check_evidence_verifier(block: dict[str, Any], config: dict[str, Any], args:
                     {"mean_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
                 )
             )
+    evidence_match = mean_numeric_field(records, "evidence_top_matches_best")
+    if evidence_match is not None and evidence_match < 0.70:
+        issues.append(
+            issue(
+                "info",
+                "evidence_verifier_misses_best_query",
+                "evidence verifier 单独打分时经常没有把 Dice 最优 query 排在第一。",
+                {"mean_evidence_top_matches_best": evidence_match},
+            )
+        )
+    return issues
+
+
+def check_visual_evidence_verifier(
+    block: dict[str, Any],
+    config: dict[str, Any],
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
+    """检查 visual evidence verifier 是否记录完整，以及是否能偏向更好的 proposal。"""
+    issues: list[dict[str, Any]] = []
+    use_visual = bool(config.get("use_visual_evidence", True))
+    selection_weight = numeric(config.get("selection_visual_evidence_weight"))
+    cls_weight = numeric(config.get("visual_evidence_cls_weight"))
+    rank_weight = numeric(config.get("visual_evidence_ranking_loss_weight"))
+    if not use_visual and selection_weight <= 0 and cls_weight <= 0 and rank_weight <= 0:
+        return issues
+    records = proposal_records(block)
+    if not records:
+        return issues
+    has_visual = any(isinstance(row.get("selected_visual_evidence_score"), (int, float)) for row in records)
+    if not has_visual:
+        issues.append(
+            issue(
+                "warning",
+                "missing_visual_evidence_scores",
+                "当前配置启用了 visual evidence verifier，但 proposal diagnostics 缺少 visual evidence score 字段。",
+                {
+                    "use_visual_evidence": use_visual,
+                    "selection_visual_evidence_weight": selection_weight,
+                    "visual_evidence_cls_weight": cls_weight,
+                    "visual_evidence_ranking_loss_weight": rank_weight,
+                },
+            )
+        )
+        return issues
+    gaps = [
+        numeric(row.get("visual_evidence_score_gap_selected_minus_best"))
+        for row in records
+        if isinstance(row.get("visual_evidence_score_gap_selected_minus_best"), (int, float))
+    ]
+    if gaps:
+        mean_gap = sum(gaps) / len(gaps)
+        if mean_gap < -float(args.weak_evidence_score_gap):
+            issues.append(
+                issue(
+                    "warning",
+                    "visual_evidence_verifier_penalizes_best_query",
+                    "visual evidence verifier 平均更偏向 selected query 而不是 Dice 最优 query，可能拖累 proposal selection。",
+                    {"mean_visual_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
+                )
+            )
+        elif abs(mean_gap) <= float(args.weak_evidence_score_gap):
+            issues.append(
+                issue(
+                    "info",
+                    "weak_visual_evidence_verifier_separation",
+                    "visual evidence verifier 对 selected/best query 区分度较弱，当前可能只是弱 verifier。",
+                    {"mean_visual_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
+                )
+            )
+    visual_match = mean_numeric_field(records, "visual_evidence_top_matches_best")
+    if visual_match is not None and visual_match < 0.70:
+        issues.append(
+            issue(
+                "info",
+                "visual_evidence_verifier_misses_best_query",
+                "visual evidence verifier 单独打分时经常没有把 Dice 最优 query 排在第一。",
+                {"mean_visual_evidence_top_matches_best": visual_match},
+            )
+        )
     return issues
 
 
@@ -467,12 +563,22 @@ def build_recommendations(issues: list[dict[str, Any]]) -> list[str]:
         recs.append("考虑降低 condition/proposal 分类权重或加入 query 多样性约束，避免所有样本集中到同一 mask token。")
     if "empty_mask_false_positives" in codes:
         recs.append("启用 empty mask suppression，并用更高阈值 sweep 检查 negative-aware 样本的误报面积是否下降。")
-    if "condition_scorer_misses_best_query" in codes:
+    if "combined_selector_misses_best_query" in codes:
+        recs.append("对比 proposal_diagnostics.csv 中 proposal/condition/evidence/visual_evidence 的 top query 命中率，调整各 SELECTION_*_WEIGHT。")
+    if "condition_verifier_misses_best_query" in codes:
         recs.append("提高 condition ranking 监督质量，或降低 SELECTION_CONDITION_WEIGHT，必要时启用 FINAL_FOREGROUND_GATE_WEIGHT。")
     if "missing_evidence_scores" in codes:
         recs.append("重新运行 eval/summary，确认新版本 proposal_diagnostics 已包含 evidence score 字段。")
     if "evidence_verifier_penalizes_best_query" in codes or "weak_evidence_verifier_separation" in codes:
         recs.append("检查 proposal_diagnostics.csv 中 evidence_score_gap_selected_minus_best；必要时调低 SELECTION_EVIDENCE_WEIGHT 或调高 EVIDENCE_RANKING_LOSS_WEIGHT 做 ablation。")
+    if "evidence_verifier_misses_best_query" in codes:
+        recs.append("查看 evidence_top_matches_best 和 best_query_evidence_rank，判断 evidence verifier 是弱监督不足还是 selection 权重过高。")
+    if "missing_visual_evidence_scores" in codes:
+        recs.append("重新运行 eval/summary，确认 proposal_diagnostics 已包含 visual evidence score 字段。")
+    if "visual_evidence_verifier_penalizes_best_query" in codes or "weak_visual_evidence_verifier_separation" in codes:
+        recs.append("检查 proposal_diagnostics.csv 中 visual_evidence_score_gap_selected_minus_best；必要时调低 SELECTION_VISUAL_EVIDENCE_WEIGHT 或调高 VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT 做 ablation。")
+    if "visual_evidence_verifier_misses_best_query" in codes:
+        recs.append("查看 visual_evidence_top_matches_best 和 best_query_visual_evidence_rank，判断 visual evidence cache/preview 是否真的提供了 query selection 信号。")
     if "modality_gate_collapse" in codes:
         recs.append("检查 gate 是否与 condition 合理对应；必要时加入 gate entropy warmup 或降低 modality dropout。")
     if "missing_query_modality_summary" in codes:
@@ -501,6 +607,7 @@ def diagnose(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     recommendations.extend(sweep_recs)
     issues.extend(check_proposals(block, args))
     issues.extend(check_evidence_verifier(block, config, args))
+    issues.extend(check_visual_evidence_verifier(block, config, args))
     issues.extend(check_empty_false_positives(block, args))
     issues.extend(check_gates(block, args))
     issues.extend(check_query_modality_gates(block, args))

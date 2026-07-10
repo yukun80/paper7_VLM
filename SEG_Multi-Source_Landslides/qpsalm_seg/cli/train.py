@@ -76,8 +76,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query-usage-balance-loss-weight", type=float, default=None)
     parser.add_argument("--evidence-cls-weight", type=float, default=None)
     parser.add_argument("--evidence-ranking-loss-weight", type=float, default=None)
+    parser.add_argument("--visual-evidence-cls-weight", type=float, default=None)
+    parser.add_argument("--visual-evidence-ranking-loss-weight", type=float, default=None)
     parser.add_argument("--selection-proposal-weight", type=float, default=None)
     parser.add_argument("--selection-condition-weight", type=float, default=None)
+    parser.add_argument("--selection-visual-evidence-weight", type=float, default=None)
     parser.add_argument("--selection-temperature", type=float, default=None)
     parser.add_argument("--final-foreground-gate-weight", type=float, default=None)
     parser.add_argument(
@@ -170,8 +173,11 @@ def main() -> None:
         "query_usage_balance_loss_weight": args.query_usage_balance_loss_weight,
         "evidence_cls_weight": args.evidence_cls_weight,
         "evidence_ranking_loss_weight": args.evidence_ranking_loss_weight,
+        "visual_evidence_cls_weight": args.visual_evidence_cls_weight,
+        "visual_evidence_ranking_loss_weight": args.visual_evidence_ranking_loss_weight,
         "selection_proposal_weight": args.selection_proposal_weight,
         "selection_condition_weight": args.selection_condition_weight,
+        "selection_visual_evidence_weight": args.selection_visual_evidence_weight,
         "selection_temperature": args.selection_temperature,
         "final_foreground_gate_weight": args.final_foreground_gate_weight,
         "final_mask_fusion": args.final_mask_fusion,

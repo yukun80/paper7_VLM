@@ -58,6 +58,7 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         selection_proposal_weight: float = 1.0,
         selection_condition_weight: float = 1.0,
         selection_evidence_weight: float = 0.25,
+        selection_visual_evidence_weight: float = 0.15,
         selection_temperature: float = 1.0,
         final_foreground_gate_weight: float = 0.0,
         final_mask_fusion: str = "weighted_average",
@@ -71,6 +72,7 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         self.selection_proposal_weight = float(selection_proposal_weight)
         self.selection_condition_weight = float(selection_condition_weight)
         self.selection_evidence_weight = float(selection_evidence_weight)
+        self.selection_visual_evidence_weight = float(selection_visual_evidence_weight)
         self.selection_temperature = max(1.0e-3, float(selection_temperature))
         self.final_foreground_gate_weight = float(final_foreground_gate_weight)
         self.final_mask_fusion = str(final_mask_fusion)
@@ -96,6 +98,7 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         self.proposal_head = nn.Linear(decoder_dim, 2)
         self.condition_scorer = ConditionAwareProposalScorer(decoder_dim)
         self.evidence_scorer = ConditionAwareProposalScorer(decoder_dim)
+        self.visual_evidence_scorer = ConditionAwareProposalScorer(decoder_dim)
         self.query_modality_scorer = nn.Sequential(
             nn.LayerNorm(decoder_dim * 4),
             nn.Linear(decoder_dim * 4, decoder_dim),
@@ -221,6 +224,7 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         proposal_context: torch.Tensor,
         condition_embedding: torch.Tensor,
         evidence_embedding: torch.Tensor | None = None,
+        visual_evidence_embedding: torch.Tensor | None = None,
         modality_features: torch.Tensor | None = None,
         modality_active_mask: torch.Tensor | None = None,
         global_modality_gate: torch.Tensor | None = None,
@@ -256,6 +260,11 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         if evidence_embedding is not None:
             evidence_out = self.evidence_scorer(decoded, evidence_embedding)
             evidence_scores = evidence_out["condition_scores"]
+        visual_evidence_out: dict[str, torch.Tensor] = {}
+        visual_evidence_scores = None
+        if visual_evidence_embedding is not None:
+            visual_evidence_out = self.visual_evidence_scorer(decoded, visual_evidence_embedding)
+            visual_evidence_scores = visual_evidence_out["condition_scores"]
         proposal_fg_logits = proposal_logits[..., 1] - proposal_logits[..., 0]
         selection_logits = (
             float(self.selection_proposal_weight) * proposal_fg_logits
@@ -263,6 +272,8 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         )
         if evidence_scores is not None and self.selection_evidence_weight:
             selection_logits = selection_logits + float(self.selection_evidence_weight) * evidence_scores
+        if visual_evidence_scores is not None and self.selection_visual_evidence_weight:
+            selection_logits = selection_logits + float(self.selection_visual_evidence_weight) * visual_evidence_scores
         final_mask_logits, weights, selected_query_indices = self._fuse_final_masks(pred_masks, selection_logits)
         foreground_gate_logits = proposal_fg_logits.max(dim=1).values
         if self.final_foreground_gate_weight:
@@ -275,6 +286,9 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
             "proposal_fg_logits": proposal_fg_logits,
             "condition_scores": condition_scores,
             "evidence_scores": evidence_scores if evidence_scores is not None else torch.zeros_like(condition_scores),
+            "visual_evidence_scores": (
+                visual_evidence_scores if visual_evidence_scores is not None else torch.zeros_like(condition_scores)
+            ),
             "selection_logits": selection_logits,
             "selection_weights": weights,
             "selected_query_indices": selected_query_indices,
@@ -285,6 +299,18 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
             "evidence_cosine_scores": evidence_out.get("condition_cosine_scores", torch.zeros_like(condition_scores)),
             "evidence_pair_logits": evidence_out.get("condition_pair_logits", torch.zeros_like(condition_scores)),
             "evidence_logit_scale": evidence_out.get("condition_logit_scale", torch.zeros((), device=condition_scores.device)).detach(),
+            "visual_evidence_cosine_scores": visual_evidence_out.get(
+                "condition_cosine_scores",
+                torch.zeros_like(condition_scores),
+            ),
+            "visual_evidence_pair_logits": visual_evidence_out.get(
+                "condition_pair_logits",
+                torch.zeros_like(condition_scores),
+            ),
+            "visual_evidence_logit_scale": visual_evidence_out.get(
+                "condition_logit_scale",
+                torch.zeros((), device=condition_scores.device),
+            ).detach(),
             "final_mask_logits": final_mask_logits,
             "query_embeddings": decoded,
             **query_modality_out,

@@ -56,6 +56,7 @@ class MultiSourceQwenPSALMSeg(nn.Module):
             selection_proposal_weight=float(config.selection_proposal_weight),
             selection_condition_weight=float(config.selection_condition_weight),
             selection_evidence_weight=float(getattr(config, "selection_evidence_weight", 0.25)),
+            selection_visual_evidence_weight=float(getattr(config, "selection_visual_evidence_weight", 0.15)),
             selection_temperature=float(config.selection_temperature),
             final_foreground_gate_weight=float(config.final_foreground_gate_weight),
             final_mask_fusion=str(config.final_mask_fusion),
@@ -123,25 +124,27 @@ class MultiSourceQwenPSALMSeg(nn.Module):
         evidence_enabled = bool(getattr(self.config, "use_evidence_reasoning", True))
         evidence_weight = float(getattr(self.config, "evidence_reasoning_weight", 0.35)) if evidence_enabled else 0.0
         if evidence_enabled and evidence_weight:
-            proposal_context = proposal_context + evidence_weight * evidence_embedding
             modality_gate_condition = condition_embedding + evidence_weight * evidence_embedding
         else:
             modality_gate_condition = condition_embedding
         bbox_prior = batch["bbox_prior"].to(device) if "bbox_prior" in batch else None  # type: ignore[union-attr]
         visual_out: dict[str, torch.Tensor] = {}
+        visual_evidence_embedding: torch.Tensor | None = None
+        visual_weight = float(getattr(self.config, "visual_evidence_weight", 0.25))
         if self.visual_evidence is not None and "visual_preview" in batch:
             visual_preview = batch["visual_preview"].to(device)  # type: ignore[union-attr]
             visual_out = self.visual_evidence(visual_preview)
-            proposal_context = proposal_context + float(getattr(self.config, "visual_evidence_weight", 0.25)) * visual_out[
-                "visual_evidence_embedding"
-            ].to(proposal_context.dtype)
+            visual_evidence_embedding = visual_weight * visual_out["visual_evidence_embedding"].to(proposal_context.dtype)
         if self.visual_evidence_cache is not None:
             keys = batch.get("visual_evidence_key")
             if keys is None:
                 raise KeyError("batch must contain visual_evidence_key when visual_evidence_cache is configured")
             cached_visual = self.visual_evidence_cache(keys, device=device)  # type: ignore[arg-type]
-            proposal_context = proposal_context + float(getattr(self.config, "visual_evidence_weight", 0.25)) * cached_visual.to(
-                proposal_context.dtype
+            cached_visual = cached_visual.to(proposal_context.dtype)
+            visual_evidence_embedding = (
+                visual_weight * cached_visual
+                if visual_evidence_embedding is None
+                else visual_evidence_embedding + visual_weight * cached_visual
             )
             visual_out["qwen_visual_evidence_embedding"] = cached_visual
 
@@ -185,6 +188,7 @@ class MultiSourceQwenPSALMSeg(nn.Module):
             proposal_context=proposal_context,
             condition_embedding=condition_embedding,
             evidence_embedding=evidence_embedding if evidence_enabled else None,
+            visual_evidence_embedding=visual_evidence_embedding,
             modality_features=modality_out.get("stacked_features"),
             modality_active_mask=modality_out.get("modality_active_mask"),
             global_modality_gate=modality_out.get("modality_gate_weights"),
@@ -251,6 +255,12 @@ class MultiSourceQwenPSALMSeg(nn.Module):
                     query_diversity_loss_weight=self.config.query_diversity_loss_weight,
                     evidence_cls_weight=self.config.evidence_cls_weight if evidence_enabled else 0.0,
                     evidence_ranking_loss_weight=self.config.evidence_ranking_loss_weight if evidence_enabled else 0.0,
+                    visual_evidence_cls_weight=(
+                        self.config.visual_evidence_cls_weight if visual_evidence_embedding is not None else 0.0
+                    ),
+                    visual_evidence_ranking_loss_weight=(
+                        self.config.visual_evidence_ranking_loss_weight if visual_evidence_embedding is not None else 0.0
+                    ),
                     proposal_mask_diversity_loss_weight=self.config.proposal_mask_diversity_loss_weight,
                     gate_entropy_loss_weight=self.config.gate_entropy_loss_weight,
                     proposal_soft_target_topk=self.config.proposal_soft_target_topk,

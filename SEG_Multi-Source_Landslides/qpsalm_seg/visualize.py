@@ -339,6 +339,7 @@ def _sample_query_score_values(
     for out_key, record_key in [
         ("condition_scores", "condition_score"),
         ("evidence_scores", "evidence_score"),
+        ("visual_evidence_scores", "visual_evidence_score"),
         ("selection_logits", "selection_logit"),
     ]:
         tensor = outputs.get(out_key)

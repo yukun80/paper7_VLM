@@ -335,6 +335,8 @@ def segmentation_losses(
     selection_ranking_loss_weight: float = 0.0,
     evidence_cls_weight: float = 0.0,
     evidence_ranking_loss_weight: float = 0.0,
+    visual_evidence_cls_weight: float = 0.0,
+    visual_evidence_ranking_loss_weight: float = 0.0,
     proposal_mask_diversity_loss_weight: float = 0.0,
     gate_entropy_loss_weight: float = 0.0,
     proposal_soft_target_topk: int = 1,
@@ -428,6 +430,26 @@ def segmentation_losses(
         evidence_cls = weighted_sample_mean(evidence_cls_per_query.mean(dim=1), weights)
     else:
         evidence_cls = final_logits.sum() * 0.0
+    visual_evidence_scores = outputs.get("visual_evidence_scores")
+    visual_evidence_loss_active = visual_evidence_scores is not None and (
+        (visual_evidence_cls_weight and visual_evidence_cls_weight > 0)
+        or (visual_evidence_ranking_loss_weight and visual_evidence_ranking_loss_weight > 0)
+    )
+    if visual_evidence_loss_active:
+        visual_evidence_pos_weight = (
+            visual_evidence_scores.new_tensor(float(evidence_positive_weight))
+            if evidence_positive_weight and evidence_positive_weight > 1.0
+            else None
+        )
+        visual_evidence_cls_per_query = F.binary_cross_entropy_with_logits(
+            visual_evidence_scores,
+            proposal_target,
+            pos_weight=visual_evidence_pos_weight,
+            reduction="none",
+        )
+        visual_evidence_cls = weighted_sample_mean(visual_evidence_cls_per_query.mean(dim=1), weights)
+    else:
+        visual_evidence_cls = final_logits.sum() * 0.0
     if non_empty.any():
         condition_rank_per_sample = soft_target_ranking_loss_per_sample(condition_scores, proposal_target, non_empty)
         condition_rank = weighted_sample_mean(condition_rank_per_sample, weights[non_empty])
@@ -443,11 +465,26 @@ def segmentation_losses(
         else:
             evidence_rank = final_logits.sum() * 0.0
             evidence_rank_acc = final_logits.sum() * 0.0
+        if visual_evidence_loss_active:
+            visual_evidence_rank_per_sample = soft_target_ranking_loss_per_sample(
+                visual_evidence_scores,
+                proposal_target,
+                non_empty,
+            )
+            visual_evidence_rank = weighted_sample_mean(visual_evidence_rank_per_sample, weights[non_empty])
+            visual_evidence_rank_acc = (
+                visual_evidence_scores[non_empty].argmax(dim=1) == best_query[non_empty]
+            ).float().mean()
+        else:
+            visual_evidence_rank = final_logits.sum() * 0.0
+            visual_evidence_rank_acc = final_logits.sum() * 0.0
     else:
         condition_rank = final_logits.sum() * 0.0
         condition_rank_acc = final_logits.sum() * 0.0
         evidence_rank = final_logits.sum() * 0.0
         evidence_rank_acc = final_logits.sum() * 0.0
+        visual_evidence_rank = final_logits.sum() * 0.0
+        visual_evidence_rank_acc = final_logits.sum() * 0.0
 
     selection_logits = outputs.get("selection_logits")
     if (
@@ -562,10 +599,12 @@ def segmentation_losses(
         + float(proposal_cls_weight) * proposal_cls
         + float(condition_cls_weight) * condition_cls
         + float(evidence_cls_weight) * evidence_cls
+        + float(visual_evidence_cls_weight) * visual_evidence_cls
         + float(proposal_mask_weight)
         * (proposal_mask_bce + proposal_mask_dice + float(mask_tversky_weight) * proposal_mask_tversky)
         + float(condition_ranking_weight) * condition_rank
         + float(evidence_ranking_loss_weight) * evidence_rank
+        + float(visual_evidence_ranking_loss_weight) * visual_evidence_rank
         + float(selection_ranking_loss_weight) * selection_rank
         + float(empty_mask_suppression_weight) * empty_mask
         + float(empty_proposal_suppression_weight) * empty_proposal
@@ -583,11 +622,14 @@ def segmentation_losses(
         "loss_proposal_cls": proposal_cls.detach(),
         "loss_condition_cls": condition_cls.detach(),
         "loss_evidence_cls": evidence_cls.detach(),
+        "loss_visual_evidence_cls": visual_evidence_cls.detach(),
         "loss_condition_rank": condition_rank.detach(),
         "loss_evidence_rank": evidence_rank.detach(),
+        "loss_visual_evidence_rank": visual_evidence_rank.detach(),
         "loss_selection_rank": selection_rank.detach(),
         "condition_rank_acc": condition_rank_acc.detach(),
         "evidence_rank_acc": evidence_rank_acc.detach(),
+        "visual_evidence_rank_acc": visual_evidence_rank_acc.detach(),
         "selection_rank_acc": selection_rank_acc.detach(),
         "proposal_target_mass": proposal_target.sum(dim=1).detach(),
         "proposal_target_positive_count": (proposal_target > 1.0e-4).float().sum(dim=1).detach(),
