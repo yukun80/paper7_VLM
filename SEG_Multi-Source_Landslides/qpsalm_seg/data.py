@@ -16,6 +16,7 @@ import json
 import math
 import random
 import re
+import hashlib
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -182,6 +183,21 @@ def gsd_to_token(gsd: Any) -> str:
 
 def gsd_token_id(token: str) -> int:
     return GSD_TOKENS.index(token) if token in GSD_TOKENS else 0
+
+
+def gsd_continuous_features(gsd: Any) -> list[float]:
+    """返回 [log_gsd_normalized, known]，供模型做连续尺度调制。"""
+    if gsd is None or gsd == "" or str(gsd).lower() == "none":
+        return [0.0, 0.0]
+    try:
+        value = float(gsd)
+    except (TypeError, ValueError):
+        return [0.0, 0.0]
+    if not math.isfinite(value) or value <= 0:
+        return [0.0, 0.0]
+    log_value = math.log10(value)
+    normalized = (max(-1.0, min(2.0, log_value)) + 1.0) / 3.0
+    return [float(normalized), 1.0]
 
 
 def row_template_id(row: dict[str, Any]) -> str:
@@ -456,6 +472,32 @@ def bbox_to_prior(bbox: list[int] | None, target_size: int) -> torch.Tensor:
     return prior
 
 
+def _preview_three_channels(tensor: torch.Tensor) -> torch.Tensor:
+    """把任意 canonical 模态张量压成 3 通道 preview，供 visual evidence 使用。"""
+    if tensor.shape[0] >= 3:
+        return tensor[:3].float().clamp(-1.0, 1.0)
+    if tensor.shape[0] == 2:
+        mean = tensor[:2].mean(dim=0, keepdim=True)
+        return torch.cat([tensor[:2], mean], dim=0).float().clamp(-1.0, 1.0)
+    if tensor.shape[0] == 1:
+        return tensor[:1].expand(3, -1, -1).float().clamp(-1.0, 1.0)
+    raise ValueError(f"无法从空模态构造 preview: shape={tuple(tensor.shape)}")
+
+
+def build_visual_preview(
+    modalities: dict[str, torch.Tensor],
+    availability: torch.Tensor,
+) -> tuple[torch.Tensor, str]:
+    """按可用模态构造 Qwen/visual evidence 预览图，保持与训练 mask 同一几何。"""
+    priority = ["hr_optical", "s2", "s1", "dem", "insar"]
+    for name in priority:
+        idx = CANONICAL_MODALITIES.index(name)
+        if float(availability[idx].item()) > 0.5:
+            return _preview_three_channels(modalities[name]), name
+    first = priority[0]
+    return torch.zeros((3, modalities[first].shape[-2], modalities[first].shape[-1]), dtype=torch.float32), "none"
+
+
 def infer_condition_prompt(row: dict[str, Any]) -> str:
     """按模板和指令文本派生 condition prompt。"""
     template_id = row_template_id(row)
@@ -508,6 +550,7 @@ def build_proposal_context_text(row: dict[str, Any]) -> str:
         f"Modality metadata: {'; '.join(modality_details) if modality_details else 'none'}.",
         f"Modality tokens: {' '.join(availability_prompt_tokens(row))}.",
         f"GSD token: <GSD_{gsd_token}>.",
+        f"GSD meters: {spatial.get('gsd_m') if spatial.get('gsd_m') not in (None, '') else 'unknown'}.",
     ]
     return " ".join(parts)
 
@@ -518,9 +561,76 @@ def build_condition_prompt_text(row: dict[str, Any]) -> str:
     return f"Condition prompt: {condition_prompt}."
 
 
+def build_evidence_reasoning_text(row: dict[str, Any]) -> str:
+    """构造 Qwen semantic/evidence controller 的地学证据推理文本。
+
+    这条 prompt 不要求 Qwen 输出 bbox，而是让 controller 明确当前任务应该
+    如何调度光学、S2、SAR、DEM 和 InSAR 证据，并在 proposal 选择时避免把
+    道路、河谷、裸地或阴影当成滑坡。
+    """
+    condition_prompt = infer_condition_prompt(row)
+    canonical = set(canonical_modality_combo(row).split("+"))
+    role_hints = []
+    if "hr_optical" in canonical:
+        role_hints.append("HR optical: inspect scar texture, exposed soil, vegetation disruption, and sharp local contrast.")
+    if "s2" in canonical:
+        role_hints.append("Sentinel-2: use multispectral or RGB reflectance cues for vegetation-soil contrast at coarser scale.")
+    if "s1" in canonical:
+        role_hints.append("Sentinel-1 SAR: use roughness, moisture, and structural backscatter as support under cloud or shadow.")
+    if "dem" in canonical:
+        role_hints.append("DEM/slope: check terrain plausibility, steep slope context, source area, and runout consistency.")
+    if "insar" in canonical:
+        role_hints.append("InSAR deformation: treat signed deformation as activity evidence, not as ordinary texture.")
+    if not role_hints:
+        role_hints.append("No strong auxiliary modality is available; rely on visible landslide morphology.")
+
+    spatial = row.get("spatial") or {}
+    gsd_value = spatial.get("gsd_m") if spatial.get("gsd_m") not in (None, "") else "unknown"
+    instruction = row.get("instruction") or {}
+    task_text = str(instruction.get("text") or "Segment all landslide regions.")
+    parts = [
+        f"Evidence reasoning target: {condition_prompt}.",
+        f"Task instruction: {task_text}",
+        f"Dataset/source: {row.get('dataset_name', 'unknown')}.",
+        f"Available evidence: {canonical_modality_combo(row)}.",
+        f"Raw evidence roles: {raw_modality_combo(row)}.",
+        f"Sensor combo: {sensor_combo(row)}.",
+        f"Scale: GSD {gsd_value} meters, token <GSD_{gsd_to_token(spatial.get('gsd_m'))}>.",
+        "Use Qwen as a semantic controller, evidence scheduler, and proposal verifier.",
+        "Do not force a rectangular box prior; landslides may be irregular patches with fuzzy boundaries and multiple instances.",
+        "Prefer mask proposals supported by morphology plus terrain or deformation evidence when available.",
+        "Reject background look-alikes such as roads, riverbeds, shadows, bare soil, terraces, or continuous slope texture without landslide evidence.",
+        "Evidence roles: " + " ".join(role_hints),
+    ]
+    return " ".join(parts)
+
+
 def build_condition_text(row: dict[str, Any]) -> str:
     """兼容完整 prompt：proposal context + condition prompt。"""
-    return f"{build_proposal_context_text(row)} {build_condition_prompt_text(row)}"
+    return f"{build_proposal_context_text(row)} {build_condition_prompt_text(row)} {build_evidence_reasoning_text(row)}"
+
+
+def build_visual_evidence_key(row: dict[str, Any]) -> str:
+    """生成图文 visual evidence cache key。
+
+    同一遥感 patch 可能对应多个 instruction/template；key 同时包含样本 ID、
+    template 和双文本 prompt 摘要，避免不同语义条件误共享同一个 Qwen visual
+    evidence embedding。
+    """
+    proposal_text = build_proposal_context_text(row)
+    condition_text = build_condition_prompt_text(row)
+    evidence_text = build_evidence_reasoning_text(row)
+    parts = [
+        str(row.get("sample_id") or ""),
+        str(row.get("parent_sample_id") or ""),
+        str(row_template_id(row) or ""),
+        str(row.get("dataset_name") or ""),
+        proposal_text,
+        condition_text,
+        evidence_text,
+    ]
+    digest = hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
+    return f"qvg:{digest}"
 
 
 def canonical_combo_loss_weight(config: QPSalmConfig, combo: str) -> float:
@@ -536,6 +646,27 @@ def canonical_combo_loss_weight(config: QPSalmConfig, combo: str) -> float:
     if not math.isfinite(weight) or weight <= 0.0:
         return 1.0
     return weight
+
+
+def raw_modality_metadata(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """收集原始模态元数据，供完整多模态推理可视化使用。"""
+    records: list[dict[str, Any]] = []
+    for raw_name, item in sorted((row.get("modalities") or {}).items()):
+        if not isinstance(item, dict) or not item.get("available", True):
+            continue
+        records.append(
+            {
+                "name": raw_name,
+                "canonical": canonical_modality_name(raw_name, item),
+                "path": item.get("path"),
+                "shape": item.get("shape"),
+                "sensor": item.get("sensor"),
+                "normalization": item.get("normalization"),
+                "value_encoding": item.get("value_encoding"),
+                "role": item.get("role"),
+            }
+        )
+    return records
 
 
 class MultiSourceLandslideDataset(Dataset):
@@ -643,12 +774,15 @@ class MultiSourceLandslideDataset(Dataset):
         if float(is_empty.item()) <= 0.5:
             bbox = compute_bbox_from_mask(mask)
         bbox_prior = bbox_to_prior(bbox, self.target_size)
+        visual_preview, visual_preview_source = build_visual_preview(modalities, availability)
         spatial = row.get("spatial") or {}
         gsd_token = gsd_to_token(spatial.get("gsd_m"))
         condition_prompt = infer_condition_prompt(row)
         proposal_context_text = build_proposal_context_text(row)
         condition_prompt_text = build_condition_prompt_text(row)
-        condition_text = f"{proposal_context_text} {condition_prompt_text}"
+        evidence_reasoning_text = build_evidence_reasoning_text(row)
+        condition_text = f"{proposal_context_text} {condition_prompt_text} {evidence_reasoning_text}"
+        visual_evidence_key = build_visual_evidence_key(row)
         canonical_combo = canonical_modality_combo(row)
         raw_combo = raw_modality_combo(row)
         sensors = sensor_combo(row)
@@ -676,16 +810,22 @@ class MultiSourceLandslideDataset(Dataset):
             "condition_prompt": condition_prompt,
             "proposal_context_text": proposal_context_text,
             "condition_prompt_text": condition_prompt_text,
+            "evidence_reasoning_text": evidence_reasoning_text,
             "condition_text": condition_text,
+            "visual_evidence_key": visual_evidence_key,
             "sample_weight": sample_weight,
+            "visual_preview_source": visual_preview_source,
+            "raw_modalities": raw_modality_metadata(row),
         }
         return {
             "modalities": modalities,
             "availability": availability,
+            "visual_preview": visual_preview,
             "mask": mask,
             "bbox_prior": bbox_prior,
             "is_empty": is_empty,
             "gsd_id": torch.tensor(gsd_token_id(gsd_token), dtype=torch.long),
+            "gsd_continuous": torch.tensor(gsd_continuous_features(spatial.get("gsd_m")), dtype=torch.float32),
             "sample_weight": torch.tensor(sample_weight, dtype=torch.float32),
             "metadata": metadata,
         }
@@ -700,15 +840,19 @@ def qpsalm_collate(batch: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "modalities": modalities,
         "availability": torch.stack([item["availability"] for item in batch], dim=0),
+        "visual_preview": torch.stack([item["visual_preview"] for item in batch], dim=0),
         "mask": torch.stack([item["mask"] for item in batch], dim=0),
         "bbox_prior": torch.stack([item["bbox_prior"] for item in batch], dim=0),
         "is_empty": torch.stack([item["is_empty"] for item in batch], dim=0),
         "gsd_id": torch.stack([item["gsd_id"] for item in batch], dim=0),
+        "gsd_continuous": torch.stack([item["gsd_continuous"] for item in batch], dim=0),
         "sample_weight": torch.stack([item["sample_weight"] for item in batch], dim=0),
         "metadata": [item["metadata"] for item in batch],
         "proposal_context_text": [item["metadata"]["proposal_context_text"] for item in batch],
         "condition_prompt_text": [item["metadata"]["condition_prompt_text"] for item in batch],
+        "evidence_reasoning_text": [item["metadata"]["evidence_reasoning_text"] for item in batch],
         "condition_text": [item["metadata"]["condition_text"] for item in batch],
+        "visual_evidence_key": [item["metadata"]["visual_evidence_key"] for item in batch],
     }
 
 

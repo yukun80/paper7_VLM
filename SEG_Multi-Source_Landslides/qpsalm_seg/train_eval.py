@@ -155,7 +155,9 @@ LOSS_LOG_KEYS = [
     "loss_mask_tversky",
     "loss_proposal_cls",
     "loss_condition_cls",
+    "loss_evidence_cls",
     "loss_condition_rank",
+    "loss_evidence_rank",
     "loss_selection_rank",
     "loss_proposal_mask",
     "loss_empty_mask",
@@ -188,6 +190,8 @@ def loss_log_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]:
         values["best_query_mean"] = scalar_tensor(outputs["best_query"])
     if "condition_rank_acc" in outputs:
         values["condition_rank_acc"] = scalar_tensor(outputs["condition_rank_acc"])
+    if "evidence_rank_acc" in outputs:
+        values["evidence_rank_acc"] = scalar_tensor(outputs["evidence_rank_acc"])
     if "selection_rank_acc" in outputs:
         values["selection_rank_acc"] = scalar_tensor(outputs["selection_rank_acc"])
     if "proposal_target_mass" in outputs:
@@ -216,6 +220,12 @@ def training_signal_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]
                 values[f"{key}_{name}"] = float(gate[:, idx].mean().item())
             gate_safe = gate.clamp_min(1.0e-8)
             values[f"{key}_entropy"] = float((-(gate_safe * gate_safe.log()).sum(dim=1)).mean().item())
+        spatial_entropy_key = f"spatial_gate_{scale_name}_entropy"
+        if spatial_entropy_key in outputs:
+            values[spatial_entropy_key] = scalar_tensor(outputs[spatial_entropy_key])
+        spatial_peak_key = f"spatial_gate_{scale_name}_peak"
+        if spatial_peak_key in outputs:
+            values[spatial_peak_key] = scalar_tensor(outputs[spatial_peak_key])
     if "modality_active_mask" in outputs:
         active = outputs["modality_active_mask"].detach().float().cpu()
         values["active_modality_count"] = float(active.sum(dim=1).mean().item())
@@ -227,6 +237,28 @@ def training_signal_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]
         norms = outputs["modality_gate_feature_norms"].detach().float().cpu()
         for idx, name in enumerate(CANONICAL_MODALITIES):
             values[f"gate_featnorm_{name}"] = float(norms[:, idx].mean().item())
+    if "query_modality_weights" in outputs:
+        query_gate = outputs["query_modality_weights"].detach().float().cpu()
+        mean_gate = query_gate.mean(dim=1)
+        for idx, name in enumerate(CANONICAL_MODALITIES):
+            values[f"query_gate_{name}"] = float(mean_gate[:, idx].mean().item())
+        safe = query_gate.clamp_min(1.0e-8)
+        values["query_modality_entropy"] = float((-(safe * safe.log()).sum(dim=-1)).mean().item())
+        values["query_modality_peak"] = float(safe.max(dim=-1).values.mean().item())
+    if "query_modality_entropy" in outputs:
+        values["query_modality_entropy"] = scalar_tensor(outputs["query_modality_entropy"])
+    if "query_modality_peak" in outputs:
+        values["query_modality_peak"] = scalar_tensor(outputs["query_modality_peak"])
+    if "visual_evidence_attention_mean" in outputs:
+        values["visual_evidence_attention_mean"] = scalar_tensor(outputs["visual_evidence_attention_mean"])
+    if "visual_evidence_attention_max" in outputs:
+        values["visual_evidence_attention_max"] = scalar_tensor(outputs["visual_evidence_attention_max"])
+    if "visual_evidence_embedding" in outputs:
+        embedding = outputs["visual_evidence_embedding"].detach().float().cpu()
+        values["visual_evidence_embedding_norm"] = float(embedding.pow(2).mean(dim=1).sqrt().mean().item())
+    if "qwen_visual_evidence_embedding" in outputs:
+        embedding = outputs["qwen_visual_evidence_embedding"].detach().float().cpu()
+        values["qwen_visual_evidence_embedding_norm"] = float(embedding.pow(2).mean(dim=1).sqrt().mean().item())
     if "proposal_logits" in outputs:
         proposal_prob = torch.softmax(outputs["proposal_logits"].detach().float().cpu(), dim=-1)[..., 1]
         values["proposal_fg_prob_mean"] = float(proposal_prob.mean().item())
@@ -249,6 +281,22 @@ def training_signal_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]
         values["condition_pair_logit_max"] = float(scores.max().item())
     if "condition_logit_scale" in outputs:
         values["condition_logit_scale"] = scalar_tensor(outputs["condition_logit_scale"])
+    if "evidence_scores" in outputs:
+        scores = outputs["evidence_scores"].detach().float().cpu()
+        values["evidence_score_mean"] = float(scores.mean().item())
+        values["evidence_score_max"] = float(scores.max().item())
+    if "evidence_cosine_scores" in outputs:
+        scores = outputs["evidence_cosine_scores"].detach().float().cpu()
+        values["evidence_cosine_mean"] = float(scores.mean().item())
+        values["evidence_cosine_max"] = float(scores.max().item())
+    if "evidence_pair_logits" in outputs:
+        scores = outputs["evidence_pair_logits"].detach().float().cpu()
+        values["evidence_pair_logit_mean"] = float(scores.mean().item())
+        values["evidence_pair_logit_max"] = float(scores.max().item())
+    if "evidence_logit_scale" in outputs:
+        values["evidence_logit_scale"] = scalar_tensor(outputs["evidence_logit_scale"])
+    if "evidence_embedding_norm" in outputs:
+        values["evidence_embedding_norm"] = scalar_tensor(outputs["evidence_embedding_norm"])
     if "selection_logits" in outputs:
         scores = outputs["selection_logits"].detach().float().cpu()
         values["selection_logit_mean"] = float(scores.mean().item())
@@ -293,12 +341,21 @@ TRAIN_LOG_KEYS = [
     "dice",
     "best_query_dice",
     "condition_rank_acc",
+    "evidence_rank_acc",
     "selection_rank_acc",
     "proposal_target_positive_count",
     "query_usage_entropy",
     "proposal_fg_prob_max",
     "top_query_mean",
     "gate_entropy",
+    "spatial_gate_high_entropy",
+    "spatial_gate_high_peak",
+    "query_modality_entropy",
+    "query_modality_peak",
+    "evidence_score_mean",
+    "evidence_score_max",
+    "visual_evidence_attention_mean",
+    "visual_evidence_attention_max",
     "active_modality_count",
     "sample_weight_raw_mean",
     "sample_weight_raw_max",
@@ -333,12 +390,20 @@ def format_train_window(start_step: int, end_step: int, count: int, summary: dic
     ]
     optional = [
         ("rank_acc", "condition_rank_acc", ".3f"),
+        ("ev_acc", "evidence_rank_acc", ".3f"),
         ("sel_acc", "selection_rank_acc", ".3f"),
         ("posQ", "proposal_target_positive_count", ".1f"),
         ("qUseH", "query_usage_entropy", ".2f"),
         ("top_q", "top_query_mean", ".1f"),
         ("fg_max", "proposal_fg_prob_max", ".3f"),
         ("gateH", "gate_entropy", ".2f"),
+        ("spGateH", "spatial_gate_high_entropy", ".2f"),
+        ("spGateP", "spatial_gate_high_peak", ".2f"),
+        ("qModH", "query_modality_entropy", ".2f"),
+        ("qModP", "query_modality_peak", ".2f"),
+        ("evMax", "evidence_score_max", ".2f"),
+        ("veMean", "visual_evidence_attention_mean", ".2f"),
+        ("veMax", "visual_evidence_attention_max", ".2f"),
         ("activeM", "active_modality_count", ".1f"),
         ("wRaw", "sample_weight_raw_mean", ".2f"),
         ("wMax", "sample_weight_raw_max", ".2f"),
@@ -373,11 +438,66 @@ def collect_gate_records(outputs: dict[str, torch.Tensor], metadata: list[dict[s
             "raw_combo": meta.get("raw_combo", "unknown"),
             "sensor_combo": meta.get("sensor_combo", "unknown"),
             "normalization_combo": meta.get("normalization_combo", "unknown"),
+            "gsd_token": meta.get("gsd_token", "unknown"),
+            "target_area_px_bin": meta.get("target_area_px_bin", "unknown"),
+            "target_area_fraction_bin": meta.get("target_area_fraction_bin", "unknown"),
+            "ground_area_m2_bin": meta.get("ground_area_m2_bin", "unknown"),
             "condition_prompt": meta.get("condition_prompt", "unknown"),
             "weights": _gate_row_to_dict(weights[idx]),
         }
         if active_cpu is not None:
             record["active"] = _gate_row_to_dict(active_cpu[idx])
+        records.append(record)
+    return records
+
+
+def collect_query_modality_records(outputs: dict[str, torch.Tensor], metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """收集每个 mask query 的模态注意力，诊断 proposal 是否按实例选择证据源。"""
+    if "query_modality_weights" not in outputs:
+        return []
+    weights = outputs["query_modality_weights"].detach().float().cpu()
+    if weights.ndim != 3:
+        return []
+    mean_weights = weights.mean(dim=1)
+    entropy = outputs.get("query_modality_entropy")
+    peak = outputs.get("query_modality_peak")
+    entropy_cpu = entropy.detach().float().cpu() if entropy is not None else None
+    peak_cpu = peak.detach().float().cpu() if peak is not None else None
+    best_query = outputs.get("best_query")
+    best_query_cpu = best_query.detach().long().cpu() if best_query is not None else None
+    selection_logits = outputs.get("selection_logits")
+    selected_query_cpu = (
+        torch.argmax(selection_logits.detach().float().cpu(), dim=1)
+        if selection_logits is not None
+        else None
+    )
+    records: list[dict[str, Any]] = []
+    for idx, meta in enumerate(metadata):
+        record: dict[str, Any] = {
+            "sample_id": meta.get("sample_id", ""),
+            "canonical_combo": meta.get("canonical_combo", "unknown"),
+            "raw_combo": meta.get("raw_combo", "unknown"),
+            "sensor_combo": meta.get("sensor_combo", "unknown"),
+            "normalization_combo": meta.get("normalization_combo", "unknown"),
+            "gsd_token": meta.get("gsd_token", "unknown"),
+            "target_area_px_bin": meta.get("target_area_px_bin", "unknown"),
+            "target_area_fraction_bin": meta.get("target_area_fraction_bin", "unknown"),
+            "ground_area_m2_bin": meta.get("ground_area_m2_bin", "unknown"),
+            "condition_prompt": meta.get("condition_prompt", "unknown"),
+            "mean_query_weights": _gate_row_to_dict(mean_weights[idx]),
+        }
+        if entropy_cpu is not None:
+            record["entropy"] = float(entropy_cpu[idx].item())
+        if peak_cpu is not None:
+            record["peak"] = float(peak_cpu[idx].item())
+        if selected_query_cpu is not None:
+            selected = int(selected_query_cpu[idx].item())
+            record["selected_query"] = selected
+            record["selected_query_weights"] = _gate_row_to_dict(weights[idx, selected])
+        if best_query_cpu is not None:
+            best = int(best_query_cpu[idx].item())
+            record["best_query"] = best
+            record["best_query_weights"] = _gate_row_to_dict(weights[idx, best])
         records.append(record)
     return records
 
@@ -394,6 +514,17 @@ def _average_named_values(records: list[dict[str, Any]], field: str) -> dict[str
     return out
 
 
+def _average_numeric_field(records: list[dict[str, Any]], field: str) -> float | None:
+    values = [
+        float(record[field])
+        for record in records
+        if isinstance(record.get(field), (int, float))
+    ]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def compute_gate_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     """按 overall/combo/condition 聚合模态 gate，便于分析多源证据使用。"""
     if not records:
@@ -404,6 +535,10 @@ def compute_gate_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         groups.setdefault(f"raw_combo={record.get('raw_combo', 'unknown')}", []).append(record)
         groups.setdefault(f"sensor_combo={record.get('sensor_combo', 'unknown')}", []).append(record)
         groups.setdefault(f"normalization_combo={record.get('normalization_combo', 'unknown')}", []).append(record)
+        groups.setdefault(f"gsd_token={record.get('gsd_token', 'unknown')}", []).append(record)
+        groups.setdefault(f"target_area_px_bin={record.get('target_area_px_bin', 'unknown')}", []).append(record)
+        groups.setdefault(f"target_area_fraction_bin={record.get('target_area_fraction_bin', 'unknown')}", []).append(record)
+        groups.setdefault(f"ground_area_m2_bin={record.get('ground_area_m2_bin', 'unknown')}", []).append(record)
         groups.setdefault(f"condition={record.get('condition_prompt', 'unknown')}", []).append(record)
     summary: dict[str, Any] = {}
     for name, rows in sorted(groups.items()):
@@ -411,6 +546,34 @@ def compute_gate_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
             "n": len(rows),
             "mean_weights": _average_named_values(rows, "weights"),
             "mean_active": _average_named_values(rows, "active"),
+        }
+    return summary
+
+
+def compute_query_modality_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """按 overall/combo/condition 聚合 query-level modality attention。"""
+    if not records:
+        return {}
+    groups: dict[str, list[dict[str, Any]]] = {"overall": records}
+    for record in records:
+        groups.setdefault(f"canonical_combo={record.get('canonical_combo', 'unknown')}", []).append(record)
+        groups.setdefault(f"raw_combo={record.get('raw_combo', 'unknown')}", []).append(record)
+        groups.setdefault(f"sensor_combo={record.get('sensor_combo', 'unknown')}", []).append(record)
+        groups.setdefault(f"normalization_combo={record.get('normalization_combo', 'unknown')}", []).append(record)
+        groups.setdefault(f"gsd_token={record.get('gsd_token', 'unknown')}", []).append(record)
+        groups.setdefault(f"target_area_px_bin={record.get('target_area_px_bin', 'unknown')}", []).append(record)
+        groups.setdefault(f"target_area_fraction_bin={record.get('target_area_fraction_bin', 'unknown')}", []).append(record)
+        groups.setdefault(f"ground_area_m2_bin={record.get('ground_area_m2_bin', 'unknown')}", []).append(record)
+        groups.setdefault(f"condition={record.get('condition_prompt', 'unknown')}", []).append(record)
+    summary: dict[str, Any] = {}
+    for name, rows in sorted(groups.items()):
+        summary[name] = {
+            "n": len(rows),
+            "mean_query_weights": _average_named_values(rows, "mean_query_weights"),
+            "mean_selected_query_weights": _average_named_values(rows, "selected_query_weights"),
+            "mean_best_query_weights": _average_named_values(rows, "best_query_weights"),
+            "mean_entropy": _average_numeric_field(rows, "entropy"),
+            "mean_peak": _average_numeric_field(rows, "peak"),
         }
     return summary
 
@@ -426,6 +589,89 @@ def _matrix_value(matrix: torch.Tensor | None, row: int, col: int, default: floa
     if matrix is None:
         return default
     return float(matrix[row, col].item())
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def target_area_px_bin(area_px: float) -> str:
+    """按训练 canvas 像素面积分层，定位小目标/大目标分割差异。"""
+    if area_px <= 0:
+        return "empty"
+    if area_px <= 32:
+        return "tiny_1_32px"
+    if area_px <= 128:
+        return "small_33_128px"
+    if area_px <= 512:
+        return "medium_129_512px"
+    if area_px <= 2048:
+        return "large_513_2048px"
+    return "very_large_gt_2048px"
+
+
+def target_area_fraction_bin(frac: float) -> str:
+    """按 mask 占 target canvas 比例分层。"""
+    if frac <= 0:
+        return "empty"
+    if frac <= 0.001:
+        return "tiny_le_0.1pct"
+    if frac <= 0.005:
+        return "small_0.1_0.5pct"
+    if frac <= 0.02:
+        return "medium_0.5_2pct"
+    if frac <= 0.10:
+        return "large_2_10pct"
+    return "very_large_gt_10pct"
+
+
+def ground_area_m2_bin(area_m2: float | None) -> str:
+    """按估算地面面积分层；GSD/resize 缺失时返回 unknown。"""
+    if area_m2 is None:
+        return "unknown"
+    if area_m2 <= 0:
+        return "empty"
+    if area_m2 <= 100.0:
+        return "tiny_le_100m2"
+    if area_m2 <= 1000.0:
+        return "small_100_1k_m2"
+    if area_m2 <= 10000.0:
+        return "medium_1k_10k_m2"
+    if area_m2 <= 100000.0:
+        return "large_10k_100k_m2"
+    return "very_large_gt_100k_m2"
+
+
+def metric_metadata_with_scale(metadata: list[dict[str, Any]], target_mask: torch.Tensor) -> list[dict[str, Any]]:
+    """为指标聚合补充 target area/GSD/ground area 分层字段。"""
+    target = (target_mask.detach().float().cpu() >= 0.5)
+    height = int(target.shape[-2])
+    width = int(target.shape[-1])
+    canvas_area = max(1.0, float(height * width))
+    enriched: list[dict[str, Any]] = []
+    for idx, meta in enumerate(metadata):
+        item = dict(meta)
+        area_px = float(target[idx, 0].sum().item()) if idx < target.shape[0] else 0.0
+        area_fraction = area_px / canvas_area
+        transform = item.get("resize_transform") if isinstance(item.get("resize_transform"), dict) else {}
+        scale = _safe_float(transform.get("scale") if isinstance(transform, dict) else None)
+        gsd = _safe_float(item.get("gsd_m"))
+        ground_area = None
+        if gsd is not None and gsd > 0 and scale is not None and scale > 0:
+            original_pixel_area = area_px / (scale * scale)
+            ground_area = original_pixel_area * gsd * gsd
+        item["target_area_px"] = area_px
+        item["target_area_fraction"] = area_fraction
+        item["target_area_px_bin"] = target_area_px_bin(area_px)
+        item["target_area_fraction_bin"] = target_area_fraction_bin(area_fraction)
+        item["ground_area_m2"] = ground_area
+        item["ground_area_m2_bin"] = ground_area_m2_bin(ground_area)
+        enriched.append(item)
+    return enriched
 
 
 def collect_proposal_records(
@@ -451,6 +697,9 @@ def collect_proposal_records(
     condition_scores = _optional_matrix(outputs, "condition_scores")
     condition_cosine = _optional_matrix(outputs, "condition_cosine_scores")
     condition_pair = _optional_matrix(outputs, "condition_pair_logits")
+    evidence_scores = _optional_matrix(outputs, "evidence_scores")
+    evidence_cosine = _optional_matrix(outputs, "evidence_cosine_scores")
+    evidence_pair = _optional_matrix(outputs, "evidence_pair_logits")
     final_probs = torch.sigmoid(outputs["final_mask_logits"].detach().float().cpu())
     proposal_mask_probs = torch.sigmoid(pred_masks)
 
@@ -470,6 +719,10 @@ def collect_proposal_records(
             "normalization_combo": meta.get("normalization_combo", "unknown"),
             "condition_prompt": meta.get("condition_prompt", "unknown"),
             "gsd_token": meta.get("gsd_token", "unknown"),
+            "target_area_px_bin": meta.get("target_area_px_bin", "unknown"),
+            "target_area_fraction_bin": meta.get("target_area_fraction_bin", "unknown"),
+            "ground_area_m2": meta.get("ground_area_m2"),
+            "ground_area_m2_bin": meta.get("ground_area_m2_bin", "unknown"),
             "best_query": best,
             "selected_query": selected,
             "selected_matches_best": float(selected == best),
@@ -485,6 +738,12 @@ def collect_proposal_records(
             "best_condition_cosine": _matrix_value(condition_cosine, idx, best),
             "selected_condition_pair_logit": _matrix_value(condition_pair, idx, selected),
             "best_condition_pair_logit": _matrix_value(condition_pair, idx, best),
+            "selected_evidence_score": _matrix_value(evidence_scores, idx, selected),
+            "best_evidence_score": _matrix_value(evidence_scores, idx, best),
+            "selected_evidence_cosine": _matrix_value(evidence_cosine, idx, selected),
+            "best_evidence_cosine": _matrix_value(evidence_cosine, idx, best),
+            "selected_evidence_pair_logit": _matrix_value(evidence_pair, idx, selected),
+            "best_evidence_pair_logit": _matrix_value(evidence_pair, idx, best),
             "final_dice": metrics.get("dice"),
             "final_iou": metrics.get("iou"),
             "final_precision": metrics.get("precision"),
@@ -498,6 +757,14 @@ def collect_proposal_records(
             record["selected_selection_logit"] - record["best_selection_logit"]
         )
         record["dice_gap_selected_minus_best"] = record["selected_query_dice"] - record["best_query_dice"]
+        if isinstance(record.get("selected_evidence_score"), (int, float)) and isinstance(record.get("best_evidence_score"), (int, float)):
+            record["evidence_score_gap_selected_minus_best"] = (
+                float(record["selected_evidence_score"]) - float(record["best_evidence_score"])
+            )
+        if isinstance(record.get("selected_condition_score"), (int, float)) and isinstance(record.get("best_condition_score"), (int, float)):
+            record["condition_score_gap_selected_minus_best"] = (
+                float(record["selected_condition_score"]) - float(record["best_condition_score"])
+            )
         records.append(record)
     return records
 
@@ -518,11 +785,16 @@ def compute_proposal_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         "best_proposal_fg_prob",
         "selected_condition_score",
         "best_condition_score",
+        "condition_score_gap_selected_minus_best",
+        "selected_evidence_score",
+        "best_evidence_score",
+        "evidence_score_gap_selected_minus_best",
         "final_dice",
         "final_iou",
         "final_precision",
         "final_recall",
         "target_area",
+        "ground_area_m2",
         "final_mask_area",
         "selected_mask_area",
         "best_mask_area",
@@ -534,6 +806,10 @@ def compute_proposal_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         groups.setdefault(f"sensor_combo={record.get('sensor_combo', 'unknown')}", []).append(record)
         groups.setdefault(f"normalization_combo={record.get('normalization_combo', 'unknown')}", []).append(record)
         groups.setdefault(f"condition={record.get('condition_prompt', 'unknown')}", []).append(record)
+        groups.setdefault(f"gsd_token={record.get('gsd_token', 'unknown')}", []).append(record)
+        groups.setdefault(f"target_area_px_bin={record.get('target_area_px_bin', 'unknown')}", []).append(record)
+        groups.setdefault(f"target_area_fraction_bin={record.get('target_area_fraction_bin', 'unknown')}", []).append(record)
+        groups.setdefault(f"ground_area_m2_bin={record.get('ground_area_m2_bin', 'unknown')}", []).append(record)
     summary: dict[str, Any] = {}
     for group, rows in sorted(groups.items()):
         item: dict[str, Any] = {"n": len(rows)}
@@ -608,6 +884,8 @@ def evaluate(
     max_batches: int | None = None,
     visual_dir: Path | None = None,
     num_visualizations: int = 0,
+    visualize_all: bool = False,
+    export_multimodal_overview: bool = False,
     threshold: float = 0.5,
     threshold_sweep: list[float] | tuple[float, ...] | None = None,
 ) -> dict[str, Any]:
@@ -618,6 +896,7 @@ def evaluate(
     loss_values: list[float] = []
     loss_components: list[dict[str, float]] = []
     gate_records: list[dict[str, Any]] = []
+    query_modality_records: list[dict[str, Any]] = []
     proposal_records: list[dict[str, Any]] = []
     saved: list[str] = []
     processed_batches = 0
@@ -626,42 +905,74 @@ def evaluate(
     raw_counts: Counter[str] = Counter()
     sensor_counts: Counter[str] = Counter()
     normalization_counts: Counter[str] = Counter()
+    gsd_counts: Counter[str] = Counter()
+    target_area_px_bin_counts: Counter[str] = Counter()
+    target_area_fraction_bin_counts: Counter[str] = Counter()
+    ground_area_m2_bin_counts: Counter[str] = Counter()
+    autocast_enabled = device.type == "cuda"
+    autocast_dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
     iterator = enumerate(loader)
     for batch_idx, batch in iterator:
         if max_batches is not None and batch_idx >= max_batches:
             break
         processed_batches += 1
         processed_samples += len(batch["metadata"])
-        for meta in batch["metadata"]:
-            canonical_counts[str(meta.get("canonical_combo", "unknown"))] += 1
-            raw_counts[str(meta.get("raw_combo", "unknown"))] += 1
-            sensor_counts[str(meta.get("sensor_combo", "unknown"))] += 1
-            normalization_counts[str(meta.get("normalization_combo", "unknown"))] += 1
-        outputs = model(batch)
+        with torch.amp.autocast(device_type=device.type, dtype=autocast_dtype, enabled=autocast_enabled):
+            outputs = model(batch)
         if "loss" in outputs:
             loss_values.append(float(outputs["loss"].detach().cpu().item()))
             loss_components.append(loss_log_values(outputs))
         logits_cpu = outputs["final_mask_logits"].detach().cpu()
         mask_cpu = batch["mask"].detach().cpu()
+        metric_metadata = metric_metadata_with_scale(batch["metadata"], mask_cpu)
+        for meta in metric_metadata:
+            canonical_counts[str(meta.get("canonical_combo", "unknown"))] += 1
+            raw_counts[str(meta.get("raw_combo", "unknown"))] += 1
+            sensor_counts[str(meta.get("sensor_combo", "unknown"))] += 1
+            normalization_counts[str(meta.get("normalization_combo", "unknown"))] += 1
+            gsd_counts[str(meta.get("gsd_token", "unknown"))] += 1
+            target_area_px_bin_counts[str(meta.get("target_area_px_bin", "unknown"))] += 1
+            target_area_fraction_bin_counts[str(meta.get("target_area_fraction_bin", "unknown"))] += 1
+            ground_area_m2_bin_counts[str(meta.get("ground_area_m2_bin", "unknown"))] += 1
         metrics = batch_binary_metrics(logits_cpu, mask_cpu, threshold=float(threshold))
-        acc.update(metrics, batch["metadata"])
+        acc.update(metrics, metric_metadata)
         for sweep_value, sweep_acc in sweep_accumulators.items():
             sweep_metrics = batch_binary_metrics(logits_cpu, mask_cpu, threshold=sweep_value)
-            sweep_acc.update(sweep_metrics, batch["metadata"])
-        gate_records.extend(collect_gate_records(outputs, batch["metadata"]))
-        proposal_records.extend(collect_proposal_records(outputs, batch["mask"], batch["metadata"], metrics))
-        if visual_dir is not None and len(saved) < num_visualizations:
+            sweep_acc.update(sweep_metrics, metric_metadata)
+        gate_records.extend(collect_gate_records(outputs, metric_metadata))
+        query_modality_records.extend(collect_query_modality_records(outputs, metric_metadata))
+        proposal_records.extend(collect_proposal_records(outputs, batch["mask"], metric_metadata, metrics))
+        should_save_visuals = visual_dir is not None and (visualize_all or len(saved) < num_visualizations)
+        if should_save_visuals:
+            max_items = len(batch["metadata"]) if visualize_all else num_visualizations - len(saved)
             saved.extend(
                 save_visualizations(
                     batch,
                     outputs,
                     visual_dir,
-                    max_items=num_visualizations - len(saved),
+                    max_items=max_items,
                     prefix=f"val_b{batch_idx}",
                     threshold=float(threshold),
+                    export_multimodal_overview=bool(export_multimodal_overview),
                 )
             )
+        del outputs
+        if device.type == "cuda" and batch_idx % 50 == 49:
+            torch.cuda.empty_cache()
     groups = acc.compute()
+    overview_dir = visual_dir / "multimodal_overviews" if visual_dir is not None else None
+    manifest_path = visual_dir / "visualization_manifest.jsonl" if visual_dir is not None else None
+    mask_export_dir = visual_dir / "mask_exports" if visual_dir is not None else None
+    restored_mask_export_dir = visual_dir / "mask_exports_original_size" if visual_dir is not None else None
+    overview_count = len(list(overview_dir.glob("*.png"))) if overview_dir is not None and overview_dir.exists() else 0
+    mask_export_count = (
+        len(list(mask_export_dir.rglob("*.png"))) if mask_export_dir is not None and mask_export_dir.exists() else 0
+    )
+    restored_mask_export_count = (
+        len(list(restored_mask_export_dir.rglob("*.png")))
+        if restored_mask_export_dir is not None and restored_mask_export_dir.exists()
+        else 0
+    )
     return {
         "loss": sum(loss_values) / len(loss_values) if loss_values else None,
         "loss_components": average_dicts(loss_components),
@@ -673,16 +984,34 @@ def evaluate(
             "raw_combos": dict(sorted(raw_counts.items())),
             "sensor_combos": dict(sorted(sensor_counts.items())),
             "normalization_combos": dict(sorted(normalization_counts.items())),
+            "gsd_tokens": dict(sorted(gsd_counts.items())),
+            "target_area_px_bins": dict(sorted(target_area_px_bin_counts.items())),
+            "target_area_fraction_bins": dict(sorted(target_area_fraction_bin_counts.items())),
+            "ground_area_m2_bins": dict(sorted(ground_area_m2_bin_counts.items())),
             "max_batches": max_batches,
         },
         "threshold_sweep": compute_threshold_sweep_report(sweep_accumulators),
         "metrics": groups,
         "modality_gate_summary": compute_gate_summary(gate_records),
+        "query_modality_summary": compute_query_modality_summary(query_modality_records),
         "proposal_diagnostics": {
             "records": proposal_records,
             "summary": compute_proposal_summary(proposal_records),
         },
         "visualizations": saved,
+        "visualization_export": {
+            "visualize_all": bool(visualize_all),
+            "export_multimodal_overview": bool(export_multimodal_overview),
+            "num_diagnostic_pngs": len(saved),
+            "num_multimodal_overviews": int(overview_count),
+            "num_mask_export_pngs": int(mask_export_count),
+            "num_restored_mask_export_pngs": int(restored_mask_export_count),
+            "visualization_dir": str(visual_dir) if visual_dir is not None else None,
+            "visualization_manifest_path": str(manifest_path) if manifest_path is not None else None,
+            "multimodal_overview_dir": str(overview_dir) if overview_dir is not None else None,
+            "mask_export_dir": str(mask_export_dir) if mask_export_dir is not None else None,
+            "restored_mask_export_dir": str(restored_mask_export_dir) if restored_mask_export_dir is not None else None,
+        },
     }
 
 
@@ -706,6 +1035,36 @@ def save_checkpoint(
         last_path = path.parent / "checkpoint_last.pt"
         if last_path != path:
             atomic_torch_save(payload, last_path)
+
+
+def _checkpoint_step(path: Path) -> int:
+    stem = path.stem
+    prefix = "checkpoint_step_"
+    if not stem.startswith(prefix):
+        return -1
+    try:
+        return int(stem[len(prefix) :])
+    except ValueError:
+        return -1
+
+
+def prune_step_checkpoints(out_dir: Path, keep_recent: int) -> list[str]:
+    """只保留最近 N 个 checkpoint_step_*.pt；best/last 始终不受影响。"""
+    if keep_recent < 0:
+        return []
+    step_paths = sorted(
+        [path for path in out_dir.glob("checkpoint_step_*.pt") if _checkpoint_step(path) >= 0],
+        key=_checkpoint_step,
+    )
+    remove = step_paths[: max(0, len(step_paths) - int(keep_recent))]
+    removed: list[str] = []
+    for path in remove:
+        try:
+            path.unlink()
+            removed.append(path.name)
+        except FileNotFoundError:
+            continue
+    return removed
 
 
 def load_best_validation(path: Path) -> float:
@@ -895,6 +1254,9 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
         row.update(training_signal_values(outputs))
         history.append(row)
         log_window.append(row)
+        outputs = None
+        batch = None
+        loss = None  # type: ignore[assignment]
 
         step += 1
         pbar.update(1)
@@ -924,7 +1286,10 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
             log_window = []
             log_window_start = time.perf_counter()
 
-        if step % config.val_interval == 0 or step == config.max_steps:
+        should_validate = step % config.val_interval == 0 or step == config.max_steps
+        if should_validate:
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
             should_visualize = (
                 config.num_visualizations > 0
                 and (step % max(1, int(config.visualize_interval)) == 0 or step == config.max_steps)
@@ -985,8 +1350,21 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
                     encoding="utf-8",
                 )
                 save_checkpoint(out_dir / "checkpoint_best.pt", model, optimizer, step, config, update_last=False)
-        if step % config.save_interval == 0 or step == config.max_steps:
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+        save_interval = int(getattr(config, "save_interval", 0) or 0)
+        if (save_interval > 0 and step % save_interval == 0) or step == config.max_steps:
             save_checkpoint(out_dir / f"checkpoint_step_{step:06d}.pt", model, optimizer, step, config)
+            removed_checkpoints = prune_step_checkpoints(
+                out_dir,
+                keep_recent=int(getattr(config, "keep_recent_checkpoints", 2)),
+            )
+            if removed_checkpoints:
+                tqdm.write(
+                    "checkpoint_prune "
+                    f"keep_recent={int(getattr(config, 'keep_recent_checkpoints', 2))} "
+                    f"removed={len(removed_checkpoints)}"
+                )
 
     pbar.close()
     history_path.write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

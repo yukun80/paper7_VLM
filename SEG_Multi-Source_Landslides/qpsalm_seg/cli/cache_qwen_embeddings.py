@@ -5,7 +5,7 @@
 脚本作用：用冻结 Qwen3-VL 把 instruction/condition/modality/GSD 文本预编码成
 hidden state，训练时通过 controller=qwen_cache 复用，避免每个 step 重跑 2B
 semantic controller。
-主要输入：核心 instruction JSONL train/val 索引。
+主要输入：核心 instruction JSONL train/val/test 索引。
 主要输出：outputs/qpsalm_qwen_condition_cache.pt。
 是否改写原始数据：不会。
 典型用法：python -m qpsalm_seg.cli.cache_qwen_embeddings --config ... --device cuda。
@@ -35,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True)
     parser.add_argument("--train-index", default=None)
     parser.add_argument("--val-index", default=None)
+    parser.add_argument("--eval-index", default=None, help="Optional val/test index for standalone inference cache.")
+    parser.add_argument("--eval-split", choices=["val", "test"], default="test")
     parser.add_argument("--output", default="outputs/qpsalm_qwen_condition_cache.pt")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--qwen-model-path", default=None)
@@ -52,15 +54,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_condition_texts(config_path: str, train_index: str | None, val_index: str | None) -> tuple[list[str], dict[str, Any]]:
+def collect_condition_texts(
+    config_path: str,
+    train_index: str | None,
+    val_index: str | None,
+    eval_index: str | None = None,
+    eval_split: str = "test",
+) -> tuple[list[str], dict[str, Any]]:
+    overrides: dict[str, Any] = {
+        "train_index": train_index,
+        "val_index": val_index,
+    }
+    if eval_index:
+        overrides["test_index" if eval_split == "test" else "val_index"] = eval_index
+        overrides["max_val_samples"] = 0
     config = load_config(
         config_path,
-        overrides={
-            "train_index": train_index,
-            "val_index": val_index,
-        },
+        overrides=overrides,
     )
-    texts, report = collect_required_qwen_texts(config, splits=("train", "val"))
+    splits = (eval_split,) if eval_index else ("train", "val")
+    texts, report = collect_required_qwen_texts(config, splits=splits)
     report["config"] = config.__dict__
     return texts, report
 
@@ -123,10 +136,17 @@ def main() -> None:
         overrides={
             "train_index": args.train_index,
             "val_index": args.val_index,
+            "test_index": args.eval_index if args.eval_split == "test" else None,
             "qwen_model_path": args.qwen_model_path,
         },
     )
-    texts, source_report = collect_condition_texts(args.config, args.train_index, args.val_index)
+    texts, source_report = collect_condition_texts(
+        args.config,
+        args.train_index,
+        args.val_index,
+        eval_index=args.eval_index,
+        eval_split=args.eval_split,
+    )
     if args.max_texts is not None and args.max_texts > 0:
         texts = texts[: args.max_texts]
     if not texts:

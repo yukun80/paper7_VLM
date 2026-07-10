@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Qwen condition cache 覆盖检查工具。
 
-脚本作用：根据当前 train/val index 重新派生 QPSALM 需要编码的
+脚本作用：根据当前 train/val/test index 重新派生 QPSALM 需要编码的
 proposal/condition 文本，并检查 qwen_cache 是否完整覆盖。
 主要输入：QPSalmConfig 与 condition_embedding_cache。
 主要输出：coverage report；训练入口可在 forward 前提前失败。
@@ -22,6 +22,7 @@ from .config import QPSalmConfig
 from .data import (
     build_condition_prompt_text,
     build_condition_text,
+    build_evidence_reasoning_text,
     build_proposal_context_text,
     iter_jsonl,
     resolve_repo_path,
@@ -33,6 +34,7 @@ TEXT_BUILDERS = [
     ("condition_text", build_condition_text),
     ("proposal_context_text", build_proposal_context_text),
     ("condition_prompt_text", build_condition_prompt_text),
+    ("evidence_reasoning_text", build_evidence_reasoning_text),
 ]
 
 

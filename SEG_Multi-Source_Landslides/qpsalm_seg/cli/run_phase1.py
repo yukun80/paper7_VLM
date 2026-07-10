@@ -26,11 +26,16 @@ import torch
 
 from qpsalm_seg.cli.cache_index import cache_split
 from qpsalm_seg.cli.cache_qwen_embeddings import collect_condition_texts, hash_smoke_embeddings, qwen_embeddings
+from qpsalm_seg.cli.cache_qwen_visual_evidence import (
+    collect_visual_evidence_samples,
+    hash_smoke_embeddings as hash_smoke_visual_embeddings,
+    qwen_visual_embeddings,
+)
 from qpsalm_seg.cli.compare_runs import compare_run_summaries, read_run_summary
 from qpsalm_seg.cli.diagnose_run import default_diagnose_args, diagnose
 from qpsalm_seg.cli.summarize_run import summarize_run
 from qpsalm_seg.analysis_tables import export_analysis_tables
-from qpsalm_seg.config import QPSalmConfig, load_config, parse_combo_loss_weights
+from qpsalm_seg.config import LOSS_STAGE_CHOICES, QPSalmConfig, apply_loss_stage, load_config, parse_combo_loss_weights
 from qpsalm_seg.data import MultiSourceLandslideDataset, qpsalm_collate, resolve_repo_path
 from qpsalm_seg.qwen_cache import assert_qwen_cache_coverage
 from qpsalm_seg.thresholding import recommend_thresholds
@@ -42,7 +47,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml")
     parser.add_argument("--output-root", default="outputs/qpsalm_phase1")
     parser.add_argument("--run-name", default="core")
-    parser.add_argument("--mode", choices=["baseline", "box-prior", "both"], default="baseline")
+    parser.add_argument(
+        "--mode",
+        choices=["baseline", "box-prior", "both"],
+        default="baseline",
+        help="baseline is the main evidence route; box-prior/both are legacy ablations.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--eval-device", default=None)
 
@@ -62,6 +72,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hash-hidden-size", type=int, default=1024)
     parser.add_argument("--reuse-embedding-cache", action="store_true")
     parser.add_argument("--allow-qwen-cpu", action="store_true")
+    parser.add_argument(
+        "--visual-evidence-backend",
+        choices=["off", "qwen", "hash-smoke"],
+        default="off",
+        help="Optional Qwen image-text visual evidence cache backend.",
+    )
+    parser.add_argument("--visual-evidence-cache", default=None)
+    parser.add_argument("--visual-evidence-batch-size", type=int, default=1)
+    parser.add_argument("--hash-visual-hidden-size", type=int, default=1024)
+    parser.add_argument("--reuse-visual-evidence-cache", action="store_true")
 
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--target-size", type=int, default=None)
@@ -69,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--val-interval", type=int, default=None)
     parser.add_argument("--save-interval", type=int, default=None)
+    parser.add_argument("--keep-recent-checkpoints", type=int, default=None)
     parser.add_argument("--visualize-interval", type=int, default=None)
     parser.add_argument("--log-interval", type=int, default=None)
     parser.add_argument("--max-train-samples", type=int, default=None)
@@ -82,6 +103,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-accum-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--modality-dropout", type=float, default=None)
+    parser.add_argument("--use-gsd-film", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--use-spatial-modality-gate", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--use-query-modality-attention", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--query-modality-feature-weight", type=float, default=None)
+    parser.add_argument("--use-evidence-reasoning", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--evidence-reasoning-weight", type=float, default=None)
+    parser.add_argument("--selection-evidence-weight", type=float, default=None)
+    parser.add_argument("--use-visual-evidence", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--visual-evidence-weight", type=float, default=None)
+    parser.add_argument("--visual-evidence-feature-weight", type=float, default=None)
+    parser.add_argument("--loss-stage", choices=LOSS_STAGE_CHOICES, default=None)
     parser.add_argument("--train-hflip-prob", type=float, default=None)
     parser.add_argument("--train-vflip-prob", type=float, default=None)
     parser.add_argument("--use-focal-loss", action=argparse.BooleanOptionalAction, default=None)
@@ -102,12 +134,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--empty-proposal-suppression-weight", type=float, default=None)
     parser.add_argument("--proposal-positive-weight", type=float, default=None)
     parser.add_argument("--condition-positive-weight", type=float, default=None)
+    parser.add_argument("--evidence-positive-weight", type=float, default=None)
     parser.add_argument("--query-diversity-loss-weight", type=float, default=None)
     parser.add_argument("--proposal-mask-diversity-loss-weight", type=float, default=None)
     parser.add_argument("--gate-entropy-loss-weight", type=float, default=None)
     parser.add_argument("--proposal-soft-target-topk", type=int, default=None)
     parser.add_argument("--proposal-soft-target-temperature", type=float, default=None)
     parser.add_argument("--query-usage-balance-loss-weight", type=float, default=None)
+    parser.add_argument("--evidence-cls-weight", type=float, default=None)
+    parser.add_argument("--evidence-ranking-loss-weight", type=float, default=None)
     parser.add_argument("--selection-proposal-weight", type=float, default=None)
     parser.add_argument("--selection-condition-weight", type=float, default=None)
     parser.add_argument("--selection-temperature", type=float, default=None)
@@ -202,6 +237,7 @@ def write_run_manifest(
     train_index: Path,
     val_index: Path,
     embedding_cache: Path | None,
+    visual_evidence_cache: Path | None,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     """写单个分支 manifest。"""
@@ -213,6 +249,7 @@ def write_run_manifest(
         "train_index": str(train_index),
         "val_index": str(val_index),
         "condition_embedding_cache": str(embedding_cache) if embedding_cache is not None else None,
+        "visual_evidence_cache": str(visual_evidence_cache) if visual_evidence_cache is not None else None,
         "checkpoint_last": str(run_dir / "checkpoint_last.pt"),
         "checkpoint_best": str(run_dir / "checkpoint_best.pt"),
         "eval_report": str(eval_dir / "eval_report.json"),
@@ -323,6 +360,76 @@ def cache_condition_embeddings(
     }
 
 
+def cache_visual_evidence_embeddings(
+    config: QPSalmConfig,
+    train_index: Path,
+    val_index: Path,
+    output_path: Path,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """生成或复用 Qwen visual evidence embedding cache。"""
+    if args.visual_evidence_backend == "off" or not bool(config.use_visual_evidence):
+        return {"skipped": True, "reason": f"backend={args.visual_evidence_backend}, use_visual_evidence={config.use_visual_evidence}"}
+    if output_path.exists() and args.reuse_visual_evidence_cache:
+        payload = torch.load(output_path, map_location="cpu")
+        return {
+            "output": str(output_path),
+            "reused": True,
+            "backend": payload.get("backend") if isinstance(payload, dict) else None,
+            "num_samples": len(payload.get("keys", [])) if isinstance(payload, dict) else None,
+            "hidden_size": int(payload["embeddings"].shape[1]) if isinstance(payload, dict) and torch.is_tensor(payload.get("embeddings")) else None,
+        }
+    if output_path.exists() and not args.overwrite:
+        raise FileExistsError(
+            f"visual evidence cache 已存在，使用 --reuse-visual-evidence-cache 或 --overwrite: {output_path}"
+        )
+    cache_config = replace(
+        config,
+        train_index=str(train_index),
+        val_index=str(val_index),
+        visual_evidence_cache=str(output_path),
+    )
+    samples, source_report = collect_visual_evidence_samples(cache_config)
+    if not samples:
+        raise RuntimeError("没有收集到 visual evidence 样本，无法生成 visual cache。")
+    if args.visual_evidence_backend == "hash-smoke":
+        embeddings = hash_smoke_visual_embeddings(samples, hidden_size=int(args.hash_visual_hidden_size))
+        device_name = "cpu"
+    else:
+        embedding_device = args.embedding_device or args.device
+        device = resolve_device(embedding_device)
+        embeddings = qwen_visual_embeddings(
+            samples=samples,
+            model_path=config.qwen_model_path,
+            device=device,
+            batch_size=max(1, int(args.visual_evidence_batch_size)),
+            allow_cpu=bool(args.allow_qwen_cpu or config.allow_qwen_cpu),
+        )
+        device_name = str(device)
+    payload = {
+        "format": "qpsalm_qwen_visual_evidence_cache_v1",
+        "backend": args.visual_evidence_backend,
+        "model_path": config.qwen_model_path,
+        "device": device_name,
+        "hidden_size": int(embeddings.shape[1]),
+        "keys": [str(item["key"]) for item in samples],
+        "texts": [str(item["text"]) for item in samples],
+        "metadata": [item["metadata"] for item in samples],
+        "embeddings": embeddings.contiguous(),
+        "source": source_report,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_torch_save(payload, output_path)
+    return {
+        "output": str(output_path),
+        "backend": args.visual_evidence_backend,
+        "num_samples": len(samples),
+        "hidden_size": int(embeddings.shape[1]),
+        "model_path": config.qwen_model_path,
+        "source": source_report["splits"],
+    }
+
+
 def apply_common_overrides(config: QPSalmConfig, args: argparse.Namespace) -> QPSalmConfig:
     """应用 runner CLI 中的通用训练覆盖项。"""
     updates: dict[str, Any] = {}
@@ -337,6 +444,7 @@ def apply_common_overrides(config: QPSalmConfig, args: argparse.Namespace) -> QP
         "num_visualizations",
         "val_interval",
         "save_interval",
+        "keep_recent_checkpoints",
         "visualize_interval",
         "log_interval",
         "lr",
@@ -347,6 +455,16 @@ def apply_common_overrides(config: QPSalmConfig, args: argparse.Namespace) -> QP
         "seed",
         "qwen_model_path",
         "modality_dropout",
+        "use_gsd_film",
+        "use_spatial_modality_gate",
+        "use_query_modality_attention",
+        "query_modality_feature_weight",
+        "use_evidence_reasoning",
+        "evidence_reasoning_weight",
+        "selection_evidence_weight",
+        "use_visual_evidence",
+        "visual_evidence_weight",
+        "visual_evidence_feature_weight",
         "train_hflip_prob",
         "train_vflip_prob",
         "use_focal_loss",
@@ -365,12 +483,15 @@ def apply_common_overrides(config: QPSalmConfig, args: argparse.Namespace) -> QP
         "empty_proposal_suppression_weight",
         "proposal_positive_weight",
         "condition_positive_weight",
+        "evidence_positive_weight",
         "query_diversity_loss_weight",
         "proposal_mask_diversity_loss_weight",
         "gate_entropy_loss_weight",
         "proposal_soft_target_topk",
         "proposal_soft_target_temperature",
         "query_usage_balance_loss_weight",
+        "evidence_cls_weight",
+        "evidence_ranking_loss_weight",
         "selection_proposal_weight",
         "selection_condition_weight",
         "selection_temperature",
@@ -395,10 +516,13 @@ def build_run_config(
     train_index: Path,
     val_index: Path,
     embedding_cache: Path | None,
+    visual_evidence_cache: Path | None,
     output_dir: Path,
     use_box_prior: bool,
 ) -> QPSalmConfig:
-    config = apply_common_overrides(base, args)
+    """构建单分支配置；box prior 仅保留为显式 legacy ablation。"""
+    config = apply_loss_stage(base, args.loss_stage or base.loss_stage)
+    config = apply_common_overrides(config, args)
     if use_box_prior:
         boundary = args.boundary_loss_weight if args.boundary_loss_weight is not None else args.box_boundary_loss_weight
     else:
@@ -410,6 +534,7 @@ def build_run_config(
         val_index=str(val_index),
         controller=args.controller,
         condition_embedding_cache=str(embedding_cache) if embedding_cache is not None else None,
+        visual_evidence_cache=str(visual_evidence_cache) if visual_evidence_cache is not None else None,
         allow_qwen_cpu=bool(args.allow_qwen_cpu or config.allow_qwen_cpu),
         use_box_prior=use_box_prior,
         boundary_loss_weight=float(boundary),
@@ -431,6 +556,21 @@ def completed_summary_matches(summary: dict[str, Any], config: QPSalmConfig) -> 
         and saved_config.get("num_mask_tokens") == config.num_mask_tokens
         and saved_config.get("max_val_batches") == config.max_val_batches
         and saved_config.get("use_box_prior") == config.use_box_prior
+        and saved_config.get("loss_stage", "full") == config.loss_stage
+        and bool(saved_config.get("use_gsd_film", True)) == bool(config.use_gsd_film)
+        and bool(saved_config.get("use_spatial_modality_gate", True)) == bool(config.use_spatial_modality_gate)
+        and bool(saved_config.get("use_query_modality_attention", True)) == bool(config.use_query_modality_attention)
+        and float(saved_config.get("query_modality_feature_weight", 0.35))
+        == float(config.query_modality_feature_weight)
+        and bool(saved_config.get("use_evidence_reasoning", True)) == bool(config.use_evidence_reasoning)
+        and float(saved_config.get("evidence_reasoning_weight", 0.35)) == float(config.evidence_reasoning_weight)
+        and float(saved_config.get("selection_evidence_weight", 0.25)) == float(config.selection_evidence_weight)
+        and bool(saved_config.get("use_visual_evidence", True)) == bool(config.use_visual_evidence)
+        and (saved_config.get("visual_evidence_cache") or None) == (config.visual_evidence_cache or None)
+        and float(saved_config.get("visual_evidence_weight", 0.25)) == float(config.visual_evidence_weight)
+        and float(saved_config.get("visual_evidence_feature_weight", 0.15))
+        == float(config.visual_evidence_feature_weight)
+        and int(saved_config.get("keep_recent_checkpoints", 2)) == int(config.keep_recent_checkpoints)
         and float(saved_config.get("boundary_loss_weight", 0.0)) == float(config.boundary_loss_weight)
         and float(saved_config.get("condition_ranking_loss_weight", 0.0))
         == float(config.condition_ranking_loss_weight)
@@ -448,6 +588,7 @@ def completed_summary_matches(summary: dict[str, Any], config: QPSalmConfig) -> 
         == float(config.empty_proposal_suppression_weight)
         and float(saved_config.get("proposal_positive_weight", 1.0)) == float(config.proposal_positive_weight)
         and float(saved_config.get("condition_positive_weight", 1.0)) == float(config.condition_positive_weight)
+        and float(saved_config.get("evidence_positive_weight", 1.0)) == float(config.evidence_positive_weight)
         and float(saved_config.get("query_diversity_loss_weight", 0.0))
         == float(config.query_diversity_loss_weight)
         and float(saved_config.get("proposal_mask_diversity_loss_weight", 0.0))
@@ -458,6 +599,9 @@ def completed_summary_matches(summary: dict[str, Any], config: QPSalmConfig) -> 
         == float(config.proposal_soft_target_temperature)
         and float(saved_config.get("query_usage_balance_loss_weight", 0.0))
         == float(config.query_usage_balance_loss_weight)
+        and float(saved_config.get("evidence_cls_weight", 0.0)) == float(config.evidence_cls_weight)
+        and float(saved_config.get("evidence_ranking_loss_weight", 0.0))
+        == float(config.evidence_ranking_loss_weight)
         and float(saved_config.get("train_hflip_prob", 0.0)) == float(config.train_hflip_prob)
         and float(saved_config.get("train_vflip_prob", 0.0)) == float(config.train_vflip_prob)
         and float(saved_config.get("selection_proposal_weight", 1.0)) == float(config.selection_proposal_weight)
@@ -610,8 +754,10 @@ def run_one_mode(
     train_index: Path,
     val_index: Path,
     embedding_cache: Path | None,
+    visual_evidence_cache: Path | None,
     run_root: Path,
 ) -> dict[str, Any]:
+    """运行一个分支；baseline 是主路线，box-prior 只用于遗留消融。"""
     use_box_prior = mode == "box-prior"
     run_dir = run_root / mode
     eval_dir = run_root / f"{mode}_eval"
@@ -623,6 +769,7 @@ def run_one_mode(
         train_index=train_index,
         val_index=val_index,
         embedding_cache=embedding_cache,
+        visual_evidence_cache=visual_evidence_cache,
         output_dir=run_dir,
         use_box_prior=use_box_prior,
     )
@@ -670,6 +817,7 @@ def run_one_mode(
         train_index=train_index,
         val_index=val_index,
         embedding_cache=embedding_cache,
+        visual_evidence_cache=visual_evidence_cache,
         args=args,
     )
     resume_path = str(checkpoint_path) if checkpoint_path.exists() and args.resume_existing else None
@@ -719,6 +867,7 @@ def main() -> None:
     if args.resume_existing or args.skip_completed:
         args.reuse_index_cache = True
         args.reuse_embedding_cache = True
+        args.reuse_visual_evidence_cache = True
     base_config = load_config(args.config)
     base_config = apply_common_overrides(base_config, args)
     output_root = resolve_repo_path(args.output_root)
@@ -752,6 +901,30 @@ def main() -> None:
     else:
         embedding_summary = {"skipped": True, "reason": "controller=text_probe"}
 
+    visual_evidence_cache: Path | None = None
+    visual_evidence_summary: dict[str, Any]
+    if args.visual_evidence_backend != "off" and bool(base_config.use_visual_evidence):
+        visual_evidence_cache = (
+            resolve_repo_path(args.visual_evidence_cache)
+            if args.visual_evidence_cache
+            else run_root / "visual_evidence_cache.pt"
+        )
+        if visual_evidence_cache is None:
+            raise FileNotFoundError(args.visual_evidence_cache)
+        visual_evidence_summary = cache_visual_evidence_embeddings(
+            config=base_config,
+            train_index=train_index,
+            val_index=val_index,
+            output_path=visual_evidence_cache,
+            args=args,
+        )
+        release_cuda_memory()
+    else:
+        visual_evidence_summary = {
+            "skipped": True,
+            "reason": f"visual_evidence_backend={args.visual_evidence_backend}, use_visual_evidence={base_config.use_visual_evidence}",
+        }
+
     run_reports = [
         run_one_mode(
             mode=mode,
@@ -760,6 +933,7 @@ def main() -> None:
             train_index=train_index,
             val_index=val_index,
             embedding_cache=embedding_cache,
+            visual_evidence_cache=visual_evidence_cache,
             run_root=run_root,
         )
         for mode in modes
@@ -792,6 +966,7 @@ def main() -> None:
         },
         "index_cache": index_summary,
         "condition_cache": embedding_summary,
+        "visual_evidence_cache": visual_evidence_summary,
         "runs": run_reports,
         "comparison": comparison,
         "analysis_tables": analysis_tables,

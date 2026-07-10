@@ -1,8 +1,8 @@
-# Multi-Source Qwen-PSALM-Seg cached-Qwen config.
-# 用途：先用冻结 Qwen3-VL 预计算 condition hidden state，再训练多源 adapter、mask tokens 和 decoder。
-# 运行：先执行 qpsalm-cache-qwen-embeddings，再用本配置启动 qpsalm-train --device cuda。
+# Multi-Source Qwen-PSALM-Seg cached-Qwen box-prior ablation config.
+# 用途：验证 Qwen3-VL-Seg 风格 bbox-guided refinement 对滑坡 mask decoder 的收益。
+# 运行：先生成 Qwen condition cache，再用本配置训练；也可用 CLI 覆盖 boundary_loss_weight。
 benchmark_dir: benchmark/multisource_landslide_v1_small
-output_dir: outputs/qpsalm_small_qwen_cached_core
+output_dir: outputs/qpsalm_small_qwen_cached_box_prior
 train_index: indexes/instruction_train.jsonl
 val_index: indexes/instruction_val.jsonl
 controller: qwen_cache
@@ -48,8 +48,8 @@ visual_evidence_weight: 0.25
 visual_evidence_feature_weight: 0.15
 loss_stage: full
 use_focal_loss: false
-use_box_prior: false
-boundary_loss_weight: 0.0
+use_box_prior: true
+boundary_loss_weight: 0.05
 condition_ranking_loss_weight: 0.1
 selection_ranking_loss_weight: 0.2
 foreground_bce_pos_weight: 2.0
@@ -78,9 +78,6 @@ selection_proposal_weight: 1.0
 selection_condition_weight: 0.5
 selection_temperature: 1.0
 final_foreground_gate_weight: 0.25
-final_mask_fusion: topk_noisy_or
-final_topk: 3
-final_noisy_or_epsilon: 0.00001
 canonical_combo_loss_weights:
   dem+s2: 2.5
   dem+s1+s2: 1.5

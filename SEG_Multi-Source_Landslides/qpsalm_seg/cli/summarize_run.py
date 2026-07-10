@@ -111,6 +111,7 @@ def manifest_record_summary(path: Path) -> dict[str, Any]:
         "unique_samples": len(sample_ids),
         "canonical_combos": dict(sorted(combos.items())),
         "modality_gate_summary": summarize_manifest_gates(records),
+        "query_modality_summary": summarize_manifest_query_gates(records),
     }
 
 
@@ -148,6 +149,33 @@ def summarize_manifest_gates(records: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def summarize_manifest_query_gates(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """汇总可视化 manifest 中的 query-level modality attention。"""
+    with_gate = [row for row in records if isinstance(row.get("query_modality_mean_weights"), dict)]
+    if not with_gate:
+        return {}
+    groups: dict[str, list[dict[str, Any]]] = {"overall": with_gate}
+    for row in with_gate:
+        meta = row.get("metadata") or {}
+        groups.setdefault(f"canonical_combo={meta.get('canonical_combo', 'unknown')}", []).append(row)
+        groups.setdefault(f"sensor_combo={meta.get('sensor_combo', 'unknown')}", []).append(row)
+        groups.setdefault(f"normalization_combo={meta.get('normalization_combo', 'unknown')}", []).append(row)
+        groups.setdefault(f"condition={meta.get('condition_prompt', 'unknown')}", []).append(row)
+    out: dict[str, Any] = {}
+    for name, rows in sorted(groups.items()):
+        out[name] = {
+            "n": len(rows),
+            "mean_query_weights": average_modality_dict([row.get("query_modality_mean_weights") for row in rows]),
+            "mean_selected_query_weights": average_modality_dict(
+                [row.get("query_modality_selected_query_weights") for row in rows]
+            ),
+            "mean_best_query_weights": average_modality_dict(
+                [row.get("query_modality_best_query_weights") for row in rows]
+            ),
+        }
+    return out
+
+
 def file_info(path: Path) -> dict[str, Any]:
     return {
         "path": str(path),
@@ -167,6 +195,7 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         "threshold_sweep": report.get("threshold_sweep") or {},
         "loss_components": report.get("loss_components") or {},
         "modality_gate_summary": report.get("modality_gate_summary") or {},
+        "query_modality_summary": report.get("query_modality_summary") or {},
     }
     proposal_diagnostics = report.get("proposal_diagnostics")
     if isinstance(proposal_diagnostics, dict):
@@ -194,10 +223,34 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         for key, value in metrics.items()
         if isinstance(key, str) and key.startswith("normalization_combo=")
     }
+    gsd_tokens = {
+        key: value
+        for key, value in metrics.items()
+        if isinstance(key, str) and key.startswith("gsd_token=")
+    }
+    target_area_px_bins = {
+        key: value
+        for key, value in metrics.items()
+        if isinstance(key, str) and key.startswith("target_area_px_bin=")
+    }
+    target_area_fraction_bins = {
+        key: value
+        for key, value in metrics.items()
+        if isinstance(key, str) and key.startswith("target_area_fraction_bin=")
+    }
+    ground_area_m2_bins = {
+        key: value
+        for key, value in metrics.items()
+        if isinstance(key, str) and key.startswith("ground_area_m2_bin=")
+    }
     out["canonical_combos"] = dict(sorted(canonical.items()))
     out["raw_combos"] = dict(sorted(raw.items()))
     out["sensor_combos"] = dict(sorted(sensor.items()))
     out["normalization_combos"] = dict(sorted(normalization.items()))
+    out["gsd_tokens"] = dict(sorted(gsd_tokens.items()))
+    out["target_area_px_bins"] = dict(sorted(target_area_px_bins.items()))
+    out["target_area_fraction_bins"] = dict(sorted(target_area_fraction_bins.items()))
+    out["ground_area_m2_bins"] = dict(sorted(ground_area_m2_bins.items()))
     out["coverage"] = {
         "n": (metrics.get("overall") or {}).get("n") if isinstance(metrics.get("overall"), dict) else None,
         "num_canonical_combos": len(canonical),
@@ -208,6 +261,14 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         "sensor_combo_names": sorted(sensor.keys()),
         "num_normalization_combos": len(normalization),
         "normalization_combo_names": sorted(normalization.keys()),
+        "num_gsd_tokens": len(gsd_tokens),
+        "gsd_token_names": sorted(gsd_tokens.keys()),
+        "num_target_area_px_bins": len(target_area_px_bins),
+        "target_area_px_bin_names": sorted(target_area_px_bins.keys()),
+        "num_target_area_fraction_bins": len(target_area_fraction_bins),
+        "target_area_fraction_bin_names": sorted(target_area_fraction_bins.keys()),
+        "num_ground_area_m2_bins": len(ground_area_m2_bins),
+        "ground_area_m2_bin_names": sorted(ground_area_m2_bins.keys()),
     }
     out["num_visualizations_listed"] = len(report.get("visualizations") or [])
     if "checkpoint_step" in report:
@@ -245,6 +306,17 @@ def key_config(config: dict[str, Any] | None) -> dict[str, Any]:
         "decoder_dim",
         "num_mask_tokens",
         "modality_dropout",
+        "use_gsd_film",
+        "use_spatial_modality_gate",
+        "use_query_modality_attention",
+        "query_modality_feature_weight",
+        "use_evidence_reasoning",
+        "evidence_reasoning_weight",
+        "selection_evidence_weight",
+        "use_visual_evidence",
+        "visual_evidence_cache",
+        "visual_evidence_weight",
+        "visual_evidence_feature_weight",
         "train_hflip_prob",
         "train_vflip_prob",
         "use_box_prior",
@@ -265,12 +337,15 @@ def key_config(config: dict[str, Any] | None) -> dict[str, Any]:
         "empty_proposal_suppression_weight",
         "proposal_positive_weight",
         "condition_positive_weight",
+        "evidence_positive_weight",
         "query_diversity_loss_weight",
         "proposal_mask_diversity_loss_weight",
         "gate_entropy_loss_weight",
         "proposal_soft_target_topk",
         "proposal_soft_target_temperature",
         "query_usage_balance_loss_weight",
+        "evidence_cls_weight",
+        "evidence_ranking_loss_weight",
         "selection_proposal_weight",
         "selection_condition_weight",
         "selection_temperature",

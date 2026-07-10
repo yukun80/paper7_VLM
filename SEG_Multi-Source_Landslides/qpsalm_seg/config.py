@@ -28,6 +28,90 @@ CORE_TEMPLATES = [
     "insar_evidence_landslide_v1",
 ]
 
+LOSS_STAGE_CHOICES = ["full", "base", "proposal", "condition", "modality"]
+LOSS_STAGE_PRESETS: dict[str, dict[str, Any]] = {
+    "base": {
+        "proposal_cls_weight": 0.0,
+        "condition_cls_weight": 0.0,
+        "proposal_mask_weight": 0.0,
+        "condition_ranking_loss_weight": 0.0,
+        "selection_ranking_loss_weight": 0.0,
+        "empty_mask_suppression_weight": 0.0,
+        "empty_proposal_suppression_weight": 0.0,
+        "query_diversity_loss_weight": 0.0,
+        "proposal_mask_diversity_loss_weight": 0.0,
+        "gate_entropy_loss_weight": 0.0,
+        "query_usage_balance_loss_weight": 0.0,
+        "selection_condition_weight": 0.0,
+        "selection_evidence_weight": 0.0,
+        "evidence_cls_weight": 0.0,
+        "evidence_ranking_loss_weight": 0.0,
+        "final_foreground_gate_weight": 0.0,
+        "final_mask_fusion": "weighted_average",
+    },
+    "proposal": {
+        "proposal_cls_weight": 0.2,
+        "condition_cls_weight": 0.0,
+        "proposal_mask_weight": 0.5,
+        "condition_ranking_loss_weight": 0.0,
+        "selection_ranking_loss_weight": 0.0,
+        "empty_mask_suppression_weight": 0.0,
+        "empty_proposal_suppression_weight": 0.0,
+        "query_diversity_loss_weight": 0.0,
+        "proposal_mask_diversity_loss_weight": 0.0,
+        "gate_entropy_loss_weight": 0.0,
+        "query_usage_balance_loss_weight": 0.0,
+        "proposal_soft_target_topk": 1,
+        "selection_condition_weight": 0.0,
+        "selection_evidence_weight": 0.0,
+        "evidence_cls_weight": 0.0,
+        "evidence_ranking_loss_weight": 0.0,
+        "final_foreground_gate_weight": 0.0,
+        "final_mask_fusion": "weighted_average",
+    },
+    "condition": {
+        "proposal_cls_weight": 0.2,
+        "condition_cls_weight": 0.2,
+        "proposal_mask_weight": 0.5,
+        "condition_ranking_loss_weight": 0.1,
+        "selection_ranking_loss_weight": 0.2,
+        "empty_mask_suppression_weight": 0.0,
+        "empty_proposal_suppression_weight": 0.0,
+        "query_diversity_loss_weight": 0.0,
+        "proposal_mask_diversity_loss_weight": 0.0,
+        "gate_entropy_loss_weight": 0.0,
+        "query_usage_balance_loss_weight": 0.0,
+        "proposal_soft_target_topk": 1,
+        "selection_condition_weight": 0.5,
+        "selection_evidence_weight": 0.0,
+        "evidence_cls_weight": 0.0,
+        "evidence_ranking_loss_weight": 0.0,
+        "final_foreground_gate_weight": 0.0,
+        "final_mask_fusion": "weighted_average",
+    },
+    "modality": {
+        "proposal_cls_weight": 0.2,
+        "condition_cls_weight": 0.2,
+        "proposal_mask_weight": 0.5,
+        "condition_ranking_loss_weight": 0.1,
+        "selection_ranking_loss_weight": 0.2,
+        "empty_mask_suppression_weight": 0.3,
+        "empty_proposal_suppression_weight": 0.1,
+        "query_diversity_loss_weight": 0.0,
+        "proposal_mask_diversity_loss_weight": 0.0,
+        "gate_entropy_loss_weight": 0.02,
+        "query_usage_balance_loss_weight": 0.0,
+        "proposal_soft_target_topk": 1,
+        "selection_condition_weight": 0.5,
+        "selection_evidence_weight": 0.0,
+        "evidence_cls_weight": 0.0,
+        "evidence_ranking_loss_weight": 0.0,
+        "final_foreground_gate_weight": 0.0,
+        "final_mask_fusion": "weighted_average",
+    },
+    "full": {},
+}
+
 
 @dataclass
 class QPSalmConfig:
@@ -37,6 +121,7 @@ class QPSalmConfig:
     output_dir: str = "outputs/qpsalm_small_qwen_core"
     train_index: str = "indexes/instruction_train.jsonl"
     val_index: str = "indexes/instruction_val.jsonl"
+    test_index: str = "indexes/instruction_test.jsonl"
     controller: str = "qwen"
     qwen_model_path: str = "models_zoo/Qwen3-VL-2B-Instruct"
     allow_qwen_cpu: bool = False
@@ -47,7 +132,8 @@ class QPSalmConfig:
     num_workers: int = 4
     max_steps: int = 1000
     val_interval: int = 100
-    save_interval: int = 100
+    save_interval: int = 1000
+    keep_recent_checkpoints: int = 2
     visualize_interval: int = 100
     log_interval: int = 20
     max_val_batches: int | None = 0
@@ -68,6 +154,18 @@ class QPSalmConfig:
     num_decoder_layers: int = 2
     num_heads: int = 8
     modality_dropout: float = 0.2
+    use_gsd_film: bool = True
+    use_spatial_modality_gate: bool = True
+    use_query_modality_attention: bool = True
+    query_modality_feature_weight: float = 0.35
+    use_evidence_reasoning: bool = True
+    evidence_reasoning_weight: float = 0.35
+    selection_evidence_weight: float = 0.25
+    use_visual_evidence: bool = True
+    visual_evidence_cache: str | None = None
+    visual_evidence_weight: float = 0.25
+    visual_evidence_feature_weight: float = 0.15
+    loss_stage: str = "full"
     use_focal_loss: bool = False
     use_box_prior: bool = False
     boundary_loss_weight: float = 0.0
@@ -86,12 +184,15 @@ class QPSalmConfig:
     empty_proposal_suppression_weight: float = 0.0
     proposal_positive_weight: float = 1.0
     condition_positive_weight: float = 1.0
+    evidence_positive_weight: float = 1.0
     query_diversity_loss_weight: float = 0.0
     proposal_mask_diversity_loss_weight: float = 0.0
     gate_entropy_loss_weight: float = 0.0
     proposal_soft_target_topk: int = 1
     proposal_soft_target_temperature: float = 0.10
     query_usage_balance_loss_weight: float = 0.0
+    evidence_cls_weight: float = 0.1
+    evidence_ranking_loss_weight: float = 0.1
     selection_proposal_weight: float = 1.0
     selection_condition_weight: float = 1.0
     selection_temperature: float = 1.0
@@ -113,7 +214,14 @@ class QPSalmConfig:
         return Path(self.output_dir)
 
     def index_path(self, split: str) -> Path:
-        rel = self.train_index if split == "train" else self.val_index
+        if split == "train":
+            rel = self.train_index
+        elif split == "val":
+            rel = self.val_index
+        elif split == "test":
+            rel = self.test_index
+        else:
+            raise ValueError(f"未知 split={split!r}; expected train/val/test")
         path = Path(rel)
         if path.is_absolute():
             return path
@@ -183,6 +291,26 @@ def load_config(path: str | Path | None = None, overrides: dict[str, Any] | None
     if "canonical_combo_loss_weights" in data:
         data["canonical_combo_loss_weights"] = parse_combo_loss_weights(data["canonical_combo_loss_weights"]) or {}
     return QPSalmConfig(**data)
+
+
+def apply_config_overrides(config: QPSalmConfig, overrides: dict[str, Any] | None = None) -> QPSalmConfig:
+    """对已有配置应用非 None 覆盖项，供 CLI 保持 preset/显式参数顺序。"""
+    if not overrides:
+        return config
+    data = {f.name: getattr(config, f.name) for f in fields(QPSalmConfig)}
+    data.update({key: value for key, value in overrides.items() if value is not None and key in data})
+    if "canonical_combo_loss_weights" in data:
+        data["canonical_combo_loss_weights"] = parse_combo_loss_weights(data["canonical_combo_loss_weights"]) or {}
+    return QPSalmConfig(**data)
+
+
+def apply_loss_stage(config: QPSalmConfig, stage: str | None) -> QPSalmConfig:
+    """按实验阶段启用一组 loss/selection 默认项，便于建立 ablation 证据链。"""
+    stage_name = str(stage or config.loss_stage or "full").strip().lower()
+    if stage_name not in LOSS_STAGE_PRESETS:
+        raise ValueError(f"未知 loss_stage={stage_name!r}; 可选: {', '.join(LOSS_STAGE_CHOICES)}")
+    updates = {"loss_stage": stage_name, **LOSS_STAGE_PRESETS[stage_name]}
+    return apply_config_overrides(config, updates)
 
 
 def save_config(path: Path, config: QPSalmConfig) -> None:

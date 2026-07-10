@@ -330,8 +330,11 @@ def segmentation_losses(
     empty_proposal_suppression_weight: float = 0.0,
     proposal_positive_weight: float = 1.0,
     condition_positive_weight: float = 1.0,
+    evidence_positive_weight: float = 1.0,
     query_diversity_loss_weight: float = 0.0,
     selection_ranking_loss_weight: float = 0.0,
+    evidence_cls_weight: float = 0.0,
+    evidence_ranking_loss_weight: float = 0.0,
     proposal_mask_diversity_loss_weight: float = 0.0,
     gate_entropy_loss_weight: float = 0.0,
     proposal_soft_target_topk: int = 1,
@@ -405,15 +408,46 @@ def segmentation_losses(
         reduction="none",
     )
     condition_cls = weighted_sample_mean(condition_cls_per_query.mean(dim=1), weights)
+    evidence_scores = outputs.get("evidence_scores")
+    evidence_loss_active = evidence_scores is not None and (
+        (evidence_cls_weight and evidence_cls_weight > 0)
+        or (evidence_ranking_loss_weight and evidence_ranking_loss_weight > 0)
+    )
+    if evidence_loss_active:
+        evidence_pos_weight = (
+            evidence_scores.new_tensor(float(evidence_positive_weight))
+            if evidence_positive_weight and evidence_positive_weight > 1.0
+            else None
+        )
+        evidence_cls_per_query = F.binary_cross_entropy_with_logits(
+            evidence_scores,
+            proposal_target,
+            pos_weight=evidence_pos_weight,
+            reduction="none",
+        )
+        evidence_cls = weighted_sample_mean(evidence_cls_per_query.mean(dim=1), weights)
+    else:
+        evidence_cls = final_logits.sum() * 0.0
     if non_empty.any():
         condition_rank_per_sample = soft_target_ranking_loss_per_sample(condition_scores, proposal_target, non_empty)
         condition_rank = weighted_sample_mean(condition_rank_per_sample, weights[non_empty])
         condition_rank_acc = (
             condition_scores[non_empty].argmax(dim=1) == best_query[non_empty]
         ).float().mean()
+        if evidence_loss_active:
+            evidence_rank_per_sample = soft_target_ranking_loss_per_sample(evidence_scores, proposal_target, non_empty)
+            evidence_rank = weighted_sample_mean(evidence_rank_per_sample, weights[non_empty])
+            evidence_rank_acc = (
+                evidence_scores[non_empty].argmax(dim=1) == best_query[non_empty]
+            ).float().mean()
+        else:
+            evidence_rank = final_logits.sum() * 0.0
+            evidence_rank_acc = final_logits.sum() * 0.0
     else:
         condition_rank = final_logits.sum() * 0.0
         condition_rank_acc = final_logits.sum() * 0.0
+        evidence_rank = final_logits.sum() * 0.0
+        evidence_rank_acc = final_logits.sum() * 0.0
 
     selection_logits = outputs.get("selection_logits")
     if (
@@ -527,9 +561,11 @@ def segmentation_losses(
         + float(mask_tversky_weight) * mask_tversky
         + float(proposal_cls_weight) * proposal_cls
         + float(condition_cls_weight) * condition_cls
+        + float(evidence_cls_weight) * evidence_cls
         + float(proposal_mask_weight)
         * (proposal_mask_bce + proposal_mask_dice + float(mask_tversky_weight) * proposal_mask_tversky)
         + float(condition_ranking_weight) * condition_rank
+        + float(evidence_ranking_loss_weight) * evidence_rank
         + float(selection_ranking_loss_weight) * selection_rank
         + float(empty_mask_suppression_weight) * empty_mask
         + float(empty_proposal_suppression_weight) * empty_proposal
@@ -546,9 +582,12 @@ def segmentation_losses(
         "loss_mask_tversky": mask_tversky.detach(),
         "loss_proposal_cls": proposal_cls.detach(),
         "loss_condition_cls": condition_cls.detach(),
+        "loss_evidence_cls": evidence_cls.detach(),
         "loss_condition_rank": condition_rank.detach(),
+        "loss_evidence_rank": evidence_rank.detach(),
         "loss_selection_rank": selection_rank.detach(),
         "condition_rank_acc": condition_rank_acc.detach(),
+        "evidence_rank_acc": evidence_rank_acc.detach(),
         "selection_rank_acc": selection_rank_acc.detach(),
         "proposal_target_mass": proposal_target.sum(dim=1).detach(),
         "proposal_target_positive_count": (proposal_target > 1.0e-4).float().sum(dim=1).detach(),

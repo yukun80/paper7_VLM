@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# 用途：在单卡 CUDA 上运行完整 Phase 1 baseline + box-prior Qwen-cache 训练闭环。
-# 运行：bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-# 说明：默认不覆盖已有 checkpoint；重跑用 RUN_CONTROL=--overwrite，续训用 RUN_CONTROL=--resume-existing。
+# 用途：在单卡 CUDA 上运行 Phase 1 baseline/evidence Qwen-cache 训练闭环。
+# 运行：BENCHMARK_SIZE=full bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
+# 说明：默认只跑 baseline/evidence 路线；box-prior 已降级为显式 legacy ablation。
+#       BENCHMARK_SIZE 可选 small/full；重跑用 RUN_CONTROL=--overwrite，续训用 RUN_CONTROL=--resume-existing。
 
 set -euo pipefail
 
@@ -10,26 +11,70 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/yukun80/miniconda3/envs/qwen3vl/bin/python}"
-CONFIG="${CONFIG:-SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml}"
+BENCHMARK_SIZE="${BENCHMARK_SIZE:-small}"
+case "${BENCHMARK_SIZE}" in
+  small)
+    DEFAULT_CONFIG="SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml"
+    DEFAULT_BATCH_SIZE="2"
+    DEFAULT_GRAD_ACCUM_STEPS="2"
+    DEFAULT_MAX_VAL_SAMPLES="0"
+    ;;
+  full)
+    DEFAULT_CONFIG="SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml"
+    DEFAULT_BATCH_SIZE="1"
+    DEFAULT_GRAD_ACCUM_STEPS="4"
+    DEFAULT_MAX_VAL_SAMPLES="1024"
+    ;;
+  *)
+    echo "Unsupported BENCHMARK_SIZE=${BENCHMARK_SIZE}; expected small or full" >&2
+    exit 2
+    ;;
+esac
+CONFIG="${CONFIG:-${DEFAULT_CONFIG}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/qpsalm_phase1}"
-RUN_NAME="${RUN_NAME:-qwen_cached_balanced}"
-MODE="${MODE:-both}"
+RUN_NAME="${RUN_NAME:-qwen_cached_${BENCHMARK_SIZE}_balanced}"
+MODE="${MODE:-baseline}"
 DEVICE="${DEVICE:-cuda}"
 CONTROLLER="${CONTROLLER:-qwen_cache}"
 EMBEDDING_BACKEND="${EMBEDDING_BACKEND:-qwen}"
+EMBEDDING_CACHE="${EMBEDDING_CACHE:-}"
 EMBEDDING_DEVICE="${EMBEDDING_DEVICE:-}"
+REUSE_EMBEDDING_CACHE="${REUSE_EMBEDDING_CACHE:-0}"
+VISUAL_EVIDENCE_BACKEND="${VISUAL_EVIDENCE_BACKEND:-off}"
+VISUAL_EVIDENCE_BATCH_SIZE="${VISUAL_EVIDENCE_BATCH_SIZE:-1}"
+HASH_VISUAL_HIDDEN_SIZE="${HASH_VISUAL_HIDDEN_SIZE:-1024}"
+VISUAL_EVIDENCE_CACHE="${VISUAL_EVIDENCE_CACHE:-}"
+REUSE_VISUAL_EVIDENCE_CACHE="${REUSE_VISUAL_EVIDENCE_CACHE:-0}"
 ALLOW_QWEN_CPU="${ALLOW_QWEN_CPU:-0}"
 TARGET_SIZE="${TARGET_SIZE:-256}"
-BATCH_SIZE="${BATCH_SIZE:-2}"
-GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-2}"
-MAX_STEPS="${MAX_STEPS:-6000}"
-MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-0}"
+BATCH_SIZE="${BATCH_SIZE:-${DEFAULT_BATCH_SIZE}}"
+GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-${DEFAULT_GRAD_ACCUM_STEPS}}"
+MAX_STEPS="${MAX_STEPS:-20000}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-1000}"
+KEEP_RECENT_CHECKPOINTS="${KEEP_RECENT_CHECKPOINTS:-2}"
+MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-${DEFAULT_MAX_VAL_SAMPLES}}"
 MAX_VAL_BATCHES="${MAX_VAL_BATCHES:-0}"
+INDEX_STRATEGY="${INDEX_STRATEGY:-balanced-canonical}"
+INDEX_CACHE_DIR="${INDEX_CACHE_DIR:-}"
+MAX_INDEX_ROWS="${MAX_INDEX_ROWS:-0}"
+MAX_INDEX_SAMPLES="${MAX_INDEX_SAMPLES:-0}"
+REUSE_INDEX_CACHE="${REUSE_INDEX_CACHE:-0}"
 SAMPLES_PER_COMBO="${SAMPLES_PER_COMBO:-64}"
 NUM_VISUALIZATIONS="${NUM_VISUALIZATIONS:-8}"
 LOG_INTERVAL="${LOG_INTERVAL:-100}"
+LOSS_STAGE="${LOSS_STAGE:-full}"
 EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.5}"
 EVAL_BEST_THRESHOLD="${EVAL_BEST_THRESHOLD:-1}"
+USE_GSD_FILM="${USE_GSD_FILM:-1}"
+USE_SPATIAL_MODALITY_GATE="${USE_SPATIAL_MODALITY_GATE:-1}"
+USE_QUERY_MODALITY_ATTENTION="${USE_QUERY_MODALITY_ATTENTION:-1}"
+QUERY_MODALITY_FEATURE_WEIGHT="${QUERY_MODALITY_FEATURE_WEIGHT:-0.35}"
+USE_EVIDENCE_REASONING="${USE_EVIDENCE_REASONING:-1}"
+EVIDENCE_REASONING_WEIGHT="${EVIDENCE_REASONING_WEIGHT:-0.35}"
+SELECTION_EVIDENCE_WEIGHT="${SELECTION_EVIDENCE_WEIGHT:-0.25}"
+USE_VISUAL_EVIDENCE="${USE_VISUAL_EVIDENCE:-1}"
+VISUAL_EVIDENCE_WEIGHT="${VISUAL_EVIDENCE_WEIGHT:-0.25}"
+VISUAL_EVIDENCE_FEATURE_WEIGHT="${VISUAL_EVIDENCE_FEATURE_WEIGHT:-0.15}"
 FOREGROUND_BCE_POS_WEIGHT="${FOREGROUND_BCE_POS_WEIGHT:-2.0}"
 MASK_TVERSKY_WEIGHT="${MASK_TVERSKY_WEIGHT:-0.5}"
 TVERSKY_ALPHA="${TVERSKY_ALPHA:-0.3}"
@@ -38,6 +83,7 @@ EMPTY_MASK_SUPPRESSION_WEIGHT="${EMPTY_MASK_SUPPRESSION_WEIGHT:-0.3}"
 EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="${EMPTY_PROPOSAL_SUPPRESSION_WEIGHT:-0.1}"
 PROPOSAL_POSITIVE_WEIGHT="${PROPOSAL_POSITIVE_WEIGHT:-4.0}"
 CONDITION_POSITIVE_WEIGHT="${CONDITION_POSITIVE_WEIGHT:-4.0}"
+EVIDENCE_POSITIVE_WEIGHT="${EVIDENCE_POSITIVE_WEIGHT:-4.0}"
 QUERY_DIVERSITY_LOSS_WEIGHT="${QUERY_DIVERSITY_LOSS_WEIGHT:-0.02}"
 SELECTION_RANKING_LOSS_WEIGHT="${SELECTION_RANKING_LOSS_WEIGHT:-0.2}"
 PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="${PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT:-0.05}"
@@ -45,6 +91,8 @@ GATE_ENTROPY_LOSS_WEIGHT="${GATE_ENTROPY_LOSS_WEIGHT:-0.02}"
 PROPOSAL_SOFT_TARGET_TOPK="${PROPOSAL_SOFT_TARGET_TOPK:-3}"
 PROPOSAL_SOFT_TARGET_TEMPERATURE="${PROPOSAL_SOFT_TARGET_TEMPERATURE:-0.10}"
 QUERY_USAGE_BALANCE_LOSS_WEIGHT="${QUERY_USAGE_BALANCE_LOSS_WEIGHT:-0.02}"
+EVIDENCE_CLS_WEIGHT="${EVIDENCE_CLS_WEIGHT:-0.1}"
+EVIDENCE_RANKING_LOSS_WEIGHT="${EVIDENCE_RANKING_LOSS_WEIGHT:-0.1}"
 TRAIN_HFLIP_PROB="${TRAIN_HFLIP_PROB:-0.5}"
 TRAIN_VFLIP_PROB="${TRAIN_VFLIP_PROB:-0.5}"
 SELECTION_PROPOSAL_WEIGHT="${SELECTION_PROPOSAL_WEIGHT:-1.0}"
@@ -61,18 +109,138 @@ RUN_CONTROL="${RUN_CONTROL:-}"
 QPSALM_EXTRA_ARGS="${QPSALM_EXTRA_ARGS:-}"
 VERIFY_AFTER_RUN="${VERIFY_AFTER_RUN:-1}"
 
+case "${LOSS_STAGE}" in
+  base)
+    PROPOSAL_CLS_WEIGHT="0.0"
+    CONDITION_CLS_WEIGHT="0.0"
+    PROPOSAL_MASK_WEIGHT="0.0"
+    CONDITION_RANKING_LOSS_WEIGHT="0.0"
+    SELECTION_RANKING_LOSS_WEIGHT="0.0"
+    EMPTY_MASK_SUPPRESSION_WEIGHT="0.0"
+    EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="0.0"
+    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
+    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
+    GATE_ENTROPY_LOSS_WEIGHT="0.0"
+    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
+    SELECTION_CONDITION_WEIGHT="0.0"
+    SELECTION_EVIDENCE_WEIGHT="0.0"
+    EVIDENCE_CLS_WEIGHT="0.0"
+    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
+    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
+    FINAL_MASK_FUSION="weighted_average"
+    ;;
+  proposal)
+    CONDITION_CLS_WEIGHT="0.0"
+    CONDITION_RANKING_LOSS_WEIGHT="0.0"
+    SELECTION_RANKING_LOSS_WEIGHT="0.0"
+    EMPTY_MASK_SUPPRESSION_WEIGHT="0.0"
+    EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="0.0"
+    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
+    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
+    GATE_ENTROPY_LOSS_WEIGHT="0.0"
+    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
+    PROPOSAL_SOFT_TARGET_TOPK="1"
+    SELECTION_CONDITION_WEIGHT="0.0"
+    SELECTION_EVIDENCE_WEIGHT="0.0"
+    EVIDENCE_CLS_WEIGHT="0.0"
+    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
+    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
+    FINAL_MASK_FUSION="weighted_average"
+    ;;
+  condition)
+    EMPTY_MASK_SUPPRESSION_WEIGHT="0.0"
+    EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="0.0"
+    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
+    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
+    GATE_ENTROPY_LOSS_WEIGHT="0.0"
+    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
+    PROPOSAL_SOFT_TARGET_TOPK="1"
+    SELECTION_EVIDENCE_WEIGHT="0.0"
+    EVIDENCE_CLS_WEIGHT="0.0"
+    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
+    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
+    FINAL_MASK_FUSION="weighted_average"
+    ;;
+  modality)
+    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
+    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
+    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
+    PROPOSAL_SOFT_TARGET_TOPK="1"
+    SELECTION_EVIDENCE_WEIGHT="0.0"
+    EVIDENCE_CLS_WEIGHT="0.0"
+    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
+    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
+    FINAL_MASK_FUSION="weighted_average"
+    ;;
+  full)
+    ;;
+  *)
+    echo "Unsupported LOSS_STAGE=${LOSS_STAGE}; expected full/base/proposal/condition/modality" >&2
+    exit 2
+    ;;
+esac
+
 export PYTHONPATH="SEG_Multi-Source_Landslides${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 
 OPTIONAL_ARGS=()
+if [[ -n "${INDEX_CACHE_DIR}" ]]; then
+  OPTIONAL_ARGS+=(--index-cache-dir "${INDEX_CACHE_DIR}")
+fi
+if [[ "${MAX_INDEX_ROWS}" -gt 0 ]]; then
+  OPTIONAL_ARGS+=(--max-index-rows "${MAX_INDEX_ROWS}")
+fi
+if [[ "${MAX_INDEX_SAMPLES}" -gt 0 ]]; then
+  OPTIONAL_ARGS+=(--max-index-samples "${MAX_INDEX_SAMPLES}")
+fi
+if [[ "${REUSE_INDEX_CACHE}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--reuse-index-cache)
+fi
+if [[ -n "${EMBEDDING_CACHE}" ]]; then
+  OPTIONAL_ARGS+=(--embedding-cache "${EMBEDDING_CACHE}")
+fi
 if [[ -n "${EMBEDDING_DEVICE}" ]]; then
   OPTIONAL_ARGS+=(--embedding-device "${EMBEDDING_DEVICE}")
+fi
+if [[ "${REUSE_EMBEDDING_CACHE}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--reuse-embedding-cache)
 fi
 if [[ "${ALLOW_QWEN_CPU}" == "1" ]]; then
   OPTIONAL_ARGS+=(--allow-qwen-cpu)
 fi
 if [[ "${EVAL_BEST_THRESHOLD}" == "1" ]]; then
   OPTIONAL_ARGS+=(--eval-best-threshold)
+fi
+if [[ "${USE_GSD_FILM}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--use-gsd-film)
+else
+  OPTIONAL_ARGS+=(--no-use-gsd-film)
+fi
+if [[ "${USE_SPATIAL_MODALITY_GATE}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--use-spatial-modality-gate)
+else
+  OPTIONAL_ARGS+=(--no-use-spatial-modality-gate)
+fi
+if [[ "${USE_QUERY_MODALITY_ATTENTION}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--use-query-modality-attention)
+else
+  OPTIONAL_ARGS+=(--no-use-query-modality-attention)
+fi
+if [[ "${USE_EVIDENCE_REASONING}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--use-evidence-reasoning)
+else
+  OPTIONAL_ARGS+=(--no-use-evidence-reasoning)
+fi
+if [[ "${USE_VISUAL_EVIDENCE}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--use-visual-evidence)
+else
+  OPTIONAL_ARGS+=(--no-use-visual-evidence)
+fi
+if [[ -n "${VISUAL_EVIDENCE_CACHE}" ]]; then
+  OPTIONAL_ARGS+=(--visual-evidence-cache "${VISUAL_EVIDENCE_CACHE}")
+fi
+if [[ "${REUSE_VISUAL_EVIDENCE_CACHE}" == "1" ]]; then
+  OPTIONAL_ARGS+=(--reuse-visual-evidence-cache)
 fi
 
 "${PYTHON_BIN}" -m qpsalm_seg.cli.run_phase1 \
@@ -84,16 +252,27 @@ fi
   --controller "${CONTROLLER}" \
   --embedding-backend "${EMBEDDING_BACKEND}" \
   --embedding-batch-size "${EMBEDDING_BATCH_SIZE}" \
-  --index-strategy balanced-canonical \
+  --visual-evidence-backend "${VISUAL_EVIDENCE_BACKEND}" \
+  --visual-evidence-batch-size "${VISUAL_EVIDENCE_BATCH_SIZE}" \
+  --hash-visual-hidden-size "${HASH_VISUAL_HIDDEN_SIZE}" \
+  --index-strategy "${INDEX_STRATEGY}" \
   --samples-per-combo "${SAMPLES_PER_COMBO}" \
   --target-size "${TARGET_SIZE}" \
   --batch-size "${BATCH_SIZE}" \
   --grad-accum-steps "${GRAD_ACCUM_STEPS}" \
   --max-steps "${MAX_STEPS}" \
+  --save-interval "${SAVE_INTERVAL}" \
+  --keep-recent-checkpoints "${KEEP_RECENT_CHECKPOINTS}" \
   --max-val-samples "${MAX_VAL_SAMPLES}" \
   --max-val-batches "${MAX_VAL_BATCHES}" \
   --num-visualizations "${NUM_VISUALIZATIONS}" \
   --log-interval "${LOG_INTERVAL}" \
+  --loss-stage "${LOSS_STAGE}" \
+  --query-modality-feature-weight "${QUERY_MODALITY_FEATURE_WEIGHT}" \
+  --evidence-reasoning-weight "${EVIDENCE_REASONING_WEIGHT}" \
+  --selection-evidence-weight "${SELECTION_EVIDENCE_WEIGHT}" \
+  --visual-evidence-weight "${VISUAL_EVIDENCE_WEIGHT}" \
+  --visual-evidence-feature-weight "${VISUAL_EVIDENCE_FEATURE_WEIGHT}" \
   --eval-threshold "${EVAL_THRESHOLD}" \
   --foreground-bce-pos-weight "${FOREGROUND_BCE_POS_WEIGHT}" \
   --mask-tversky-weight "${MASK_TVERSKY_WEIGHT}" \
@@ -103,6 +282,7 @@ fi
   --empty-proposal-suppression-weight "${EMPTY_PROPOSAL_SUPPRESSION_WEIGHT}" \
   --proposal-positive-weight "${PROPOSAL_POSITIVE_WEIGHT}" \
   --condition-positive-weight "${CONDITION_POSITIVE_WEIGHT}" \
+  --evidence-positive-weight "${EVIDENCE_POSITIVE_WEIGHT}" \
   --query-diversity-loss-weight "${QUERY_DIVERSITY_LOSS_WEIGHT}" \
   --selection-ranking-loss-weight "${SELECTION_RANKING_LOSS_WEIGHT}" \
   --proposal-mask-diversity-loss-weight "${PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT}" \
@@ -110,6 +290,8 @@ fi
   --proposal-soft-target-topk "${PROPOSAL_SOFT_TARGET_TOPK}" \
   --proposal-soft-target-temperature "${PROPOSAL_SOFT_TARGET_TEMPERATURE}" \
   --query-usage-balance-loss-weight "${QUERY_USAGE_BALANCE_LOSS_WEIGHT}" \
+  --evidence-cls-weight "${EVIDENCE_CLS_WEIGHT}" \
+  --evidence-ranking-loss-weight "${EVIDENCE_RANKING_LOSS_WEIGHT}" \
   --train-hflip-prob "${TRAIN_HFLIP_PROB}" \
   --train-vflip-prob "${TRAIN_VFLIP_PROB}" \
   --selection-proposal-weight "${SELECTION_PROPOSAL_WEIGHT}" \

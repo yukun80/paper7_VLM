@@ -17,19 +17,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--split", choices=["val"], default="val")
+    parser.add_argument("--split", choices=["val", "test"], default="val")
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--target-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--max-val-samples", type=int, default=None)
     parser.add_argument("--max-val-batches", type=int, default=None)
     parser.add_argument("--val-index", default=None)
+    parser.add_argument("--test-index", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--controller", choices=["qwen", "qwen_cache", "cached_qwen", "text_probe"], default=None)
     parser.add_argument("--qwen-model-path", default=None)
     parser.add_argument("--allow-qwen-cpu", action="store_true")
     parser.add_argument("--condition-embedding-cache", default=None)
+    parser.add_argument("--visual-evidence-cache", default=None)
+    parser.add_argument("--use-visual-evidence", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--visual-evidence-weight", type=float, default=None)
+    parser.add_argument("--visual-evidence-feature-weight", type=float, default=None)
+    parser.add_argument("--use-query-modality-attention", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--query-modality-feature-weight", type=float, default=None)
+    parser.add_argument("--use-evidence-reasoning", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--evidence-reasoning-weight", type=float, default=None)
+    parser.add_argument("--selection-evidence-weight", type=float, default=None)
     parser.add_argument("--num-visualizations", type=int, default=None)
+    parser.add_argument("--visualize-all", action="store_true", help="Export visualizations for every evaluated sample.")
+    parser.add_argument(
+        "--export-multimodal-overview",
+        action="store_true",
+        help="Export one multimodal overview PNG per visualized sample.",
+    )
     parser.add_argument("--train-hflip-prob", type=float, default=None)
     parser.add_argument("--train-vflip-prob", type=float, default=None)
     parser.add_argument("--use-box-prior", action=argparse.BooleanOptionalAction, default=None)
@@ -50,12 +66,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--empty-proposal-suppression-weight", type=float, default=None)
     parser.add_argument("--proposal-positive-weight", type=float, default=None)
     parser.add_argument("--condition-positive-weight", type=float, default=None)
+    parser.add_argument("--evidence-positive-weight", type=float, default=None)
     parser.add_argument("--query-diversity-loss-weight", type=float, default=None)
     parser.add_argument("--proposal-mask-diversity-loss-weight", type=float, default=None)
     parser.add_argument("--gate-entropy-loss-weight", type=float, default=None)
     parser.add_argument("--proposal-soft-target-topk", type=int, default=None)
     parser.add_argument("--proposal-soft-target-temperature", type=float, default=None)
     parser.add_argument("--query-usage-balance-loss-weight", type=float, default=None)
+    parser.add_argument("--evidence-cls-weight", type=float, default=None)
+    parser.add_argument("--evidence-ranking-loss-weight", type=float, default=None)
     parser.add_argument("--selection-proposal-weight", type=float, default=None)
     parser.add_argument("--selection-condition-weight", type=float, default=None)
     parser.add_argument("--selection-temperature", type=float, default=None)
@@ -89,11 +108,21 @@ def main() -> None:
             "max_val_samples": args.max_val_samples,
             "max_val_batches": args.max_val_batches,
             "val_index": args.val_index,
+            "test_index": args.test_index,
             "output_dir": args.output_dir,
             "controller": args.controller,
             "qwen_model_path": args.qwen_model_path,
             "allow_qwen_cpu": True if args.allow_qwen_cpu else None,
             "condition_embedding_cache": args.condition_embedding_cache,
+            "visual_evidence_cache": args.visual_evidence_cache,
+            "use_visual_evidence": args.use_visual_evidence,
+            "visual_evidence_weight": args.visual_evidence_weight,
+            "visual_evidence_feature_weight": args.visual_evidence_feature_weight,
+            "use_query_modality_attention": args.use_query_modality_attention,
+            "query_modality_feature_weight": args.query_modality_feature_weight,
+            "use_evidence_reasoning": args.use_evidence_reasoning,
+            "evidence_reasoning_weight": args.evidence_reasoning_weight,
+            "selection_evidence_weight": args.selection_evidence_weight,
             "num_visualizations": args.num_visualizations,
             "train_hflip_prob": args.train_hflip_prob,
             "train_vflip_prob": args.train_vflip_prob,
@@ -115,12 +144,15 @@ def main() -> None:
             "empty_proposal_suppression_weight": args.empty_proposal_suppression_weight,
             "proposal_positive_weight": args.proposal_positive_weight,
             "condition_positive_weight": args.condition_positive_weight,
+            "evidence_positive_weight": args.evidence_positive_weight,
             "query_diversity_loss_weight": args.query_diversity_loss_weight,
             "proposal_mask_diversity_loss_weight": args.proposal_mask_diversity_loss_weight,
             "gate_entropy_loss_weight": args.gate_entropy_loss_weight,
             "proposal_soft_target_topk": args.proposal_soft_target_topk,
             "proposal_soft_target_temperature": args.proposal_soft_target_temperature,
             "query_usage_balance_loss_weight": args.query_usage_balance_loss_weight,
+            "evidence_cls_weight": args.evidence_cls_weight,
+            "evidence_ranking_loss_weight": args.evidence_ranking_loss_weight,
             "selection_proposal_weight": args.selection_proposal_weight,
             "selection_condition_weight": args.selection_condition_weight,
             "selection_temperature": args.selection_temperature,
@@ -173,6 +205,8 @@ def main() -> None:
         max_batches=config.max_val_batches if config.max_val_batches and config.max_val_batches > 0 else None,
         visual_dir=out_dir / "eval_visualizations",
         num_visualizations=config.num_visualizations,
+        visualize_all=bool(args.visualize_all),
+        export_multimodal_overview=bool(args.export_multimodal_overview),
         threshold=float(config.eval_threshold),
         threshold_sweep=config.threshold_sweep,
     )
@@ -187,6 +221,8 @@ def main() -> None:
             "checkpoint_step": step,
             "device": args.device,
             "split": args.split,
+            "visualize_all": bool(args.visualize_all),
+            "export_multimodal_overview": bool(args.export_multimodal_overview),
             "eval_report": str(out_dir / "eval_report.json"),
             "resolved_config": dict(config.__dict__),
         },

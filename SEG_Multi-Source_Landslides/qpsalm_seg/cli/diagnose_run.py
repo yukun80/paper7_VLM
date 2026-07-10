@@ -31,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold-delta", type=float, default=0.03)
     parser.add_argument("--query-collapse-frac", type=float, default=0.80)
     parser.add_argument("--gate-collapse-weight", type=float, default=0.85)
+    parser.add_argument("--query-gate-collapse-peak", type=float, default=0.85)
+    parser.add_argument("--weak-evidence-score-gap", type=float, default=0.05)
     parser.add_argument("--empty-fp-area", type=float, default=128.0)
     return parser.parse_args()
 
@@ -44,6 +46,8 @@ def default_diagnose_args(**overrides: Any) -> argparse.Namespace:
         "threshold_delta": 0.03,
         "query_collapse_frac": 0.80,
         "gate_collapse_weight": 0.85,
+        "query_gate_collapse_peak": 0.85,
+        "weak_evidence_score_gap": 0.05,
         "empty_fp_area": 128.0,
     }
     values.update(overrides)
@@ -137,6 +141,54 @@ def check_validation_coverage(block_name: str, block: dict[str, Any], config: di
                 "limited_modality_coverage",
                 "当前指标只覆盖很少的 canonical modality combo，不能代表完整多源能力。",
                 {"num_canonical_combos": len(canonical), "groups": sorted(canonical.keys())},
+            )
+        )
+    target_area_bins = block.get("target_area_px_bins") if isinstance(block.get("target_area_px_bins"), dict) else {}
+    if not target_area_bins:
+        issues.append(
+            issue(
+                "info",
+                "missing_target_area_strata",
+                "缺少 target area 分层指标，难以判断小滑坡斑块是否是主要误差来源。",
+                {"metric_block": block_name},
+            )
+        )
+    elif len(target_area_bins) <= 1:
+        issues.append(
+            issue(
+                "info",
+                "limited_target_area_strata",
+                "当前验证只覆盖一个目标面积分层，小目标/大目标泛化结论不充分。",
+                {"metric_block": block_name, "groups": sorted(target_area_bins.keys())},
+            )
+        )
+    gsd_tokens = block.get("gsd_tokens") if isinstance(block.get("gsd_tokens"), dict) else {}
+    if not gsd_tokens:
+        issues.append(
+            issue(
+                "info",
+                "missing_gsd_strata",
+                "缺少 GSD 分层指标，无法判断尺度差异对分割性能的影响。",
+                {"metric_block": block_name},
+            )
+        )
+    elif all(str(name).endswith("=unknown") for name in gsd_tokens):
+        issues.append(
+            issue(
+                "info",
+                "gsd_unknown_or_missing",
+                "当前验证样本的 GSD 全部为 unknown，scale-aware 模块只能依赖弱文本/数据集线索。",
+                {"metric_block": block_name, "groups": sorted(gsd_tokens.keys())},
+            )
+        )
+    ground_area_bins = block.get("ground_area_m2_bins") if isinstance(block.get("ground_area_m2_bins"), dict) else {}
+    if ground_area_bins and all(str(name).endswith("=unknown") for name in ground_area_bins):
+        issues.append(
+            issue(
+                "info",
+                "ground_area_unknown",
+                "缺少可估算地面面积的样本，无法进行真实尺度下的小/大滑坡性能比较。",
+                {"metric_block": block_name, "groups": sorted(ground_area_bins.keys())},
             )
         )
     return issues
@@ -248,6 +300,62 @@ def check_proposals(block: dict[str, Any], args: argparse.Namespace) -> list[dic
     return issues
 
 
+def check_evidence_verifier(block: dict[str, Any], config: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+    """检查 evidence verifier 是否记录完整，以及是否能偏向更好的 proposal。"""
+    issues: list[dict[str, Any]] = []
+    use_evidence = bool(config.get("use_evidence_reasoning", True))
+    selection_weight = numeric(config.get("selection_evidence_weight"))
+    cls_weight = numeric(config.get("evidence_cls_weight"))
+    rank_weight = numeric(config.get("evidence_ranking_loss_weight"))
+    if not use_evidence and selection_weight <= 0 and cls_weight <= 0 and rank_weight <= 0:
+        return issues
+    records = proposal_records(block)
+    if not records:
+        return issues
+    has_evidence = any(isinstance(row.get("selected_evidence_score"), (int, float)) for row in records)
+    if not has_evidence:
+        issues.append(
+            issue(
+                "warning",
+                "missing_evidence_scores",
+                "当前配置启用了 evidence reasoning/selection/loss，但 proposal diagnostics 缺少 evidence score 字段。",
+                {
+                    "use_evidence_reasoning": use_evidence,
+                    "selection_evidence_weight": selection_weight,
+                    "evidence_cls_weight": cls_weight,
+                    "evidence_ranking_loss_weight": rank_weight,
+                },
+            )
+        )
+        return issues
+    gaps = [
+        numeric(row.get("evidence_score_gap_selected_minus_best"))
+        for row in records
+        if isinstance(row.get("evidence_score_gap_selected_minus_best"), (int, float))
+    ]
+    if gaps:
+        mean_gap = sum(gaps) / len(gaps)
+        if mean_gap < -float(args.weak_evidence_score_gap):
+            issues.append(
+                issue(
+                    "warning",
+                    "evidence_verifier_penalizes_best_query",
+                    "evidence scorer 平均更偏向 selected query 而不是 Dice 最优 query，可能拖累 proposal selection。",
+                    {"mean_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
+                )
+            )
+        elif abs(mean_gap) <= float(args.weak_evidence_score_gap):
+            issues.append(
+                issue(
+                    "info",
+                    "weak_evidence_verifier_separation",
+                    "evidence scorer 对 selected/best query 区分度较弱，当前可能只是弱 verifier。",
+                    {"mean_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
+                )
+            )
+    return issues
+
+
 def check_empty_false_positives(block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
     """检查 negative/empty GT 样本是否产生大量假阳性面积。"""
     diagnostics = block.get("proposal_diagnostics") if isinstance(block.get("proposal_diagnostics"), dict) else {}
@@ -310,6 +418,44 @@ def check_gates(block: dict[str, Any], args: argparse.Namespace) -> list[dict[st
     return issues
 
 
+def check_query_modality_gates(block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+    """检查 query-level modality attention 是否存在，以及多源组合中是否塌缩。"""
+    issues: list[dict[str, Any]] = []
+    query_summary = block.get("query_modality_summary") if isinstance(block.get("query_modality_summary"), dict) else {}
+    if not query_summary:
+        return [issue("info", "missing_query_modality_summary", "缺少 query_modality_summary，无法判断 query 是否按 proposal 选择模态证据。")]
+    for group, payload in query_summary.items():
+        if not isinstance(group, str) or not group.startswith("canonical_combo=") or not isinstance(payload, dict):
+            continue
+        combo = group.split("=", 1)[1]
+        if "+" not in combo:
+            continue
+        peak = numeric(payload.get("mean_peak"))
+        weights = payload.get("mean_query_weights") if isinstance(payload.get("mean_query_weights"), dict) else {}
+        top_name = None
+        top_weight = -1.0
+        for name in CANONICAL_MODALITIES:
+            value = numeric(weights.get(name))
+            if value > top_weight:
+                top_name = name
+                top_weight = value
+        if peak >= float(args.query_gate_collapse_peak):
+            issues.append(
+                issue(
+                    "info",
+                    "query_modality_attention_collapse",
+                    "多源组合中 query-level modality attention 过度集中，需确认是否只依赖单一证据源。",
+                    {
+                        "group": group,
+                        "mean_peak": peak,
+                        "top_modality": top_name,
+                        "top_weight": top_weight,
+                    },
+                )
+            )
+    return issues
+
+
 def build_recommendations(issues: list[dict[str, Any]]) -> list[str]:
     codes = {item["code"] for item in issues}
     recs: list[str] = []
@@ -323,8 +469,20 @@ def build_recommendations(issues: list[dict[str, Any]]) -> list[str]:
         recs.append("启用 empty mask suppression，并用更高阈值 sweep 检查 negative-aware 样本的误报面积是否下降。")
     if "condition_scorer_misses_best_query" in codes:
         recs.append("提高 condition ranking 监督质量，或降低 SELECTION_CONDITION_WEIGHT，必要时启用 FINAL_FOREGROUND_GATE_WEIGHT。")
+    if "missing_evidence_scores" in codes:
+        recs.append("重新运行 eval/summary，确认新版本 proposal_diagnostics 已包含 evidence score 字段。")
+    if "evidence_verifier_penalizes_best_query" in codes or "weak_evidence_verifier_separation" in codes:
+        recs.append("检查 proposal_diagnostics.csv 中 evidence_score_gap_selected_minus_best；必要时调低 SELECTION_EVIDENCE_WEIGHT 或调高 EVIDENCE_RANKING_LOSS_WEIGHT 做 ablation。")
     if "modality_gate_collapse" in codes:
         recs.append("检查 gate 是否与 condition 合理对应；必要时加入 gate entropy warmup 或降低 modality dropout。")
+    if "missing_query_modality_summary" in codes:
+        recs.append("确认 USE_QUERY_MODALITY_ATTENTION=1 并重新 eval，导出 query_modality_gates.csv 后再比较多源组合。")
+    if "query_modality_attention_collapse" in codes:
+        recs.append("查看 query_modality_gates.csv；若 query gate 总是集中到单模态，可降低 QUERY_MODALITY_FEATURE_WEIGHT 或加入 query gate entropy warmup。")
+    if "missing_target_area_strata" in codes or "limited_target_area_strata" in codes:
+        recs.append("重新用新版 eval/summary 生成 target_area_px_bin 与 target_area_fraction_bin 分组，单独检查 tiny/small 滑坡斑块的 Dice/Recall。")
+    if "missing_gsd_strata" in codes or "gsd_unknown_or_missing" in codes or "ground_area_unknown" in codes:
+        recs.append("优先完善 benchmark 中的 gsd_m/resize_transform 元数据，再比较 gsd_token 与 ground_area_m2_bin 下的分割性能。")
     if "missing_best_checkpoint" in codes:
         recs.append("重新训练以生成 checkpoint_best.pt，并用 best checkpoint 做最终 eval。")
     return recs
@@ -342,8 +500,10 @@ def diagnose(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     issues.extend(sweep_issues)
     recommendations.extend(sweep_recs)
     issues.extend(check_proposals(block, args))
+    issues.extend(check_evidence_verifier(block, config, args))
     issues.extend(check_empty_false_positives(block, args))
     issues.extend(check_gates(block, args))
+    issues.extend(check_query_modality_gates(block, args))
     recommendations.extend(build_recommendations(issues))
     severity_order = {"error": 0, "warning": 1, "info": 2}
     issues = sorted(issues, key=lambda item: (severity_order.get(str(item.get("severity")), 9), str(item.get("code"))))

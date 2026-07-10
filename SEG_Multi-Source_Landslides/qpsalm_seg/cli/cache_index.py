@@ -4,8 +4,8 @@
 
 脚本作用：从 benchmark 的 instruction JSONL 中过滤 Phase 1 核心模板，生成更小的
 训练/验证 JSONL，减少真实训练启动时的大索引扫描开销。
-主要输入：indexes/instruction_train.jsonl、indexes/instruction_val.jsonl。
-主要输出：outputs/qpsalm_index_cache/qpsalm_core_{train,val}.jsonl 与 summary.json。
+主要输入：indexes/instruction_{train,val,test}.jsonl。
+主要输出：outputs/qpsalm_index_cache/qpsalm_core_{train,val,test}.jsonl 与 summary.json。
 是否改写原始数据：不会。
 典型用法：python -m qpsalm_seg.cli.cache_index --config SEG_Multi-Source_Landslides/configs/qpsalm_tiny_text_probe.yaml。
 """
@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_core.yaml")
     parser.add_argument("--benchmark-dir", default=None)
     parser.add_argument("--output-dir", default="outputs/qpsalm_index_cache")
-    parser.add_argument("--split", choices=["train", "val", "both"], default="both")
+    parser.add_argument("--split", choices=["train", "val", "test", "both"], default="both")
     parser.add_argument("--max-rows", type=int, default=None, help="Optional source scan cap for quick tests.")
     parser.add_argument("--max-samples", type=int, default=None, help="Optional kept-row cap per split.")
     parser.add_argument(
@@ -65,7 +65,46 @@ def parse_args() -> argparse.Namespace:
         help="first keeps source order; balanced-canonical keeps up to N samples per canonical combo.",
     )
     parser.add_argument("--samples-per-combo", type=int, default=8)
+    parser.add_argument(
+        "--include-canonical-combos",
+        default=None,
+        help="Comma-separated canonical combos to keep, e.g. 'dem+s2,dem+s1+s2'.",
+    )
+    parser.add_argument(
+        "--exclude-canonical-combos",
+        default=None,
+        help="Comma-separated canonical combos to drop, e.g. 'hr_optical'.",
+    )
+    parser.add_argument(
+        "--require-multimodal",
+        action="store_true",
+        help="Keep only canonical combos with at least two modalities.",
+    )
     return parser.parse_args()
+
+
+def parse_combo_list(value: str | None) -> set[str] | None:
+    """解析逗号分隔的 canonical combo 列表。"""
+    if value is None:
+        return None
+    combos = {item.strip() for item in str(value).split(",") if item.strip()}
+    return combos or None
+
+
+def combo_filter_reason(
+    combo: str,
+    include_canonical_combos: set[str] | None,
+    exclude_canonical_combos: set[str] | None,
+    require_multimodal: bool,
+) -> str | None:
+    """返回 combo 过滤原因；None 表示保留。"""
+    if include_canonical_combos is not None and combo not in include_canonical_combos:
+        return "canonical_combo_not_in_include"
+    if exclude_canonical_combos is not None and combo in exclude_canonical_combos:
+        return "canonical_combo_excluded"
+    if require_multimodal and "+" not in combo:
+        return "single_modality_excluded"
+    return None
 
 
 def cache_split(
@@ -78,6 +117,9 @@ def cache_split(
     max_samples: int | None,
     strategy: str,
     samples_per_combo: int,
+    include_canonical_combos: set[str] | None = None,
+    exclude_canonical_combos: set[str] | None = None,
+    require_multimodal: bool = False,
 ) -> dict[str, Any]:
     index_path = resolve_repo_path(benchmark_dir / index_rel)
     if index_path is None or not index_path.exists():
@@ -101,6 +143,15 @@ def cache_split(
             skipped[reason] += 1
             continue
         combo = canonical_modality_combo(row)
+        filter_reason = combo_filter_reason(
+            combo,
+            include_canonical_combos=include_canonical_combos,
+            exclude_canonical_combos=exclude_canonical_combos,
+            require_multimodal=require_multimodal,
+        )
+        if filter_reason is not None:
+            skipped[filter_reason] += 1
+            continue
         if strategy == "balanced-canonical" and selected_by_combo[combo] >= samples_per_combo:
             continue
         selected.append(row)
@@ -132,6 +183,11 @@ def cache_split(
         "canonical_combos": dict(canonical_combos.most_common()),
         "sensor_combos": dict(sensor_combos.most_common()),
         "normalization_combos": dict(normalization_combos.most_common()),
+        "filters": {
+            "include_canonical_combos": sorted(include_canonical_combos) if include_canonical_combos else None,
+            "exclude_canonical_combos": sorted(exclude_canonical_combos) if exclude_canonical_combos else None,
+            "require_multimodal": bool(require_multimodal),
+        },
     }
 
 
@@ -143,10 +199,17 @@ def main() -> None:
     if output_dir is None:
         raise FileNotFoundError(args.output_dir)
     core_templates = list(config["core_templates"])
+    include_canonical_combos = parse_combo_list(args.include_canonical_combos)
+    exclude_canonical_combos = parse_combo_list(args.exclude_canonical_combos)
     splits = ["train", "val"] if args.split == "both" else [args.split]
     reports = []
     for split in splits:
-        index_rel = str(config["train_index"] if split == "train" else config["val_index"])
+        if split == "train":
+            index_rel = str(config["train_index"])
+        elif split == "val":
+            index_rel = str(config["val_index"])
+        else:
+            index_rel = str(config.get("test_index") or "indexes/instruction_test.jsonl")
         reports.append(
             cache_split(
                 split=split,
@@ -158,14 +221,22 @@ def main() -> None:
                 max_samples=args.max_samples,
                 strategy=args.strategy,
                 samples_per_combo=args.samples_per_combo,
+                include_canonical_combos=include_canonical_combos,
+                exclude_canonical_combos=exclude_canonical_combos,
+                require_multimodal=bool(args.require_multimodal),
             )
         )
+    generated_splits = {report["split"] for report in reports}
     summary = {
         "output_dir": str(output_dir),
         "reports": reports,
-        "train_index_override": str(output_dir / "qpsalm_core_train.jsonl"),
-        "val_index_override": str(output_dir / "qpsalm_core_val.jsonl"),
     }
+    if "train" in generated_splits:
+        summary["train_index_override"] = str(output_dir / "qpsalm_core_train.jsonl")
+    if "val" in generated_splits:
+        summary["val_index_override"] = str(output_dir / "qpsalm_core_val.jsonl")
+    if "test" in generated_splits:
+        summary["test_index_override"] = str(output_dir / "qpsalm_core_test.jsonl")
     (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

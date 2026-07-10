@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 用途：在单卡 CUDA 上运行真实 Qwen embedding cache + QPSALM 小步训练闭环。
 # 运行：bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_smoke.sh
-# 说明：默认跑 baseline 5 step；如需同时跑 box-prior，使用 MODE=both 覆盖。
+# 说明：默认跑 baseline/evidence 5 step；box-prior 仅作为 legacy ablation，需显式 MODE=box-prior 或 MODE=both。
 
 set -euo pipefail
 

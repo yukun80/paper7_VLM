@@ -19,9 +19,15 @@ class MultiScaleFeatureFusion(nn.Module):
     多尺度空间恢复前被过早平均掉。若旧调用只传 fused_modalities，仍走兼容路径。
     """
 
-    def __init__(self, decoder_dim: int, use_box_prior: bool = False) -> None:
+    def __init__(
+        self,
+        decoder_dim: int,
+        use_box_prior: bool = False,
+        use_spatial_modality_gate: bool = True,
+    ) -> None:
         super().__init__()
         d = int(decoder_dim)
+        self.use_spatial_modality_gate = bool(use_spatial_modality_gate)
         self.stem = ConvBlock(d, d)
         self.fuse_high = ConvBlock(d, d)
         self.box_prior_adapter = ConvBlock(1, d) if use_box_prior else None
@@ -41,6 +47,23 @@ class MultiScaleFeatureFusion(nn.Module):
                 )
                 for name in ("high", "mid", "low")
             }
+        )
+        spatial_hidden = max(16, d // 4)
+        self.spatial_gate_feature_proj = nn.ModuleDict(
+            {
+                name: nn.Sequential(
+                    nn.Conv2d(d, spatial_hidden, kernel_size=1, bias=False),
+                    nn.GroupNorm(1, spatial_hidden),
+                    nn.GELU(),
+                )
+                for name in ("high", "mid", "low")
+            }
+        )
+        self.spatial_gate_condition_proj = nn.ModuleDict(
+            {name: nn.Linear(d, spatial_hidden) for name in ("high", "mid", "low")}
+        )
+        self.spatial_gate_heads = nn.ModuleDict(
+            {name: nn.Conv2d(spatial_hidden, 1, kernel_size=1) for name in ("high", "mid", "low")}
         )
 
     def _single_pyramid(self, feature: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -75,6 +98,53 @@ class MultiScaleFeatureFusion(nn.Module):
         weights = torch.softmax(logits, dim=1) * active.to(logits.dtype)
         return weights / weights.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
 
+    def _spatial_gate_weights(
+        self,
+        scale_name: str,
+        scale_features: torch.Tensor,
+        base_gate_weights: torch.Tensor,
+        condition_embedding: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """返回 [B,M,H,W] 空间 gate，并用全局 gate 作为先验约束。"""
+        if not self.use_spatial_modality_gate or condition_embedding is None:
+            weights = base_gate_weights[:, :, None, None].expand(
+                -1,
+                -1,
+                scale_features.shape[-2],
+                scale_features.shape[-1],
+            )
+            return weights, self._spatial_gate_stats(weights)[0]
+        bsz, num_modalities, channels, height, width = scale_features.shape
+        flat = scale_features.reshape(bsz * num_modalities, channels, height, width)
+        feat = self.spatial_gate_feature_proj[scale_name](flat)
+        hidden = feat.shape[1]
+        feat = feat.view(bsz, num_modalities, hidden, height, width)
+        condition = self.spatial_gate_condition_proj[scale_name](condition_embedding)
+        condition = condition.view(bsz, 1, hidden, 1, 1).to(feat.dtype)
+        logits = self.spatial_gate_heads[scale_name](
+            torch.tanh(feat + condition).reshape(bsz * num_modalities, hidden, height, width)
+        ).view(bsz, num_modalities, height, width)
+        active = base_gate_weights > 0
+        prior = torch.log(base_gate_weights.clamp_min(1.0e-6)).view(bsz, num_modalities, 1, 1)
+        logits = logits + prior
+        logits = logits.masked_fill(~active[:, :, None, None], -1.0e4)
+        weights = torch.softmax(logits.float(), dim=1).to(scale_features.dtype)
+        weights = weights * active[:, :, None, None].to(weights.dtype)
+        weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
+        return weights, self._spatial_gate_stats(weights)[0]
+
+    @staticmethod
+    def _spatial_gate_stats(weights: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """返回空间 gate 的 per-sample entropy 和 per-sample peak。"""
+        safe = weights.float().clamp_min(1.0e-8)
+        entropy = -(safe * safe.log()).sum(dim=1).mean(dim=(1, 2))
+        peak = safe.max(dim=1).values.mean(dim=(1, 2))
+        return entropy.to(weights.dtype), peak.to(weights.dtype)
+
+    @staticmethod
+    def _spatial_weighted_sum(features: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+        return (features * weights[:, :, None, :, :]).sum(dim=1)
+
     def _fuse_modality_pyramids(
         self,
         modality_features: torch.Tensor,
@@ -95,13 +165,43 @@ class MultiScaleFeatureFusion(nn.Module):
         high_gate = self._scale_gate_weights("high", high_stack, gate_weights, condition_embedding)
         mid_gate = self._scale_gate_weights("mid", mid_stack, gate_weights, condition_embedding)
         low_gate = self._scale_gate_weights("low", low_stack, gate_weights, condition_embedding)
-        high = self._weighted_sum(high_stack, high_gate)
-        mid = self._weighted_sum(mid_stack, mid_gate)
-        low = self._weighted_sum(low_stack, low_gate)
+        high_spatial_gate, high_entropy = self._spatial_gate_weights(
+            "high",
+            high_stack,
+            high_gate,
+            condition_embedding,
+        )
+        mid_spatial_gate, mid_entropy = self._spatial_gate_weights(
+            "mid",
+            mid_stack,
+            mid_gate,
+            condition_embedding,
+        )
+        low_spatial_gate, low_entropy = self._spatial_gate_weights(
+            "low",
+            low_stack,
+            low_gate,
+            condition_embedding,
+        )
+        high = self._spatial_weighted_sum(high_stack, high_spatial_gate)
+        mid = self._spatial_weighted_sum(mid_stack, mid_spatial_gate)
+        low = self._spatial_weighted_sum(low_stack, low_spatial_gate)
+        high_peak = self._spatial_gate_stats(high_spatial_gate)[1]
+        mid_peak = self._spatial_gate_stats(mid_spatial_gate)[1]
+        low_peak = self._spatial_gate_stats(low_spatial_gate)[1]
         return high, mid, low, {
-            "scale_gate_high": high_gate,
-            "scale_gate_mid": mid_gate,
-            "scale_gate_low": low_gate,
+            "scale_gate_high": high_spatial_gate.mean(dim=(2, 3)),
+            "scale_gate_mid": mid_spatial_gate.mean(dim=(2, 3)),
+            "scale_gate_low": low_spatial_gate.mean(dim=(2, 3)),
+            "global_scale_gate_high": high_gate,
+            "global_scale_gate_mid": mid_gate,
+            "global_scale_gate_low": low_gate,
+            "spatial_gate_high_entropy": high_entropy,
+            "spatial_gate_mid_entropy": mid_entropy,
+            "spatial_gate_low_entropy": low_entropy,
+            "spatial_gate_high_peak": high_peak,
+            "spatial_gate_mid_peak": mid_peak,
+            "spatial_gate_low_peak": low_peak,
         }
 
     def forward(

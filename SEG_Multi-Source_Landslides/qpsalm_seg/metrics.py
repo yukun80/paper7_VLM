@@ -33,7 +33,7 @@ def batch_binary_metrics(logits: torch.Tensor, target: torch.Tensor, threshold: 
 
 
 class MetricAccumulator:
-    """按 overall/dataset/modality/sensor/normalization 分组聚合指标。"""
+    """按 overall/dataset/modality/sensor/normalization/scale 分组聚合指标。"""
 
     def __init__(self) -> None:
         self.groups: dict[str, list[dict[str, float]]] = defaultdict(list)
@@ -46,6 +46,10 @@ class MetricAccumulator:
             self.groups[f"sensor_combo={meta.get('sensor_combo', 'unknown')}"].append(item)
             self.groups[f"normalization_combo={meta.get('normalization_combo', 'unknown')}"].append(item)
             self.groups[f"dataset={meta.get('dataset_name', 'unknown')}"].append(item)
+            self.groups[f"gsd_token={meta.get('gsd_token', 'unknown')}"].append(item)
+            self.groups[f"target_area_px_bin={meta.get('target_area_px_bin', 'unknown')}"].append(item)
+            self.groups[f"target_area_fraction_bin={meta.get('target_area_fraction_bin', 'unknown')}"].append(item)
+            self.groups[f"ground_area_m2_bin={meta.get('ground_area_m2_bin', 'unknown')}"].append(item)
 
     def compute(self) -> dict[str, dict[str, float]]:
         out: dict[str, dict[str, float]] = {}

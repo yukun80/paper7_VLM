@@ -57,21 +57,27 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         num_heads: int,
         selection_proposal_weight: float = 1.0,
         selection_condition_weight: float = 1.0,
+        selection_evidence_weight: float = 0.25,
         selection_temperature: float = 1.0,
         final_foreground_gate_weight: float = 0.0,
         final_mask_fusion: str = "weighted_average",
         final_topk: int = 3,
         final_noisy_or_epsilon: float = 1.0e-5,
+        use_query_modality_attention: bool = True,
+        query_modality_feature_weight: float = 0.35,
     ) -> None:
         super().__init__()
         self.num_queries = int(num_queries)
         self.selection_proposal_weight = float(selection_proposal_weight)
         self.selection_condition_weight = float(selection_condition_weight)
+        self.selection_evidence_weight = float(selection_evidence_weight)
         self.selection_temperature = max(1.0e-3, float(selection_temperature))
         self.final_foreground_gate_weight = float(final_foreground_gate_weight)
         self.final_mask_fusion = str(final_mask_fusion)
         self.final_topk = max(1, int(final_topk))
         self.final_noisy_or_epsilon = max(1.0e-8, float(final_noisy_or_epsilon))
+        self.use_query_modality_attention = bool(use_query_modality_attention)
+        self.query_modality_feature_weight = float(query_modality_feature_weight)
         self.mask_tokens = nn.Parameter(torch.randn(num_queries, decoder_dim) * 0.02)
         self.query_pos = nn.Parameter(torch.randn(num_queries, decoder_dim) * 0.02)
         layer = nn.TransformerDecoderLayer(
@@ -89,6 +95,71 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         self.mask_embed = MLP(decoder_dim)
         self.proposal_head = nn.Linear(decoder_dim, 2)
         self.condition_scorer = ConditionAwareProposalScorer(decoder_dim)
+        self.evidence_scorer = ConditionAwareProposalScorer(decoder_dim)
+        self.query_modality_scorer = nn.Sequential(
+            nn.LayerNorm(decoder_dim * 4),
+            nn.Linear(decoder_dim * 4, decoder_dim),
+            nn.GELU(),
+            nn.Linear(decoder_dim, 1),
+        )
+
+    @staticmethod
+    def _modality_attention_stats(weights: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        safe = weights.float().clamp_min(1.0e-8)
+        entropy = -(safe * safe.log()).sum(dim=-1).mean(dim=1)
+        peak = safe.max(dim=-1).values.mean(dim=1)
+        return entropy.to(weights.dtype), peak.to(weights.dtype)
+
+    def _query_modality_masks(
+        self,
+        decoded: torch.Tensor,
+        condition_embedding: torch.Tensor,
+        mask_embed: torch.Tensor,
+        modality_features: torch.Tensor,
+        modality_active_mask: torch.Tensor,
+        global_modality_gate: torch.Tensor | None = None,
+        target_hw: tuple[int, int] | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """为每个 query 生成独立的模态加权 mask。
+
+        这一步让不同 mask proposal 能各自选择 DEM/SAR/InSAR/光学证据，而不是
+        被全局 fused feature 限制在同一套模态权重上。
+
+        旧实现会显式构造 ``[B,Q,D,H,W]`` query feature；在 256x256、16 个
+        mask token、decoder_dim=256 时反向传播显存很重。这里利用线性性先把
+        ``mask_embed`` 投影到每个模态的 mask，再按 query-modality gate 融合，
+        避免保留巨大的 query feature 中间张量。
+        """
+        if modality_features.shape[-2:] != target_hw and target_hw is not None:
+            bsz, num_modalities, channels, _, _ = modality_features.shape
+            flat = modality_features.reshape(bsz * num_modalities, channels, modality_features.shape[-2], modality_features.shape[-1])
+            flat = F.interpolate(flat, size=target_hw, mode="bilinear", align_corners=False)
+            modality_features = flat.view(bsz, num_modalities, channels, target_hw[0], target_hw[1])
+        pooled = modality_features.mean(dim=(3, 4))
+        bsz, num_queries, dim = decoded.shape
+        num_modalities = modality_features.shape[1]
+        query = decoded.unsqueeze(2).expand(bsz, num_queries, num_modalities, dim)
+        modality = pooled.unsqueeze(1).expand_as(query)
+        condition = condition_embedding[:, None, None, :].expand_as(query)
+        context = torch.cat([query, modality, condition, query * modality], dim=-1)
+        logits = self.query_modality_scorer(context).squeeze(-1)
+        active = modality_active_mask.to(device=logits.device, dtype=torch.bool)
+        if global_modality_gate is not None:
+            prior = torch.log(global_modality_gate.to(device=logits.device, dtype=logits.dtype).clamp_min(1.0e-6))
+            logits = logits + prior[:, None, :]
+        logits = logits.masked_fill(~active[:, None, :], -1.0e4)
+        weights = torch.softmax(logits.float(), dim=-1).to(modality_features.dtype)
+        weights = weights * active[:, None, :].to(weights.dtype)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
+        modality_masks = torch.einsum("bqd,bmdhw->bqmhw", mask_embed, modality_features)
+        query_masks = (modality_masks * weights[:, :, :, None, None]).sum(dim=2)
+        entropy, peak = self._modality_attention_stats(weights)
+        return query_masks, {
+            "query_modality_weights": weights,
+            "query_modality_entropy": entropy,
+            "query_modality_peak": peak,
+            "query_modality_logits": logits,
+        }
 
     def _fuse_final_masks(
         self,
@@ -149,6 +220,10 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
         memory_features: torch.Tensor,
         proposal_context: torch.Tensor,
         condition_embedding: torch.Tensor,
+        evidence_embedding: torch.Tensor | None = None,
+        modality_features: torch.Tensor | None = None,
+        modality_active_mask: torch.Tensor | None = None,
+        global_modality_gate: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         bsz = mask_features.shape[0]
         memory = memory_features.flatten(2).transpose(1, 2)
@@ -160,15 +235,34 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
 
         mask_embed = self.mask_embed(decoded)
         pred_masks = torch.einsum("bqd,bdhw->bqhw", mask_embed, mask_features)
+        query_modality_out: dict[str, torch.Tensor] = {}
+        if self.use_query_modality_attention and modality_features is not None and modality_active_mask is not None:
+            query_masks, query_modality_out = self._query_modality_masks(
+                decoded=decoded,
+                condition_embedding=condition_embedding,
+                mask_embed=mask_embed,
+                modality_features=modality_features,
+                modality_active_mask=modality_active_mask,
+                global_modality_gate=global_modality_gate,
+                target_hw=(int(mask_features.shape[-2]), int(mask_features.shape[-1])),
+            )
+            pred_masks = pred_masks + float(self.query_modality_feature_weight) * query_masks
         proposal_logits = self.proposal_head(decoded)
 
         score_out = self.condition_scorer(decoded, condition_embedding)
         condition_scores = score_out["condition_scores"]
+        evidence_out: dict[str, torch.Tensor] = {}
+        evidence_scores = None
+        if evidence_embedding is not None:
+            evidence_out = self.evidence_scorer(decoded, evidence_embedding)
+            evidence_scores = evidence_out["condition_scores"]
         proposal_fg_logits = proposal_logits[..., 1] - proposal_logits[..., 0]
         selection_logits = (
             float(self.selection_proposal_weight) * proposal_fg_logits
             + float(self.selection_condition_weight) * condition_scores
         )
+        if evidence_scores is not None and self.selection_evidence_weight:
+            selection_logits = selection_logits + float(self.selection_evidence_weight) * evidence_scores
         final_mask_logits, weights, selected_query_indices = self._fuse_final_masks(pred_masks, selection_logits)
         foreground_gate_logits = proposal_fg_logits.max(dim=1).values
         if self.final_foreground_gate_weight:
@@ -180,6 +274,7 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
             "proposal_logits": proposal_logits,
             "proposal_fg_logits": proposal_fg_logits,
             "condition_scores": condition_scores,
+            "evidence_scores": evidence_scores if evidence_scores is not None else torch.zeros_like(condition_scores),
             "selection_logits": selection_logits,
             "selection_weights": weights,
             "selected_query_indices": selected_query_indices,
@@ -187,6 +282,10 @@ class PSALMConditionAwareMaskDecoder(nn.Module):
             "condition_cosine_scores": score_out["condition_cosine_scores"],
             "condition_pair_logits": score_out["condition_pair_logits"],
             "condition_logit_scale": score_out["condition_logit_scale"].detach(),
+            "evidence_cosine_scores": evidence_out.get("condition_cosine_scores", torch.zeros_like(condition_scores)),
+            "evidence_pair_logits": evidence_out.get("condition_pair_logits", torch.zeros_like(condition_scores)),
+            "evidence_logit_scale": evidence_out.get("condition_logit_scale", torch.zeros((), device=condition_scores.device)).detach(),
             "final_mask_logits": final_mask_logits,
             "query_embeddings": decoded,
+            **query_modality_out,
         }

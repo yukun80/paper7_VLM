@@ -36,6 +36,7 @@ def load_light_config(path: str | None) -> dict[str, object]:
         "benchmark_dir": "benchmark/multisource_landslide_v1_small",
         "train_index": "indexes/instruction_train.jsonl",
         "val_index": "indexes/instruction_val.jsonl",
+        "test_index": "indexes/instruction_test.jsonl",
         "core_templates": list(DEFAULT_CORE_TEMPLATES),
     }
     if not path:
@@ -65,7 +66,7 @@ def load_light_config(path: str | None) -> dict[str, object]:
         if key == "core_templates":
             data[key] = []
             current_list = key
-        elif key in {"benchmark_dir", "train_index", "val_index"}:
+        elif key in {"benchmark_dir", "train_index", "val_index", "test_index"}:
             data[key] = value.strip("'\"")
     return data
 
@@ -74,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Inspect QPSALM instruction dataset fields.")
     parser.add_argument("--config", default="SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_core.yaml")
     parser.add_argument("--benchmark-dir", default=None)
-    parser.add_argument("--split", choices=["train", "val"], default="train")
+    parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--limit", type=int, default=16, help="Limit displayed entries per counter.")
     parser.add_argument("--max-rows", type=int, default=None, help="Optionally scan only the first N rows.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
@@ -85,7 +86,12 @@ def main() -> None:
     args = parse_args()
     config = load_light_config(args.config)
     benchmark_dir = Path(args.benchmark_dir or str(config["benchmark_dir"]))
-    index_rel = str(config["train_index"] if args.split == "train" else config["val_index"])
+    if args.split == "train":
+        index_rel = str(config["train_index"])
+    elif args.split == "val":
+        index_rel = str(config["val_index"])
+    else:
+        index_rel = str(config["test_index"])
     core_templates = list(config["core_templates"])
     index_path = resolve_repo_path(benchmark_dir / index_rel)
     if index_path is None:
