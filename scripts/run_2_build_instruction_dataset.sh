@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
-# 批运行脚本：构建多源滑坡 instruction segmentation 训练索引。
+# 用途：批量构建多源滑坡 instruction segmentation 训练索引。
+# 推荐运行命令：bash scripts/run_2_build_instruction_dataset.sh small
+# 也可运行：bash scripts/run_2_build_instruction_dataset.sh full
+#          bash scripts/run_2_build_instruction_dataset.sh both
 #
-# 脚本作用：按固定顺序运行 2-1 到 2-3，完成任务指令模板校验、
+# 按固定顺序运行 2-1 到 2-3，完成任务指令模板校验、
 # instruction_*.jsonl 生成和 instruction 索引验证。
-# 主要输入：benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl、
+# 主要输入：仓库同级 benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl、
 # indexes/referring_target_all.jsonl，以及 configs/instruction_templates/*.yaml。
 # 主要输出：benchmark/multisource_landslide_v1_<mode>/indexes/instruction_*.jsonl
 # 和 reports/instruction_*.json。
-# 是否改写原始数据：不会改写 datasets/；不会覆盖 1-benchmark 生成的 all/referring_target 索引。
+# 写入行为：不会改写 datasets/；不会覆盖 1-benchmark 生成的 all/referring_target 索引。
+# 所属流程：主数据流程第 2 阶段；必须先完成对应 small/full benchmark。
 # 环境变量覆盖：BENCHMARK_PREFIX、TEMPLATE_CONFIG、PYTHON_BIN 可覆盖；
 # 默认 PYTHON_BIN=python，建议先 conda activate qwen3vl。
 #
-# 用法：
-#   bash scripts/run_2_build_instruction_dataset.sh small
-#   bash scripts/run_2_build_instruction_dataset.sh full
-#   bash scripts/run_2_build_instruction_dataset.sh both
-
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+WORKSPACE_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 MODE="${1:-small}"
-BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-benchmark/multisource_landslide_v1}"
+DEFAULT_BENCHMARK_ROOT="${WORKSPACE_ROOT}/benchmark"
+if [[ ! -d "${DEFAULT_BENCHMARK_ROOT}" && -d "${REPO_ROOT}/benchmark" ]]; then
+  DEFAULT_BENCHMARK_ROOT="${REPO_ROOT}/benchmark"
+fi
+BENCHMARK_ROOT="${PAPER7_BENCHMARK_ROOT:-${DEFAULT_BENCHMARK_ROOT}}"
+BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-${BENCHMARK_ROOT}/multisource_landslide_v1}"
 TEMPLATE_CONFIG="${TEMPLATE_CONFIG:-configs/instruction_templates/multisource_landslide_v1.yaml}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+
+export PAPER7_BENCHMARK_ROOT="$(dirname "${BENCHMARK_PREFIX}")"
+echo "benchmark_root=${PAPER7_BENCHMARK_ROOT}"
 
 run_one_mode() {
   local mode="$1"

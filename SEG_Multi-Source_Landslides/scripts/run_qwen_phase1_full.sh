@@ -1,376 +1,164 @@
 #!/usr/bin/env bash
-# 用途：在单卡 CUDA 上运行 Phase 1 baseline/evidence Qwen-cache 训练闭环。
-# 运行：BENCHMARK_SIZE=full bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-# 说明：默认跑 evidence+visual verifier 路线；box-prior 已降级为显式 legacy ablation。
-#       VERIFIER_STAGE 可选 condition_only/evidence_text/visual_evidence/evidence_visual。
-#       BENCHMARK_SIZE 可选 small/full；重跑用 RUN_CONTROL=--overwrite，续训用 RUN_CONTROL=--resume-existing。
+# 用途：构建核心索引与 Qwen cache，并训练、评估、汇总和诊断 SANE-QMEF-PMRD。
+# 推荐运行命令：BENCHMARK_SIZE=small PRESET=sane_qmef_pmrd RUN_NAME=small_main \
+#   RUN_CONTROL=--overwrite bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
+# Full 示例：BENCHMARK_SIZE=full PRESET=sane_qmef_pmrd RUN_NAME=full_main \
+#   RUN_CONTROL=--overwrite bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
+# 主要输入：instruction train/val 索引、本地 Qwen3-VL 权重、YAML runtime 配置和 Python preset。
+# 主要输出：核心索引、Qwen cache、best/last checkpoint、eval report、分析表和可视化。
+# 写入行为：写 outputs/qpsalm_refactor；RUN_CONTROL=--overwrite 会覆盖同名运行产物。
+# 所属流程：主模型正式实验入口；应先完成 benchmark 与 instruction 数据构建。
+# 注意事项：算法与训练规模来自 Python preset + YAML，本脚本只编排数据、设备和运行目录。
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+WORKSPACE_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/yukun80/miniconda3/envs/qwen3vl/bin/python}"
 BENCHMARK_SIZE="${BENCHMARK_SIZE:-small}"
+PRESET="${PRESET:-sane_qmef_pmrd}"
+DEVICE="${DEVICE:-cuda}"
+RUN_NAME="${RUN_NAME:-${PRESET}_${BENCHMARK_SIZE}}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/qpsalm_refactor}"
+RUN_CONTROL="${RUN_CONTROL:-}"
+
 case "${BENCHMARK_SIZE}" in
   small)
-    DEFAULT_CONFIG="SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml"
-    DEFAULT_BATCH_SIZE="2"
-    DEFAULT_GRAD_ACCUM_STEPS="2"
-    DEFAULT_MAX_VAL_SAMPLES="0"
+    CONFIG="${CONFIG:-SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml}"
+    BENCHMARK_DIR="${BENCHMARK_DIR:-benchmark/multisource_landslide_v1_small}"
     ;;
   full)
-    DEFAULT_CONFIG="SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml"
-    DEFAULT_BATCH_SIZE="1"
-    DEFAULT_GRAD_ACCUM_STEPS="4"
-    DEFAULT_MAX_VAL_SAMPLES="1024"
+    CONFIG="${CONFIG:-SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml}"
+    BENCHMARK_DIR="${BENCHMARK_DIR:-benchmark/multisource_landslide_v1_full}"
     ;;
   *)
     echo "Unsupported BENCHMARK_SIZE=${BENCHMARK_SIZE}; expected small or full" >&2
     exit 2
     ;;
 esac
-CONFIG="${CONFIG:-${DEFAULT_CONFIG}}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/qpsalm_phase1}"
-RUN_NAME="${RUN_NAME:-qwen_cached_${BENCHMARK_SIZE}_balanced}"
-MODE="${MODE:-baseline}"
-DEVICE="${DEVICE:-cuda}"
-CONTROLLER="${CONTROLLER:-qwen_cache}"
-EMBEDDING_BACKEND="${EMBEDDING_BACKEND:-qwen}"
-EMBEDDING_CACHE="${EMBEDDING_CACHE:-}"
-EMBEDDING_DEVICE="${EMBEDDING_DEVICE:-}"
-REUSE_EMBEDDING_CACHE="${REUSE_EMBEDDING_CACHE:-0}"
-VISUAL_EVIDENCE_BACKEND="${VISUAL_EVIDENCE_BACKEND:-off}"
-VISUAL_EVIDENCE_BATCH_SIZE="${VISUAL_EVIDENCE_BATCH_SIZE:-1}"
-HASH_VISUAL_HIDDEN_SIZE="${HASH_VISUAL_HIDDEN_SIZE:-1024}"
-VISUAL_EVIDENCE_CACHE="${VISUAL_EVIDENCE_CACHE:-}"
-REUSE_VISUAL_EVIDENCE_CACHE="${REUSE_VISUAL_EVIDENCE_CACHE:-0}"
-ALLOW_QWEN_CPU="${ALLOW_QWEN_CPU:-0}"
-TARGET_SIZE="${TARGET_SIZE:-256}"
-BATCH_SIZE="${BATCH_SIZE:-${DEFAULT_BATCH_SIZE}}"
-GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-${DEFAULT_GRAD_ACCUM_STEPS}}"
-MAX_STEPS="${MAX_STEPS:-20000}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-1000}"
-KEEP_RECENT_CHECKPOINTS="${KEEP_RECENT_CHECKPOINTS:-2}"
-MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-${DEFAULT_MAX_VAL_SAMPLES}}"
-MAX_VAL_BATCHES="${MAX_VAL_BATCHES:-0}"
-INDEX_STRATEGY="${INDEX_STRATEGY:-balanced-canonical}"
-INDEX_CACHE_DIR="${INDEX_CACHE_DIR:-}"
-MAX_INDEX_ROWS="${MAX_INDEX_ROWS:-0}"
-MAX_INDEX_SAMPLES="${MAX_INDEX_SAMPLES:-0}"
-REUSE_INDEX_CACHE="${REUSE_INDEX_CACHE:-0}"
-SAMPLES_PER_COMBO="${SAMPLES_PER_COMBO:-64}"
-NUM_VISUALIZATIONS="${NUM_VISUALIZATIONS:-8}"
-LOG_INTERVAL="${LOG_INTERVAL:-100}"
-LOSS_STAGE="${LOSS_STAGE:-full}"
-VERIFIER_STAGE="${VERIFIER_STAGE:-evidence_visual}"
-EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.5}"
-EVAL_BEST_THRESHOLD="${EVAL_BEST_THRESHOLD:-1}"
-USE_GSD_FILM="${USE_GSD_FILM:-1}"
-USE_SPATIAL_MODALITY_GATE="${USE_SPATIAL_MODALITY_GATE:-1}"
-USE_QUERY_MODALITY_ATTENTION="${USE_QUERY_MODALITY_ATTENTION:-1}"
-QUERY_MODALITY_FEATURE_WEIGHT="${QUERY_MODALITY_FEATURE_WEIGHT:-0.35}"
-USE_EVIDENCE_REASONING="${USE_EVIDENCE_REASONING:-1}"
-EVIDENCE_REASONING_WEIGHT="${EVIDENCE_REASONING_WEIGHT:-0.35}"
-SELECTION_EVIDENCE_WEIGHT="${SELECTION_EVIDENCE_WEIGHT:-0.25}"
-USE_VISUAL_EVIDENCE="${USE_VISUAL_EVIDENCE:-1}"
-VISUAL_EVIDENCE_WEIGHT="${VISUAL_EVIDENCE_WEIGHT:-0.25}"
-VISUAL_EVIDENCE_FEATURE_WEIGHT="${VISUAL_EVIDENCE_FEATURE_WEIGHT:-0.15}"
-SELECTION_VISUAL_EVIDENCE_WEIGHT="${SELECTION_VISUAL_EVIDENCE_WEIGHT:-0.15}"
-FOREGROUND_BCE_POS_WEIGHT="${FOREGROUND_BCE_POS_WEIGHT:-2.0}"
-MASK_TVERSKY_WEIGHT="${MASK_TVERSKY_WEIGHT:-0.5}"
-TVERSKY_ALPHA="${TVERSKY_ALPHA:-0.3}"
-TVERSKY_BETA="${TVERSKY_BETA:-0.7}"
-EMPTY_MASK_SUPPRESSION_WEIGHT="${EMPTY_MASK_SUPPRESSION_WEIGHT:-0.3}"
-EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="${EMPTY_PROPOSAL_SUPPRESSION_WEIGHT:-0.1}"
-PROPOSAL_POSITIVE_WEIGHT="${PROPOSAL_POSITIVE_WEIGHT:-4.0}"
-CONDITION_POSITIVE_WEIGHT="${CONDITION_POSITIVE_WEIGHT:-4.0}"
-EVIDENCE_POSITIVE_WEIGHT="${EVIDENCE_POSITIVE_WEIGHT:-4.0}"
-QUERY_DIVERSITY_LOSS_WEIGHT="${QUERY_DIVERSITY_LOSS_WEIGHT:-0.02}"
-SELECTION_RANKING_LOSS_WEIGHT="${SELECTION_RANKING_LOSS_WEIGHT:-0.2}"
-PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="${PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT:-0.05}"
-GATE_ENTROPY_LOSS_WEIGHT="${GATE_ENTROPY_LOSS_WEIGHT:-0.02}"
-PROPOSAL_SOFT_TARGET_TOPK="${PROPOSAL_SOFT_TARGET_TOPK:-3}"
-PROPOSAL_SOFT_TARGET_TEMPERATURE="${PROPOSAL_SOFT_TARGET_TEMPERATURE:-0.10}"
-QUERY_USAGE_BALANCE_LOSS_WEIGHT="${QUERY_USAGE_BALANCE_LOSS_WEIGHT:-0.02}"
-EVIDENCE_CLS_WEIGHT="${EVIDENCE_CLS_WEIGHT:-0.1}"
-EVIDENCE_RANKING_LOSS_WEIGHT="${EVIDENCE_RANKING_LOSS_WEIGHT:-0.1}"
-VISUAL_EVIDENCE_CLS_WEIGHT="${VISUAL_EVIDENCE_CLS_WEIGHT:-0.05}"
-VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT="${VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT:-0.05}"
-TRAIN_HFLIP_PROB="${TRAIN_HFLIP_PROB:-0.5}"
-TRAIN_VFLIP_PROB="${TRAIN_VFLIP_PROB:-0.5}"
-SELECTION_PROPOSAL_WEIGHT="${SELECTION_PROPOSAL_WEIGHT:-1.0}"
-SELECTION_CONDITION_WEIGHT="${SELECTION_CONDITION_WEIGHT:-0.5}"
-SELECTION_TEMPERATURE="${SELECTION_TEMPERATURE:-1.0}"
-FINAL_FOREGROUND_GATE_WEIGHT="${FINAL_FOREGROUND_GATE_WEIGHT:-0.25}"
-FINAL_MASK_FUSION="${FINAL_MASK_FUSION:-topk_noisy_or}"
-FINAL_TOPK="${FINAL_TOPK:-3}"
-FINAL_NOISY_OR_EPSILON="${FINAL_NOISY_OR_EPSILON:-0.00001}"
-CANONICAL_COMBO_LOSS_WEIGHTS="${CANONICAL_COMBO_LOSS_WEIGHTS:-dem+s2=2.5,dem+s1+s2=1.5}"
-NUM_WORKERS="${NUM_WORKERS:-8}"
-EMBEDDING_BATCH_SIZE="${EMBEDDING_BATCH_SIZE:-1}"
-RUN_CONTROL="${RUN_CONTROL:-}"
-QPSALM_EXTRA_ARGS="${QPSALM_EXTRA_ARGS:-}"
-VERIFY_AFTER_RUN="${VERIFY_AFTER_RUN:-1}"
 
-case "${LOSS_STAGE}" in
-  base)
-    PROPOSAL_CLS_WEIGHT="0.0"
-    CONDITION_CLS_WEIGHT="0.0"
-    PROPOSAL_MASK_WEIGHT="0.0"
-    CONDITION_RANKING_LOSS_WEIGHT="0.0"
-    SELECTION_RANKING_LOSS_WEIGHT="0.0"
-    EMPTY_MASK_SUPPRESSION_WEIGHT="0.0"
-    EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="0.0"
-    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
-    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
-    GATE_ENTROPY_LOSS_WEIGHT="0.0"
-    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
-    SELECTION_CONDITION_WEIGHT="0.0"
-    SELECTION_EVIDENCE_WEIGHT="0.0"
-    SELECTION_VISUAL_EVIDENCE_WEIGHT="0.0"
-    EVIDENCE_CLS_WEIGHT="0.0"
-    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_CLS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
-    FINAL_MASK_FUSION="weighted_average"
-    ;;
-  proposal)
-    CONDITION_CLS_WEIGHT="0.0"
-    CONDITION_RANKING_LOSS_WEIGHT="0.0"
-    SELECTION_RANKING_LOSS_WEIGHT="0.0"
-    EMPTY_MASK_SUPPRESSION_WEIGHT="0.0"
-    EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="0.0"
-    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
-    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
-    GATE_ENTROPY_LOSS_WEIGHT="0.0"
-    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
-    PROPOSAL_SOFT_TARGET_TOPK="1"
-    SELECTION_CONDITION_WEIGHT="0.0"
-    SELECTION_EVIDENCE_WEIGHT="0.0"
-    SELECTION_VISUAL_EVIDENCE_WEIGHT="0.0"
-    EVIDENCE_CLS_WEIGHT="0.0"
-    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_CLS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
-    FINAL_MASK_FUSION="weighted_average"
-    ;;
-  condition)
-    EMPTY_MASK_SUPPRESSION_WEIGHT="0.0"
-    EMPTY_PROPOSAL_SUPPRESSION_WEIGHT="0.0"
-    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
-    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
-    GATE_ENTROPY_LOSS_WEIGHT="0.0"
-    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
-    PROPOSAL_SOFT_TARGET_TOPK="1"
-    SELECTION_EVIDENCE_WEIGHT="0.0"
-    SELECTION_VISUAL_EVIDENCE_WEIGHT="0.0"
-    EVIDENCE_CLS_WEIGHT="0.0"
-    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_CLS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
-    FINAL_MASK_FUSION="weighted_average"
-    ;;
-  modality)
-    QUERY_DIVERSITY_LOSS_WEIGHT="0.0"
-    PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT="0.0"
-    QUERY_USAGE_BALANCE_LOSS_WEIGHT="0.0"
-    PROPOSAL_SOFT_TARGET_TOPK="1"
-    SELECTION_EVIDENCE_WEIGHT="0.0"
-    SELECTION_VISUAL_EVIDENCE_WEIGHT="0.0"
-    EVIDENCE_CLS_WEIGHT="0.0"
-    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_CLS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    FINAL_FOREGROUND_GATE_WEIGHT="0.0"
-    FINAL_MASK_FUSION="weighted_average"
-    ;;
-  full)
-    ;;
-  *)
-    echo "Unsupported LOSS_STAGE=${LOSS_STAGE}; expected full/base/proposal/condition/modality" >&2
-    exit 2
-    ;;
+case "${RUN_CONTROL}" in
+  ""|--overwrite|--resume-existing) ;;
+  *) echo "Unsupported RUN_CONTROL=${RUN_CONTROL}" >&2; exit 2 ;;
 esac
 
-case "${VERIFIER_STAGE}" in
-  condition_only)
-    USE_EVIDENCE_REASONING="0"
-    USE_VISUAL_EVIDENCE="0"
-    VISUAL_EVIDENCE_BACKEND="off"
-    SELECTION_EVIDENCE_WEIGHT="0.0"
-    SELECTION_VISUAL_EVIDENCE_WEIGHT="0.0"
-    EVIDENCE_CLS_WEIGHT="0.0"
-    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_CLS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    ;;
-  evidence_text)
-    USE_EVIDENCE_REASONING="1"
-    USE_VISUAL_EVIDENCE="0"
-    VISUAL_EVIDENCE_BACKEND="off"
-    SELECTION_VISUAL_EVIDENCE_WEIGHT="0.0"
-    VISUAL_EVIDENCE_CLS_WEIGHT="0.0"
-    VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    ;;
-  visual_evidence)
-    USE_EVIDENCE_REASONING="0"
-    USE_VISUAL_EVIDENCE="1"
-    SELECTION_EVIDENCE_WEIGHT="0.0"
-    EVIDENCE_CLS_WEIGHT="0.0"
-    EVIDENCE_RANKING_LOSS_WEIGHT="0.0"
-    ;;
-  evidence_visual)
-    USE_EVIDENCE_REASONING="1"
-    USE_VISUAL_EVIDENCE="1"
-    ;;
-  *)
-    echo "Unsupported VERIFIER_STAGE=${VERIFIER_STAGE}; expected condition_only/evidence_text/visual_evidence/evidence_visual" >&2
-    exit 2
-    ;;
-esac
-
+DEFAULT_BENCHMARK_ROOT="${WORKSPACE_ROOT}/benchmark"
+if [[ ! -d "${DEFAULT_BENCHMARK_ROOT}" && -d "${REPO_ROOT}/benchmark" ]]; then
+  DEFAULT_BENCHMARK_ROOT="${REPO_ROOT}/benchmark"
+fi
+export PAPER7_BENCHMARK_ROOT="${PAPER7_BENCHMARK_ROOT:-${DEFAULT_BENCHMARK_ROOT}}"
 export PYTHONPATH="SEG_Multi-Source_Landslides${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 
-OPTIONAL_ARGS=()
-if [[ -n "${INDEX_CACHE_DIR}" ]]; then
-  OPTIONAL_ARGS+=(--index-cache-dir "${INDEX_CACHE_DIR}")
-fi
-if [[ "${MAX_INDEX_ROWS}" -gt 0 ]]; then
-  OPTIONAL_ARGS+=(--max-index-rows "${MAX_INDEX_ROWS}")
-fi
-if [[ "${MAX_INDEX_SAMPLES}" -gt 0 ]]; then
-  OPTIONAL_ARGS+=(--max-index-samples "${MAX_INDEX_SAMPLES}")
-fi
-if [[ "${REUSE_INDEX_CACHE}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--reuse-index-cache)
-fi
-if [[ -n "${EMBEDDING_CACHE}" ]]; then
-  OPTIONAL_ARGS+=(--embedding-cache "${EMBEDDING_CACHE}")
-fi
-if [[ -n "${EMBEDDING_DEVICE}" ]]; then
-  OPTIONAL_ARGS+=(--embedding-device "${EMBEDDING_DEVICE}")
-fi
-if [[ "${REUSE_EMBEDDING_CACHE}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--reuse-embedding-cache)
-fi
-if [[ "${ALLOW_QWEN_CPU}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--allow-qwen-cpu)
-fi
-if [[ "${EVAL_BEST_THRESHOLD}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--eval-best-threshold)
-fi
-if [[ "${USE_GSD_FILM}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--use-gsd-film)
-else
-  OPTIONAL_ARGS+=(--no-use-gsd-film)
-fi
-if [[ "${USE_SPATIAL_MODALITY_GATE}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--use-spatial-modality-gate)
-else
-  OPTIONAL_ARGS+=(--no-use-spatial-modality-gate)
-fi
-if [[ "${USE_QUERY_MODALITY_ATTENTION}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--use-query-modality-attention)
-else
-  OPTIONAL_ARGS+=(--no-use-query-modality-attention)
-fi
-if [[ "${USE_EVIDENCE_REASONING}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--use-evidence-reasoning)
-else
-  OPTIONAL_ARGS+=(--no-use-evidence-reasoning)
-fi
-if [[ "${USE_VISUAL_EVIDENCE}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--use-visual-evidence)
-else
-  OPTIONAL_ARGS+=(--no-use-visual-evidence)
-fi
-if [[ -n "${VISUAL_EVIDENCE_CACHE}" ]]; then
-  OPTIONAL_ARGS+=(--visual-evidence-cache "${VISUAL_EVIDENCE_CACHE}")
-fi
-if [[ "${REUSE_VISUAL_EVIDENCE_CACHE}" == "1" ]]; then
-  OPTIONAL_ARGS+=(--reuse-visual-evidence-cache)
+RUN_ROOT="${OUTPUT_ROOT}/${RUN_NAME}"
+INDEX_DIR="${RUN_ROOT}/index_cache"
+TRAIN_INDEX="${INDEX_DIR}/qpsalm_core_train.jsonl"
+VAL_INDEX="${INDEX_DIR}/qpsalm_core_val.jsonl"
+CONDITION_CACHE="${RUN_ROOT}/condition_cache.pt"
+VISUAL_CACHE="${RUN_ROOT}/multiview_cache_v2.pt"
+TRAIN_DIR="${RUN_ROOT}/${PRESET}"
+EVAL_DIR="${RUN_ROOT}/${PRESET}_eval"
+
+echo "benchmark_dir=${BENCHMARK_DIR}"
+echo "benchmark_root=${PAPER7_BENCHMARK_ROOT}"
+echo "config=${CONFIG} preset=${PRESET} run_root=${RUN_ROOT}"
+
+if [[ "${RUN_CONTROL}" == "" && -f "${TRAIN_DIR}/checkpoint_last.pt" ]]; then
+  echo "Run already exists: ${TRAIN_DIR}; set RUN_CONTROL=--overwrite or --resume-existing" >&2
+  exit 2
 fi
 
-"${PYTHON_BIN}" -m qpsalm_seg.cli.run_phase1 \
+if [[ "${RUN_CONTROL}" == "--overwrite" || ! -f "${TRAIN_INDEX}" || ! -f "${VAL_INDEX}" ]]; then
+  "${PYTHON_BIN}" -m qpsalm_seg.cli.cache_index \
+    --config "${CONFIG}" \
+    --benchmark-dir "${BENCHMARK_DIR}" \
+    --output-dir "${INDEX_DIR}" \
+    --split both \
+    --strategy round-robin-canonical
+fi
+
+if [[ "${RUN_CONTROL}" == "--overwrite" || ! -f "${CONDITION_CACHE}" ]]; then
+  "${PYTHON_BIN}" -m qpsalm_seg.cli.cache_qwen_embeddings \
+    --config "${CONFIG}" \
+    --benchmark-dir "${BENCHMARK_DIR}" \
+    --train-index "${TRAIN_INDEX}" \
+    --val-index "${VAL_INDEX}" \
+    --output "${CONDITION_CACHE}" \
+    --device "${DEVICE}" \
+    --backend qwen \
+    --overwrite
+fi
+
+VISUAL_ARGS=()
+if [[ "${PRESET}" == "full_multiview" ]]; then
+  if [[ "${RUN_CONTROL}" == "--overwrite" || ! -f "${VISUAL_CACHE}" ]]; then
+    "${PYTHON_BIN}" -m qpsalm_seg.cli.cache_qwen_visual_evidence \
+      --config "${CONFIG}" \
+      --benchmark-dir "${BENCHMARK_DIR}" \
+      --train-index "${TRAIN_INDEX}" \
+      --val-index "${VAL_INDEX}" \
+      --output "${VISUAL_CACHE}" \
+      --device "${DEVICE}" \
+      --backend qwen \
+      --overwrite
+  fi
+  VISUAL_ARGS+=(--visual-evidence-cache "${VISUAL_CACHE}")
+fi
+
+TRAIN_CONTROL=()
+RESUME_ARGS=()
+if [[ "${RUN_CONTROL}" == "--overwrite" ]]; then
+  TRAIN_CONTROL+=(--overwrite-output)
+elif [[ "${RUN_CONTROL}" == "--resume-existing" && -f "${TRAIN_DIR}/checkpoint_last.pt" ]]; then
+  RESUME_ARGS+=(--resume "${TRAIN_DIR}/checkpoint_last.pt")
+fi
+
+"${PYTHON_BIN}" -m qpsalm_seg.cli.train \
   --config "${CONFIG}" \
-  --output-root "${OUTPUT_ROOT}" \
-  --run-name "${RUN_NAME}" \
-  --mode "${MODE}" \
+  --preset "${PRESET}" \
+  --benchmark-dir "${BENCHMARK_DIR}" \
   --device "${DEVICE}" \
-  --controller "${CONTROLLER}" \
-  --embedding-backend "${EMBEDDING_BACKEND}" \
-  --embedding-batch-size "${EMBEDDING_BATCH_SIZE}" \
-  --visual-evidence-backend "${VISUAL_EVIDENCE_BACKEND}" \
-  --visual-evidence-batch-size "${VISUAL_EVIDENCE_BATCH_SIZE}" \
-  --hash-visual-hidden-size "${HASH_VISUAL_HIDDEN_SIZE}" \
-  --index-strategy "${INDEX_STRATEGY}" \
-  --samples-per-combo "${SAMPLES_PER_COMBO}" \
-  --target-size "${TARGET_SIZE}" \
-  --batch-size "${BATCH_SIZE}" \
-  --grad-accum-steps "${GRAD_ACCUM_STEPS}" \
-  --max-steps "${MAX_STEPS}" \
-  --save-interval "${SAVE_INTERVAL}" \
-  --keep-recent-checkpoints "${KEEP_RECENT_CHECKPOINTS}" \
-  --max-val-samples "${MAX_VAL_SAMPLES}" \
-  --max-val-batches "${MAX_VAL_BATCHES}" \
-  --num-visualizations "${NUM_VISUALIZATIONS}" \
-  --log-interval "${LOG_INTERVAL}" \
-  --loss-stage "${LOSS_STAGE}" \
-  --verifier-stage "${VERIFIER_STAGE}" \
-  --query-modality-feature-weight "${QUERY_MODALITY_FEATURE_WEIGHT}" \
-  --evidence-reasoning-weight "${EVIDENCE_REASONING_WEIGHT}" \
-  --selection-evidence-weight "${SELECTION_EVIDENCE_WEIGHT}" \
-  --selection-visual-evidence-weight "${SELECTION_VISUAL_EVIDENCE_WEIGHT}" \
-  --visual-evidence-weight "${VISUAL_EVIDENCE_WEIGHT}" \
-  --visual-evidence-feature-weight "${VISUAL_EVIDENCE_FEATURE_WEIGHT}" \
-  --eval-threshold "${EVAL_THRESHOLD}" \
-  --foreground-bce-pos-weight "${FOREGROUND_BCE_POS_WEIGHT}" \
-  --mask-tversky-weight "${MASK_TVERSKY_WEIGHT}" \
-  --tversky-alpha "${TVERSKY_ALPHA}" \
-  --tversky-beta "${TVERSKY_BETA}" \
-  --empty-mask-suppression-weight "${EMPTY_MASK_SUPPRESSION_WEIGHT}" \
-  --empty-proposal-suppression-weight "${EMPTY_PROPOSAL_SUPPRESSION_WEIGHT}" \
-  --proposal-positive-weight "${PROPOSAL_POSITIVE_WEIGHT}" \
-  --condition-positive-weight "${CONDITION_POSITIVE_WEIGHT}" \
-  --evidence-positive-weight "${EVIDENCE_POSITIVE_WEIGHT}" \
-  --query-diversity-loss-weight "${QUERY_DIVERSITY_LOSS_WEIGHT}" \
-  --selection-ranking-loss-weight "${SELECTION_RANKING_LOSS_WEIGHT}" \
-  --proposal-mask-diversity-loss-weight "${PROPOSAL_MASK_DIVERSITY_LOSS_WEIGHT}" \
-  --gate-entropy-loss-weight "${GATE_ENTROPY_LOSS_WEIGHT}" \
-  --proposal-soft-target-topk "${PROPOSAL_SOFT_TARGET_TOPK}" \
-  --proposal-soft-target-temperature "${PROPOSAL_SOFT_TARGET_TEMPERATURE}" \
-  --query-usage-balance-loss-weight "${QUERY_USAGE_BALANCE_LOSS_WEIGHT}" \
-  --evidence-cls-weight "${EVIDENCE_CLS_WEIGHT}" \
-  --evidence-ranking-loss-weight "${EVIDENCE_RANKING_LOSS_WEIGHT}" \
-  --visual-evidence-cls-weight "${VISUAL_EVIDENCE_CLS_WEIGHT}" \
-  --visual-evidence-ranking-loss-weight "${VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT}" \
-  --train-hflip-prob "${TRAIN_HFLIP_PROB}" \
-  --train-vflip-prob "${TRAIN_VFLIP_PROB}" \
-  --selection-proposal-weight "${SELECTION_PROPOSAL_WEIGHT}" \
-  --selection-condition-weight "${SELECTION_CONDITION_WEIGHT}" \
-  --selection-temperature "${SELECTION_TEMPERATURE}" \
-  --final-foreground-gate-weight "${FINAL_FOREGROUND_GATE_WEIGHT}" \
-  --final-mask-fusion "${FINAL_MASK_FUSION}" \
-  --final-topk "${FINAL_TOPK}" \
-  --final-noisy-or-epsilon "${FINAL_NOISY_OR_EPSILON}" \
-  --canonical-combo-loss-weights "${CANONICAL_COMBO_LOSS_WEIGHTS}" \
-  --num-workers "${NUM_WORKERS}" \
-  --min-visualizations "${NUM_VISUALIZATIONS}" \
-  "${OPTIONAL_ARGS[@]}" \
-  ${RUN_CONTROL} \
-  ${QPSALM_EXTRA_ARGS}
+  --controller qwen_cache \
+  --condition-embedding-cache "${CONDITION_CACHE}" \
+  --train-index "${TRAIN_INDEX}" \
+  --val-index "${VAL_INDEX}" \
+  --output-dir "${TRAIN_DIR}" \
+  --skip-torch-preflight \
+  "${VISUAL_ARGS[@]}" \
+  "${TRAIN_CONTROL[@]}" \
+  "${RESUME_ARGS[@]}"
 
-if [[ "${VERIFY_AFTER_RUN}" == "1" ]]; then
-  "${PYTHON_BIN}" -m qpsalm_seg.cli.verify_phase1 \
-    --run-root "${OUTPUT_ROOT}/${RUN_NAME}" \
-    --require-mode "${MODE}" \
-    --require-embedding-backend "${EMBEDDING_BACKEND}" \
-    --require-device "${DEVICE}" \
-    --min-visualizations "${NUM_VISUALIZATIONS}"
+CHECKPOINT="${TRAIN_DIR}/checkpoint_best.pt"
+if [[ ! -f "${CHECKPOINT}" ]]; then
+  CHECKPOINT="${TRAIN_DIR}/checkpoint_last.pt"
 fi
+
+EVAL_CONTROL=()
+if [[ "${RUN_CONTROL}" == "--overwrite" ]]; then
+  EVAL_CONTROL+=(--overwrite-output)
+fi
+
+"${PYTHON_BIN}" -m qpsalm_seg.cli.eval \
+  --config "${CONFIG}" \
+  --preset "${PRESET}" \
+  --checkpoint "${CHECKPOINT}" \
+  --benchmark-dir "${BENCHMARK_DIR}" \
+  --device "${DEVICE}" \
+  --controller qwen_cache \
+  --condition-embedding-cache "${CONDITION_CACHE}" \
+  --val-index "${VAL_INDEX}" \
+  --output-dir "${EVAL_DIR}" \
+  --skip-torch-preflight \
+  "${VISUAL_ARGS[@]}" \
+  "${EVAL_CONTROL[@]}"
+
+"${PYTHON_BIN}" -m qpsalm_seg.cli.summarize_run \
+  --run-dir "${TRAIN_DIR}" \
+  --eval-dir "${EVAL_DIR}"
+
+"${PYTHON_BIN}" -m qpsalm_seg.cli.diagnose_run \
+  --run "${TRAIN_DIR}/run_summary.json" \
+  --output "${TRAIN_DIR}/diagnose_report.json"

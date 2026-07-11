@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 """步骤 1-2：把异构数据集整理成统一 JSONL 索引。
 
-脚本作用：对应 Task_Introduction.md 的“步骤 2”，把不同目录结构、
+用途：对应 benchmark 步骤 2，把不同目录结构、
 文件格式和模态组合整理为 source JSONL；该索引允许记录 datasets/ 原始路径，
 仅供 1-4 物化阶段读取，不作为最终训练索引。
 主要输入：datasets/ 原始数据目录，以及 --mode small|full、--small-limit 等参数。
 主要输出：indexes/source_all.jsonl、source_train.jsonl、source_val.jsonl、
 source_test.jsonl、source_unlabeled.jsonl。
-是否改写原始数据：不会改写 datasets/；.npy/HDF5/NetCDF 使用虚拟引用，不拆大文件。
-典型用法：python scripts/1-benchmark/1-2_build_index.py --mode small --small-limit 1000 --datasets-root datasets --out-dir benchmark/multisource_landslide_v1_small
+写入行为：不会改写 datasets/；.npy/HDF5/NetCDF 使用虚拟引用，不拆大文件。
+所属流程：benchmark 构建 1-2；应在 1-1 后运行，也可由总控 Shell 调用。
+推荐运行命令：python scripts/1-benchmark/1-2_build_index.py --mode small --small-limit 1000 --datasets-root datasets --out-dir benchmark/multisource_landslide_v1_small
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from geohazard_benchmark_common import (
     mask_entry,
     modality_entry,
     parse_npy_header,
+    project_path_arg,
     probe_image,
     read_jsonl,
     read_lines,
@@ -572,8 +574,8 @@ def build_multimodal(root: Path, mode: str, small_limit: int, seed: int, use_ext
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构建多源滑坡分割 benchmark 的统一 JSONL 索引。")
-    parser.add_argument("--datasets-root", type=Path, default=DEFAULT_DATASETS_ROOT, help="原始 datasets 根目录。")
-    parser.add_argument("--out-dir", type=Path, default=None, help="当前模式 benchmark 输出目录，默认使用后缀式 multisource_landslide_v1_<mode>。")
+    parser.add_argument("--datasets-root", type=project_path_arg, default=DEFAULT_DATASETS_ROOT, help="原始 datasets 根目录。")
+    parser.add_argument("--out-dir", type=project_path_arg, default=None, help="当前模式 benchmark 输出目录，默认使用后缀式 multisource_landslide_v1_<mode>。")
     parser.add_argument("--mode", choices=["small", "full"], default="small", help="small 抽样模式或 full 完整模式。")
     parser.add_argument("--small-limit", type=int, default=1000, help="small 模式下每个 dataset_name + split 的最大样本数，默认 1000。")
     parser.add_argument("--seed", type=int, default=42, help="确定性抽样随机种子。")

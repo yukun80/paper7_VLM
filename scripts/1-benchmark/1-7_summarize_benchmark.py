@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """步骤 1-7：汇总 benchmark 统计，生成中文清洗报告。
 
-脚本作用：汇总样本数、数据集分布、模态组合、尺寸 bucket、bbox 状态、
+用途：汇总样本数、数据集分布、模态组合、尺寸 bucket、标注状态、
 指代目标分布和质量标记，为论文图表和实验记录准备统计结果。
 主要输入：benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl。
 主要输出：reports/statistics.json 和 reports/cleaning_report.md。
-是否改写原始数据：不会改写 datasets/，只写 benchmark/ 下的统计报告。
-典型用法：python scripts/1-benchmark/1-7_summarize_benchmark.py --benchmark-dir benchmark/multisource_landslide_v1_small
+写入行为：不会改写 datasets/ 或索引，只写 benchmark/ 下的统计报告。
+所属流程：benchmark 构建 1-7，作为数据构建的最终汇总阶段。
+推荐运行命令：python scripts/1-benchmark/1-7_summarize_benchmark.py --benchmark-dir benchmark/multisource_landslide_v1_small
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typing import Any
 from geohazard_benchmark_common import (
     DEFAULT_BENCHMARK_ROOT,
     modality_combo,
+    project_path_arg,
     read_jsonl,
     referring_target_index_paths,
     split_index_paths,
@@ -170,7 +172,7 @@ def report_markdown(stats: dict[str, Any], benchmark_dir: Path) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="汇总 benchmark 统计并生成中文清洗报告。")
-    parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
+    parser.add_argument("--benchmark-dir", type=project_path_arg, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
     return parser.parse_args()
 
 

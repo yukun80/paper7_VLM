@@ -1,166 +1,54 @@
-# Multi-Source Qwen-PSALM-Seg Prototype
+# Multi-Source Qwen-PSALM-Seg
 
-本目录是面向 `benchmark/multisource_landslide_v1_small` 的多源遥感滑坡 instruction segmentation 研究原型。当前主目标是跑通单卡 Qwen-cache 训练、验证指标、checkpoint reload、分组诊断和 mask 可视化闭环。
+面向异构多源遥感滑坡指令分割的单卡研究原型。主模型已重构为 **SANE -> QMEF -> PMRD**，研究范围限定为单时相或同期多源证据分割；Qwen3-VL 作为冻结的 semantic/evidence controller，不生成 bbox，也不承担密集像素编码。
 
-## 当前能力
+完整运行手册、全部 CLI、benchmark/instruction 构建、训练、val/test 推理和诊断命令统一维护在仓库根目录 [README.md](../README.md)。本文件只说明模型架构、preset 和核心训练约定。
 
-- 读取 `instruction_train.jsonl` / `instruction_val.jsonl`，默认过滤 Phase 1 核心模板，暂不训练 referring 样本。
-- 将 `optical_rgb`、`optical_multiband`、`multispectral`、`sar_asc`、`sar_dsc`、`dem`、`slope`、`insar_vel` 映射到 `hr_optical/s2/s1/dem/insar` canonical 模态槽位。
-- 支持不同 H/W patch 等比例 resize + padding，metadata 和可视化 manifest 会记录 `resize_transform`。
-- 输出多个 mask proposals、condition scores、最终 mask、Dice/IoU/Precision/Recall、grouped metrics 和 overlay PNG。
-- 支持 Qwen3-VL frozen controller、`qwen_cache` 预计算文本 embedding 路径，以及轻量 `text_probe` 开发回归路径。
-- 支持可选 `use_box_prior` 分支，把 bbox prior 作为 Qwen3-VL-Seg 风格 box-guided refinement 注入 decoder 特征。
-- 默认启用 hard-combo loss weighting，加强 `s1`、`dem+s2`、`dem+s1+s2` 等上一轮验证中较弱的模态组合。
+索引中的 `datasets/...` 与 `benchmark/...` 是逻辑路径，默认解析到仓库同级的 `../datasets`、`../benchmark`。可使用 `PAPER7_DATASETS_ROOT`、`PAPER7_BENCHMARK_ROOT` 或 CLI `--benchmark-dir` 覆盖，无需改写 JSONL。
 
-## 模型结构
+## 架构
 
-`qpsalm_seg/model.py` 只保留兼容 shim，实际模型拆到 `qpsalm_seg/models/`：
+- **SANE** (`models/sane.py`)：逐波段共享 stem，注入 modality family、sensor、band、orbit、GSD 与 quality embedding；每个模态独立产生 1/4、1/8、1/16 原生尺度特征，不截断多光谱波段。
+- **QMEF** (`models/qmef.py`)：用 GSD-aware `grid_sample` 聚合器对齐模态；仅保留样本级可靠性 prior 和 query-spatial cross-modal attention。
+- **PMRD** (`models/pmrd.py`)：PSALM-style mask tokens 生成 proposal set；由统一 semantic-evidence verifier 给 proposal 打 relevance 分，再通过 mask-aware 区域证据进行第二轮细化和 relevance-gated union。
+- **Semantic evidence**：task、condition、evidence reasoning 与可选 Qwen 多视图 token 通过 attention 形成统一证据对象，不再使用 condition/evidence/visual 三套独立 scorer。
 
-- `common.py`: `ConvBlock`、MLP 等基础模块。
-- `modality.py`: per-modality adapters、availability/dropout 和 condition-aware modality gating。
-- `fusion.py`: 每个模态独立形成 high/mid/low 金字塔，再按 condition-aware gate 在各尺度融合，可选 bbox prior 注入。
-- `decoder.py`: PSALM-style learnable mask tokens、proposal decoder、two-tower condition-aware proposal scorer。
-- `qpsalm.py`: 总装 controller、modality adapters、fusion、decoder 和 loss。
+数据接口由 `schema.py` 中的 `ModalityInstance`、`ModalityBatch`、`MultiScaleFeatures`、`SemanticEvidence`、`ProposalSet` 和 `SegmentationOutput` 定义。resize/pad 产生的 `valid_mask` 会贯穿 loss、proposal matching、metrics 和可视化恢复。
 
-数据层同时输出 `proposal_context_text`、`condition_prompt_text` 和向后兼容的 `condition_text`。模型分别编码 proposal context 与 condition prompt：前者更新 mask tokens、驱动 proposal generation；后者进入 condition-aware scorer 判断 proposal 是否匹配任务语义。这对应 PSALM 的 proposal generation 与 condition classification 解耦思想。
+## Preset
 
-## 主训练入口
+算法参数由 `qpsalm_seg/presets.py` 统一管理：
 
-默认使用 `/home/yukun80/miniconda3/envs/qwen3vl/bin/python`，并假设 torch/CUDA 已由用户手动确认。完整 Phase 1 baseline 训练：
+- `sane_baseline`：单 query 的空间编码基线。
+- `sane_qmef`：增加多源可靠性和 query-spatial attention。
+- `sane_qmef_pmrd`：增加 proposal set、Hungarian/coverage supervision 和两轮细化，默认主线。
+- `full_multiview`：在主线基础上接入 Qwen visual cache v2。
+- `dev_smoke`：仅用于快速回归，不作为正式实验结果。
+
+## 核心训练约定
+
+Small 主线训练：
 
 ```bash
-MODE=baseline \
-RUN_NAME=qwen_cached_baseline_t256_b4_s64_hardcombo \
+PRESET=sane_qmef_pmrd \
+BENCHMARK_SIZE=small \
+RUN_NAME=sane_qmef_pmrd_small \
 RUN_CONTROL=--overwrite \
 bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
 ```
 
-完整脚本默认参数包括：
+Full benchmark 将 `BENCHMARK_SIZE` 改为 `full`。Qwen 多视图版本将 `PRESET` 改为 `full_multiview`。脚本只管理 benchmark、preset、run name、device 和运行目录；模型、epoch/batch 与 loss 参数不再散落在 shell 环境变量中。small/full YAML 默认分别按 10/5 epochs 解析 optimizer steps，启动日志会打印 `steps_per_epoch` 和 `estimated_epochs`。默认只维护 `checkpoint_best.pt` 与 `checkpoint_last.pt`，step checkpoint 和逐 step validation report 均需在 Python 配置中显式启用。
 
-- `TARGET_SIZE=256`
-- `BATCH_SIZE=2`
-- `GRAD_ACCUM_STEPS=2`
-- `MAX_STEPS=6000`
-- `EMBEDDING_BATCH_SIZE=1`
-- `SAMPLES_PER_COMBO=64`
-- `MAX_VAL_SAMPLES=0`
-- `LOG_INTERVAL=100`
-- `CANONICAL_COMBO_LOSS_WEIGHTS="s1=2.5,dem+s2=2.5,dem+s1+s2=1.5"`
+Qwen 多视图真实性对照仍由 visual cache CLI 提供：`--shuffle-views-across-samples` 打乱父样本，`--drop-view-pattern` 移除指定视图，`--pooling-method` 选择 token pooling。具体命令见根 README。
 
-常用覆盖项：
+## 评估产物
 
-```bash
-MAX_STEPS=1000 BATCH_SIZE=1 GRAD_ACCUM_STEPS=4 TARGET_SIZE=192 \
-RUN_CONTROL=--resume-existing \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-```
+训练脚本会 reload best/last checkpoint 并运行 eval。重点产物包括：
 
-如需单独训练 box-prior 分支：
+- `validation_best.json` / `eval_report.json`：canvas 与原尺寸 Dice、IoU、Precision、Recall，positive-only、negative accuracy、empty false-positive rate 及模态组合分组。
+- `proposal_diagnostics.csv`：Dice-best query、relevance-top query、rank 与 score gap。
+- `modality_reliability.csv`：QMEF 样本级可靠性 prior。
+- `query_modality_attention.csv`：每个 proposal 的跨模态证据注意力。
+- `visualization_manifest.jsonl`：多模态元数据、最终 mask、best proposal 和原尺寸恢复路径。
 
-```bash
-MODE=box-prior RUN_NAME=qwen_cached_boxprior_t256_b4_s64 \
-RUN_CONTROL=--overwrite \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-```
-
-训练结束后脚本会自动运行 `qpsalm-verify-phase1`，检查 checkpoint、eval metrics、PNG/mask exports、visualization manifest、analysis tables 和 runtime metadata。只想训练不验收时可加 `VERIFY_AFTER_RUN=0`。
-
-## 开发回归
-
-保留一个标准小步 smoke，用于修改模型结构后快速验证 train/eval/reload/visualization 是否被破坏：
-
-```bash
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_smoke.sh
-```
-
-该脚本仍可用 `hash-smoke` + CPU 只验证编排路径：
-
-```bash
-CONFIG=SEG_Multi-Source_Landslides/configs/qpsalm_tiny_text_probe.yaml \
-OUTPUT_ROOT=/tmp/qpsalm_dev_smoke \
-RUN_NAME=dev \
-DEVICE=cpu \
-CONTROLLER=qwen_cache \
-EMBEDDING_BACKEND=hash-smoke \
-MAX_STEPS=1 \
-MAX_TRAIN_SAMPLES=4 \
-MAX_VAL_SAMPLES=4 \
-VERIFY_AFTER_RUN=1 \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_smoke.sh
-```
-
-`hash-smoke` 只用于验证索引、cache、模块化模型、训练/eval/reload/可视化编排链路；正式实验应使用 `EMBEDDING_BACKEND=qwen` 和 `DEVICE=cuda`。
-
-## 数据与 Cache
-
-检查数据索引：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python -m qpsalm_seg.cli.inspect_data \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --limit 16 \
-  --max-rows 5000
-```
-
-手动生成均衡核心索引：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python -m qpsalm_seg.cli.cache_index \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --output-dir outputs/qpsalm_index_cache_balanced \
-  --strategy balanced-canonical \
-  --samples-per-combo 64
-```
-
-手动生成 Qwen condition cache：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python -m qpsalm_seg.cli.cache_qwen_embeddings \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --train-index outputs/qpsalm_index_cache_balanced/qpsalm_core_train.jsonl \
-  --val-index outputs/qpsalm_index_cache_balanced/qpsalm_core_val.jsonl \
-  --output outputs/qpsalm_qwen_condition_cache_balanced.pt \
-  --device cuda \
-  --batch-size 1 \
-  --backend qwen \
-  --overwrite
-```
-
-训练/eval 会检查 cache coverage：按当前 train/val index 派生 `condition_text`、`proposal_context_text` 和 `condition_prompt_text`，确认它们都存在于 `condition_embedding_cache`。
-
-## Eval 与诊断
-
-checkpoint reload eval：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python -m qpsalm_seg.cli.eval \
-  --config outputs/qpsalm_phase1/qwen_cached_baseline_t256_b4_s64_hardcombo/baseline/resolved_config.yaml \
-  --checkpoint outputs/qpsalm_phase1/qwen_cached_baseline_t256_b4_s64_hardcombo/baseline/checkpoint_best.pt \
-  --device cuda \
-  --output-dir outputs/qpsalm_phase1/qwen_cached_baseline_t256_b4_s64_hardcombo/baseline_eval_reload \
-  --skip-torch-preflight
-```
-
-推荐训练后查看：
-
-- `validation_best.json`: overall、raw combo、canonical combo、condition metrics。
-- `analysis_tables/metrics.csv`: 分组 Dice/IoU/Precision/Recall。
-- `analysis_tables/modality_gates.csv`: 不同 condition 下 DEM/SAR/InSAR 等证据权重。
-- `analysis_tables/proposal_diagnostics.csv`: selected query 与 supervised best query 是否一致。
-- `threshold_recommendations.json`: overall 和 per-combo 阈值建议。
-- `visualizations/*/visualization_manifest.jsonl`: condition、raw/canonical modality combo、resize transform、mask 路径。
-
-## 代码检查
-
-```bash
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python -B -m py_compile \
-  SEG_Multi-Source_Landslides/qpsalm_seg/*.py \
-  SEG_Multi-Source_Landslides/qpsalm_seg/models/*.py \
-  SEG_Multi-Source_Landslides/qpsalm_seg/cli/*.py
-
-bash -n SEG_Multi-Source_Landslides/scripts/*.sh
-```
+回归测试、静态检查、独立训练 CLI、val/test 推理、完整多模态 overview、结果比较和诊断命令均见根 README，避免在两个文档中重复维护。

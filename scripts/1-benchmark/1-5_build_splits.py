@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """步骤 1-5：生成最终 train/val/test/unlabeled split 文件。
 
-脚本作用：整理统一索引的最终 split 文件，并写入后续 dataloader 可用的
+用途：整理统一索引的最终 split 文件，并写入后续 dataloader 可用的
 dataset-balanced、modality-combo-balanced 采样权重。
 主要输入：benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl。
 主要输出：indexes/train.jsonl、val.jsonl、test.jsonl、unlabeled.jsonl、
 reports/split_report.json。
-是否改写原始数据：不会改写 datasets/；只重写 benchmark/ 下的最终 split 索引。
-典型用法：python scripts/1-benchmark/1-5_build_splits.py --benchmark-dir benchmark/multisource_landslide_v1_small
+写入行为：不会改写 datasets/；会重写 benchmark 下的最终 split 索引。
+所属流程：benchmark 构建 1-5；应在物化与 final 验证后运行。
+推荐运行命令：python scripts/1-benchmark/1-5_build_splits.py --benchmark-dir benchmark/multisource_landslide_v1_small
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Any
 from geohazard_benchmark_common import (
     DEFAULT_BENCHMARK_ROOT,
     modality_combo,
+    project_path_arg,
     read_jsonl,
     split_index_paths,
     to_repo_rel,
@@ -84,7 +86,7 @@ def add_sampling_weights(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="整理最终 split JSONL，并写入训练采样权重字段。")
-    parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
+    parser.add_argument("--benchmark-dir", type=project_path_arg, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
     parser.add_argument("--derive-val-ratio", type=float, default=0.0, help="对只有 train 的数据集派生 val 的比例；默认不派生。")
     return parser.parse_args()
 

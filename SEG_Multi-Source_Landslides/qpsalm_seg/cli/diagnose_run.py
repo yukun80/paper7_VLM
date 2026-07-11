@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 """诊断 QPSALM 运行结果中的低精度原因。
 
-脚本作用：读取 run_summary.json，自动检查验证覆盖、threshold sweep、proposal
-选择、modality gate、precision/recall 结构和 checkpoint 产物，输出可操作建议。
+用途：检查验证覆盖、threshold sweep、PMRD proposal、QMEF attention 和误差结构。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.diagnose_run --run outputs/RUN/run_summary.json
+--output outputs/RUN/diagnose_report.json
 主要输入：一个 run 目录或 run_summary.json。
 主要输出：诊断 JSON，可选写入 diagnose_report.json。
-是否改写原始数据：只在指定 --output 时写诊断报告，不改 checkpoint 或 benchmark。
-典型用法：python -m qpsalm_seg.cli.diagnose_run --run outputs/.../baseline。
+写入行为：只在指定 --output 时写报告，不修改 checkpoint 或 benchmark。
+所属流程：训练/评估完成后的精度与结构诊断。
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from qpsalm_seg.data import CANONICAL_MODALITIES, resolve_repo_path
+from qpsalm_seg.paths import resolve_repo_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,23 +32,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--low-recall", type=float, default=0.40)
     parser.add_argument("--threshold-delta", type=float, default=0.03)
     parser.add_argument("--query-collapse-frac", type=float, default=0.80)
-    parser.add_argument("--gate-collapse-weight", type=float, default=0.85)
-    parser.add_argument("--query-gate-collapse-peak", type=float, default=0.85)
+    parser.add_argument("--reliability-collapse-weight", type=float, default=0.85)
+    parser.add_argument("--query-attention-collapse-peak", type=float, default=0.85)
     parser.add_argument("--weak-evidence-score-gap", type=float, default=0.05)
     parser.add_argument("--empty-fp-area", type=float, default=128.0)
+    parser.add_argument("--print-full-report", action="store_true")
     return parser.parse_args()
 
 
 def default_diagnose_args(**overrides: Any) -> argparse.Namespace:
-    """返回与 CLI 默认值一致的诊断参数，便于 run_phase1 自动生成报告。"""
+    """返回与 CLI 默认值一致的诊断参数，供训练后自动报告复用。"""
     values: dict[str, Any] = {
         "low_dice": 0.45,
         "low_iou": 0.30,
         "low_recall": 0.40,
         "threshold_delta": 0.03,
         "query_collapse_frac": 0.80,
-        "gate_collapse_weight": 0.85,
-        "query_gate_collapse_peak": 0.85,
+        "reliability_collapse_weight": 0.85,
+        "query_attention_collapse_peak": 0.85,
         "weak_evidence_score_gap": 0.05,
         "empty_fp_area": 128.0,
     }
@@ -97,8 +100,8 @@ def numeric(value: Any, default: float = 0.0) -> float:
 def check_artifacts(summary: dict[str, Any]) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     acceptance = summary.get("acceptance") if isinstance(summary.get("acceptance"), dict) else {}
-    if not acceptance.get("phase1_smoke_ready"):
-        issues.append(issue("error", "phase1_not_ready", "phase1_smoke_ready 不是 true。", acceptance))
+    if not acceptance.get("research_pipeline_ready"):
+        issues.append(issue("error", "pipeline_not_ready", "research_pipeline_ready 不是 true。", acceptance))
     checkpoint = summary.get("checkpoint_best") if isinstance(summary.get("checkpoint_best"), dict) else {}
     if not checkpoint.get("exists"):
         issues.append(issue("warning", "missing_best_checkpoint", "缺少 checkpoint_best.pt，最终 eval 可能不是最佳验证点。", checkpoint))
@@ -197,14 +200,15 @@ def check_validation_coverage(block_name: str, block: dict[str, Any], config: di
 def check_metric_shape(block_name: str, block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     overall = block.get("overall") if isinstance(block.get("overall"), dict) else {}
-    dice = numeric(overall.get("dice"))
-    iou = numeric(overall.get("iou"))
-    precision = numeric(overall.get("precision"))
-    recall = numeric(overall.get("recall"))
+    positive = block.get("positive_only") if isinstance(block.get("positive_only"), dict) else overall
+    dice = numeric(positive.get("dice"))
+    iou = numeric(positive.get("iou"))
+    precision = numeric(positive.get("precision"))
+    recall = numeric(positive.get("recall"))
     if dice < args.low_dice:
-        issues.append(issue("warning", "low_dice", "Dice 偏低，需要继续改进模型或阈值。", {"block": block_name, "dice": dice}))
+        issues.append(issue("warning", "low_dice", "Positive-only Dice 偏低，需要继续改进模型或阈值。", {"block": block_name, "dice": dice}))
     if iou < args.low_iou:
-        issues.append(issue("warning", "low_iou", "IoU 偏低，需要检查召回、边界和假阳性。", {"block": block_name, "iou": iou}))
+        issues.append(issue("warning", "low_iou", "Positive-only IoU 偏低，需要检查召回、边界和假阳性。", {"block": block_name, "iou": iou}))
     if recall < args.low_recall:
         issues.append(issue("warning", "low_recall", "Recall 偏低，预测 mask 可能偏小或阈值偏高。", {"block": block_name, "recall": recall, "precision": precision}))
     if precision > recall + 0.15:
@@ -217,9 +221,13 @@ def check_threshold_sweep(block: dict[str, Any], args: argparse.Namespace) -> tu
     recommendations: list[str] = []
     overall = block.get("overall") if isinstance(block.get("overall"), dict) else {}
     sweep = block.get("threshold_sweep") if isinstance(block.get("threshold_sweep"), dict) else {}
-    best = sweep.get("best_by_dice") if isinstance(sweep.get("best_by_dice"), dict) else {}
+    per_group = sweep.get("best_by_dice_per_group") if isinstance(sweep.get("best_by_dice_per_group"), dict) else {}
+    best = per_group.get("positive_only") if isinstance(per_group.get("positive_only"), dict) else {}
+    if not best:
+        best = sweep.get("best_by_dice") if isinstance(sweep.get("best_by_dice"), dict) else {}
     current_threshold = numeric(block.get("threshold"), 0.5)
-    current_dice = numeric(overall.get("dice"))
+    positive = block.get("positive_only") if isinstance(block.get("positive_only"), dict) else overall
+    current_dice = numeric(positive.get("dice"))
     best_threshold = numeric(best.get("threshold"), current_threshold)
     best_dice = numeric(best.get("dice"), current_dice)
     if best and best_dice >= current_dice + float(args.threshold_delta):
@@ -239,10 +247,9 @@ def check_threshold_sweep(block: dict[str, Any], args: argparse.Namespace) -> tu
         recommendations.append(f"尝试设置 EVAL_THRESHOLD={best_threshold:.2f} 重新 eval；若稳定，再作为默认推理阈值。")
     elif not sweep:
         issues.append(issue("info", "missing_threshold_sweep", "报告中缺少 threshold_sweep，无法判断阈值校准收益。"))
-    per_group = sweep.get("best_by_dice_per_group") if isinstance(sweep.get("best_by_dice_per_group"), dict) else {}
     canonical_thresholds: dict[str, float] = {}
     for group, values in per_group.items():
-        if not isinstance(group, str) or not group.startswith("canonical_combo=") or not isinstance(values, dict):
+        if not isinstance(group, str) or not group.startswith("canonical_combo=") or "/" in group or not isinstance(values, dict):
             continue
         threshold = values.get("threshold")
         if isinstance(threshold, (int, float)):
@@ -303,152 +310,56 @@ def check_proposals(block: dict[str, Any], args: argparse.Namespace) -> list[dic
                     {"mean_selected_matches_best": mean_match},
                 )
             )
-    condition_match = mean_numeric_field(records, "condition_top_matches_best")
-    if condition_match is not None and condition_match < 0.70:
-        issues.append(
-            issue(
-                "info",
-                "condition_verifier_misses_best_query",
-                "condition verifier 单独打分时经常没有把 Dice 最优 query 排在第一。",
-                {"mean_condition_top_matches_best": condition_match},
-            )
-        )
     return issues
 
 
-def check_evidence_verifier(block: dict[str, Any], config: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
-    """检查 evidence verifier 是否记录完整，以及是否能偏向更好的 proposal。"""
+def check_semantic_verifier(block: dict[str, Any], config: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+    """检查统一 semantic-evidence verifier 是否记录完整。"""
     issues: list[dict[str, Any]] = []
-    use_evidence = bool(config.get("use_evidence_reasoning", True))
-    selection_weight = numeric(config.get("selection_evidence_weight"))
-    cls_weight = numeric(config.get("evidence_cls_weight"))
-    rank_weight = numeric(config.get("evidence_ranking_loss_weight"))
-    if not use_evidence and selection_weight <= 0 and cls_weight <= 0 and rank_weight <= 0:
+    verifier_weight = numeric(config.get("semantic_verifier_loss_weight"))
+    if verifier_weight <= 0:
         return issues
     records = proposal_records(block)
     if not records:
         return issues
-    has_evidence = any(isinstance(row.get("selected_evidence_score"), (int, float)) for row in records)
-    if not has_evidence:
+    has_relevance = any(isinstance(row.get("selected_relevance_logit"), (int, float)) for row in records)
+    if not has_relevance:
         issues.append(
             issue(
                 "warning",
-                "missing_evidence_scores",
-                "当前配置启用了 evidence reasoning/selection/loss，但 proposal diagnostics 缺少 evidence score 字段。",
-                {
-                    "use_evidence_reasoning": use_evidence,
-                    "selection_evidence_weight": selection_weight,
-                    "evidence_cls_weight": cls_weight,
-                    "evidence_ranking_loss_weight": rank_weight,
-                },
+                "missing_semantic_verifier_scores",
+                "当前配置启用了统一 verifier，但 proposal diagnostics 缺少 relevance score。",
+                {"semantic_verifier_loss_weight": verifier_weight},
             )
         )
         return issues
-    gaps = [
-        numeric(row.get("evidence_score_gap_selected_minus_best"))
+    wrong_gaps = [
+        numeric(row.get("relevance_gap_selected_minus_best"))
         for row in records
-        if isinstance(row.get("evidence_score_gap_selected_minus_best"), (int, float))
+        if numeric(row.get("selected_matches_best"), 1.0) < 0.5
+        and isinstance(row.get("relevance_gap_selected_minus_best"), (int, float))
     ]
-    if gaps:
-        mean_gap = sum(gaps) / len(gaps)
-        if mean_gap < -float(args.weak_evidence_score_gap):
+    match = mean_numeric_field(records, "selected_matches_best")
+    if wrong_gaps:
+        mean_gap = sum(wrong_gaps) / len(wrong_gaps)
+        if mean_gap > float(args.weak_evidence_score_gap):
             issues.append(
                 issue(
                     "warning",
-                    "evidence_verifier_penalizes_best_query",
-                    "evidence scorer 平均更偏向 selected query 而不是 Dice 最优 query，可能拖累 proposal selection。",
-                    {"mean_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
+                    "semantic_verifier_confidently_misses_best_query",
+                    "统一 verifier 对错误 query 给出明显更高 relevance，正在拖累 proposal selection。",
+                    {"mean_wrong_relevance_gap": mean_gap, "match_rate": match, "num_wrong": len(wrong_gaps)},
                 )
             )
-        elif abs(mean_gap) <= float(args.weak_evidence_score_gap):
+        elif match is not None and match < 0.70:
             issues.append(
                 issue(
                     "info",
-                    "weak_evidence_verifier_separation",
-                    "evidence scorer 对 selected/best query 区分度较弱，当前可能只是弱 verifier。",
-                    {"mean_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
+                    "weak_semantic_verifier_separation",
+                    "统一 verifier 的 best-query 命中率较低且错误 query 分差很小，语义证据区分度不足。",
+                    {"mean_wrong_relevance_gap": mean_gap, "match_rate": match, "num_wrong": len(wrong_gaps)},
                 )
             )
-    evidence_match = mean_numeric_field(records, "evidence_top_matches_best")
-    if evidence_match is not None and evidence_match < 0.70:
-        issues.append(
-            issue(
-                "info",
-                "evidence_verifier_misses_best_query",
-                "evidence verifier 单独打分时经常没有把 Dice 最优 query 排在第一。",
-                {"mean_evidence_top_matches_best": evidence_match},
-            )
-        )
-    return issues
-
-
-def check_visual_evidence_verifier(
-    block: dict[str, Any],
-    config: dict[str, Any],
-    args: argparse.Namespace,
-) -> list[dict[str, Any]]:
-    """检查 visual evidence verifier 是否记录完整，以及是否能偏向更好的 proposal。"""
-    issues: list[dict[str, Any]] = []
-    use_visual = bool(config.get("use_visual_evidence", True))
-    selection_weight = numeric(config.get("selection_visual_evidence_weight"))
-    cls_weight = numeric(config.get("visual_evidence_cls_weight"))
-    rank_weight = numeric(config.get("visual_evidence_ranking_loss_weight"))
-    if not use_visual and selection_weight <= 0 and cls_weight <= 0 and rank_weight <= 0:
-        return issues
-    records = proposal_records(block)
-    if not records:
-        return issues
-    has_visual = any(isinstance(row.get("selected_visual_evidence_score"), (int, float)) for row in records)
-    if not has_visual:
-        issues.append(
-            issue(
-                "warning",
-                "missing_visual_evidence_scores",
-                "当前配置启用了 visual evidence verifier，但 proposal diagnostics 缺少 visual evidence score 字段。",
-                {
-                    "use_visual_evidence": use_visual,
-                    "selection_visual_evidence_weight": selection_weight,
-                    "visual_evidence_cls_weight": cls_weight,
-                    "visual_evidence_ranking_loss_weight": rank_weight,
-                },
-            )
-        )
-        return issues
-    gaps = [
-        numeric(row.get("visual_evidence_score_gap_selected_minus_best"))
-        for row in records
-        if isinstance(row.get("visual_evidence_score_gap_selected_minus_best"), (int, float))
-    ]
-    if gaps:
-        mean_gap = sum(gaps) / len(gaps)
-        if mean_gap < -float(args.weak_evidence_score_gap):
-            issues.append(
-                issue(
-                    "warning",
-                    "visual_evidence_verifier_penalizes_best_query",
-                    "visual evidence verifier 平均更偏向 selected query 而不是 Dice 最优 query，可能拖累 proposal selection。",
-                    {"mean_visual_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
-                )
-            )
-        elif abs(mean_gap) <= float(args.weak_evidence_score_gap):
-            issues.append(
-                issue(
-                    "info",
-                    "weak_visual_evidence_verifier_separation",
-                    "visual evidence verifier 对 selected/best query 区分度较弱，当前可能只是弱 verifier。",
-                    {"mean_visual_evidence_score_gap_selected_minus_best": mean_gap, "num_records": len(gaps)},
-                )
-            )
-    visual_match = mean_numeric_field(records, "visual_evidence_top_matches_best")
-    if visual_match is not None and visual_match < 0.70:
-        issues.append(
-            issue(
-                "info",
-                "visual_evidence_verifier_misses_best_query",
-                "visual evidence verifier 单独打分时经常没有把 Dice 最优 query 排在第一。",
-                {"mean_visual_evidence_top_matches_best": visual_match},
-            )
-        )
     return issues
 
 
@@ -484,42 +395,43 @@ def check_empty_false_positives(block: dict[str, Any], args: argparse.Namespace)
     return issues
 
 
-def check_gates(block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+def check_modality_reliability(block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
-    gates = block.get("modality_gate_summary") if isinstance(block.get("modality_gate_summary"), dict) else {}
-    for group, payload in gates.items():
+    summaries = block.get("modality_reliability_summary") if isinstance(block.get("modality_reliability_summary"), dict) else {}
+    for group, payload in summaries.items():
         if not isinstance(payload, dict):
             continue
         weights = payload.get("mean_weights") if isinstance(payload.get("mean_weights"), dict) else {}
         active = payload.get("mean_active") if isinstance(payload.get("mean_active"), dict) else {}
-        active_count = sum(numeric(active.get(name)) for name in CANONICAL_MODALITIES)
+        names = sorted(set(weights) | set(active))
+        active_count = sum(numeric(active.get(name)) for name in names)
         if active_count <= 1.2:
             continue
         top_name = None
         top_weight = -1.0
-        for name in CANONICAL_MODALITIES:
+        for name in names:
             value = numeric(weights.get(name))
             if value > top_weight:
                 top_name = name
                 top_weight = value
-        if top_weight >= float(args.gate_collapse_weight):
+        if top_weight >= float(args.reliability_collapse_weight):
             issues.append(
                 issue(
                     "info",
-                    "modality_gate_collapse",
-                    "多模态样本中 gate 过度偏向单一模态，需要确认是否合理。",
+                    "modality_reliability_collapse",
+                    "多模态样本的可靠性先验过度偏向单一模态，需要确认质量元数据与证据是否一致。",
                     {"group": group, "top_modality": top_name, "top_weight": top_weight, "active_count": active_count},
                 )
             )
     return issues
 
 
-def check_query_modality_gates(block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+def check_query_modality_attention(block: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
     """检查 query-level modality attention 是否存在，以及多源组合中是否塌缩。"""
     issues: list[dict[str, Any]] = []
-    query_summary = block.get("query_modality_summary") if isinstance(block.get("query_modality_summary"), dict) else {}
+    query_summary = block.get("query_modality_attention_summary") if isinstance(block.get("query_modality_attention_summary"), dict) else {}
     if not query_summary:
-        return [issue("info", "missing_query_modality_summary", "缺少 query_modality_summary，无法判断 query 是否按 proposal 选择模态证据。")]
+        return [issue("info", "missing_query_modality_attention_summary", "缺少 query-level modality attention 汇总，无法判断 proposal 是否按区域选择证据。")]
     for group, payload in query_summary.items():
         if not isinstance(group, str) or not group.startswith("canonical_combo=") or not isinstance(payload, dict):
             continue
@@ -530,12 +442,12 @@ def check_query_modality_gates(block: dict[str, Any], args: argparse.Namespace) 
         weights = payload.get("mean_query_weights") if isinstance(payload.get("mean_query_weights"), dict) else {}
         top_name = None
         top_weight = -1.0
-        for name in CANONICAL_MODALITIES:
+        for name in sorted(weights):
             value = numeric(weights.get(name))
             if value > top_weight:
                 top_name = name
                 top_weight = value
-        if peak >= float(args.query_gate_collapse_peak):
+        if peak >= float(args.query_attention_collapse_peak):
             issues.append(
                 issue(
                     "info",
@@ -556,35 +468,25 @@ def build_recommendations(issues: list[dict[str, Any]]) -> list[str]:
     codes = {item["code"] for item in issues}
     recs: list[str] = []
     if "validation_truncated_by_batches" in codes or "limited_modality_coverage" in codes:
-        recs.append("使用 MAX_VAL_BATCHES=0 并确认 index cache 为 round_robin_canonical_combo，重新生成完整多源验证报告。")
+        recs.append("在 YAML 中设置 max_val_batches: 0，并使用固定完整 split 重新生成多源验证报告。")
     if "low_recall" in codes or "precision_recall_imbalance" in codes:
-        recs.append("优先检查 threshold_sweep；若低阈值有效，调低 EVAL_THRESHOLD；若仍低 recall，增大 Tversky beta 或 foreground BCE 权重。")
+        recs.append("优先检查 positive-only threshold sweep；若低阈值仍无效，再调整 final BCE/Dice 比例与 proposal coverage。")
     if "query_selection_collapse" in codes:
-        recs.append("考虑降低 condition/proposal 分类权重或加入 query 多样性约束，避免所有样本集中到同一 mask token。")
+        recs.append("检查 proposal set matching 的组件覆盖与 relevance target，确认 mask tokens 是否学到不同连通区域。")
     if "empty_mask_false_positives" in codes:
         recs.append("启用 empty mask suppression，并用更高阈值 sweep 检查 negative-aware 样本的误报面积是否下降。")
     if "combined_selector_misses_best_query" in codes:
-        recs.append("对比 proposal_diagnostics.csv 中 proposal/condition/evidence/visual_evidence 的 top query 命中率，调整各 SELECTION_*_WEIGHT。")
-    if "condition_verifier_misses_best_query" in codes:
-        recs.append("提高 condition ranking 监督质量，或降低 SELECTION_CONDITION_WEIGHT，必要时启用 FINAL_FOREGROUND_GATE_WEIGHT。")
-    if "missing_evidence_scores" in codes:
-        recs.append("重新运行 eval/summary，确认新版本 proposal_diagnostics 已包含 evidence score 字段。")
-    if "evidence_verifier_penalizes_best_query" in codes or "weak_evidence_verifier_separation" in codes:
-        recs.append("检查 proposal_diagnostics.csv 中 evidence_score_gap_selected_minus_best；必要时调低 SELECTION_EVIDENCE_WEIGHT 或调高 EVIDENCE_RANKING_LOSS_WEIGHT 做 ablation。")
-    if "evidence_verifier_misses_best_query" in codes:
-        recs.append("查看 evidence_top_matches_best 和 best_query_evidence_rank，判断 evidence verifier 是弱监督不足还是 selection 权重过高。")
-    if "missing_visual_evidence_scores" in codes:
-        recs.append("重新运行 eval/summary，确认 proposal_diagnostics 已包含 visual evidence score 字段。")
-    if "visual_evidence_verifier_penalizes_best_query" in codes or "weak_visual_evidence_verifier_separation" in codes:
-        recs.append("检查 proposal_diagnostics.csv 中 visual_evidence_score_gap_selected_minus_best；必要时调低 SELECTION_VISUAL_EVIDENCE_WEIGHT 或调高 VISUAL_EVIDENCE_RANKING_LOSS_WEIGHT 做 ablation。")
-    if "visual_evidence_verifier_misses_best_query" in codes:
-        recs.append("查看 visual_evidence_top_matches_best 和 best_query_visual_evidence_rank，判断 visual evidence cache/preview 是否真的提供了 query selection 信号。")
-    if "modality_gate_collapse" in codes:
-        recs.append("检查 gate 是否与 condition 合理对应；必要时加入 gate entropy warmup 或降低 modality dropout。")
-    if "missing_query_modality_summary" in codes:
-        recs.append("确认 USE_QUERY_MODALITY_ATTENTION=1 并重新 eval，导出 query_modality_gates.csv 后再比较多源组合。")
+        recs.append("检查 proposal_diagnostics.csv 的 relevance rank 与 Dice-best query，校准统一 semantic verifier 的监督。")
+    if "missing_semantic_verifier_scores" in codes:
+        recs.append("重新运行 eval，确认 proposal diagnostics 已包含统一 relevance logit。")
+    if "semantic_verifier_confidently_misses_best_query" in codes or "weak_semantic_verifier_separation" in codes:
+        recs.append("比较 sane_qmef 与 sane_qmef_pmrd，定位错误来自 proposal 质量还是统一 verifier；再检查 visual-view removal/shuffle 消融。")
+    if "modality_reliability_collapse" in codes:
+        recs.append("核对 SANE quality/GSD/sensor 元数据，并做单模态移除实验，判断可靠性集中是否符合数据质量。")
+    if "missing_query_modality_attention_summary" in codes:
+        recs.append("使用 sane_qmef 或更高 preset 重新 eval，导出 query-level modality attention 后再比较多源组合。")
     if "query_modality_attention_collapse" in codes:
-        recs.append("查看 query_modality_gates.csv；若 query gate 总是集中到单模态，可降低 QUERY_MODALITY_FEATURE_WEIGHT 或加入 query gate entropy warmup。")
+        recs.append("查看 query_modality_attention.csv，并结合 view-removal 对照判断局部证据集中是否合理。")
     if "missing_target_area_strata" in codes or "limited_target_area_strata" in codes:
         recs.append("重新用新版 eval/summary 生成 target_area_px_bin 与 target_area_fraction_bin 分组，单独检查 tiny/small 滑坡斑块的 Dice/Recall。")
     if "missing_gsd_strata" in codes or "gsd_unknown_or_missing" in codes or "ground_area_unknown" in codes:
@@ -606,20 +508,21 @@ def diagnose(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     issues.extend(sweep_issues)
     recommendations.extend(sweep_recs)
     issues.extend(check_proposals(block, args))
-    issues.extend(check_evidence_verifier(block, config, args))
-    issues.extend(check_visual_evidence_verifier(block, config, args))
+    issues.extend(check_semantic_verifier(block, config, args))
     issues.extend(check_empty_false_positives(block, args))
-    issues.extend(check_gates(block, args))
-    issues.extend(check_query_modality_gates(block, args))
+    issues.extend(check_modality_reliability(block, args))
+    issues.extend(check_query_modality_attention(block, args))
     recommendations.extend(build_recommendations(issues))
     severity_order = {"error": 0, "warning": 1, "info": 2}
     issues = sorted(issues, key=lambda item: (severity_order.get(str(item.get("severity")), 9), str(item.get("code"))))
     overall = block.get("overall") if isinstance(block.get("overall"), dict) else {}
+    positive_only = block.get("positive_only") if isinstance(block.get("positive_only"), dict) else {}
     return {
         "run_dir": summary.get("run_dir"),
         "summary_path": summary.get("_summary_path"),
         "metric_block": block_name,
         "overall": overall,
+        "positive_only": positive_only,
         "threshold_sweep": block.get("threshold_sweep") or {},
         "issues": issues,
         "recommendations": list(dict.fromkeys(recommendations)),
@@ -637,7 +540,22 @@ def main() -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         report["output"] = str(output)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.print_full_report:
+        payload = report
+    else:
+        payload = {
+            "output": report.get("output"),
+            "metric_block": report.get("metric_block"),
+            "overall": report.get("overall"),
+            "positive_only": report.get("positive_only"),
+            "issue_count": len(report.get("issues") or []),
+            "issues": [
+                {"severity": item.get("severity"), "code": item.get("code"), "message": item.get("message")}
+                for item in report.get("issues") or []
+            ],
+            "recommendations": report.get("recommendations"),
+        }
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":

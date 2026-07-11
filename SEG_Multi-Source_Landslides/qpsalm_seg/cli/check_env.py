@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""QPSALM 环境门禁检查。
+"""QPSALM 可选环境检查。
 
-脚本作用：在不直接阻塞训练的前提下，检查 Python、benchmark 索引、Qwen 本地文件、
-torch 导入耗时/GPU 可见性和 torch 动态库依赖线索。
+用途：检查 Python、benchmark 索引、Qwen 本地文件、torch/GPU 和动态库线索。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.check_env --benchmark-dir benchmark/multisource_landslide_v1_small
 主要输入：本地 repo 与 qwen3vl Python 环境。
 主要输出：终端 JSON。
-是否改写原始数据：不会。
-典型用法：PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.check_env。
+写入行为：只读检查，不修改任何数据或配置。
+所属流程：可选开发诊断，不是 benchmark 构建或正式训练的前置门槛。
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from qpsalm_seg.paths import resolve_project_path
 from typing import Any
 
 
@@ -95,7 +98,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    benchmark = Path(args.benchmark_dir)
+    benchmark = resolve_project_path(args.benchmark_dir)
+    if benchmark is None:
+        raise ValueError("benchmark_dir 不能为空")
     qwen = Path(args.qwen_dir)
     qwen_config: dict[str, Any] = {}
     if (qwen / "config.json").exists():

@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """步骤 1-1：扫描多源滑坡数据集，生成原始数据清单。
 
-脚本作用：对应 Task_Introduction.md 的“步骤 1”，统计每个原始数据集
+用途：对应 benchmark 步骤 1，统计每个原始数据集
 的模态、格式、split、样本量、尺寸、标签状态和已知 warning。
 主要输入：datasets/ 下的 GDCLD、LandslideBench_agent、LMHLD、
 landslide4sense、Sen12Landslides、multimodal-landslide-dataset。
 主要输出：source_manifest.csv 和 dataset_inventory.json。
-是否改写原始数据：不会改写 datasets/，只写 benchmark/ 下的清单文件。
-典型用法：python scripts/1-benchmark/1-1_scan_sources.py --datasets-root datasets --out-dir benchmark/multisource_landslide_v1_small
+写入行为：不会改写 datasets/，只写 benchmark/ 下的清单文件。
+所属流程：benchmark 构建 1-1；也可由 scripts/run_1_build_benchmark.sh 调用。
+推荐运行命令：python scripts/1-benchmark/1-1_scan_sources.py --datasets-root datasets --out-dir benchmark/multisource_landslide_v1_small
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from geohazard_benchmark_common import (
     hdf5_dataset_meta,
     image_size_text,
     parse_npy_header,
+    project_path_arg,
     probe_image,
     read_lines,
     sen12_collect,
@@ -307,8 +309,8 @@ def scan_multimodal(root: Path) -> list[dict[str, Any]]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="扫描多源滑坡数据集，生成 benchmark 原始清单。")
-    parser.add_argument("--datasets-root", type=Path, default=DEFAULT_DATASETS_ROOT, help="原始 datasets 根目录。")
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="当前模式 benchmark 输出目录。")
+    parser.add_argument("--datasets-root", type=project_path_arg, default=DEFAULT_DATASETS_ROOT, help="原始 datasets 根目录。")
+    parser.add_argument("--out-dir", type=project_path_arg, default=DEFAULT_BENCHMARK_ROOT, help="当前模式 benchmark 输出目录。")
     return parser.parse_args()
 
 

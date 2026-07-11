@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 """比较两个 QPSALM 训练运行的指标。
 
-脚本作用：读取 baseline 与 candidate 的 run_summary.json，输出 overall、模态组合
-分组、loss components 和 proposal diagnostics 的差值，用于 baseline vs box-prior 消融。
+用途：比较 baseline/candidate 的 overall、模态分组、loss 和 proposal diagnostics。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.compare_runs --baseline-summary outputs/BASELINE
+--candidate-summary outputs/CANDIDATE --output outputs/comparison.json
 主要输入：两个 run_summary.json 或包含 run_summary.json 的运行目录。
 主要输出：comparison JSON。
-是否改写原始数据：只写可选 comparison JSON，不改 checkpoint 或 benchmark。
-典型用法：python -m qpsalm_seg.cli.compare_runs --baseline-summary outputs/.../baseline --candidate-summary outputs/.../box-prior。
+写入行为：只写可选 --output，不修改 checkpoint 或 benchmark。
+所属流程：SANE/QMEF/PMRD preset 消融比较。
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from qpsalm_seg.data import resolve_repo_path
+from qpsalm_seg.paths import resolve_repo_path
 
 
 METRIC_KEYS = ["dice", "iou", "precision", "recall", "loss", "n"]
@@ -130,9 +132,10 @@ def proposal_primary_deltas(base_summary: dict[str, Any], cand_summary: dict[str
         "mean_selected_query_dice",
         "mean_best_query_dice",
         "mean_dice_gap_selected_minus_best",
-        "mean_selected_condition_score",
-        "mean_best_condition_score",
-        "mean_selection_logit_gap_selected_minus_best",
+        "mean_selected_relevance_logit",
+        "mean_best_relevance_logit",
+        "mean_best_query_relevance_rank",
+        "mean_relevance_gap_selected_minus_best",
         "mean_final_dice",
         "mean_final_iou",
     ]
@@ -172,8 +175,8 @@ def compare_run_summaries(
             "candidate": cand_source,
         },
         "acceptance": {
-            "baseline_phase1_smoke_ready": (baseline_summary.get("acceptance") or {}).get("phase1_smoke_ready"),
-            "candidate_phase1_smoke_ready": (candidate_summary.get("acceptance") or {}).get("phase1_smoke_ready"),
+            "baseline_pipeline_ready": (baseline_summary.get("acceptance") or {}).get("research_pipeline_ready"),
+            "candidate_pipeline_ready": (candidate_summary.get("acceptance") or {}).get("research_pipeline_ready"),
         },
         "overall": overall,
         "primary_deltas": {

@@ -1,21 +1,21 @@
 # 一、研究背景说明
 
-当前工程和科研问题是：现有滑坡遥感分割模型通常只能处理固定输入形式，例如只用高分辨率光学图像，或固定使用 Sentinel-2 + Sentinel-1 + DEM 的多模态组合。但在真实地质灾害监测中，不同区域、不同灾害事件、不同数据来源往往只有部分传感器可用：有的区域只有高分辨率光学影像，有的区域只有 Sentinel-2 多光谱影像，有的区域有 SAR，有的区域有 DEM 或 InSAR 形变速率，有的区域还有灾前灾后影像。也就是说，真实场景中的输入模态是不完整、不统一、不等尺度的。
+当前工程和科研问题是：现有滑坡遥感分割模型通常只能处理固定输入形式，例如只用高分辨率光学图像，或固定使用 Sentinel-2 + Sentinel-1 + DEM 的多模态组合。但在真实地质灾害监测中，不同区域、不同灾害事件、不同数据来源往往只有部分传感器可用：有的区域只有高分辨率光学影像，有的区域只有 Sentinel-2 多光谱影像，有的区域有 SAR，有的区域有 DEM 或同期 InSAR 形变速率。也就是说，真实场景中的输入模态是不完整、不统一、不等尺度的。
 
-这个问题很重要，因为滑坡识别和应急调查不能依赖某一种固定传感器。光学影像能提供地表纹理、裸土、植被破坏和滑坡边界信息；SAR 能在云雨和夜间条件下提供地表散射信息；DEM 能提供坡度、地形、沟谷和地貌约束；InSAR 形变速率能反映活动性证据；灾前灾后影像能帮助识别新增滑坡或变化斑块。如果模型只能处理单一模态或固定模态组合，在真实区域推广时会很脆弱。
+这个问题很重要，因为滑坡识别和应急调查不能依赖某一种固定传感器。光学影像能提供地表纹理、裸土、植被破坏和滑坡边界信息；SAR 能在云雨和夜间条件下提供地表散射信息；DEM 能提供坡度、地形、沟谷和地貌约束；InSAR 形变速率能反映活动性证据。如果模型只能处理单一模态或固定模态组合，在真实区域推广时会很脆弱。
 
 现有方法通常有两类。第一类是传统深度学习分割模型，例如 U-Net、DeepLab、SegFormer、Swin-UNet、Mask2Former 等，它们通常针对某一个数据集和某一种输入组合训练。第二类是视觉语言模型或大模型分割方法，例如 PSALM、LISA、Qwen3-VL-Seg 类方法，它们把分割任务变成指令驱动任务，可以根据文本提示输出目标 mask。但是这些方法大多面向自然图像 RGB 输入，原生不支持多光谱、SAR、InSAR、DEM 这类多源遥感数据，也没有直接解决不同切片尺寸、不同空间分辨率、不同模态缺失的问题。
 
-现有方法的不足主要有五点：第一，输入形式固定，不能自然适配任意模态组合；第二，不同数据集之间标注标准、图像尺寸、空间分辨率不同，难以统一训练；第三，传统分割模型缺少语言指令能力，不能支持“分割新增滑坡”“分割有形变证据的活动滑坡”这类任务；第四，现有 VLM 分割模型不懂遥感多源物理含义，尤其不能区分光学纹理证据、DEM 地形证据和 InSAR 活动性证据；第五，模型通常只输出 mask，缺少对 mask 区域的解释和地学证据表达。
+现有方法的不足主要有五点：第一，输入形式固定，不能自然适配任意模态组合；第二，不同数据集之间标注标准、图像尺寸、空间分辨率不同，难以统一训练；第三，传统分割模型缺少语言条件能力，不能区分普通滑坡、地形支持滑坡和形变证据支持滑坡；第四，现有 VLM 分割模型不懂遥感多源物理含义，尤其不能区分光学纹理证据、DEM 地形证据和 InSAR 活动性证据；第五，模型通常只输出 mask，缺少对 proposal 与证据使用的可诊断表达。
 
-因此，本研究尝试以 PSALM 的“多种分割任务统一建模”思想为主线，引入 Qwen3-VL-2B 作为小参数视觉语言基座，设计一个面向多源遥感滑坡分割的模型，暂定名为 **Multi-Source Qwen-PSALM-Seg**。这个思路希望把不同来源的滑坡分割数据统一成指令化分割任务，使模型能够在高分辨率光学、Sentinel-2、多光谱-SAR-DEM、Sentinel-2 + Sentinel-1 + InSAR + DEM、灾前灾后光学影像等不同输入条件下完成滑坡分割。
+因此，本研究尝试以 PSALM 的统一分割 schema 为主线，引入 Qwen3-VL-2B 作为冻结的 semantic/evidence controller，设计 **Multi-Source Qwen-PSALM-Seg**。该模型把不同来源的单时相或同期多源样本统一成指令化分割任务，支持高分辨率光学、Sentinel-2、多光谱-SAR-DEM、Sentinel-2 + Sentinel-1 + InSAR + DEM 等输入条件。
 
 本研究希望解决的关键问题是：**在模态不完整、图像尺寸不一致、空间分辨率不同、数据来源复杂的条件下，能否训练一个统一的指令化分割模型，使其在任意模态组合下都能完成滑坡分割，并优于传统单模态或固定模态组合模型。**
 
 # 二、核心研究目标
 
 目标 1：构建一个统一的多源滑坡分割 benchmark。
-将高分辨率光学滑坡分割数据集、Sentinel-2 多光谱滑坡分割数据集、高分辨率光学灾前灾后变化检测分割数据集、Sentinel-2 + Sentinel-1 + DEM 多模态滑坡分割数据集、Sentinel-2 + Sentinel-1 + InSAR 形变速率 + DEM 多模态滑坡分割数据集整理成统一格式。需要验证不同数据源能否被组织成统一的 instruction segmentation 任务。
+将高分辨率光学、Sentinel-2 多光谱、Sentinel-2 + Sentinel-1 + DEM、以及 Sentinel-2 + Sentinel-1 + InSAR + DEM 滑坡分割数据集整理成统一格式。需要验证不同数据源能否被组织成统一的 instruction segmentation 任务。
 
 目标 2：设计并实现 Multi-Source Qwen-PSALM-Seg 原型模型。
 以 PSALM 的 task instruction、condition prompt、mask token、mask proposal 思想为主线，引入 Qwen3-VL-2B 作为语义控制器，增加多源遥感 modality adapter、尺度编码、缺失模态训练机制和共享 mask decoder。需要验证该模型是否能在不同模态组合下输出有效滑坡 mask。
@@ -24,15 +24,15 @@
 重点判断 Multi-Source Qwen-PSALM-Seg 是否在跨数据集、跨区域、缺失模态、不同图像尺寸条件下比基准方法更稳定。不能只比较平均 IoU，还要比较不同模态组合下的性能。
 
 目标 4：分析多源信息对滑坡分割的贡献机制。
-通过消融实验判断光学、多光谱、SAR、DEM、InSAR、灾前灾后变化信息分别对滑坡分割有什么作用。需要得到可用于论文写作的结论，例如：DEM 是否改善边界，InSAR 是否提升活动滑坡识别，SAR 是否提高云雨或低质量光学场景下的鲁棒性。
+通过消融实验判断光学、多光谱、SAR、DEM、InSAR 分别对滑坡分割有什么作用。需要得到可用于论文写作的结论，例如：DEM 是否改善边界，InSAR 是否提升形变证据支持区域的识别，SAR 是否提高云雨或低质量光学场景下的鲁棒性。
 
 # 三、研究假设或预期结论
 
 假设 1：PSALM 式统一分割协议可以把不同来源、不同输入形式的滑坡分割数据统一到一个模型中。
-它可能成立，因为 PSALM 的核心思想就是用 task instruction、condition prompt 和 mask tokens 统一多种分割任务，而你的数据集本质上也包含多种分割任务：普通滑坡分割、变化检测分割、多源融合分割、指令化分割。需要用以下结果证明：统一模型能在多类数据集上正常训练和推理，并且在不同任务类型上都有可接受的 IoU/F1。如果结果不成立，可能说明不同数据集标注标准差异过大，或者任务指令设计不够清晰，需要先做数据分组训练或分阶段训练。
+它可能成立，因为 PSALM 的核心思想是用 task instruction、condition prompt 和 mask tokens 统一分割接口，而当前数据包含普通滑坡、困难负样本、地形证据、SAR/地形证据和 InSAR 证据等条件。需要证明统一模型能在多类数据集和模态组合上正常训练，并在不同条件下获得可接受的 positive-only IoU/Dice。
 
 假设 2：引入 Qwen3-VL-2B 能够提升模型对指令化滑坡分割任务的适应能力。
-它可能成立，因为 Qwen3-VL 具备较强的图像理解、语言理解和视觉 grounding 能力，适合把传统“滑坡/背景二分类分割”升级为“根据任务指令分割目标区域”。需要用 referring segmentation 或 instruction segmentation 实验证明，例如输入“分割灾后新增滑坡区域”“分割有形变证据支持的滑坡区域”时，模型能比传统分割模型更准确地选择目标。如果结果不成立，可能说明 Qwen3-VL 的遥感知识不足，或分割任务主要依赖像素纹理，语言指令没有被充分利用。
+它可能成立，因为 Qwen3-VL 具备较强的语言理解和全局视觉证据建模能力，适合为 proposal verifier 提供任务条件、场景语义和多源证据 token。需要通过 condition、view-removal 和 cross-sample view-shuffle 消融证明其能更准确地选择与条件匹配的 mask proposal。
 
 假设 3：多源模态 adapter + modality dropout 能提高模型在缺失模态条件下的鲁棒性。
 它可能成立，因为训练时随机丢弃某些模态，可以迫使模型学习不同模态之间的互补关系，而不是过度依赖某一个固定输入组合。需要用完整模态与子集模态测试证明，例如 S2、S2+DEM、S2+S1、S2+S1+DEM、S2+S1+InSAR+DEM 等组合下性能下降较小。如果结果不成立，可能说明模态间配准误差、尺度差异或特征融合方式存在问题，需要改进模态对齐和融合模块。
@@ -45,33 +45,31 @@
 
 # 四、实验或分析对象
 
-数据类型包括五类：
+数据类型包括四类：
 
 第一类，高分辨率光学遥感滑坡分割数据，通常为 RGB 或多波段可见光/近红外影像，标签为滑坡 mask。
 
 第二类，Sentinel-2 多光谱滑坡分割数据，输入可能包含 B2、B3、B4、B8、B11、B12 等波段，空间分辨率可能为 10 m 或重采样到统一分辨率，标签为滑坡 mask。
 
-第三类，高分辨率光学灾前灾后变化检测分割数据，输入包括 pre-disaster image 和 post-disaster image，输出为灾后新增滑坡或变化滑坡 mask。
+第三类，Sentinel-2 + Sentinel-1 + DEM 多源滑坡分割数据，输入包括多光谱、SAR VV/VH 或相关极化组合、DEM 或 slope 等地形变量，输出为滑坡 mask。
 
-第四类，Sentinel-2 + Sentinel-1 + DEM 多源滑坡分割数据，输入包括多光谱、SAR VV/VH 或相关极化组合、DEM 或 slope 等地形变量，输出为滑坡 mask。
+第四类，Sentinel-2 + Sentinel-1 + InSAR 形变速率 + DEM 多源证据滑坡分割数据，输入包括多光谱、SAR、InSAR deformation rate、DEM/slope/curvature，输出为滑坡 mask。
 
-第五类，Sentinel-2 + Sentinel-1 + InSAR 形变速率 + DEM 多源活动滑坡分割数据，输入包括多光谱、SAR、InSAR deformation rate、DEM/slope/curvature，输出为滑坡或活动滑坡 mask。
-
-时间长度方面，普通滑坡分割数据可以是单时相；灾前灾后变化检测至少需要两个时相；InSAR 形变速率数据通常是由一段时间序列反演得到的年平均形变速率或某一时间窗口形变速率，学生需要记录形变速率对应的时间范围。如果没有完整时间序列，只需要记录形变产品的时间跨度。
+时间范围方面，模型使用单时相或同期多源输入；InSAR 形变速率可以由时间序列反演得到，但模型只读取物化后的形变证据图，并记录产品时间跨度。
 
 采样频率方面，光学和 SAR 影像按影像获取日期记录；Sentinel-1/2 可记录原始重访周期，但模型训练时主要使用已处理 patch；InSAR 如果只是形变速率图，则不需要逐时相输入，但要记录形变估计周期。
 
-输入变量包括：RGB 或多光谱波段、SAR VV/VH、InSAR 形变速率、DEM、高程派生变量、灾前影像、灾后影像、模态可用性标记、空间分辨率、patch 尺寸、任务指令文本。
+输入变量包括：RGB 或多光谱波段、SAR VV/VH、InSAR 形变速率、DEM、高程派生变量、模态可用性标记、空间分辨率、patch 尺寸、任务指令文本。
 
-输出变量包括：滑坡 mask、可选 bbox、可选类别标签、可选任务类型标签，例如普通滑坡、新增滑坡、活动滑坡、背景。
+输出变量包括：滑坡 mask、proposal relevance 和可选 referring target 标签。
 
-是否需要真实值：分割任务必须需要真实 mask 作为监督标签。bbox 可以由 mask 自动生成。文本指令可以由模板自动生成。mask 区域描述如果没有人工真实值，第一阶段不作为主任务，只作为后续扩展。
+是否需要真实值：分割任务必须需要真实 mask 作为监督标签。文本指令可以由模板自动生成。mask 区域描述如果没有人工真实值，第一阶段不作为主任务，只作为后续扩展。
 
 如果没有真实值，可采用替代评价方式：对于区域描述任务，可以采用专家抽样检查、规则一致性检查、与 mask/DEM/InSAR 的证据一致性检查；对于无人工标注区域，可以只作为伪标签预训练，不作为正式测试集。
 
-如果构造仿真数据，可以从已有真实 mask 出发自动生成任务指令和 bbox，例如“Segment all landslide regions”“Segment the landslide region in the upper-left part of the image”“Segment newly appeared landslide scars after the disaster”。不建议仿真遥感影像本身，除非只是做模态缺失或噪声增强实验。
+如果构造仿真数据，可以从已有真实 mask 出发生成“Segment all landslide regions”或方位、尺度等 referring 指令。不建议仿真遥感影像本身，除非只是做模态缺失或噪声增强实验。
 
-真实数据清洗要求包括：统一坐标系或至少保证 patch 内多模态配准；统一 nodata 值；记录每个 patch 的原始尺寸、空间分辨率和可用模态；检查 mask 是否为空、是否错位、是否与影像范围一致；将不同数据集的标签统一为 landslide/background，后续再扩展 subtype；灾前灾后数据要保证时间顺序正确；InSAR 形变速率要统一正负方向含义和单位。
+真实数据清洗要求包括：统一坐标系或至少保证 patch 内多模态配准；统一 nodata 值；记录每个 patch 的原始尺寸、空间分辨率和可用模态；检查 mask 是否为空、是否错位、是否与影像范围一致；将不同数据集的标签统一为 landslide/background；InSAR 形变速率要统一正负方向含义和单位。
 
 # 五、方法路线
 
@@ -102,8 +100,8 @@
 步骤 4：设计任务指令模板。
 这一步做什么：把传统分割标签转换为 instruction segmentation 样本。
 为什么要做：模型需要学习“根据任务指令输出 mask”，而不是只做固定二分类。
-输入是什么：样本 task_type、mask、bbox、模态信息。
-输出是什么：文本指令，例如“Segment all landslide regions”“Segment newly appeared landslide scars after the disaster”“Segment landslide regions supported by deformation evidence”。
+输入是什么：样本 task_type、mask 和模态信息。
+输出是什么：文本指令，例如“Segment all landslide regions”“Segment landslide regions supported by deformation evidence”。
 注意什么：指令要简洁、可控，第一阶段不要生成太复杂的自然语言。
 如何进入下一步：指令与图像一起输入 Qwen3-VL-2B 语义控制器。
 
@@ -155,11 +153,11 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 这一步结果如何进入下一步：单模态模型结果作为多源模型的起点和性能下限。
 
 步骤 10：训练 PSALM-style 统一分割模型。
-这一步做什么：使用 task instruction、condition prompt、mask tokens，把普通滑坡分割、变化检测分割、多源分割统一到一个训练框架中。
+这一步做什么：使用 task instruction、condition prompt、mask tokens，把普通滑坡、困难负样本和多源证据条件分割统一到一个训练框架中。
 为什么要做：你的数据集来自多个任务类型，不能只按传统二分类分割处理。
-输入是什么：影像模态、任务指令、mask 标签、可选 bbox。
+输入是什么：影像模态、任务指令和 mask 标签。
 输出是什么：统一模型在多个任务类型上的分割结果。
-需要注意什么：训练初期指令模板要稳定，不要大量使用复杂自然语言；先保证模型能理解“分割所有滑坡区域”“分割新增滑坡区域”“分割活动滑坡区域”这几类核心任务。
+需要注意什么：训练初期指令模板要稳定，不要大量使用复杂自然语言；先保证模型能理解普通滑坡、困难负样本和多源证据约束任务。
 这一步结果如何进入下一步：如果统一模型在单模态和简单多模态任务上稳定，再加入缺失模态训练。
 
 步骤 11：加入 modality dropout，实现任意模态组合训练。
@@ -170,15 +168,7 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 需要注意什么：modality dropout 不能过强，否则模型可能学不到多源融合优势；建议从较低丢弃概率开始，例如 0.1 或 0.2，再逐步提高。
 这一步结果如何进入下一步：训练完成后需要按不同模态组合分别测试，而不是只测试完整模态。
 
-步骤 12：加入变化检测分割任务。
-这一步做什么：将灾前灾后高分辨率光学影像组织为 change-aware segmentation 任务。
-为什么要做：灾后新增滑坡与普通裸地、旧滑坡、采矿裸露地等容易混淆，灾前灾后变化信息能提供关键证据。
-输入是什么：pre-disaster image、post-disaster image、change task instruction、变化滑坡 mask。
-输出是什么：新增滑坡或变化滑坡分割结果。
-需要注意什么：灾前灾后影像必须配准；如果配准误差较大，需要记录并在结果分析中单独讨论。
-这一步结果如何进入下一步：变化检测任务可以作为模型多任务能力的重要证明，也可以与普通滑坡分割任务对比。
-
-步骤 13：加入 InSAR/DEM evidence-conditioned segmentation。
+步骤 12：加入 InSAR/DEM evidence-conditioned segmentation。
 这一步做什么：将 InSAR 形变速率、DEM、slope 等变量作为地学证据输入模型，训练“有形变证据支持的滑坡区域”或“地形约束下的滑坡区域”分割任务。
 为什么要做：滑坡识别不仅依赖表面纹理，还依赖坡度、地貌位置和活动性证据。
 输入是什么：Sentinel-2、Sentinel-1、InSAR deformation rate、DEM/slope/curvature、任务指令、mask。
@@ -186,7 +176,7 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 需要注意什么：InSAR 形变速率的正负方向、单位、时间范围必须统一；DEM 派生变量要与影像配准；不能把 InSAR 噪声误解释为滑坡证据。
 这一步结果如何进入下一步：用于分析 DEM 和 InSAR 对滑坡分割的真实贡献。
 
-步骤 14：加入可选的 GAR-style mask 区域表述分支。
+步骤 13：加入可选的 GAR-style mask 区域表述分支。
 这一步做什么：将模型预测 mask 或真实 mask 输入区域理解模块，生成简短区域描述，例如“该区域位于陡坡上，呈裸露纹理，边界沿沟谷展开，InSAR 显示形变异常”。
 为什么要做：分割结果如果能给出地学解释，将更适合后续论文扩展和地灾应用。
 输入是什么：图像、多源证据、预测 mask 或 GT mask、区域描述指令。
@@ -244,11 +234,11 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 为什么测试：维度太小表达能力不足，维度太大显存和过拟合风险增加。
 可能影响：影响多源特征融合效果和训练稳定性。
 
-参数 6：Qwen3-VL LoRA rank。
-参数含义：微调 Qwen3-VL 时低秩适配的秩大小。
-推荐测试范围：8、16、32、64。
-为什么测试：rank 越大可学习能力越强，但显存和过拟合风险也更大。
-可能影响：rank 太低可能无法适应遥感任务，rank 太高可能小数据集过拟合。
+参数 6：QMEF deformable sampling points。
+参数含义：每个尺度用于 GSD-aware 空间聚合的采样点数。
+推荐测试范围：2、4、8。
+为什么测试：采样点过少可能无法对齐尺度差异，过多会增加计算并可能引入无关区域。
+可能影响：影响多源空间证据对齐、边界恢复和显存占用。
 
 参数 7：mask decoder 层数。
 参数含义：mask proposal decoder 的 transformer 层数或解码层数。
@@ -280,11 +270,11 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 
 改进方法包括：PSALM-style 统一分割模型；Qwen3-VL-2B + simple segmentation head；Multi-Source Qwen-PSALM-Seg；Multi-Source Qwen-PSALM-Seg + modality dropout；Multi-Source Qwen-PSALM-Seg + GSD token；Multi-Source Qwen-PSALM-Seg + evidence-conditioned prompt。
 
-消融实验包括：去掉 Qwen3-VL，只保留视觉分割 decoder；去掉 task instruction；去掉 modality token；去掉 GSD token；去掉 modality dropout；去掉 SAR；去掉 DEM；去掉 InSAR；去掉 change-aware branch；去掉 Boundary loss；去掉 mask proposal，只输出单一 mask。
+消融实验包括：去掉 Qwen3-VL，只保留视觉分割 decoder；去掉 task instruction；去掉 modality token；去掉 GSD token；去掉 modality dropout；去掉 SAR；去掉 DEM；去掉 InSAR；去掉 Boundary loss；去掉 mask proposal，只输出单一 mask。
 
-敏感性分析包括：不同 mask token 数量、不同输入尺寸、不同 LoRA rank、不同 modality dropout 概率、不同 adapter 维度、不同损失权重、不同数据采样比例。
+敏感性分析包括：不同 mask token 数量、不同输入尺寸桶、不同 QMEF 采样点数、不同 modality dropout 概率、encoder 维度、不同损失权重和数据采样比例。
 
-不同工况分析包括：完整模态、缺失一个模态、只用光学、只用 Sentinel-2、S2+DEM、S2+S1、S2+S1+DEM、S2+S1+InSAR+DEM、灾前灾后光学、跨区域测试、跨数据集测试、不同 patch size 测试。
+不同工况分析包括：完整模态、缺失一个模态、只用光学、只用 Sentinel-2、S2+DEM、S2+S1、S2+S1+DEM、S2+S1+InSAR+DEM、跨区域测试、跨数据集测试、不同 patch size 测试。
 
 # 七、评价指标
 
@@ -319,16 +309,16 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 第一，描述是否与 mask 区域一致。
 第二，描述是否引用了真实存在的遥感证据，例如裸露纹理、坡度、沟谷位置、形变异常。
 第三，是否出现明显幻觉，例如把河滩说成滑坡，把阴影说成形变。
-第四，是否能与 DEM/InSAR/变化检测结果相互验证。
+第四，是否能与 DEM/InSAR 和光学/SAR 证据相互验证。
 第五，专家抽样评分，建议使用 1–5 分制评价区域描述的正确性、完整性和地学合理性。
 
 # 八、建议绘制的图表
 
 图 1：原始数据模态示例图。
 横轴和纵轴为空间坐标或像素坐标。
-需要画 HR optical、Sentinel-2 RGB/假彩色、Sentinel-1 VV/VH、DEM/slope、InSAR deformation rate、pre/post optical、GT mask。
+需要画 HR optical、Sentinel-2 RGB/假彩色、Sentinel-1 VV/VH、DEM/slope、InSAR deformation rate 和 GT mask。
 这张图说明综合数据集包含哪些模态，以及不同模态提供什么信息。
-预期观察到：光学提供纹理，DEM 提供地形，InSAR 提供活动性证据，pre/post 提供变化信息。
+预期观察到：光学提供纹理，DEM 提供地形约束，SAR 提供散射补充，InSAR 提供形变证据。
 
 图 2：不同数据集尺寸与分辨率统计图。
 横轴为数据集名称，纵轴为 patch size、GSD 或样本数量。
@@ -362,7 +352,7 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 预期观察到：完整模态性能最好，但子集模态下降可控；加入 DEM/InSAR 后在部分场景有提升。
 
 图 7：参数敏感性图。
-横轴为关键参数，例如 modality dropout 概率、mask token 数量、LoRA rank、输入尺寸。
+横轴为关键参数，例如 modality dropout 概率、mask token 数量、QMEF 采样点数和输入尺寸桶。
 纵轴为 IoU 或 F1。
 需要画折线图或热力图。
 这张图说明哪些参数最敏感。
@@ -417,7 +407,7 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 可能原因包括模态配准误差、InSAR 噪声、DEM 分辨率不足、标签与形变证据不一致、不同数据集标注标准不同、训练采样不均衡、模型过拟合某一数据源。
 
 第六，分析结果是否有工程解释。
-例如 DEM 改善山区陡坡边界，InSAR 提高活动滑坡识别，SAR 在光学纹理不清时提供补充，pre/post 光学有助于新增滑坡识别。这些解释要结合图像案例，而不是只看数字。
+例如 DEM 改善山区陡坡边界，InSAR 提高形变证据支持区域的识别，SAR 在光学纹理不清时提供补充。这些解释要结合图像案例，而不是只看数字。
 
 第七，判断结果是否足以支撑论文结论。
 如果只是在同一数据集随机划分中提升，不足以支撑“任意模态组合”结论。必须至少有缺失模态实验、跨数据集实验或跨区域实验。
@@ -437,7 +427,7 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 
 第四，数据清洗报告。说明删除了哪些异常样本，如何处理 nodata、空 mask、错位 mask、不同尺寸样本和缺失模态。
 
-第五，参数设置表。包括模型参数、训练参数、输入尺寸、batch size、学习率、LoRA rank、mask token 数量、modality dropout 概率、损失权重。
+第五，参数设置表。包括模型参数、训练参数、尺寸桶、batch size、学习率、mask token 数量、QMEF 采样点数、modality dropout 概率和损失权重。
 
 第六，所有 baseline 结果表。至少包括传统单模态模型、固定多模态模型、统一模型和消融模型。
 
@@ -459,7 +449,7 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 
 学生可以按照下面模板写实验总结：
 
-本实验针对多源遥感滑坡分割中输入模态不统一、图像尺寸不一致、空间分辨率差异大、传统模型难以适配任意模态组合的问题，采用 PSALM 式统一分割建模思想，引入 Qwen3-VL-2B 作为语义控制器，构建了 Multi-Source Qwen-PSALM-Seg 原型模型。实验整合了高分辨率光学、Sentinel-2 多光谱、Sentinel-1 SAR、DEM、InSAR 形变速率以及灾前灾后光学影像等数据，并将普通滑坡分割、变化检测分割和多源证据约束分割统一为 instruction segmentation 任务。
+本实验针对多源遥感滑坡分割中输入模态不统一、图像尺寸不一致、空间分辨率差异大、传统模型难以适配任意模态组合的问题，采用 PSALM 式统一分割建模思想，引入 Qwen3-VL-2B 作为冻结的 semantic/evidence controller，构建了 SANE-QMEF-PMRD 架构的 Multi-Source Qwen-PSALM-Seg。实验整合高分辨率光学、Sentinel-2、Sentinel-1 SAR、DEM 和 InSAR 形变速率，并将普通滑坡、困难负样本和多源证据条件统一为 instruction segmentation。
 
 结果表明，Multi-Source Qwen-PSALM-Seg 在……数据集和……模态组合下取得了……的 IoU/F1，相比……基准方法提升了……。与传统单模态或固定多模态模型相比，该方法在……指标上表现更好，说明统一任务指令、模态适配模块和缺失模态训练机制能够提升模型在异构遥感数据条件下的适应能力。消融实验表明，……模块贡献最大，去除该模块后……指标下降……；参数敏感性分析表明，……参数对结果影响最明显，最佳设置为……。总体来看，该方法能够在不同传感器组合和不同图像尺寸条件下完成较稳定的滑坡分割，但仍存在……局限，例如……。后续需要进一步通过跨区域测试、真实大图推理、InSAR 质量控制和 mask 区域解释任务验证其工程适用性。
 
@@ -472,16 +462,16 @@ step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 在多源遥感滑坡数据输入模态不统一、图像尺寸不一致、空间分辨率不同的条件下，可以借鉴 PSALM 的多任务统一分割范式，引入 Qwen3-VL-2B 作为小参数语义控制器，并通过多源 modality adapter、GSD/scale token、modality dropout 和共享 mask proposal decoder，实现一个能够适配不同传感器组合的统一滑坡分割模型。该模型应在多种模态组合下优于传统单模态或固定多模态分割模型。
 
 研究对象：
-高分辨率光学遥感滑坡分割数据集；Sentinel-2 多光谱滑坡分割数据集；高分辨率光学灾前灾后变化检测分割数据集；Sentinel-2 + Sentinel-1 + DEM 多模态滑坡分割数据集；Sentinel-2 + Sentinel-1 + InSAR 形变速率 + DEM 多模态滑坡分割数据集。研究对象的共同输出是真实滑坡 mask，部分数据可派生 bbox 和 instruction prompt。
+高分辨率光学遥感滑坡分割数据集；Sentinel-2 多光谱滑坡分割数据集；Sentinel-2 + Sentinel-1 + DEM 多模态滑坡分割数据集；Sentinel-2 + Sentinel-1 + InSAR 形变速率 + DEM 多模态滑坡分割数据集。研究对象的共同输出是真实滑坡 mask 和 instruction/condition prompt。
 
 已有方法或基准方法：
 传统单模态分割模型，例如 U-Net、DeepLabV3+、SegFormer、Swin-UNet；传统固定多模态融合分割模型，例如 early fusion、late fusion、cross-attention fusion；通用分割模型，例如 Mask2Former；PSALM 原始范式作为结构参考；Qwen3-VL-Seg 作为思想参考，但不依赖其代码实现。
 
 我提出的方法：
-Multi-Source Qwen-PSALM-Seg。该方法以 PSALM 的 task instruction、condition prompt、mask tokens 和 mask proposal decoder 为主线，引入 Qwen3-VL-2B 作为视觉语言语义控制器，增加 HR optical、Sentinel-2、Sentinel-1、InSAR、DEM 等模态专属 adapter，通过 modality token、GSD token、tile-size token 和 modality dropout 支持任意模态组合，并使用共享 mask decoder 输出滑坡 mask。后续可加入 GAR-style mask 区域表述分支，用于分割结果解释。
+Multi-Source Qwen-PSALM-Seg。SANE 以共享单波段 stem 和 sensor/band/orbit/GSD/quality embedding 编码原生尺度模态；QMEF 用可靠性 prior 与 query-spatial cross-modal attention 调度多源证据；PMRD 用 PSALM-style mask tokens、连通域 set matching、统一 semantic-evidence verifier 和两轮 mask refinement 输出 proposal set 与最终 mask。Qwen 多视图 token 只提供语义证据，不承担密集像素编码。
 
 关键变量或参数：
-输入尺寸、尺寸分桶策略、空间分辨率/GSD token、mask token 数量、modality dropout 概率、adapter 维度、LoRA rank、mask decoder 层数、多源融合方式、损失函数权重、数据集采样比例、InSAR 归一化方式、DEM 派生变量类型。
+输入尺寸桶、原生/对齐 GSD、mask token 数量、modality dropout 概率、encoder/decoder 维度、QMEF 采样点数、proposal set/verifier/consistency loss 权重、数据采样比例、InSAR 归一化方式和 DEM 派生变量类型。
 
 希望得到的图表：
 原始多源数据样例图、不同数据集尺寸和分辨率统计图、处理后 instruction segmentation 样例图、模型结构图、方法对比图、不同模态组合性能图、参数敏感性图、误差统计图、典型局部放大图、跨数据集泛化结果图、消融实验汇总表、最终结果汇总表。
@@ -493,7 +483,7 @@ Multi-Source Qwen-PSALM-Seg。该方法以 PSALM 的 task instruction、conditio
 第一，不要把所有模态简单拼成固定多通道输入，这不符合任意模态组合目标。
 第二，不同图像尺寸和空间分辨率必须显式记录，不能全部粗暴 resize 后忽略尺度差异。
 第三，第一阶段只把滑坡分割做扎实，不要一开始同时追求完整地灾大模型、区域描述、VQA 和灾害报告生成。
-第四，Qwen3-VL-Seg 当前不能作为可直接复现主线，只借鉴其 grounding box + lightweight mask decoder 思想。
+第四，Qwen3-VL-Seg 当前不能作为可直接复现主线，本研究只借鉴 VLM 语义证据辅助轻量像素 decoder 的思想，不要求 Qwen 产生框。
 第五，GAR 不负责生成 mask，只适合作为后续 mask 区域表述和解释模块。
 第六，所有实验必须按不同模态组合分别报告结果，不能只报告一个平均 IoU。
 第七，必须设计缺失模态实验和跨数据集/跨区域实验，否则不能证明模型具备真实泛化能力。

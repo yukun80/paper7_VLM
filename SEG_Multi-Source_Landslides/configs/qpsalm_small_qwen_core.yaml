@@ -1,21 +1,20 @@
-# Multi-Source Qwen-PSALM-Seg Phase 1 default config.
-# 用途：冻结本地 Qwen3-VL 语义控制器，训练多源 adapter、mask tokens 和轻量 mask decoder。
-# 运行：/home/yukun80/miniconda3/envs/qwen3vl/bin/qpsalm-train --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_core.yaml --device cuda --batch-size 1 --target-size 128 --max-steps 1000
+# Small benchmark runtime config for an online frozen Qwen controller.
 benchmark_dir: benchmark/multisource_landslide_v1_small
-output_dir: outputs/qpsalm_small_qwen_core
+output_dir: outputs/qpsalm_refactor_small_online_qwen
 train_index: indexes/instruction_train.jsonl
 val_index: indexes/instruction_val.jsonl
+test_index: indexes/instruction_test.jsonl
+preset: sane_qmef_pmrd
 controller: qwen
 qwen_model_path: models_zoo/Qwen3-VL-2B-Instruct
 allow_qwen_cpu: false
-target_size: 128
 batch_size: 1
 num_workers: 4
-max_steps: 1000
-val_interval: 100
-save_interval: 1000
-keep_recent_checkpoints: 2
-visualize_interval: 100
+max_steps: null
+num_epochs: 10
+val_interval: 1000
+save_interval: 5000
+visualize_interval: 1000
 log_interval: 20
 max_val_batches: 0
 num_visualizations: 8
@@ -26,72 +25,7 @@ train_hflip_prob: 0.5
 train_vflip_prob: 0.5
 lr: 0.0001
 weight_decay: 0.01
-warmup_steps: 20
+warmup_steps: 500
 grad_clip: 1.0
 grad_accum_steps: 1
-decoder_dim: 256
-num_mask_tokens: 16
-num_decoder_layers: 2
-num_heads: 8
-modality_dropout: 0.2
-use_gsd_film: true
-use_spatial_modality_gate: true
-use_query_modality_attention: true
-query_modality_feature_weight: 0.35
-use_evidence_reasoning: true
-evidence_reasoning_weight: 0.35
-selection_evidence_weight: 0.25
-use_visual_evidence: true
-visual_evidence_cache: null
-visual_evidence_weight: 0.25
-visual_evidence_feature_weight: 0.15
-selection_visual_evidence_weight: 0.15
-loss_stage: full
-use_focal_loss: false
-use_box_prior: false
-boundary_loss_weight: 0.0
-condition_ranking_loss_weight: 0.1
-selection_ranking_loss_weight: 0.2
-foreground_bce_pos_weight: 2.0
-mask_bce_weight: 1.0
-mask_dice_weight: 1.0
-mask_tversky_weight: 0.5
-tversky_alpha: 0.3
-tversky_beta: 0.7
-proposal_cls_weight: 0.2
-condition_cls_weight: 0.2
-proposal_mask_weight: 0.5
-empty_mask_suppression_weight: 0.3
-empty_proposal_suppression_weight: 0.1
-proposal_positive_weight: 4.0
-condition_positive_weight: 4.0
-evidence_positive_weight: 4.0
-query_diversity_loss_weight: 0.02
-proposal_mask_diversity_loss_weight: 0.05
-gate_entropy_loss_weight: 0.02
-proposal_soft_target_topk: 3
-proposal_soft_target_temperature: 0.10
-query_usage_balance_loss_weight: 0.02
-evidence_cls_weight: 0.1
-evidence_ranking_loss_weight: 0.1
-visual_evidence_cls_weight: 0.05
-visual_evidence_ranking_loss_weight: 0.05
-selection_proposal_weight: 1.0
-selection_condition_weight: 0.5
-selection_temperature: 1.0
-final_foreground_gate_weight: 0.25
-final_mask_fusion: topk_noisy_or
-final_topk: 3
-final_noisy_or_epsilon: 0.00001
-canonical_combo_loss_weights:
-  dem+s2: 2.5
-  dem+s1+s2: 1.5
 eval_threshold: 0.5
-threshold_sweep: [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7]
-core_templates:
-  - generic_landslide_v1
-  - negative_aware_landslide_v1
-  - multisource_landslide_v1
-  - terrain_evidence_landslide_v1
-  - sar_terrain_landslide_v1
-  - insar_evidence_landslide_v1

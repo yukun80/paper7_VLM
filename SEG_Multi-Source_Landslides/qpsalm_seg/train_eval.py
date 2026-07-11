@@ -22,20 +22,21 @@ from tqdm import tqdm
 from .config import QPSalmConfig, save_config
 from .controllers import build_controller
 from .data import (
-    CANONICAL_MODALITIES,
     MultiSourceLandslideDataset,
-    canonical_modality_combo,
-    normalization_combo,
+    SizeBucketBatchSampler,
     qpsalm_collate,
-    raw_modality_combo,
-    resolve_repo_path,
-    sensor_combo,
 )
+from .indexing import canonical_modality_combo, normalization_combo, raw_modality_combo, sensor_combo
 from .losses import dice_scores_with_logits
 from .metrics import MetricAccumulator, batch_binary_metrics
-from .model import MultiSourceQwenPSALMSeg
+from .models import MultiSourceQwenPSALMSeg
+from .paths import resolve_repo_path
 from .qwen_cache import assert_qwen_cache_coverage
-from .visualize import save_visualizations
+from .visualize import restore_mask_to_original, save_visualizations
+
+
+CHECKPOINT_FORMAT = "qpsalm_sane_qmef_pmrd_v1"
+EXCLUDED_FROZEN_PREFIXES = ("controller.model.",)
 
 
 def set_seed(seed: int) -> None:
@@ -70,7 +71,7 @@ def atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
 
 
 def write_standalone_train_manifest(out_dir: Path, config: QPSalmConfig, device_name: str, resume: str | None) -> None:
-    """直接调用 qpsalm-train 时补充 run_manifest；run_phase1 已写过则保留。"""
+    """直接调用 qpsalm-train 时写入稳定的 run manifest。"""
     path = out_dir / "run_manifest.json"
     if path.exists():
         return
@@ -79,7 +80,7 @@ def write_standalone_train_manifest(out_dir: Path, config: QPSalmConfig, device_
         {
             "created_at_utc": utc_now(),
             "created_by": "qpsalm-train",
-            "mode": "standalone",
+            "preset": config.preset,
             "run_dir": str(out_dir),
             "device": device_name,
             "resume": resume,
@@ -116,22 +117,35 @@ def build_dataloaders(config: QPSalmConfig) -> tuple[DataLoader, DataLoader]:
         max_samples=config.max_val_samples,
         shuffle_seed=None,
     )
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=config.batch_size,
-        shuffle=True,
-        num_workers=config.num_workers,
-        collate_fn=qpsalm_collate,
-        pin_memory=torch.cuda.is_available(),
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=config.num_workers,
-        collate_fn=qpsalm_collate,
-        pin_memory=torch.cuda.is_available(),
-    )
+    loader_common = {
+        "num_workers": config.num_workers,
+        "collate_fn": qpsalm_collate,
+        "pin_memory": torch.cuda.is_available(),
+    }
+    if getattr(config, "size_buckets", []):
+        train_loader = DataLoader(
+            train_ds,
+            batch_sampler=SizeBucketBatchSampler(
+                train_ds,
+                config.batch_size,
+                shuffle=True,
+                seed=config.seed,
+            ),
+            **loader_common,
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_sampler=SizeBucketBatchSampler(
+                val_ds,
+                config.batch_size,
+                shuffle=False,
+                seed=config.seed,
+            ),
+            **loader_common,
+        )
+    else:
+        train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **loader_common)
+        val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **loader_common)
     return train_loader, val_loader
 
 
@@ -152,26 +166,12 @@ def cosine_lr(step: int, max_steps: int, warmup_steps: int) -> float:
 LOSS_LOG_KEYS = [
     "loss_mask_bce",
     "loss_mask_dice",
-    "loss_mask_tversky",
-    "loss_proposal_cls",
-    "loss_condition_cls",
-    "loss_evidence_cls",
-    "loss_visual_evidence_cls",
-    "loss_condition_rank",
-    "loss_evidence_rank",
-    "loss_visual_evidence_rank",
-    "loss_selection_rank",
-    "loss_proposal_mask",
-    "loss_empty_mask",
-    "loss_empty_proposal",
-    "loss_query_diversity",
-    "loss_proposal_mask_diversity",
-    "loss_gate_entropy",
-    "loss_query_usage_balance",
     "loss_boundary",
-    "sample_weight_normalized_mean",
-    "sample_weight_normalized_min",
-    "sample_weight_normalized_max",
+    "loss_proposal_set",
+    "loss_proposal_coarse",
+    "loss_proposal_coverage",
+    "loss_semantic_verifier",
+    "loss_missing_modality_consistency",
 ]
 
 
@@ -190,149 +190,45 @@ def loss_log_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]:
         values["best_query_dice"] = scalar_tensor(outputs["best_query_dice"])
     if "best_query" in outputs:
         values["best_query_mean"] = scalar_tensor(outputs["best_query"])
-    if "condition_rank_acc" in outputs:
-        values["condition_rank_acc"] = scalar_tensor(outputs["condition_rank_acc"])
-    if "evidence_rank_acc" in outputs:
-        values["evidence_rank_acc"] = scalar_tensor(outputs["evidence_rank_acc"])
-    if "visual_evidence_rank_acc" in outputs:
-        values["visual_evidence_rank_acc"] = scalar_tensor(outputs["visual_evidence_rank_acc"])
-    if "selection_rank_acc" in outputs:
-        values["selection_rank_acc"] = scalar_tensor(outputs["selection_rank_acc"])
+    if "verifier_best_query_accuracy" in outputs:
+        values["verifier_best_query_accuracy"] = scalar_tensor(outputs["verifier_best_query_accuracy"])
+    if "verifier_positive_target_accuracy" in outputs:
+        values["verifier_positive_target_accuracy"] = scalar_tensor(outputs["verifier_positive_target_accuracy"])
     if "proposal_target_mass" in outputs:
         values["proposal_target_mass"] = scalar_tensor(outputs["proposal_target_mass"])
     if "proposal_target_positive_count" in outputs:
         values["proposal_target_positive_count"] = scalar_tensor(outputs["proposal_target_positive_count"])
-    if "query_usage_entropy" in outputs:
-        values["query_usage_entropy"] = scalar_tensor(outputs["query_usage_entropy"])
+    if "proposal_component_count" in outputs:
+        values["proposal_component_count"] = scalar_tensor(outputs["proposal_component_count"])
+    if "proposal_matching_coverage_mode" in outputs:
+        values["proposal_matching_coverage_fraction"] = scalar_tensor(outputs["proposal_matching_coverage_mode"])
     return values
 
 
 def training_signal_values(outputs: dict[str, torch.Tensor]) -> dict[str, float]:
-    """记录轻量 proposal/gate 诊断，便于不看图时追踪训练动态。"""
+    """记录 SANE/QMEF/PMRD 的高信号训练诊断。"""
     values: dict[str, float] = {}
-    if "modality_gate_weights" in outputs:
-        gate = outputs["modality_gate_weights"].detach().float().cpu()
-        for idx, name in enumerate(CANONICAL_MODALITIES):
-            values[f"gate_{name}"] = float(gate[:, idx].mean().item())
-        gate_safe = gate.clamp_min(1.0e-8)
-        values["gate_entropy"] = float((-(gate_safe * gate_safe.log()).sum(dim=1)).mean().item())
-    for scale_name in ("high", "mid", "low"):
-        key = f"scale_gate_{scale_name}"
-        if key in outputs:
-            gate = outputs[key].detach().float().cpu()
-            for idx, name in enumerate(CANONICAL_MODALITIES):
-                values[f"{key}_{name}"] = float(gate[:, idx].mean().item())
-            gate_safe = gate.clamp_min(1.0e-8)
-            values[f"{key}_entropy"] = float((-(gate_safe * gate_safe.log()).sum(dim=1)).mean().item())
-        spatial_entropy_key = f"spatial_gate_{scale_name}_entropy"
-        if spatial_entropy_key in outputs:
-            values[spatial_entropy_key] = scalar_tensor(outputs[spatial_entropy_key])
-        spatial_peak_key = f"spatial_gate_{scale_name}_peak"
-        if spatial_peak_key in outputs:
-            values[spatial_peak_key] = scalar_tensor(outputs[spatial_peak_key])
-    if "modality_active_mask" in outputs:
-        active = outputs["modality_active_mask"].detach().float().cpu()
+    if "modality_reliability_weights" in outputs:
+        reliability = outputs["modality_reliability_weights"].detach().float().cpu()
+        safe = reliability.clamp_min(1.0e-8)
+        values["modality_reliability_entropy"] = float((-(safe * safe.log()).sum(dim=1)).mean().item())
+        values["modality_reliability_peak"] = float(safe.max(dim=1).values.mean().item())
+    if "modality_active" in outputs:
+        active = outputs["modality_active"].detach().float().cpu()
         values["active_modality_count"] = float(active.sum(dim=1).mean().item())
-    if "modality_feature_norms" in outputs:
-        norms = outputs["modality_feature_norms"].detach().float().cpu()
-        for idx, name in enumerate(CANONICAL_MODALITIES):
-            values[f"featnorm_{name}"] = float(norms[:, idx].mean().item())
-    if "modality_gate_feature_norms" in outputs:
-        norms = outputs["modality_gate_feature_norms"].detach().float().cpu()
-        for idx, name in enumerate(CANONICAL_MODALITIES):
-            values[f"gate_featnorm_{name}"] = float(norms[:, idx].mean().item())
-    if "query_modality_weights" in outputs:
-        query_gate = outputs["query_modality_weights"].detach().float().cpu()
-        mean_gate = query_gate.mean(dim=1)
-        for idx, name in enumerate(CANONICAL_MODALITIES):
-            values[f"query_gate_{name}"] = float(mean_gate[:, idx].mean().item())
-        safe = query_gate.clamp_min(1.0e-8)
-        values["query_modality_entropy"] = float((-(safe * safe.log()).sum(dim=-1)).mean().item())
-        values["query_modality_peak"] = float(safe.max(dim=-1).values.mean().item())
-    if "query_modality_entropy" in outputs:
-        values["query_modality_entropy"] = scalar_tensor(outputs["query_modality_entropy"])
-    if "query_modality_peak" in outputs:
-        values["query_modality_peak"] = scalar_tensor(outputs["query_modality_peak"])
-    if "visual_evidence_attention_mean" in outputs:
-        values["visual_evidence_attention_mean"] = scalar_tensor(outputs["visual_evidence_attention_mean"])
-    if "visual_evidence_attention_max" in outputs:
-        values["visual_evidence_attention_max"] = scalar_tensor(outputs["visual_evidence_attention_max"])
-    if "visual_evidence_embedding" in outputs:
-        embedding = outputs["visual_evidence_embedding"].detach().float().cpu()
-        values["visual_evidence_embedding_norm"] = float(embedding.pow(2).mean(dim=1).sqrt().mean().item())
-    if "qwen_visual_evidence_embedding" in outputs:
-        embedding = outputs["qwen_visual_evidence_embedding"].detach().float().cpu()
-        values["qwen_visual_evidence_embedding_norm"] = float(embedding.pow(2).mean(dim=1).sqrt().mean().item())
-    if "proposal_logits" in outputs:
-        proposal_prob = torch.softmax(outputs["proposal_logits"].detach().float().cpu(), dim=-1)[..., 1]
-        values["proposal_fg_prob_mean"] = float(proposal_prob.mean().item())
-        values["proposal_fg_prob_max"] = float(proposal_prob.max().item())
-    if "proposal_fg_logits" in outputs:
-        fg_logits = outputs["proposal_fg_logits"].detach().float().cpu()
-        values["proposal_fg_logit_mean"] = float(fg_logits.mean().item())
-        values["proposal_fg_logit_max"] = float(fg_logits.max().item())
-    if "condition_scores" in outputs:
-        scores = outputs["condition_scores"].detach().float().cpu()
-        values["condition_score_mean"] = float(scores.mean().item())
-        values["condition_score_max"] = float(scores.max().item())
-    if "condition_cosine_scores" in outputs:
-        scores = outputs["condition_cosine_scores"].detach().float().cpu()
-        values["condition_cosine_mean"] = float(scores.mean().item())
-        values["condition_cosine_max"] = float(scores.max().item())
-    if "condition_pair_logits" in outputs:
-        scores = outputs["condition_pair_logits"].detach().float().cpu()
-        values["condition_pair_logit_mean"] = float(scores.mean().item())
-        values["condition_pair_logit_max"] = float(scores.max().item())
-    if "condition_logit_scale" in outputs:
-        values["condition_logit_scale"] = scalar_tensor(outputs["condition_logit_scale"])
-    if "evidence_scores" in outputs:
-        scores = outputs["evidence_scores"].detach().float().cpu()
-        values["evidence_score_mean"] = float(scores.mean().item())
-        values["evidence_score_max"] = float(scores.max().item())
-    if "evidence_cosine_scores" in outputs:
-        scores = outputs["evidence_cosine_scores"].detach().float().cpu()
-        values["evidence_cosine_mean"] = float(scores.mean().item())
-        values["evidence_cosine_max"] = float(scores.max().item())
-    if "evidence_pair_logits" in outputs:
-        scores = outputs["evidence_pair_logits"].detach().float().cpu()
-        values["evidence_pair_logit_mean"] = float(scores.mean().item())
-        values["evidence_pair_logit_max"] = float(scores.max().item())
-    if "evidence_logit_scale" in outputs:
-        values["evidence_logit_scale"] = scalar_tensor(outputs["evidence_logit_scale"])
-    if "evidence_embedding_norm" in outputs:
-        values["evidence_embedding_norm"] = scalar_tensor(outputs["evidence_embedding_norm"])
-    if "visual_evidence_scores" in outputs:
-        scores = outputs["visual_evidence_scores"].detach().float().cpu()
-        values["visual_evidence_score_mean"] = float(scores.mean().item())
-        values["visual_evidence_score_max"] = float(scores.max().item())
-    if "visual_evidence_cosine_scores" in outputs:
-        scores = outputs["visual_evidence_cosine_scores"].detach().float().cpu()
-        values["visual_evidence_cosine_mean"] = float(scores.mean().item())
-        values["visual_evidence_cosine_max"] = float(scores.max().item())
-    if "visual_evidence_pair_logits" in outputs:
-        scores = outputs["visual_evidence_pair_logits"].detach().float().cpu()
-        values["visual_evidence_pair_logit_mean"] = float(scores.mean().item())
-        values["visual_evidence_pair_logit_max"] = float(scores.max().item())
-    if "visual_evidence_logit_scale" in outputs:
-        values["visual_evidence_logit_scale"] = scalar_tensor(outputs["visual_evidence_logit_scale"])
-    if "selection_logits" in outputs:
-        scores = outputs["selection_logits"].detach().float().cpu()
-        values["selection_logit_mean"] = float(scores.mean().item())
-        values["selection_logit_max"] = float(scores.max().item())
+    if "query_modality_attention" in outputs:
+        attention = outputs["query_modality_attention"].detach().float().cpu().clamp_min(1.0e-8)
+        values["query_modality_attention_entropy"] = float((-(attention * attention.log()).sum(dim=-1)).mean().item())
+        values["query_modality_attention_peak"] = float(attention.max(dim=-1).values.mean().item())
+    if "proposal_relevance_logits" in outputs:
+        scores = outputs["proposal_relevance_logits"].detach().float().cpu()
+        values["proposal_relevance_mean"] = float(scores.mean().item())
+        values["proposal_relevance_max"] = float(scores.max().item())
         values["top_query_mean"] = float(torch.argmax(scores, dim=1).float().mean().item())
-        values["top_query_score_mean"] = float(torch.max(scores, dim=1).values.mean().item())
-    if "selection_weights" in outputs:
-        weights = outputs["selection_weights"].detach().float().cpu().clamp_min(1.0e-8)
-        values["selection_entropy"] = float((-(weights * weights.log()).sum(dim=1)).mean().item())
-    if "foreground_gate_logits" in outputs:
-        gate_logits = outputs["foreground_gate_logits"].detach().float().cpu()
-        values["foreground_gate_logit_mean"] = float(gate_logits.mean().item())
-        values["foreground_gate_logit_max"] = float(gate_logits.max().item())
-    elif "proposal_logits" in outputs and "condition_scores" in outputs:
-        proposal_prob = torch.softmax(outputs["proposal_logits"].detach().float().cpu(), dim=-1)[..., 1]
-        scores = proposal_prob + outputs["condition_scores"].detach().float().cpu()
-        values["top_query_mean"] = float(torch.argmax(scores, dim=1).float().mean().item())
-        values["top_query_score_mean"] = float(torch.max(scores, dim=1).values.mean().item())
+    if "proposal_relevance_gates" in outputs:
+        gates = outputs["proposal_relevance_gates"].detach().float().cpu()
+        values["proposal_relevance_gate_mean"] = float(gates.mean().item())
+        values["proposal_relevance_gate_max"] = float(gates.max().item())
     if "final_mask_logits" in outputs:
         logits = outputs["final_mask_logits"].detach().float().cpu()
         values["final_logit_mean"] = float(logits.mean().item())
@@ -358,29 +254,20 @@ TRAIN_LOG_KEYS = [
     "iou",
     "dice",
     "best_query_dice",
-    "condition_rank_acc",
-    "evidence_rank_acc",
-    "visual_evidence_rank_acc",
-    "selection_rank_acc",
+    "verifier_best_query_accuracy",
+    "verifier_positive_target_accuracy",
     "proposal_target_positive_count",
-    "query_usage_entropy",
-    "proposal_fg_prob_max",
+    "proposal_component_count",
+    "proposal_matching_coverage_fraction",
+    "proposal_relevance_max",
+    "proposal_relevance_gate_mean",
+    "proposal_relevance_gate_max",
     "top_query_mean",
-    "gate_entropy",
-    "spatial_gate_high_entropy",
-    "spatial_gate_high_peak",
-    "query_modality_entropy",
-    "query_modality_peak",
-    "evidence_score_mean",
-    "evidence_score_max",
-    "visual_evidence_score_mean",
-    "visual_evidence_score_max",
-    "visual_evidence_attention_mean",
-    "visual_evidence_attention_max",
+    "modality_reliability_entropy",
+    "modality_reliability_peak",
+    "query_modality_attention_entropy",
+    "query_modality_attention_peak",
     "active_modality_count",
-    "sample_weight_raw_mean",
-    "sample_weight_raw_max",
-    "sample_weight_normalized_max",
 ]
 
 
@@ -410,27 +297,19 @@ def format_train_window(start_step: int, end_step: int, count: int, summary: dic
         f"sps={summary.get('steps_per_sec', 0.0):.2f}",
     ]
     optional = [
-        ("rank_acc", "condition_rank_acc", ".3f"),
-        ("ev_acc", "evidence_rank_acc", ".3f"),
-        ("vis_acc", "visual_evidence_rank_acc", ".3f"),
-        ("sel_acc", "selection_rank_acc", ".3f"),
+        ("bestQ_acc", "verifier_best_query_accuracy", ".3f"),
+        ("target_acc", "verifier_positive_target_accuracy", ".3f"),
         ("posQ", "proposal_target_positive_count", ".1f"),
-        ("qUseH", "query_usage_entropy", ".2f"),
+        ("components", "proposal_component_count", ".1f"),
+        ("coverage", "proposal_matching_coverage_fraction", ".2f"),
         ("top_q", "top_query_mean", ".1f"),
-        ("fg_max", "proposal_fg_prob_max", ".3f"),
-        ("gateH", "gate_entropy", ".2f"),
-        ("spGateH", "spatial_gate_high_entropy", ".2f"),
-        ("spGateP", "spatial_gate_high_peak", ".2f"),
-        ("qModH", "query_modality_entropy", ".2f"),
-        ("qModP", "query_modality_peak", ".2f"),
-        ("evMax", "evidence_score_max", ".2f"),
-        ("visMax", "visual_evidence_score_max", ".2f"),
-        ("veMean", "visual_evidence_attention_mean", ".2f"),
-        ("veMax", "visual_evidence_attention_max", ".2f"),
+        ("rel_max", "proposal_relevance_max", ".2f"),
+        ("relGate", "proposal_relevance_gate_mean", ".2f"),
+        ("relH", "modality_reliability_entropy", ".2f"),
+        ("relP", "modality_reliability_peak", ".2f"),
+        ("qAttnH", "query_modality_attention_entropy", ".2f"),
+        ("qAttnP", "query_modality_attention_peak", ".2f"),
         ("activeM", "active_modality_count", ".1f"),
-        ("wRaw", "sample_weight_raw_mean", ".2f"),
-        ("wMax", "sample_weight_raw_max", ".2f"),
-        ("wNormMax", "sample_weight_normalized_max", ".2f"),
     ]
     for label, key, fmt in optional:
         if key in summary:
@@ -438,23 +317,22 @@ def format_train_window(start_step: int, end_step: int, count: int, summary: dic
     return "train " + " ".join(parts)
 
 
-def _gate_row_to_dict(values: torch.Tensor) -> dict[str, float]:
+def _gate_row_to_dict(values: torch.Tensor, names: list[str] | None = None) -> dict[str, float]:
     """把单样本模态 gate 张量转成稳定 JSON 字段。"""
-    return {
-        name: float(values[idx].item())
-        for idx, name in enumerate(CANONICAL_MODALITIES)
-    }
+    labels = names or [f"modality_{index}" for index in range(int(values.numel()))]
+    return {str(labels[index]): float(values[index].item()) for index in range(min(len(labels), int(values.numel())))}
 
 
-def collect_gate_records(outputs: dict[str, torch.Tensor], metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """收集验证/eval 阶段的 condition-aware modality gate。"""
-    if "modality_gate_weights" not in outputs:
+def collect_reliability_records(outputs: dict[str, torch.Tensor], metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """收集 QMEF 的样本级模态可靠性先验。"""
+    if "modality_reliability_weights" not in outputs:
         return []
-    weights = outputs["modality_gate_weights"].detach().float().cpu()
-    active = outputs.get("modality_active_mask")
+    weights = outputs["modality_reliability_weights"].detach().float().cpu()
+    active = outputs.get("modality_active")
     active_cpu = active.detach().float().cpu() if active is not None else None
     records: list[dict[str, Any]] = []
     for idx, meta in enumerate(metadata):
+        names = [str(item.get("name", f"modality_{j}")) for j, item in enumerate(meta.get("raw_modalities") or [])]
         record = {
             "sample_id": meta.get("sample_id", ""),
             "canonical_combo": meta.get("canonical_combo", "unknown"),
@@ -466,36 +344,37 @@ def collect_gate_records(outputs: dict[str, torch.Tensor], metadata: list[dict[s
             "target_area_fraction_bin": meta.get("target_area_fraction_bin", "unknown"),
             "ground_area_m2_bin": meta.get("ground_area_m2_bin", "unknown"),
             "condition_prompt": meta.get("condition_prompt", "unknown"),
-            "weights": _gate_row_to_dict(weights[idx]),
+            "weights": _gate_row_to_dict(weights[idx], names),
         }
         if active_cpu is not None:
-            record["active"] = _gate_row_to_dict(active_cpu[idx])
+            record["active"] = _gate_row_to_dict(active_cpu[idx], names)
         records.append(record)
     return records
 
 
-def collect_query_modality_records(outputs: dict[str, torch.Tensor], metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def collect_query_modality_attention_records(outputs: dict[str, torch.Tensor], metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """收集每个 mask query 的模态注意力，诊断 proposal 是否按实例选择证据源。"""
-    if "query_modality_weights" not in outputs:
+    if "query_modality_attention" not in outputs:
         return []
-    weights = outputs["query_modality_weights"].detach().float().cpu()
+    weights = outputs["query_modality_attention"].detach().float().cpu()
     if weights.ndim != 3:
         return []
     mean_weights = weights.mean(dim=1)
-    entropy = outputs.get("query_modality_entropy")
-    peak = outputs.get("query_modality_peak")
+    entropy = outputs.get("query_spatial_entropy_mean")
+    peak = outputs.get("query_modality_attention_peak")
     entropy_cpu = entropy.detach().float().cpu() if entropy is not None else None
     peak_cpu = peak.detach().float().cpu() if peak is not None else None
     best_query = outputs.get("best_query")
     best_query_cpu = best_query.detach().long().cpu() if best_query is not None else None
-    selection_logits = outputs.get("selection_logits")
+    relevance_logits = outputs.get("proposal_relevance_logits")
     selected_query_cpu = (
-        torch.argmax(selection_logits.detach().float().cpu(), dim=1)
-        if selection_logits is not None
+        torch.argmax(relevance_logits.detach().float().cpu(), dim=1)
+        if relevance_logits is not None
         else None
     )
     records: list[dict[str, Any]] = []
     for idx, meta in enumerate(metadata):
+        names = [str(item.get("name", f"modality_{j}")) for j, item in enumerate(meta.get("raw_modalities") or [])]
         record: dict[str, Any] = {
             "sample_id": meta.get("sample_id", ""),
             "canonical_combo": meta.get("canonical_combo", "unknown"),
@@ -507,7 +386,7 @@ def collect_query_modality_records(outputs: dict[str, torch.Tensor], metadata: l
             "target_area_fraction_bin": meta.get("target_area_fraction_bin", "unknown"),
             "ground_area_m2_bin": meta.get("ground_area_m2_bin", "unknown"),
             "condition_prompt": meta.get("condition_prompt", "unknown"),
-            "mean_query_weights": _gate_row_to_dict(mean_weights[idx]),
+            "mean_query_weights": _gate_row_to_dict(mean_weights[idx], names),
         }
         if entropy_cpu is not None:
             record["entropy"] = float(entropy_cpu[idx].item())
@@ -516,19 +395,26 @@ def collect_query_modality_records(outputs: dict[str, torch.Tensor], metadata: l
         if selected_query_cpu is not None:
             selected = int(selected_query_cpu[idx].item())
             record["selected_query"] = selected
-            record["selected_query_weights"] = _gate_row_to_dict(weights[idx, selected])
+            record["selected_query_weights"] = _gate_row_to_dict(weights[idx, selected], names)
         if best_query_cpu is not None:
             best = int(best_query_cpu[idx].item())
             record["best_query"] = best
-            record["best_query_weights"] = _gate_row_to_dict(weights[idx, best])
+            record["best_query_weights"] = _gate_row_to_dict(weights[idx, best], names)
         records.append(record)
     return records
 
 
 def _average_named_values(records: list[dict[str, Any]], field: str) -> dict[str, float]:
     """对 records 中 weights/active 这类 name->float 字典求均值。"""
+    names = sorted(
+        {
+            str(name)
+            for record in records
+            for name in ((record.get(field) or {}).keys() if isinstance(record.get(field), dict) else [])
+        }
+    )
     out: dict[str, float] = {}
-    for name in CANONICAL_MODALITIES:
+    for name in names:
         values = [
             float((record.get(field) or {}).get(name, 0.0))
             for record in records
@@ -548,8 +434,8 @@ def _average_numeric_field(records: list[dict[str, Any]], field: str) -> float |
     return sum(values) / len(values)
 
 
-def compute_gate_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """按 overall/combo/condition 聚合模态 gate，便于分析多源证据使用。"""
+def compute_reliability_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """按 overall/combo/condition 聚合 QMEF 模态可靠性。"""
     if not records:
         return {}
     groups: dict[str, list[dict[str, Any]]] = {"overall": records}
@@ -573,7 +459,7 @@ def compute_gate_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     return summary
 
 
-def compute_query_modality_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+def compute_query_modality_attention_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     """按 overall/combo/condition 聚合 query-level modality attention。"""
     if not records:
         return {}
@@ -601,25 +487,6 @@ def compute_query_modality_summary(records: list[dict[str, Any]]) -> dict[str, A
     return summary
 
 
-def _optional_matrix(outputs: dict[str, torch.Tensor], key: str) -> torch.Tensor | None:
-    value = outputs.get(key)
-    if value is None:
-        return None
-    return value.detach().float().cpu()
-
-
-def _matrix_value(matrix: torch.Tensor | None, row: int, col: int, default: float | None = None) -> float | None:
-    if matrix is None:
-        return default
-    return float(matrix[row, col].item())
-
-
-def _matrix_argmax(matrix: torch.Tensor | None, row: int) -> int | None:
-    if matrix is None:
-        return None
-    return int(torch.argmax(matrix[row]).item())
-
-
 def _matrix_rank_of_col(matrix: torch.Tensor | None, row: int, col: int) -> float | None:
     if matrix is None:
         return None
@@ -627,16 +494,6 @@ def _matrix_rank_of_col(matrix: torch.Tensor | None, row: int, col: int) -> floa
     ranks = torch.empty_like(order)
     ranks[order] = torch.arange(order.numel(), dtype=order.dtype)
     return float(ranks[int(col)].item() + 1)
-
-
-def _scalar_output(outputs: dict[str, torch.Tensor], key: str, default: float = 0.0) -> float:
-    value = outputs.get(key)
-    if value is None:
-        return default
-    try:
-        return float(value.detach().float().mean().cpu().item())
-    except (AttributeError, RuntimeError, ValueError):
-        return default
 
 
 def _safe_float(value: Any) -> float | None:
@@ -725,51 +582,28 @@ def metric_metadata_with_scale(metadata: list[dict[str, Any]], target_mask: torc
 def collect_proposal_records(
     outputs: dict[str, torch.Tensor],
     target_mask: torch.Tensor,
+    valid_mask: torch.Tensor,
     metadata: list[dict[str, Any]],
     sample_metrics: list[dict[str, float]],
 ) -> list[dict[str, Any]]:
-    """记录样本级 proposal 选择诊断，便于分析 condition scorer 是否选对 query。"""
-    if "pred_masks" not in outputs or "proposal_logits" not in outputs:
+    """记录 PMRD proposal set 与统一 semantic verifier 的样本级诊断。"""
+    if "proposal_mask_logits" not in outputs or "proposal_relevance_logits" not in outputs:
         return []
-    pred_masks = outputs["pred_masks"].detach().float().cpu()
+    proposal_masks = outputs["proposal_mask_logits"].detach().float().cpu()
     target = target_mask.detach().float().cpu()
-    dice_scores = dice_scores_with_logits(pred_masks, target)
+    valid = valid_mask.detach().float().cpu()
+    dice_scores = dice_scores_with_logits(proposal_masks, target, valid_mask=valid)
     best_query = outputs.get("best_query")
     best_query_cpu = best_query.detach().long().cpu() if best_query is not None else dice_scores.argmax(dim=1)
-    proposal_prob = torch.softmax(outputs["proposal_logits"].detach().float().cpu(), dim=-1)[..., 1]
-    selection_logits = _optional_matrix(outputs, "selection_logits")
-    if selection_logits is None:
-        condition_scores = _optional_matrix(outputs, "condition_scores")
-        selection_logits = proposal_prob + (condition_scores if condition_scores is not None else 0.0)
-    selected_query = torch.argmax(selection_logits, dim=1)
-    condition_scores = _optional_matrix(outputs, "condition_scores")
-    condition_cosine = _optional_matrix(outputs, "condition_cosine_scores")
-    condition_pair = _optional_matrix(outputs, "condition_pair_logits")
-    evidence_scores = _optional_matrix(outputs, "evidence_scores")
-    evidence_cosine = _optional_matrix(outputs, "evidence_cosine_scores")
-    evidence_pair = _optional_matrix(outputs, "evidence_pair_logits")
-    visual_evidence_scores = _optional_matrix(outputs, "visual_evidence_scores")
-    visual_evidence_cosine = _optional_matrix(outputs, "visual_evidence_cosine_scores")
-    visual_evidence_pair = _optional_matrix(outputs, "visual_evidence_pair_logits")
-    if _scalar_output(outputs, "evidence_logit_scale") <= 0.0:
-        evidence_scores = None
-        evidence_cosine = None
-        evidence_pair = None
-    if _scalar_output(outputs, "visual_evidence_logit_scale") <= 0.0:
-        visual_evidence_scores = None
-        visual_evidence_cosine = None
-        visual_evidence_pair = None
+    relevance = outputs["proposal_relevance_logits"].detach().float().cpu()
+    selected_query = torch.argmax(relevance, dim=1)
     final_probs = torch.sigmoid(outputs["final_mask_logits"].detach().float().cpu())
-    proposal_mask_probs = torch.sigmoid(pred_masks)
+    proposal_mask_probs = torch.sigmoid(proposal_masks)
 
     records: list[dict[str, Any]] = []
     for idx, meta in enumerate(metadata):
         selected = int(selected_query[idx].item())
         best = int(best_query_cpu[idx].item())
-        proposal_top = _matrix_argmax(proposal_prob, idx)
-        condition_top = _matrix_argmax(condition_scores, idx)
-        evidence_top = _matrix_argmax(evidence_scores, idx)
-        visual_top = _matrix_argmax(visual_evidence_scores, idx)
         metrics = sample_metrics[idx] if idx < len(sample_metrics) else {}
         record: dict[str, Any] = {
             "sample_id": meta.get("sample_id", ""),
@@ -789,61 +623,11 @@ def collect_proposal_records(
             "best_query": best,
             "selected_query": selected,
             "selected_matches_best": float(selected == best),
-            "proposal_top_query": proposal_top,
-            "proposal_top_matches_best": float(proposal_top == best) if proposal_top is not None else None,
-            "condition_top_query": condition_top,
-            "condition_top_matches_best": float(condition_top == best) if condition_top is not None else None,
-            "evidence_top_query": evidence_top,
-            "evidence_top_matches_best": float(evidence_top == best) if evidence_top is not None else None,
-            "visual_evidence_top_query": visual_top,
-            "visual_evidence_top_matches_best": float(visual_top == best) if visual_top is not None else None,
             "best_query_dice": float(dice_scores[idx, best].item()),
             "selected_query_dice": float(dice_scores[idx, selected].item()),
-            "proposal_top_query_dice": (
-                float(dice_scores[idx, proposal_top].item()) if proposal_top is not None else None
-            ),
-            "condition_top_query_dice": (
-                float(dice_scores[idx, condition_top].item()) if condition_top is not None else None
-            ),
-            "evidence_top_query_dice": (
-                float(dice_scores[idx, evidence_top].item()) if evidence_top is not None else None
-            ),
-            "visual_evidence_top_query_dice": (
-                float(dice_scores[idx, visual_top].item()) if visual_top is not None else None
-            ),
-            "selected_selection_logit": float(selection_logits[idx, selected].item()),
-            "best_selection_logit": float(selection_logits[idx, best].item()),
-            "best_query_selection_rank": _matrix_rank_of_col(selection_logits, idx, best),
-            "selected_proposal_fg_prob": float(proposal_prob[idx, selected].item()),
-            "best_proposal_fg_prob": float(proposal_prob[idx, best].item()),
-            "proposal_top_score": _matrix_value(proposal_prob, idx, proposal_top) if proposal_top is not None else None,
-            "best_query_proposal_rank": _matrix_rank_of_col(proposal_prob, idx, best),
-            "selected_condition_score": _matrix_value(condition_scores, idx, selected),
-            "best_condition_score": _matrix_value(condition_scores, idx, best),
-            "condition_top_score": _matrix_value(condition_scores, idx, condition_top) if condition_top is not None else None,
-            "best_query_condition_rank": _matrix_rank_of_col(condition_scores, idx, best),
-            "selected_condition_cosine": _matrix_value(condition_cosine, idx, selected),
-            "best_condition_cosine": _matrix_value(condition_cosine, idx, best),
-            "selected_condition_pair_logit": _matrix_value(condition_pair, idx, selected),
-            "best_condition_pair_logit": _matrix_value(condition_pair, idx, best),
-            "selected_evidence_score": _matrix_value(evidence_scores, idx, selected),
-            "best_evidence_score": _matrix_value(evidence_scores, idx, best),
-            "evidence_top_score": _matrix_value(evidence_scores, idx, evidence_top) if evidence_top is not None else None,
-            "best_query_evidence_rank": _matrix_rank_of_col(evidence_scores, idx, best),
-            "selected_evidence_cosine": _matrix_value(evidence_cosine, idx, selected),
-            "best_evidence_cosine": _matrix_value(evidence_cosine, idx, best),
-            "selected_evidence_pair_logit": _matrix_value(evidence_pair, idx, selected),
-            "best_evidence_pair_logit": _matrix_value(evidence_pair, idx, best),
-            "selected_visual_evidence_score": _matrix_value(visual_evidence_scores, idx, selected),
-            "best_visual_evidence_score": _matrix_value(visual_evidence_scores, idx, best),
-            "visual_evidence_top_score": (
-                _matrix_value(visual_evidence_scores, idx, visual_top) if visual_top is not None else None
-            ),
-            "best_query_visual_evidence_rank": _matrix_rank_of_col(visual_evidence_scores, idx, best),
-            "selected_visual_evidence_cosine": _matrix_value(visual_evidence_cosine, idx, selected),
-            "best_visual_evidence_cosine": _matrix_value(visual_evidence_cosine, idx, best),
-            "selected_visual_evidence_pair_logit": _matrix_value(visual_evidence_pair, idx, selected),
-            "best_visual_evidence_pair_logit": _matrix_value(visual_evidence_pair, idx, best),
+            "selected_relevance_logit": float(relevance[idx, selected].item()),
+            "best_relevance_logit": float(relevance[idx, best].item()),
+            "best_query_relevance_rank": _matrix_rank_of_col(relevance, idx, best),
             "final_dice": metrics.get("dice"),
             "final_iou": metrics.get("iou"),
             "final_precision": metrics.get("precision"),
@@ -853,42 +637,10 @@ def collect_proposal_records(
             "selected_mask_area": float((proposal_mask_probs[idx, selected] >= 0.5).sum().item()),
             "best_mask_area": float((proposal_mask_probs[idx, best] >= 0.5).sum().item()),
         }
-        record["selection_logit_gap_selected_minus_best"] = (
-            record["selected_selection_logit"] - record["best_selection_logit"]
+        record["relevance_gap_selected_minus_best"] = (
+            record["selected_relevance_logit"] - record["best_relevance_logit"]
         )
         record["dice_gap_selected_minus_best"] = record["selected_query_dice"] - record["best_query_dice"]
-        for prefix in ["proposal", "condition", "evidence", "visual_evidence"]:
-            top_dice = record.get(f"{prefix}_top_query_dice")
-            if isinstance(top_dice, (int, float)):
-                record[f"dice_gap_{prefix}_top_minus_best"] = float(top_dice) - record["best_query_dice"]
-        if isinstance(record.get("proposal_top_score"), (int, float)):
-            record["proposal_score_gap_top_minus_best"] = (
-                float(record["proposal_top_score"]) - float(record["best_proposal_fg_prob"])
-            )
-        if isinstance(record.get("selected_evidence_score"), (int, float)) and isinstance(record.get("best_evidence_score"), (int, float)):
-            record["evidence_score_gap_selected_minus_best"] = (
-                float(record["selected_evidence_score"]) - float(record["best_evidence_score"])
-            )
-        if isinstance(record.get("evidence_top_score"), (int, float)) and isinstance(record.get("best_evidence_score"), (int, float)):
-            record["evidence_score_gap_top_minus_best"] = (
-                float(record["evidence_top_score"]) - float(record["best_evidence_score"])
-            )
-        if isinstance(record.get("selected_visual_evidence_score"), (int, float)) and isinstance(record.get("best_visual_evidence_score"), (int, float)):
-            record["visual_evidence_score_gap_selected_minus_best"] = (
-                float(record["selected_visual_evidence_score"]) - float(record["best_visual_evidence_score"])
-            )
-        if isinstance(record.get("visual_evidence_top_score"), (int, float)) and isinstance(record.get("best_visual_evidence_score"), (int, float)):
-            record["visual_evidence_score_gap_top_minus_best"] = (
-                float(record["visual_evidence_top_score"]) - float(record["best_visual_evidence_score"])
-            )
-        if isinstance(record.get("selected_condition_score"), (int, float)) and isinstance(record.get("best_condition_score"), (int, float)):
-            record["condition_score_gap_selected_minus_best"] = (
-                float(record["selected_condition_score"]) - float(record["best_condition_score"])
-            )
-        if isinstance(record.get("condition_top_score"), (int, float)) and isinstance(record.get("best_condition_score"), (int, float)):
-            record["condition_score_gap_top_minus_best"] = (
-                float(record["condition_top_score"]) - float(record["best_condition_score"])
-            )
         records.append(record)
     return records
 
@@ -899,48 +651,13 @@ def compute_proposal_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         return {}
     numeric_fields = [
         "selected_matches_best",
-        "proposal_top_matches_best",
-        "condition_top_matches_best",
-        "evidence_top_matches_best",
-        "visual_evidence_top_matches_best",
         "best_query_dice",
         "selected_query_dice",
-        "proposal_top_query_dice",
-        "condition_top_query_dice",
-        "evidence_top_query_dice",
-        "visual_evidence_top_query_dice",
-        "selected_selection_logit",
-        "best_selection_logit",
-        "best_query_selection_rank",
-        "selection_logit_gap_selected_minus_best",
+        "selected_relevance_logit",
+        "best_relevance_logit",
+        "best_query_relevance_rank",
+        "relevance_gap_selected_minus_best",
         "dice_gap_selected_minus_best",
-        "dice_gap_proposal_top_minus_best",
-        "dice_gap_condition_top_minus_best",
-        "dice_gap_evidence_top_minus_best",
-        "dice_gap_visual_evidence_top_minus_best",
-        "selected_proposal_fg_prob",
-        "best_proposal_fg_prob",
-        "proposal_top_score",
-        "best_query_proposal_rank",
-        "proposal_score_gap_top_minus_best",
-        "selected_condition_score",
-        "best_condition_score",
-        "condition_top_score",
-        "best_query_condition_rank",
-        "condition_score_gap_selected_minus_best",
-        "condition_score_gap_top_minus_best",
-        "selected_evidence_score",
-        "best_evidence_score",
-        "evidence_top_score",
-        "best_query_evidence_rank",
-        "evidence_score_gap_selected_minus_best",
-        "evidence_score_gap_top_minus_best",
-        "selected_visual_evidence_score",
-        "best_visual_evidence_score",
-        "visual_evidence_top_score",
-        "best_query_visual_evidence_rank",
-        "visual_evidence_score_gap_selected_minus_best",
-        "visual_evidence_score_gap_top_minus_best",
         "final_dice",
         "final_iou",
         "final_precision",
@@ -1028,6 +745,45 @@ def compute_threshold_sweep_report(accumulators: dict[float, MetricAccumulator])
     }
 
 
+def restored_original_space_metrics(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    metadata: list[dict[str, Any]],
+    threshold: float,
+) -> list[dict[str, float]]:
+    """将有效 canvas 反变换回 source H/W 后逐样本计算指标。"""
+    probabilities = torch.sigmoid(logits.detach().float().cpu())
+    targets = target.detach().float().cpu()
+    records: list[dict[str, float]] = []
+    for index, meta in enumerate(metadata):
+        transform = meta.get("resize_transform")
+        pred = (probabilities[index, 0].numpy() >= float(threshold)).astype(np.uint8)
+        gt = (targets[index, 0].numpy() >= 0.5).astype(np.uint8)
+        restored_pred = restore_mask_to_original(pred, transform)
+        restored_gt = restore_mask_to_original(gt, transform)
+        if restored_pred is None or restored_gt is None:
+            restored_pred, restored_gt = pred, gt
+        pred_tensor = torch.from_numpy(restored_pred).float()[None, None]
+        gt_tensor = torch.from_numpy(restored_gt).float()[None, None]
+        pred_logits = torch.where(pred_tensor > 0.5, torch.full_like(pred_tensor, 20.0), torch.full_like(pred_tensor, -20.0))
+        records.extend(batch_binary_metrics(pred_logits, gt_tensor, threshold=0.5))
+    return records
+
+
+def canvas_original_metric_delta(
+    canvas: dict[str, dict[str, float]],
+    original: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    """报告 target canvas 与原尺寸 overall 指标差值，便于发现恢复偏差。"""
+    canvas_overall = canvas.get("overall") or {}
+    original_overall = original.get("overall") or {}
+    return {
+        key: float(canvas_overall.get(key, 0.0)) - float(original_overall.get(key, 0.0))
+        for key in ("dice", "iou", "precision", "recall")
+        if key in canvas_overall and key in original_overall
+    }
+
+
 @torch.no_grad()
 def evaluate(
     model: MultiSourceQwenPSALMSeg,
@@ -1043,12 +799,13 @@ def evaluate(
 ) -> dict[str, Any]:
     model.eval()
     acc = MetricAccumulator()
+    original_acc = MetricAccumulator()
     sweep_thresholds = normalize_thresholds(threshold_sweep)
     sweep_accumulators = {value: MetricAccumulator() for value in sweep_thresholds}
     loss_values: list[float] = []
     loss_components: list[dict[str, float]] = []
-    gate_records: list[dict[str, Any]] = []
-    query_modality_records: list[dict[str, Any]] = []
+    reliability_records: list[dict[str, Any]] = []
+    query_attention_records: list[dict[str, Any]] = []
     proposal_records: list[dict[str, Any]] = []
     saved: list[str] = []
     processed_batches = 0
@@ -1086,14 +843,34 @@ def evaluate(
             target_area_px_bin_counts[str(meta.get("target_area_px_bin", "unknown"))] += 1
             target_area_fraction_bin_counts[str(meta.get("target_area_fraction_bin", "unknown"))] += 1
             ground_area_m2_bin_counts[str(meta.get("ground_area_m2_bin", "unknown"))] += 1
-        metrics = batch_binary_metrics(logits_cpu, mask_cpu, threshold=float(threshold))
+        valid_cpu = batch["valid_mask"].detach().cpu()
+        metrics = batch_binary_metrics(
+            logits_cpu,
+            mask_cpu,
+            threshold=float(threshold),
+            valid_mask=valid_cpu,
+        )
         acc.update(metrics, metric_metadata)
+        original_metrics = restored_original_space_metrics(
+            logits_cpu,
+            mask_cpu,
+            metric_metadata,
+            threshold=float(threshold),
+        )
+        original_acc.update(original_metrics, metric_metadata)
         for sweep_value, sweep_acc in sweep_accumulators.items():
-            sweep_metrics = batch_binary_metrics(logits_cpu, mask_cpu, threshold=sweep_value)
+            sweep_metrics = batch_binary_metrics(
+                logits_cpu,
+                mask_cpu,
+                threshold=sweep_value,
+                valid_mask=valid_cpu,
+            )
             sweep_acc.update(sweep_metrics, metric_metadata)
-        gate_records.extend(collect_gate_records(outputs, metric_metadata))
-        query_modality_records.extend(collect_query_modality_records(outputs, metric_metadata))
-        proposal_records.extend(collect_proposal_records(outputs, batch["mask"], metric_metadata, metrics))
+        reliability_records.extend(collect_reliability_records(outputs, metric_metadata))
+        query_attention_records.extend(collect_query_modality_attention_records(outputs, metric_metadata))
+        proposal_records.extend(
+            collect_proposal_records(outputs, batch["mask"], batch["valid_mask"], metric_metadata, metrics)
+        )
         should_save_visuals = visual_dir is not None and (visualize_all or len(saved) < num_visualizations)
         if should_save_visuals:
             max_items = len(batch["metadata"]) if visualize_all else num_visualizations - len(saved)
@@ -1112,6 +889,7 @@ def evaluate(
         if device.type == "cuda" and batch_idx % 50 == 49:
             torch.cuda.empty_cache()
     groups = acc.compute()
+    original_groups = original_acc.compute()
     overview_dir = visual_dir / "multimodal_overviews" if visual_dir is not None else None
     manifest_path = visual_dir / "visualization_manifest.jsonl" if visual_dir is not None else None
     mask_export_dir = visual_dir / "mask_exports" if visual_dir is not None else None
@@ -1144,8 +922,10 @@ def evaluate(
         },
         "threshold_sweep": compute_threshold_sweep_report(sweep_accumulators),
         "metrics": groups,
-        "modality_gate_summary": compute_gate_summary(gate_records),
-        "query_modality_summary": compute_query_modality_summary(query_modality_records),
+        "metrics_original_size": original_groups,
+        "canvas_vs_original_delta": canvas_original_metric_delta(groups, original_groups),
+        "modality_reliability_summary": compute_reliability_summary(reliability_records),
+        "query_modality_attention_summary": compute_query_modality_attention_summary(query_attention_records),
         "proposal_diagnostics": {
             "records": proposal_records,
             "summary": compute_proposal_summary(proposal_records),
@@ -1174,14 +954,23 @@ def save_checkpoint(
     step: int,
     config: QPSalmConfig,
     update_last: bool = True,
+    include_optimizer: bool = True,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    model_state = {
+        key: value
+        for key, value in model.state_dict().items()
+        if not any(key.startswith(prefix) for prefix in EXCLUDED_FROZEN_PREFIXES)
+    }
     payload = {
+        "format": CHECKPOINT_FORMAT,
         "step": step,
-        "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
+        "model_state": model_state,
+        "excluded_frozen_prefixes": list(EXCLUDED_FROZEN_PREFIXES),
         "config": config.__dict__,
     }
+    if include_optimizer:
+        payload["optimizer_state"] = optimizer.state_dict()
     atomic_torch_save(payload, path)
     if update_last:
         last_path = path.parent / "checkpoint_last.pt"
@@ -1227,9 +1016,23 @@ def load_best_validation(path: Path) -> float:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return -1.0
-    overall = (payload.get("metrics") or {}).get("overall") if isinstance(payload, dict) else None
-    value = overall.get("dice") if isinstance(overall, dict) else None
+    value = payload.get("selection_score") if isinstance(payload, dict) else None
+    if not isinstance(value, (int, float)):
+        positive = (payload.get("metrics") or {}).get("positive_only") if isinstance(payload, dict) else None
+        value = positive.get("dice") if isinstance(positive, dict) else None
     return float(value) if isinstance(value, (int, float)) else -1.0
+
+
+def validation_selection_score(report: dict[str, Any], metric_name: str) -> float:
+    """从拆分指标选择 checkpoint，避免 negative 样本掩盖前景退化。"""
+    metrics = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
+    overall = metrics.get("overall") if isinstance(metrics.get("overall"), dict) else {}
+    positive = metrics.get("positive_only") if isinstance(metrics.get("positive_only"), dict) else {}
+    if metric_name == "overall_dice":
+        return float(overall.get("dice", 0.0))
+    if metric_name != "positive_only_dice":
+        raise ValueError(f"未知 checkpoint_metric={metric_name!r}; expected positive_only_dice or overall_dice")
+    return float(positive.get("dice", overall.get("dice", 0.0)))
 
 
 def load_checkpoint(path: str | Path, model: MultiSourceQwenPSALMSeg, optimizer: torch.optim.Optimizer | None = None) -> int:
@@ -1242,7 +1045,19 @@ def load_checkpoint(path: str | Path, model: MultiSourceQwenPSALMSeg, optimizer:
             "文件可能是不完整写入或格式损坏；请改用 checkpoint_best.pt、checkpoint_step_*.pt，"
             "或删除损坏文件后重跑。"
         ) from exc
-    model.load_state_dict(ckpt["model_state"], strict=True)
+    if ckpt.get("format") != CHECKPOINT_FORMAT:
+        raise RuntimeError(
+            f"不支持 checkpoint 格式: {ckpt.get('format')!r}; expected {CHECKPOINT_FORMAT}. "
+            "本次架构重构不兼容旧 checkpoint，请重新训练。"
+        )
+    incompatible = model.load_state_dict(ckpt["model_state"], strict=False)
+    prefixes = tuple(str(item) for item in ckpt.get("excluded_frozen_prefixes") or [])
+    illegal_missing = [key for key in incompatible.missing_keys if not any(key.startswith(prefix) for prefix in prefixes)]
+    if illegal_missing or incompatible.unexpected_keys:
+        raise RuntimeError(
+            "checkpoint 与当前 SANE/QMEF/PMRD 架构不一致: "
+            f"missing={illegal_missing[:8]} unexpected={incompatible.unexpected_keys[:8]}"
+        )
     if optimizer is not None and "optimizer_state" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer_state"])
     return int(ckpt.get("step", 0))
@@ -1271,33 +1086,19 @@ def load_existing_history(path: Path, start_step: int) -> list[dict[str, Any]]:
     return history
 
 
-def dataset_combo_report(dataset: Any, config: QPSalmConfig) -> dict[str, Any]:
-    """汇总实际可训练 rows 的组合和生效 loss 权重。"""
+def dataset_combo_report(dataset: Any) -> dict[str, Any]:
+    """汇总实际可训练 rows 的模态与传感器组合。"""
     rows = list(getattr(dataset, "rows", []) or [])
     canonical = Counter(canonical_modality_combo(row) for row in rows)
     raw = Counter(raw_modality_combo(row) for row in rows)
     sensors = Counter(sensor_combo(row) for row in rows)
     normalizations = Counter(normalization_combo(row) for row in rows)
-    configured = dict(getattr(config, "canonical_combo_loss_weights", {}) or {})
-    effective = {
-        combo: float(configured.get(combo, configured.get(f"canonical_combo={combo}", 1.0)))
-        for combo in sorted(canonical)
-        if float(configured.get(combo, configured.get(f"canonical_combo={combo}", 1.0))) != 1.0
-    }
-    present_keys = set(canonical) | {f"canonical_combo={combo}" for combo in canonical}
-    ignored = {
-        key: value
-        for key, value in sorted(configured.items())
-        if key not in present_keys
-    }
     return {
         "num_rows": len(rows),
         "canonical_combos": dict(sorted(canonical.items())),
         "raw_combos": dict(sorted(raw.items())),
         "sensor_combos": dict(sorted(sensors.items())),
         "normalization_combos": dict(sorted(normalizations.items())),
-        "effective_canonical_combo_loss_weights": effective,
-        "ignored_canonical_combo_loss_weights": ignored,
     }
 
 
@@ -1306,8 +1107,6 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
     device = resolve_device(device_name)
     out_dir = resolve_repo_path(config.output_dir) or Path(config.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    save_config(out_dir / "resolved_config.yaml", config)
-    write_standalone_train_manifest(out_dir, config, device_name=device_name, resume=resume)
     cache_report = assert_qwen_cache_coverage(config, splits=("train", "val"))
     if cache_report.get("ok"):
         print(
@@ -1320,19 +1119,27 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
     train_loader, val_loader = build_dataloaders(config)
     if len(train_loader) == 0:
         raise RuntimeError("训练集为空：核心模板过滤后没有可用样本。")
+    grad_accum_steps = max(1, int(getattr(config, "grad_accum_steps", 1) or 1))
+    steps_per_epoch = max(1, math.ceil(len(train_loader) / grad_accum_steps))
+    if config.max_steps is None or int(config.max_steps) <= 0:
+        if config.num_epochs is None or int(config.num_epochs) <= 0:
+            raise ValueError("max_steps 为空时必须设置正整数 num_epochs")
+        config.max_steps = int(config.num_epochs) * steps_per_epoch
+    config.max_steps = int(config.max_steps)
+    save_config(out_dir / "resolved_config.yaml", config)
+    write_standalone_train_manifest(out_dir, config, device_name=device_name, resume=resume)
     print(
         f"dataset train_samples={len(train_loader.dataset)} val_samples={len(val_loader.dataset)} "
-        f"batch_size={config.batch_size} grad_accum_steps={max(1, int(config.grad_accum_steps))} "
-        f"target_size={config.target_size}"
+        f"batch_size={config.batch_size} grad_accum_steps={grad_accum_steps} "
+        f"target_size={config.target_size} steps_per_epoch={steps_per_epoch} "
+        f"max_steps={config.max_steps} estimated_epochs={config.max_steps / steps_per_epoch:.2f}"
     )
-    train_combo_report = dataset_combo_report(train_loader.dataset, config)
-    val_combo_report = dataset_combo_report(val_loader.dataset, config)
+    train_combo_report = dataset_combo_report(train_loader.dataset)
+    val_combo_report = dataset_combo_report(val_loader.dataset)
     print(
         "dataset_combos "
         f"train={train_combo_report['canonical_combos']} "
-        f"val={val_combo_report['canonical_combos']} "
-        f"effective_weights={train_combo_report['effective_canonical_combo_loss_weights']} "
-        f"ignored_weights={train_combo_report['ignored_canonical_combo_loss_weights']}"
+        f"val={val_combo_report['canonical_combos']}"
     )
     print(
         "dataset_sensor_normalization "
@@ -1349,13 +1156,12 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
     history_path = out_dir / "train_history.json"
     history: list[dict[str, Any]] = load_existing_history(history_path, start_step) if resume else []
     best_validation_path = out_dir / "validation_best.json"
-    best_val_dice = load_best_validation(best_validation_path) if resume else -1.0
+    best_selection_score = load_best_validation(best_validation_path) if resume else -1.0
     step = start_step
     train_iter = iter(train_loader)
     log_interval = int(getattr(config, "log_interval", 20) or 0)
     log_window: list[dict[str, Any]] = []
     log_window_start = time.perf_counter()
-    grad_accum_steps = max(1, int(getattr(config, "grad_accum_steps", 1) or 1))
     pbar = tqdm(total=max(0, config.max_steps - start_step), desc="qpsalm-train", dynamic_ncols=True)
     while step < config.max_steps:
         model.train()
@@ -1364,6 +1170,9 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
             group["lr"] = config.lr * lr_mult
         optimizer.zero_grad(set_to_none=True)
         accumulated_loss = 0.0
+        step_metrics: list[dict[str, float]] = []
+        step_loss_logs: list[dict[str, float]] = []
+        step_signal_logs: list[dict[str, float]] = []
         outputs: dict[str, torch.Tensor] | None = None
         batch: dict[str, Any] | None = None
         for _micro_step in range(grad_accum_steps):
@@ -1378,32 +1187,34 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
             if not torch.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss at step {step}: {float(loss.detach().cpu().item())}")
             accumulated_loss += float(loss.detach().cpu().item())
+            step_metrics.extend(
+                batch_binary_metrics(
+                    outputs["final_mask_logits"].detach().cpu(),
+                    batch["mask"].detach().cpu(),
+                    threshold=float(config.eval_threshold),
+                    valid_mask=batch["valid_mask"].detach().cpu(),
+                )
+            )
+            step_loss_logs.append(loss_log_values(outputs))
+            step_signal_logs.append(training_signal_values(outputs))
             (loss / float(grad_accum_steps)).backward()
         assert outputs is not None and batch is not None
         if config.grad_clip and config.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(trainable, config.grad_clip)
         optimizer.step()
 
-        metrics = batch_binary_metrics(
-            outputs["final_mask_logits"].detach().cpu(),
-            batch["mask"].detach().cpu(),
-            threshold=float(config.eval_threshold),
-        )
+        mean_dice = sum(item["dice"] for item in step_metrics) / max(1, len(step_metrics))
+        mean_iou = sum(item["iou"] for item in step_metrics) / max(1, len(step_metrics))
         row = {
             "step": step,
             "loss": accumulated_loss / float(grad_accum_steps),
             "lr": config.lr * lr_mult,
-            "dice": metrics[0]["dice"],
-            "iou": metrics[0]["iou"],
+            "dice": mean_dice,
+            "iou": mean_iou,
             "grad_accum_steps": float(grad_accum_steps),
         }
-        if "sample_weight" in batch:
-            raw_weights = batch["sample_weight"].detach().float().cpu()
-            row["sample_weight_raw_mean"] = float(raw_weights.mean().item())
-            row["sample_weight_raw_min"] = float(raw_weights.min().item())
-            row["sample_weight_raw_max"] = float(raw_weights.max().item())
-        row.update(loss_log_values(outputs))
-        row.update(training_signal_values(outputs))
+        row.update(average_dicts(step_loss_logs))
+        row.update(average_dicts(step_signal_logs))
         history.append(row)
         log_window.append(row)
         outputs = None
@@ -1463,12 +1274,15 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
             )
             val_report["step"] = step
             overall = (val_report.get("metrics") or {}).get("overall") or {}
-            val_dice = float(overall.get("dice", 0.0))
-            is_best = val_dice > best_val_dice
+            checkpoint_metric = str(getattr(config, "checkpoint_metric", "positive_only_dice"))
+            selection_score = validation_selection_score(val_report, checkpoint_metric)
+            is_best = selection_score > best_selection_score
             if is_best:
-                best_val_dice = val_dice
+                best_selection_score = selection_score
+            val_report["selection_metric"] = checkpoint_metric
+            val_report["selection_score"] = selection_score
             val_report["is_best"] = bool(is_best)
-            val_report["best_so_far"] = {"dice": best_val_dice}
+            val_report["best_so_far"] = {"metric": checkpoint_metric, "score": best_selection_score}
             tqdm.write(
                 "val "
                 f"step={step} "
@@ -1476,7 +1290,8 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
                 f"dice={float(overall.get('dice', 0.0)):.4f} "
                 f"precision={float(overall.get('precision', 0.0)):.4f} "
                 f"recall={float(overall.get('recall', 0.0)):.4f} "
-                f"best={best_val_dice:.4f} "
+                f"select={checkpoint_metric}:{selection_score:.4f} "
+                f"best={best_selection_score:.4f} "
                 f"n={int((val_report.get('coverage') or {}).get('num_samples') or overall.get('n') or 0)} "
                 f"combos={len((val_report.get('coverage') or {}).get('canonical_combos') or {})} "
                 f"visualize={int(config.num_visualizations if should_visualize else 0)}"
@@ -1488,10 +1303,11 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
                     f"max_val_batches={max_val_batches} "
                     f"canonical_combos={coverage.get('canonical_combos') or {}}"
                 )
-            (out_dir / f"validation_step_{step:06d}.json").write_text(
-                json.dumps(val_report, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            if bool(getattr(config, "save_step_validation_reports", False)):
+                (out_dir / f"validation_step_{step:06d}.json").write_text(
+                    json.dumps(val_report, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             (out_dir / "validation_latest.json").write_text(
                 json.dumps(val_report, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
@@ -1501,22 +1317,32 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
                     json.dumps(val_report, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
-                save_checkpoint(out_dir / "checkpoint_best.pt", model, optimizer, step, config, update_last=False)
+                save_checkpoint(
+                    out_dir / "checkpoint_best.pt",
+                    model,
+                    optimizer,
+                    step,
+                    config,
+                    update_last=False,
+                    include_optimizer=False,
+                )
             if device.type == "cuda":
                 torch.cuda.empty_cache()
         save_interval = int(getattr(config, "save_interval", 0) or 0)
         if (save_interval > 0 and step % save_interval == 0) or step == config.max_steps:
-            save_checkpoint(out_dir / f"checkpoint_step_{step:06d}.pt", model, optimizer, step, config)
-            removed_checkpoints = prune_step_checkpoints(
-                out_dir,
-                keep_recent=int(getattr(config, "keep_recent_checkpoints", 2)),
-            )
-            if removed_checkpoints:
-                tqdm.write(
-                    "checkpoint_prune "
-                    f"keep_recent={int(getattr(config, 'keep_recent_checkpoints', 2))} "
-                    f"removed={len(removed_checkpoints)}"
+            save_checkpoint(out_dir / "checkpoint_last.pt", model, optimizer, step, config, update_last=False)
+            if bool(getattr(config, "save_step_checkpoints", False)):
+                save_checkpoint(out_dir / f"checkpoint_step_{step:06d}.pt", model, optimizer, step, config, update_last=False)
+                removed_checkpoints = prune_step_checkpoints(
+                    out_dir,
+                    keep_recent=int(getattr(config, "keep_recent_checkpoints", 2)),
                 )
+                if removed_checkpoints:
+                    tqdm.write(
+                        "checkpoint_prune "
+                        f"keep_recent={int(getattr(config, 'keep_recent_checkpoints', 2))} "
+                        f"removed={len(removed_checkpoints)}"
+                    )
 
     pbar.close()
     history_path.write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

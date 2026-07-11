@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 """步骤 1-3：验证统一 JSONL 索引。
 
-脚本作用：对应 Task_Introduction.md 对数据可靠性的要求，检查 source、final
+用途：检查 source、final
 或 referring_target 索引中的路径、split、mask、bbox 字段、模态缺失标记和重复样本。
 主要输入：source 阶段读取 indexes/source_all.jsonl；final 阶段读取 indexes/all.jsonl；
 referring_target 阶段读取 indexes/referring_target_all.jsonl。
 主要输出：reports/validation_report_source.json、validation_report.json 或
 validation_report_referring_target.json。
-是否改写原始数据：不会改写 datasets/，只写 benchmark/ 下的验证报告。
-典型用法：python scripts/1-benchmark/1-3_validate_index.py --stage final --benchmark-dir benchmark/multisource_landslide_v1_small
+写入行为：不会改写 datasets/ 或索引，只写 benchmark/ 下的验证报告。
+所属流程：benchmark 构建的 source/final/referring_target 阶段门禁。
+推荐运行命令：python scripts/1-benchmark/1-3_validate_index.py --stage final --benchmark-dir benchmark/multisource_landslide_v1_small
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from geohazard_benchmark_common import (
     final_index_paths,
     hdf5_has_dataset,
     path_is_inside_benchmark,
+    project_path_arg,
     read_jsonl,
     referring_target_index_paths,
     resolve_repo_path,
@@ -334,7 +336,7 @@ def validate_sample(sample: dict[str, Any], *, stage: str, benchmark_dir: Path) 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="验证 benchmark 统一索引，生成 validation_report.json。")
-    parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
+    parser.add_argument("--benchmark-dir", type=project_path_arg, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
     parser.add_argument("--stage", choices=["source", "final", "referring_target"], default="final", help="验证源索引、最终自包含训练索引或指代目标索引。")
     return parser.parse_args()
 

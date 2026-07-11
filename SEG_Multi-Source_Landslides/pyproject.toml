@@ -11,8 +11,9 @@ dependencies = [
   "numpy",
   "Pillow",
   "PyYAML",
+  "scipy",
   "torch",
-  "torchvision",
+  "transformers",
   "tqdm",
 ]
 
@@ -29,9 +30,7 @@ qpsalm-summarize-run = "qpsalm_seg.cli.summarize_run:main"
 qpsalm-compare-runs = "qpsalm_seg.cli.compare_runs:main"
 qpsalm-diagnose-run = "qpsalm_seg.cli.diagnose_run:main"
 qpsalm-recommend-threshold = "qpsalm_seg.cli.recommend_threshold:main"
-qpsalm-run-phase1 = "qpsalm_seg.cli.run_phase1:main"
 qpsalm-export-tables = "qpsalm_seg.cli.export_tables:main"
-qpsalm-verify-phase1 = "qpsalm_seg.cli.verify_phase1:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 """步骤 1-4：真实预处理并物化自包含 benchmark 数据。
 
-脚本作用：对应 Task_Introduction.md 的“步骤 3”，读取 source 索引中的
+用途：读取 source 索引中的
 datasets/ 原始路径，按模态规则生成 benchmark 内部 .npy 数据，并写出最终
 训练索引，保证训练阶段不再读取 datasets/。
 主要输入：indexes/source_all.jsonl 与 datasets/ 原始数据文件。
 主要输出：data/{split}/{dataset_name}/{sample_id}/ 下的 .npy 数据、
 indexes/all.jsonl、train.jsonl、val.jsonl、test.jsonl、unlabeled.jsonl。
-是否改写原始数据：不会改写 datasets/；只在 benchmark/ 后缀目录内写物化数据。
-典型用法：python scripts/1-benchmark/1-4_preprocess_samples.py --benchmark-dir benchmark/multisource_landslide_v1_small --strategy materialize
+写入行为：不会改写 datasets/；只在 benchmark 目标目录内写物化数据与最终索引。
+所属流程：benchmark 构建 1-4；必须先通过 source 索引验证。
+推荐运行命令：python scripts/1-benchmark/1-4_preprocess_samples.py --benchmark-dir benchmark/multisource_landslide_v1_small --strategy materialize
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from geohazard_benchmark_common import (
     ensure_dir,
     final_index_paths,
     is_tif_path,
+    project_path_arg,
     resolve_repo_path,
     source_index_paths,
     to_repo_rel,
@@ -687,7 +689,7 @@ def materialize_sample(sample: dict[str, Any], benchmark_dir: Path) -> dict[str,
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="物化自包含 benchmark 数据，并生成最终训练索引。")
-    parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
+    parser.add_argument("--benchmark-dir", type=project_path_arg, default=DEFAULT_BENCHMARK_ROOT, help="后缀式 small 或 full benchmark 输出目录。")
     parser.add_argument("--strategy", choices=["materialize"], default="materialize", help="预处理输出策略；当前默认并只支持 materialize。")
     parser.add_argument("--max-failures", type=int, default=20, help="允许跳过的单样本失败数量；超过后停止。")
     return parser.parse_args()

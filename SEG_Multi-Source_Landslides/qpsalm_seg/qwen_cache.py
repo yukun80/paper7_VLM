@@ -21,17 +21,14 @@ import torch
 from .config import QPSalmConfig
 from .data import (
     build_condition_prompt_text,
-    build_condition_text,
     build_evidence_reasoning_text,
     build_proposal_context_text,
-    iter_jsonl,
-    resolve_repo_path,
-    should_skip_row,
 )
+from .indexing import iter_jsonl, should_skip_row
+from .paths import resolve_repo_path
 
 
 TEXT_BUILDERS = [
-    ("condition_text", build_condition_text),
     ("proposal_context_text", build_proposal_context_text),
     ("condition_prompt_text", build_condition_prompt_text),
     ("evidence_reasoning_text", build_evidence_reasoning_text),

@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """多源滑坡 benchmark 构建公共工具库。
 
-脚本作用：为 scripts/1-benchmark/ 下的阶段脚本提供路径、JSONL、CSV、
+用途：为 scripts/1-benchmark/ 下的阶段脚本提供路径、JSONL、CSV、
 抽样、样本 ID、专业遥感/数组读取和 Sen12 文件名配对等公共函数。
 主要输入：各阶段脚本传入的 datasets/ 路径、benchmark/ 输出路径和样本记录。
 主要输出：公共函数返回值；本文件本身不作为流程入口，也不单独生成文件。
-是否改写原始数据：不会改写 datasets/ 原始数据。
-典型用法：由 1-1_scan_sources.py、1-2_build_index.py 等脚本 import 后复用。
+写入行为：不会自行改写数据；文件写入由调用方控制。
+运行方式：内部公共模块，不作为独立程序运行；由 1-1 到 1-7 阶段脚本 import。
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import csv
 import copy
 import hashlib
 import json
+import os
 import random
 import re
 import warnings
@@ -32,8 +33,42 @@ from rasterio.errors import NotGeoreferencedWarning
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATASETS_ROOT = REPO_ROOT / "datasets"
-DEFAULT_BENCHMARK_PREFIX = REPO_ROOT / "benchmark" / "multisource_landslide_v1"
+
+
+def _resolve_root_override(value: str | None, default: Path) -> Path:
+    """解析存储根目录覆盖；相对路径始终相对仓库根目录。"""
+    if not value:
+        return default.resolve(strict=False)
+    path = Path(value).expanduser()
+    if not path.is_absolute() and len(path.parts) == 1 and path.parts[0] in {"datasets", "benchmark"}:
+        return _default_external_root(path.parts[0]).resolve(strict=False)
+    resolved = path if path.is_absolute() else REPO_ROOT / path
+    return resolved.resolve(strict=False)
+
+
+def _default_external_root(name: str) -> Path:
+    """优先使用仓库同级大数据目录，并兼容旧的仓库内目录。"""
+    sibling = REPO_ROOT.parent / name
+    legacy = REPO_ROOT / name
+    return sibling if sibling.exists() or not legacy.exists() else legacy
+
+
+_datasets_override = os.environ.get("PAPER7_DATASETS_ROOT") or os.environ.get("DATASETS_ROOT")
+_benchmark_override = os.environ.get("PAPER7_BENCHMARK_ROOT")
+if not _benchmark_override and os.environ.get("BENCHMARK_PREFIX"):
+    prefix_path = Path(os.environ["BENCHMARK_PREFIX"])
+    _benchmark_override = (
+        str(_default_external_root("benchmark"))
+        if not prefix_path.is_absolute() and prefix_path.parts and prefix_path.parts[0] == "benchmark"
+        else str(prefix_path.parent)
+    )
+
+DEFAULT_DATASETS_ROOT = _resolve_root_override(_datasets_override, _default_external_root("datasets"))
+DEFAULT_BENCHMARK_STORAGE_ROOT = _resolve_root_override(
+    _benchmark_override,
+    _default_external_root("benchmark"),
+)
+DEFAULT_BENCHMARK_PREFIX = DEFAULT_BENCHMARK_STORAGE_ROOT / "multisource_landslide_v1"
 DEFAULT_BENCHMARK_ROOT = DEFAULT_BENCHMARK_PREFIX.with_name(f"{DEFAULT_BENCHMARK_PREFIX.name}_small")
 BUCKETS = [32, 64, 128, 224, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
 LANDSLIDE4SENSE_S2_BANDS = [f"B{i}" for i in range(1, 13)]
@@ -82,27 +117,49 @@ def benchmark_dir_for_mode(mode: str, prefix: Path | None = None) -> Path:
 
 
 def to_repo_rel(path: Path | str | None) -> str | None:
-    """把路径写成相对仓库根目录的形式，避免大量 resolve 带来的 I/O 开销。"""
+    """把路径写成可移植逻辑引用，不暴露外置存储的机器绝对路径。"""
     if path is None:
         return None
     p = Path(path)
     if not p.is_absolute():
         return p.as_posix()
+    p = p.resolve(strict=False)
+    for logical_root, physical_root in (
+        ("datasets", DEFAULT_DATASETS_ROOT),
+        ("benchmark", DEFAULT_BENCHMARK_STORAGE_ROOT),
+    ):
+        try:
+            relative = p.relative_to(physical_root)
+            return (Path(logical_root) / relative).as_posix()
+        except ValueError:
+            pass
     try:
         return p.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         return p.as_posix()
 
 
-def resolve_repo_path(path_ref: str | None) -> Path | None:
-    """解析索引中的路径引用；支持 path::index 这种虚拟样本写法。"""
+def resolve_repo_path(path_ref: str | Path | None) -> Path | None:
+    """解析项目逻辑路径；支持外置 datasets/benchmark 和 path::index。"""
     if not path_ref:
         return None
-    base = path_ref.split("::", 1)[0]
+    base = str(path_ref).split("::", 1)[0]
     p = Path(base)
     if p.is_absolute():
-        return p
-    return REPO_ROOT / p
+        return p.resolve(strict=False)
+    if p.parts and p.parts[0] == "datasets":
+        return DEFAULT_DATASETS_ROOT.joinpath(*p.parts[1:]).resolve(strict=False)
+    if p.parts and p.parts[0] == "benchmark":
+        return DEFAULT_BENCHMARK_STORAGE_ROOT.joinpath(*p.parts[1:]).resolve(strict=False)
+    return (REPO_ROOT / p).resolve(strict=False)
+
+
+def project_path_arg(path_ref: str) -> Path:
+    """argparse 路径类型：把命令行逻辑路径解析为物理路径。"""
+    path = resolve_repo_path(path_ref)
+    if path is None:
+        raise ValueError(f"路径不能为空: {path_ref!r}")
+    return path
 
 
 def is_relative_to(path: Path, parent: Path) -> bool:

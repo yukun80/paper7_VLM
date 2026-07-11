@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""预计算 Qwen condition embedding 缓存。
+"""预计算 Qwen semantic-evidence 文本缓存。
 
-脚本作用：用冻结 Qwen3-VL 把 instruction/condition/modality/GSD 文本预编码成
-hidden state，训练时通过 controller=qwen_cache 复用，避免每个 step 重跑 2B
-semantic controller。
-主要输入：核心 instruction JSONL train/val/test 索引。
-主要输出：outputs/qpsalm_qwen_condition_cache.pt。
-是否改写原始数据：不会。
-典型用法：python -m qpsalm_seg.cli.cache_qwen_embeddings --config ... --device cuda。
+用途：用冻结 Qwen3-VL 编码 task、condition 和 evidence reasoning 文本，供训练复用。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.cache_qwen_embeddings --config
+SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml
+--output outputs/qpsalm_condition_cache.pt --backend qwen --device cuda --overwrite
+主要输入：核心 train/val 索引，或通过 --eval-index 指定的 val/test 索引。
+主要输出：Qwen 文本 hidden-state 缓存 .pt。
+写入行为：只写 --output；--overwrite 允许覆盖已有缓存，不修改 benchmark。
+所属流程：QPSALM 训练/推理准备；真实 Qwen backend 需要本地模型权重。
 """
 
 from __future__ import annotations
@@ -25,14 +27,15 @@ from tqdm import tqdm
 
 from qpsalm_seg.config import load_config
 from qpsalm_seg.controllers import FrozenQwenController
-from qpsalm_seg.data import resolve_repo_path
+from qpsalm_seg.paths import resolve_repo_path
 from qpsalm_seg.qwen_cache import collect_required_qwen_texts
 from qpsalm_seg.train_eval import atomic_torch_save, resolve_device
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Cache frozen Qwen condition hidden states for QPSALM training.")
+    parser = argparse.ArgumentParser(description="Cache frozen Qwen semantic-evidence text states.")
     parser.add_argument("--config", required=True)
+    parser.add_argument("--benchmark-dir", default=None)
     parser.add_argument("--train-index", default=None)
     parser.add_argument("--val-index", default=None)
     parser.add_argument("--eval-index", default=None, help="Optional val/test index for standalone inference cache.")
@@ -54,14 +57,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_condition_texts(
+def collect_controller_texts(
     config_path: str,
     train_index: str | None,
     val_index: str | None,
     eval_index: str | None = None,
     eval_split: str = "test",
+    benchmark_dir: str | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     overrides: dict[str, Any] = {
+        "benchmark_dir": benchmark_dir,
         "train_index": train_index,
         "val_index": val_index,
     }
@@ -134,23 +139,25 @@ def main() -> None:
     config = load_config(
         args.config,
         overrides={
+            "benchmark_dir": args.benchmark_dir,
             "train_index": args.train_index,
             "val_index": args.val_index,
             "test_index": args.eval_index if args.eval_split == "test" else None,
             "qwen_model_path": args.qwen_model_path,
         },
     )
-    texts, source_report = collect_condition_texts(
+    texts, source_report = collect_controller_texts(
         args.config,
         args.train_index,
         args.val_index,
         eval_index=args.eval_index,
         eval_split=args.eval_split,
+        benchmark_dir=args.benchmark_dir,
     )
     if args.max_texts is not None and args.max_texts > 0:
         texts = texts[: args.max_texts]
     if not texts:
-        raise RuntimeError("没有收集到可缓存的 condition_text。")
+        raise RuntimeError("没有收集到可缓存的 semantic-evidence text。")
 
     if args.backend == "hash-smoke":
         embeddings = hash_smoke_embeddings(texts, hidden_size=int(args.hash_hidden_size))

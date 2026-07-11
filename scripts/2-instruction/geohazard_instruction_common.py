@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """多源滑坡任务指令模板公共工具库。
 
-脚本作用：为 scripts/2-instruction/ 阶段脚本提供模板读取、模板校验、
+用途：为 scripts/2-instruction/ 阶段脚本提供模板读取、模板校验、
 instruction JSONL 路径、模态组合判断和训练样本构造函数。
 主要输入：configs/instruction_templates/*.yaml 与 benchmark/indexes/*.jsonl。
 主要输出：公共函数返回值；本文件不作为流程入口单独运行。
-是否改写原始数据：不会改写 datasets/ 原始数据。
-典型用法：由 2-1、2-2、2-3 脚本 import 后复用。
+写入行为：不会自行改写数据；文件写入由调用方控制。
+运行方式：内部公共模块，不作为独立程序运行；由 2-1、2-2、2-3 import。
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from geohazard_benchmark_common import (  # noqa: E402
     DEFAULT_BENCHMARK_ROOT,
     ensure_dir,
     modality_combo,
+    project_path_arg,
     read_jsonl,
     to_repo_rel,
     write_json,
@@ -43,13 +44,6 @@ OPTICAL_MODALITIES = {"optical_rgb", "optical_multiband", "multispectral"}
 TERRAIN_MODALITIES = {"dem", "slope"}
 SAR_MODALITIES = {"sar_asc", "sar_dsc"}
 INSAR_MODALITIES = {"insar_vel"}
-ACTIVE_OR_CHANGE_WORDS = {
-    "active landslide",
-    "newly appeared",
-    "new landslide",
-    "新增滑坡",
-    "活动滑坡",
-}
 REFERRING_TEMPLATE_REQUIREMENTS = {
     "position": [
         "upper-left",
@@ -122,8 +116,6 @@ def validate_templates(config: dict[str, Any]) -> tuple[list[str], list[str]]:
             errors.append(f"{tid}: 缺少字段 {missing}")
         if template.get("task_family") == "referring_landslide_segmentation" and not template.get("template_id_pattern"):
             warnings.append(f"{tid}: referring 模板建议记录 template_id_pattern")
-        if any(word in str(template.get("text_en", "")).lower() for word in ["newly appeared", "active landslide"]):
-            warnings.append(f"{tid}: 第一版不建议把 active/newly appeared 写成独立监督目标")
     expected = {
         "generic_landslide_v1",
         "negative_aware_landslide_v1",

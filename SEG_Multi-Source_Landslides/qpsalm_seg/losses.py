@@ -1,652 +1,260 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Qwen-PSALM-Seg 损失函数。"""
+"""Compact valid-region losses for proposal-set landslide segmentation."""
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
-
-def dice_loss_with_logits(logits: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """二值 Dice loss，适配滑坡小目标不平衡。"""
-    return dice_loss_per_sample_with_logits(logits, target, eps=eps).mean()
+from qpsalm_seg.schema import ModalityBatch, SegmentationOutput
 
 
-def dice_loss_per_sample_with_logits(logits: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """返回每个样本的二值 Dice loss，形状为 [B]。"""
-    probs = torch.sigmoid(logits)
-    dims = tuple(range(1, probs.ndim))
-    inter = (probs * target).sum(dim=dims)
-    denom = probs.sum(dim=dims) + target.sum(dim=dims)
-    dice = (2.0 * inter + eps) / (denom + eps)
-    return 1.0 - dice
+def _valid_like(valid_mask: torch.Tensor | None, reference: torch.Tensor) -> torch.Tensor:
+    if valid_mask is None:
+        return torch.ones_like(reference)
+    valid = valid_mask.to(device=reference.device, dtype=reference.dtype)
+    if valid.shape[-2:] != reference.shape[-2:]:
+        valid = F.interpolate(valid, size=reference.shape[-2:], mode="nearest")
+    if valid.ndim != reference.ndim:
+        raise ValueError(f"valid_mask/reference 维数不一致: {valid.shape} vs {reference.shape}")
+    if valid.shape[1] == 1 and reference.shape[1] != 1:
+        valid = valid.expand(-1, reference.shape[1], -1, -1)
+    return valid
 
 
-def tversky_loss_with_logits(
+def _masked_mean_per_sample(values: torch.Tensor, valid_mask: torch.Tensor | None) -> torch.Tensor:
+    valid = _valid_like(valid_mask, values)
+    dims = tuple(range(1, values.ndim))
+    return (values * valid).sum(dim=dims) / valid.sum(dim=dims).clamp_min(1.0e-6)
+
+
+def dice_loss_per_sample_with_logits(
     logits: torch.Tensor,
     target: torch.Tensor,
-    alpha: float = 0.3,
-    beta: float = 0.7,
-    eps: float = 1e-6,
+    valid_mask: torch.Tensor | None = None,
+    eps: float = 1.0e-6,
 ) -> torch.Tensor:
-    """Tversky loss：beta 更大时更重罚漏检，适合滑坡小目标低 recall 场景。"""
-    return tversky_loss_per_sample_with_logits(logits, target, alpha=alpha, beta=beta, eps=eps).mean()
+    probs = torch.sigmoid(logits)
+    valid = _valid_like(valid_mask, probs)
+    dims = tuple(range(1, probs.ndim))
+    intersection = (probs * target * valid).sum(dim=dims)
+    denominator = (probs * valid).sum(dim=dims) + (target * valid).sum(dim=dims)
+    return 1.0 - (2.0 * intersection + eps) / (denominator + eps)
 
 
-def tversky_loss_per_sample_with_logits(
+def dice_scores_with_logits(
     logits: torch.Tensor,
     target: torch.Tensor,
-    alpha: float = 0.3,
-    beta: float = 0.7,
-    eps: float = 1e-6,
+    valid_mask: torch.Tensor | None = None,
+    eps: float = 1.0e-6,
 ) -> torch.Tensor:
-    """返回每个样本的 Tversky loss，形状为 [B]。"""
     probs = torch.sigmoid(logits)
-    dims = tuple(range(1, probs.ndim))
-    tp = (probs * target).sum(dim=dims)
-    fp = (probs * (1.0 - target)).sum(dim=dims)
-    fn = ((1.0 - probs) * target).sum(dim=dims)
-    score = (tp + eps) / (tp + float(alpha) * fp + float(beta) * fn + eps)
-    return 1.0 - score
-
-
-def dice_scores_with_logits(logits: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """返回每个 proposal 与 GT 的 soft Dice score。"""
-    probs = torch.sigmoid(logits)
-    if target.ndim == 4 and target.shape[1] == 1:
+    if target.shape[1] == 1 and probs.shape[1] != 1:
         target = target.expand(-1, probs.shape[1], -1, -1)
-    inter = (probs * target).sum(dim=(2, 3))
-    denom = probs.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
-    return (2.0 * inter + eps) / (denom + eps)
+    valid = _valid_like(valid_mask, probs)
+    intersection = (probs * target * valid).sum(dim=(2, 3))
+    denominator = (probs * valid).sum(dim=(2, 3)) + (target * valid).sum(dim=(2, 3))
+    return (2.0 * intersection + eps) / (denominator + eps)
 
 
-def per_query_weighted_bce_with_logits(
+def weighted_bce_per_sample_with_logits(
     logits: torch.Tensor,
     target: torch.Tensor,
+    valid_mask: torch.Tensor | None = None,
     pos_weight: float = 1.0,
 ) -> torch.Tensor:
-    """返回每个 query 的 mask BCE，形状为 [B,Q]。"""
-    if target.ndim == 4 and target.shape[1] == 1:
-        target = target.expand(-1, logits.shape[1], -1, -1)
     loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
     if pos_weight > 1.0:
-        weight = torch.ones_like(loss)
-        weight = torch.where(target >= 0.5, weight * float(pos_weight), weight)
-        loss = loss * weight
-    return loss.mean(dim=(2, 3))
+        loss = loss * torch.where(target >= 0.5, loss.new_tensor(float(pos_weight)), loss.new_tensor(1.0))
+    return _masked_mean_per_sample(loss, valid_mask)
 
 
-def tversky_losses_with_logits(
+def boundary_loss_per_sample_with_logits(
     logits: torch.Tensor,
     target: torch.Tensor,
-    alpha: float = 0.3,
-    beta: float = 0.7,
-    eps: float = 1e-6,
+    valid_mask: torch.Tensor | None = None,
+    kernel_size: int = 3,
 ) -> torch.Tensor:
-    """返回每个 query 的 Tversky loss，形状为 [B,Q]。"""
-    probs = torch.sigmoid(logits)
-    if target.ndim == 4 and target.shape[1] == 1:
-        target = target.expand(-1, probs.shape[1], -1, -1)
-    tp = (probs * target).sum(dim=(2, 3))
-    fp = (probs * (1.0 - target)).sum(dim=(2, 3))
-    fn = ((1.0 - probs) * target).sum(dim=(2, 3))
-    score = (tp + eps) / (tp + float(alpha) * fp + float(beta) * fn + eps)
-    return 1.0 - score
-
-
-def focal_loss_with_logits(logits: torch.Tensor, target: torch.Tensor, gamma: float = 2.0, alpha: float = 0.25) -> torch.Tensor:
-    """可选 focal loss。"""
-    return focal_loss_per_sample_with_logits(logits, target, gamma=gamma, alpha=alpha).mean()
-
-
-def focal_loss_per_sample_with_logits(
-    logits: torch.Tensor,
-    target: torch.Tensor,
-    gamma: float = 2.0,
-    alpha: float = 0.25,
-) -> torch.Tensor:
-    """返回每个样本的 focal loss，形状为 [B]。"""
-    bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-    prob = torch.sigmoid(logits)
-    pt = prob * target + (1.0 - prob) * (1.0 - target)
-    weight = alpha * target + (1.0 - alpha) * (1.0 - target)
-    return (weight * (1.0 - pt).pow(gamma) * bce).mean(dim=tuple(range(1, logits.ndim)))
-
-
-def weighted_bce_with_logits(logits: torch.Tensor, target: torch.Tensor, pos_weight: float = 1.0) -> torch.Tensor:
-    """前景加权 BCE；pos_weight>1 可缓解小目标被背景压制。"""
-    return weighted_bce_per_sample_with_logits(logits, target, pos_weight=pos_weight).mean()
-
-
-def weighted_bce_per_sample_with_logits(logits: torch.Tensor, target: torch.Tensor, pos_weight: float = 1.0) -> torch.Tensor:
-    """返回每个样本的前景加权 BCE，形状为 [B]。"""
-    if pos_weight <= 1.0:
-        loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-        return loss.mean(dim=tuple(range(1, logits.ndim)))
-    loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-    weight = torch.ones_like(loss)
-    weight = torch.where(target >= 0.5, weight * float(pos_weight), weight)
-    return (loss * weight).mean(dim=tuple(range(1, logits.ndim)))
-
-
-def boundary_loss_with_logits(logits: torch.Tensor, target: torch.Tensor, kernel_size: int = 3) -> torch.Tensor:
-    """轻量边界损失：比较预测概率与 GT 的 soft boundary map。"""
-    return boundary_loss_per_sample_with_logits(logits, target, kernel_size=kernel_size).mean()
-
-
-def boundary_loss_per_sample_with_logits(logits: torch.Tensor, target: torch.Tensor, kernel_size: int = 3) -> torch.Tensor:
-    """返回每个样本的轻量边界损失，形状为 [B]。"""
     pad = kernel_size // 2
     probs = torch.sigmoid(logits)
     target = (target >= 0.5).to(probs.dtype)
-    pred_max = F.max_pool2d(probs, kernel_size=kernel_size, stride=1, padding=pad)
-    pred_min = -F.max_pool2d(-probs, kernel_size=kernel_size, stride=1, padding=pad)
-    gt_max = F.max_pool2d(target, kernel_size=kernel_size, stride=1, padding=pad)
-    gt_min = -F.max_pool2d(-target, kernel_size=kernel_size, stride=1, padding=pad)
-    pred_boundary = (pred_max - pred_min).clamp(0, 1)
-    gt_boundary = (gt_max - gt_min).clamp(0, 1)
-    return (pred_boundary - gt_boundary).abs().mean(dim=tuple(range(1, logits.ndim)))
+    pred_boundary = (
+        F.max_pool2d(probs, kernel_size, stride=1, padding=pad)
+        + F.max_pool2d(-probs, kernel_size, stride=1, padding=pad)
+    ).clamp(0.0, 1.0)
+    target_boundary = (
+        F.max_pool2d(target, kernel_size, stride=1, padding=pad)
+        + F.max_pool2d(-target, kernel_size, stride=1, padding=pad)
+    ).clamp(0.0, 1.0)
+    boundary_valid = valid_mask
+    if valid_mask is not None:
+        valid = valid_mask.to(device=logits.device, dtype=logits.dtype)
+        boundary_valid = 1.0 - F.max_pool2d(1.0 - valid, kernel_size, stride=1, padding=pad)
+    return _masked_mean_per_sample((pred_boundary - target_boundary).abs(), boundary_valid)
 
 
-def normalized_sample_weights(
-    sample_weights: torch.Tensor | None,
-    batch_size: int,
-    dtype: torch.dtype,
-    device: torch.device,
-    eps: float = 1e-6,
+def _component_masks(
+    target: torch.Tensor,
+    valid: torch.Tensor,
+    min_area_fraction: float,
+    min_area_pixels: int,
 ) -> torch.Tensor:
-    """返回均值约为 1 的 [B] 样本权重，避免整体 loss 尺度随配置漂移。"""
-    if sample_weights is None:
-        return torch.ones((batch_size,), dtype=dtype, device=device)
-    weights = sample_weights.to(device=device, dtype=dtype).view(-1)
-    if weights.numel() != batch_size:
-        return torch.ones((batch_size,), dtype=dtype, device=device)
-    weights = torch.where(torch.isfinite(weights) & (weights > 0), weights, torch.ones_like(weights))
-    return weights / weights.mean().clamp_min(eps)
+    from scipy import ndimage
+
+    binary = ((target >= 0.5) & (valid >= 0.5)).detach().cpu().numpy().astype(np.uint8)
+    labels, count = ndimage.label(binary, structure=np.ones((3, 3), dtype=np.uint8))
+    valid_area = int((valid >= 0.5).sum().item())
+    threshold = max(int(min_area_pixels), int(round(valid_area * float(min_area_fraction))))
+    components = [
+        torch.from_numpy(labels == label_id).to(device=target.device, dtype=target.dtype)
+        for label_id in range(1, int(count) + 1)
+        if int((labels == label_id).sum()) >= threshold
+    ]
+    if not components and bool(binary.any()):
+        components.append(((target >= 0.5) & (valid >= 0.5)).to(target.dtype))
+    return torch.stack(components) if components else target.new_zeros((0, *target.shape[-2:]))
 
 
-def weighted_sample_mean(values: torch.Tensor, weights: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """按 [B] 权重对 per-sample loss 求均值。"""
-    values = values.view(-1)
-    weights = weights.to(device=values.device, dtype=values.dtype).view(-1)
-    if values.numel() != weights.numel():
-        return values.mean()
-    return (values * weights).sum() / weights.sum().clamp_min(eps)
-
-
-def query_diversity_loss(query_embeddings: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """轻量 query 正交正则，缓解多个 mask token 学成同一 proposal。"""
-    if query_embeddings.ndim != 3 or query_embeddings.shape[1] <= 1:
-        return query_embeddings.sum() * 0.0
-    q = F.normalize(query_embeddings.float(), dim=-1, eps=eps)
-    sim = torch.matmul(q, q.transpose(1, 2))
-    eye = torch.eye(sim.shape[-1], dtype=torch.bool, device=sim.device).unsqueeze(0)
-    off_diag = sim.masked_select(~eye)
-    if off_diag.numel() == 0:
-        return sim.sum() * 0.0
-    return off_diag.pow(2).mean().to(query_embeddings.dtype)
-
-
-def proposal_mask_diversity_loss(
-    pred_masks: torch.Tensor,
-    is_empty: torch.Tensor,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """约束非空样本的 proposal mask 不要全部学成同一空间响应。"""
-    if pred_masks.ndim != 4 or pred_masks.shape[1] <= 1:
-        return pred_masks.sum() * 0.0
-    non_empty = (is_empty <= 0.5).view(-1)
-    if not non_empty.any():
-        return pred_masks.sum() * 0.0
-    probs = torch.sigmoid(pred_masks[non_empty]).flatten(2).float()
-    probs = probs - probs.mean(dim=-1, keepdim=True)
-    probs = F.normalize(probs, dim=-1, eps=eps)
-    sim = torch.matmul(probs, probs.transpose(1, 2))
-    eye = torch.eye(sim.shape[-1], dtype=torch.bool, device=sim.device).unsqueeze(0)
-    off_diag = sim.masked_select(~eye)
-    if off_diag.numel() == 0:
-        return pred_masks.sum() * 0.0
-    return off_diag.clamp_min(0.0).pow(2).mean().to(pred_masks.dtype)
-
-
-def modality_gate_entropy_loss(
-    gate_weights: torch.Tensor | None,
-    active_mask: torch.Tensor | None,
-    eps: float = 1e-6,
-) -> torch.Tensor | None:
-    """鼓励多模态样本的 gate 保持可用证据多样性，缓解早期单模态塌缩。"""
-    if gate_weights is None or active_mask is None:
-        return None
-    if gate_weights.ndim != 2 or active_mask.ndim != 2:
-        return gate_weights.sum() * 0.0
-    active = active_mask.to(gate_weights.device, dtype=gate_weights.dtype)
-    multi_source = active.sum(dim=1) > 1.5
-    if not multi_source.any():
-        return gate_weights.sum() * 0.0
-    weights = (gate_weights[multi_source] * active[multi_source]).float().clamp_min(0.0)
-    denom = weights.sum(dim=1, keepdim=True).clamp_min(eps)
-    weights = weights / denom
-    entropy = -(weights * weights.clamp_min(eps).log()).sum(dim=1)
-    max_entropy = active[multi_source].float().sum(dim=1).clamp_min(2.0).log()
-    normalized_entropy = entropy / max_entropy.clamp_min(eps)
-    return (1.0 - normalized_entropy).mean().to(gate_weights.dtype)
-
-
-def build_soft_proposal_targets(
-    dice_scores: torch.Tensor,
-    non_empty: torch.Tensor,
-    topk: int = 1,
-    temperature: float = 0.10,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """按 proposal-GT Dice 构造 top-k soft targets，缓解单 query 正样本塌缩。"""
-    targets = torch.zeros_like(dice_scores)
-    if dice_scores.ndim != 2 or dice_scores.shape[1] == 0 or not non_empty.any():
-        return targets
-    k = max(1, min(int(topk), int(dice_scores.shape[1])))
-    rows = torch.nonzero(non_empty, as_tuple=False).flatten()
-    scores = dice_scores.detach()[rows]
-    top_values, top_indices = torch.topk(scores, k=k, dim=1)
-    if k == 1:
-        soft_values = torch.ones_like(top_values)
-    else:
-        temp = max(float(temperature), eps)
-        soft_values = torch.softmax(top_values / temp, dim=1)
-        soft_values = soft_values / soft_values.max(dim=1, keepdim=True).values.clamp_min(eps)
-    targets[rows.unsqueeze(1), top_indices] = soft_values.to(targets.dtype)
-    return targets
-
-
-def soft_target_ranking_loss(
+def _pairwise_component_cost(
     logits: torch.Tensor,
-    soft_targets: torch.Tensor,
-    non_empty: torch.Tensor,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """用 soft proposal targets 监督 query ranking；top-k=1 时退化为 hard CE。"""
-    if not non_empty.any():
-        return logits.sum() * 0.0
-    return soft_target_ranking_loss_per_sample(logits, soft_targets, non_empty, eps=eps).mean()
+    components: torch.Tensor,
+    valid: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    valid = valid.to(logits.dtype)
+    probs = torch.sigmoid(logits) * valid
+    components = components * valid
+    intersection = torch.einsum("qhw,khw->qk", probs, components)
+    pred_area = probs.sum(dim=(1, 2))[:, None]
+    target_area = components.sum(dim=(1, 2))[None]
+    dice = 1.0 - (2.0 * intersection + 1.0e-6) / (pred_area + target_area + 1.0e-6)
+    valid_area = valid.sum().clamp_min(1.0)
+    base = (F.softplus(logits) * valid).sum(dim=(1, 2)) / valid_area
+    positive = torch.einsum("qhw,khw->qk", logits * valid, components) / valid_area
+    bce = base[:, None] - positive
+    return bce, dice, bce + dice
 
 
-def soft_target_ranking_loss_per_sample(
-    logits: torch.Tensor,
-    soft_targets: torch.Tensor,
-    non_empty: torch.Tensor,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """返回非空样本的 query ranking loss，形状为 [N_non_empty]。"""
-    if not non_empty.any():
-        return logits.new_zeros((0,))
-    target = soft_targets[non_empty].float()
-    target = target / target.sum(dim=1, keepdim=True).clamp_min(eps)
-    log_prob = F.log_softmax(logits[non_empty].float(), dim=1)
-    return -(target * log_prob).sum(dim=1).to(logits.dtype)
-
-
-def query_usage_balance_loss(
-    selection_weights: torch.Tensor | None,
-    non_empty: torch.Tensor,
-    eps: float = 1e-6,
-) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-    """batch 级 query 使用均衡正则，缓解 selection 长期集中到单个 mask token。"""
-    if selection_weights is None:
-        return None, None
-    if selection_weights.ndim != 2 or selection_weights.shape[1] <= 1:
-        zero = selection_weights.sum() * 0.0
-        return zero, zero
-    if not non_empty.any():
-        zero = selection_weights.sum() * 0.0
-        return zero, zero
-    weights = selection_weights[non_empty].float().clamp_min(eps)
-    usage = weights.mean(dim=0)
-    usage = usage / usage.sum().clamp_min(eps)
-    entropy = -(usage * usage.clamp_min(eps).log()).sum()
-    max_entropy = usage.new_tensor(float(usage.numel())).log().clamp_min(eps)
-    normalized_entropy = entropy / max_entropy
-    loss = 1.0 - normalized_entropy
-    return loss.to(selection_weights.dtype), normalized_entropy.to(selection_weights.dtype)
-
-
-def segmentation_losses(
-    outputs: dict[str, torch.Tensor],
-    target_mask: torch.Tensor,
-    is_empty: torch.Tensor,
-    sample_weights: torch.Tensor | None = None,
-    use_focal: bool = False,
+def proposal_set_losses(
+    output: SegmentationOutput,
+    batch: ModalityBatch,
+    *,
+    final_bce_weight: float = 1.0,
+    final_dice_weight: float = 1.0,
+    proposal_set_weight: float = 0.75,
+    coarse_proposal_weight: float = 0.25,
+    verifier_weight: float = 0.25,
     boundary_weight: float = 0.0,
-    condition_ranking_weight: float = 0.1,
-    foreground_bce_pos_weight: float = 1.0,
-    mask_bce_weight: float = 1.0,
-    mask_dice_weight: float = 1.0,
-    mask_tversky_weight: float = 0.0,
-    tversky_alpha: float = 0.3,
-    tversky_beta: float = 0.7,
-    proposal_cls_weight: float = 0.2,
-    condition_cls_weight: float = 0.2,
-    proposal_mask_weight: float = 0.5,
-    empty_mask_suppression_weight: float = 0.0,
-    empty_proposal_suppression_weight: float = 0.0,
-    proposal_positive_weight: float = 1.0,
-    condition_positive_weight: float = 1.0,
-    evidence_positive_weight: float = 1.0,
-    query_diversity_loss_weight: float = 0.0,
-    selection_ranking_loss_weight: float = 0.0,
-    evidence_cls_weight: float = 0.0,
-    evidence_ranking_loss_weight: float = 0.0,
-    visual_evidence_cls_weight: float = 0.0,
-    visual_evidence_ranking_loss_weight: float = 0.0,
-    proposal_mask_diversity_loss_weight: float = 0.0,
-    gate_entropy_loss_weight: float = 0.0,
-    proposal_soft_target_topk: int = 1,
-    proposal_soft_target_temperature: float = 0.10,
-    query_usage_balance_loss_weight: float = 0.0,
+    missing_modality_consistency: torch.Tensor | None = None,
+    consistency_weight: float = 0.0,
+    min_component_area_fraction: float = 5.0e-5,
+    min_component_area_pixels: int = 4,
 ) -> dict[str, torch.Tensor]:
-    """组合最终 mask、proposal mask 和 proposal/condition 分类损失。"""
-    final_logits = outputs["final_mask_logits"]
-    pred_masks = outputs["pred_masks"]
-    proposal_logits = outputs["proposal_logits"]
-    condition_scores = outputs["condition_scores"]
-    weights = normalized_sample_weights(
-        sample_weights,
-        batch_size=int(target_mask.shape[0]),
-        dtype=final_logits.dtype,
-        device=final_logits.device,
-    )
+    """Final mask + hybrid set matching + one verifier + missing-modality consistency."""
+    from scipy.optimize import linear_sum_assignment
 
-    mask_bce_per_sample = (
-        focal_loss_per_sample_with_logits(final_logits, target_mask)
-        if use_focal
-        else weighted_bce_per_sample_with_logits(final_logits, target_mask, pos_weight=float(foreground_bce_pos_weight))
-    )
-    mask_bce = weighted_sample_mean(mask_bce_per_sample, weights)
-    mask_dice = weighted_sample_mean(dice_loss_per_sample_with_logits(final_logits, target_mask), weights)
-    mask_tversky = (
-        weighted_sample_mean(
-            tversky_loss_per_sample_with_logits(
-                final_logits,
-                target_mask,
-                alpha=float(tversky_alpha),
-                beta=float(tversky_beta),
-            ),
-            weights,
-        )
-        if mask_tversky_weight and mask_tversky_weight > 0
-        else final_logits.sum() * 0.0
-    )
+    final_logits = output.final_mask_logits
+    proposal_masks = output.proposals.mask_logits
+    coarse_masks = output.proposals.coarse_mask_logits
+    relevance_logits = output.proposals.relevance_logits
+    target = batch.mask.to(final_logits.device)
+    valid = batch.valid_mask.to(final_logits.device)
+    batch_size, num_queries = relevance_logits.shape
+    final_bce = weighted_bce_per_sample_with_logits(final_logits, target, valid_mask=valid).mean()
+    final_dice = dice_loss_per_sample_with_logits(final_logits, target, valid_mask=valid).mean()
+    zero = final_logits.sum() * 0.0
+    proposal_terms: list[torch.Tensor] = []
+    coarse_terms: list[torch.Tensor] = []
+    coverage_terms: list[torch.Tensor] = []
+    verifier_terms: list[torch.Tensor] = []
+    target_rows: list[torch.Tensor] = []
+    component_counts = final_logits.new_zeros((batch_size,))
+    coverage_modes = final_logits.new_zeros((batch_size,))
+    full_dice_scores = dice_scores_with_logits(proposal_masks, target, valid_mask=valid)
+    best_query = full_dice_scores.argmax(dim=1)
 
-    dice_scores = dice_scores_with_logits(pred_masks, target_mask)
-    best_query = dice_scores.argmax(dim=1)
-    non_empty = (is_empty <= 0.5).view(-1)
-    proposal_target = build_soft_proposal_targets(
-        dice_scores,
-        non_empty,
-        topk=int(proposal_soft_target_topk),
-        temperature=float(proposal_soft_target_temperature),
-    )
-    proposal_class_weight = (
-        proposal_logits.new_tensor(float(proposal_positive_weight))
-        if proposal_positive_weight and proposal_positive_weight > 1.0
-        else None
-    )
-    proposal_fg_logits = proposal_logits[..., 1] - proposal_logits[..., 0]
-    proposal_cls_per_query = F.binary_cross_entropy_with_logits(
-        proposal_fg_logits,
-        proposal_target,
-        pos_weight=proposal_class_weight,
-        reduction="none",
-    )
-    proposal_cls = weighted_sample_mean(proposal_cls_per_query.mean(dim=1), weights)
-    condition_pos_weight = (
-        condition_scores.new_tensor(float(condition_positive_weight))
-        if condition_positive_weight and condition_positive_weight > 1.0
-        else None
-    )
-    condition_cls_per_query = F.binary_cross_entropy_with_logits(
-        condition_scores,
-        proposal_target,
-        pos_weight=condition_pos_weight,
-        reduction="none",
-    )
-    condition_cls = weighted_sample_mean(condition_cls_per_query.mean(dim=1), weights)
-    evidence_scores = outputs.get("evidence_scores")
-    evidence_loss_active = evidence_scores is not None and (
-        (evidence_cls_weight and evidence_cls_weight > 0)
-        or (evidence_ranking_loss_weight and evidence_ranking_loss_weight > 0)
-    )
-    if evidence_loss_active:
-        evidence_pos_weight = (
-            evidence_scores.new_tensor(float(evidence_positive_weight))
-            if evidence_positive_weight and evidence_positive_weight > 1.0
-            else None
+    for batch_index in range(batch_size):
+        relevance_target = torch.zeros_like(relevance_logits[batch_index])
+        components = _component_masks(
+            target[batch_index, 0],
+            valid[batch_index, 0],
+            min_component_area_fraction,
+            min_component_area_pixels,
         )
-        evidence_cls_per_query = F.binary_cross_entropy_with_logits(
-            evidence_scores,
-            proposal_target,
-            pos_weight=evidence_pos_weight,
-            reduction="none",
-        )
-        evidence_cls = weighted_sample_mean(evidence_cls_per_query.mean(dim=1), weights)
-    else:
-        evidence_cls = final_logits.sum() * 0.0
-    visual_evidence_scores = outputs.get("visual_evidence_scores")
-    visual_evidence_loss_active = visual_evidence_scores is not None and (
-        (visual_evidence_cls_weight and visual_evidence_cls_weight > 0)
-        or (visual_evidence_ranking_loss_weight and visual_evidence_ranking_loss_weight > 0)
-    )
-    if visual_evidence_loss_active:
-        visual_evidence_pos_weight = (
-            visual_evidence_scores.new_tensor(float(evidence_positive_weight))
-            if evidence_positive_weight and evidence_positive_weight > 1.0
-            else None
-        )
-        visual_evidence_cls_per_query = F.binary_cross_entropy_with_logits(
-            visual_evidence_scores,
-            proposal_target,
-            pos_weight=visual_evidence_pos_weight,
-            reduction="none",
-        )
-        visual_evidence_cls = weighted_sample_mean(visual_evidence_cls_per_query.mean(dim=1), weights)
-    else:
-        visual_evidence_cls = final_logits.sum() * 0.0
-    if non_empty.any():
-        condition_rank_per_sample = soft_target_ranking_loss_per_sample(condition_scores, proposal_target, non_empty)
-        condition_rank = weighted_sample_mean(condition_rank_per_sample, weights[non_empty])
-        condition_rank_acc = (
-            condition_scores[non_empty].argmax(dim=1) == best_query[non_empty]
-        ).float().mean()
-        if evidence_loss_active:
-            evidence_rank_per_sample = soft_target_ranking_loss_per_sample(evidence_scores, proposal_target, non_empty)
-            evidence_rank = weighted_sample_mean(evidence_rank_per_sample, weights[non_empty])
-            evidence_rank_acc = (
-                evidence_scores[non_empty].argmax(dim=1) == best_query[non_empty]
-            ).float().mean()
-        else:
-            evidence_rank = final_logits.sum() * 0.0
-            evidence_rank_acc = final_logits.sum() * 0.0
-        if visual_evidence_loss_active:
-            visual_evidence_rank_per_sample = soft_target_ranking_loss_per_sample(
-                visual_evidence_scores,
-                proposal_target,
-                non_empty,
+        component_count = int(components.shape[0])
+        component_counts[batch_index] = float(component_count)
+        if component_count:
+            bce_cost, dice_cost, matching_cost = _pairwise_component_cost(
+                proposal_masks[batch_index], components, valid[batch_index, 0]
             )
-            visual_evidence_rank = weighted_sample_mean(visual_evidence_rank_per_sample, weights[non_empty])
-            visual_evidence_rank_acc = (
-                visual_evidence_scores[non_empty].argmax(dim=1) == best_query[non_empty]
-            ).float().mean()
-        else:
-            visual_evidence_rank = final_logits.sum() * 0.0
-            visual_evidence_rank_acc = final_logits.sum() * 0.0
-    else:
-        condition_rank = final_logits.sum() * 0.0
-        condition_rank_acc = final_logits.sum() * 0.0
-        evidence_rank = final_logits.sum() * 0.0
-        evidence_rank_acc = final_logits.sum() * 0.0
-        visual_evidence_rank = final_logits.sum() * 0.0
-        visual_evidence_rank_acc = final_logits.sum() * 0.0
-
-    selection_logits = outputs.get("selection_logits")
-    if (
-        selection_logits is not None
-        and selection_ranking_loss_weight
-        and selection_ranking_loss_weight > 0
-        and non_empty.any()
-    ):
-        selection_rank_per_sample = soft_target_ranking_loss_per_sample(selection_logits, proposal_target, non_empty)
-        selection_rank = weighted_sample_mean(selection_rank_per_sample, weights[non_empty])
-        selection_rank_acc = (
-            selection_logits[non_empty].argmax(dim=1) == best_query[non_empty]
-        ).float().mean()
-    else:
-        selection_rank = final_logits.sum() * 0.0
-        selection_rank_acc = final_logits.sum() * 0.0
-    selection_weights = outputs.get("selection_weights")
-    if selection_weights is None and selection_logits is not None:
-        selection_weights = torch.softmax(selection_logits, dim=1)
-    usage_balance_value, usage_entropy_value = query_usage_balance_loss(selection_weights, non_empty)
-    query_usage_balance = (
-        usage_balance_value
-        if usage_balance_value is not None
-        and query_usage_balance_loss_weight
-        and query_usage_balance_loss_weight > 0
-        else final_logits.sum() * 0.0
-    )
-    query_usage_entropy = (
-        usage_entropy_value
-        if usage_entropy_value is not None
-        else final_logits.sum() * 0.0
-    )
-
-    if non_empty.any():
-        proposal_mass = proposal_target[non_empty].sum(dim=1).clamp_min(1.0e-6)
-        mask_bce_per_query = per_query_weighted_bce_with_logits(
-            pred_masks,
-            target_mask,
-            pos_weight=float(foreground_bce_pos_weight),
-        )
-        mask_dice_per_query = 1.0 - dice_scores
-        if mask_tversky_weight and mask_tversky_weight > 0:
-            mask_tversky_per_query = tversky_losses_with_logits(
-                pred_masks,
-                target_mask,
-                alpha=float(tversky_alpha),
-                beta=float(tversky_beta),
+            rows, cols = linear_sum_assignment(matching_cost.detach().float().cpu().numpy())
+            row_index = torch.as_tensor(rows, dtype=torch.long, device=final_logits.device)
+            col_index = torch.as_tensor(cols, dtype=torch.long, device=final_logits.device)
+            relevance_target = relevance_target.scatter(0, row_index, 1.0)
+            proposal_terms.append((bce_cost[row_index, col_index] + dice_cost[row_index, col_index]).mean())
+            coarse_bce, coarse_dice, _ = _pairwise_component_cost(
+                coarse_masks[batch_index], components, valid[batch_index, 0]
             )
-        else:
-            mask_tversky_per_query = None
-        proposal_mask_bce_per_sample = (
-            mask_bce_per_query[non_empty] * proposal_target[non_empty]
-        ).sum(dim=1).div(proposal_mass)
-        proposal_mask_dice_per_sample = (
-            mask_dice_per_query[non_empty] * proposal_target[non_empty]
-        ).sum(dim=1).div(proposal_mass)
-        proposal_mask_bce = weighted_sample_mean(proposal_mask_bce_per_sample, weights[non_empty])
-        proposal_mask_dice = weighted_sample_mean(proposal_mask_dice_per_sample, weights[non_empty])
-        if mask_tversky_weight and mask_tversky_weight > 0:
-            proposal_mask_tversky_per_sample = (
-                mask_tversky_per_query[non_empty] * proposal_target[non_empty]
-            ).sum(dim=1).div(proposal_mass)
-            proposal_mask_tversky = weighted_sample_mean(proposal_mask_tversky_per_sample, weights[non_empty])
-        else:
-            proposal_mask_tversky = final_logits.sum() * 0.0
-    else:
-        proposal_mask_bce = final_logits.sum() * 0.0
-        proposal_mask_dice = final_logits.sum() * 0.0
-        proposal_mask_tversky = final_logits.sum() * 0.0
+            coarse_terms.append((coarse_bce[row_index, col_index] + coarse_dice[row_index, col_index]).mean())
+            if component_count > num_queries:
+                coverage_modes[batch_index] = 1.0
+                coverage_terms.append(1.0 - (1.0 - dice_cost).max(dim=0).values.mean())
+                relevance_target = torch.ones_like(relevance_target)
+        verifier_terms.append(
+            F.binary_cross_entropy_with_logits(
+                relevance_logits[batch_index],
+                relevance_target,
+                pos_weight=relevance_logits.new_tensor(2.0),
+            )
+        )
+        target_rows.append(relevance_target)
 
-    empty = ~non_empty
-    if empty.any():
-        empty_mask_per_sample = torch.sigmoid(final_logits[empty]).mean(dim=tuple(range(1, final_logits.ndim)))
-        empty_proposal_per_sample = torch.sigmoid(pred_masks[empty]).mean(dim=tuple(range(1, pred_masks.ndim)))
-        empty_mask = weighted_sample_mean(empty_mask_per_sample, weights[empty])
-        empty_proposal = weighted_sample_mean(empty_proposal_per_sample, weights[empty])
-    else:
-        empty_mask = final_logits.sum() * 0.0
-        empty_proposal = final_logits.sum() * 0.0
-
-    diversity = (
-        query_diversity_loss(outputs["query_embeddings"])
-        if query_diversity_loss_weight and query_diversity_loss_weight > 0 and "query_embeddings" in outputs
-        else final_logits.sum() * 0.0
-    )
-    mask_diversity = (
-        proposal_mask_diversity_loss(pred_masks, is_empty)
-        if proposal_mask_diversity_loss_weight and proposal_mask_diversity_loss_weight > 0
-        else final_logits.sum() * 0.0
-    )
-    gate_entropy_value = modality_gate_entropy_loss(
-        outputs.get("modality_gate_weights_for_loss"),
-        outputs.get("modality_active_mask_for_loss"),
-    )
-    gate_entropy = (
-        gate_entropy_value
-        if gate_entropy_value is not None and gate_entropy_loss_weight and gate_entropy_loss_weight > 0
-        else final_logits.sum() * 0.0
-    )
-
-    boundary = (
-        weighted_sample_mean(boundary_loss_per_sample_with_logits(final_logits, target_mask), weights)
-        * float(boundary_weight)
-        if boundary_weight and boundary_weight > 0
-        else final_logits.sum() * 0.0
-    )
-
+    relevance_targets = torch.stack(target_rows)
+    refined_proposal = torch.stack(proposal_terms).mean() if proposal_terms else zero
+    coarse_proposal = torch.stack(coarse_terms).mean() if coarse_terms else zero
+    proposal_set = refined_proposal + float(coarse_proposal_weight) * coarse_proposal
+    coverage = torch.stack(coverage_terms).mean() if coverage_terms else zero
+    verifier = torch.stack(verifier_terms).mean() if verifier_terms else zero
+    boundary = boundary_loss_per_sample_with_logits(final_logits, target, valid).mean() if boundary_weight > 0.0 else zero
+    consistency = missing_modality_consistency if missing_modality_consistency is not None else zero
     total = (
-        float(mask_bce_weight) * mask_bce
-        + float(mask_dice_weight) * mask_dice
-        + float(mask_tversky_weight) * mask_tversky
-        + float(proposal_cls_weight) * proposal_cls
-        + float(condition_cls_weight) * condition_cls
-        + float(evidence_cls_weight) * evidence_cls
-        + float(visual_evidence_cls_weight) * visual_evidence_cls
-        + float(proposal_mask_weight)
-        * (proposal_mask_bce + proposal_mask_dice + float(mask_tversky_weight) * proposal_mask_tversky)
-        + float(condition_ranking_weight) * condition_rank
-        + float(evidence_ranking_loss_weight) * evidence_rank
-        + float(visual_evidence_ranking_loss_weight) * visual_evidence_rank
-        + float(selection_ranking_loss_weight) * selection_rank
-        + float(empty_mask_suppression_weight) * empty_mask
-        + float(empty_proposal_suppression_weight) * empty_proposal
-        + float(query_diversity_loss_weight) * diversity
-        + float(proposal_mask_diversity_loss_weight) * mask_diversity
-        + float(gate_entropy_loss_weight) * gate_entropy
-        + float(query_usage_balance_loss_weight) * query_usage_balance
-        + boundary
+        float(final_bce_weight) * final_bce
+        + float(final_dice_weight) * final_dice
+        + float(proposal_set_weight) * (proposal_set + coverage)
+        + float(verifier_weight) * verifier
+        + float(boundary_weight) * boundary
+        + float(consistency_weight) * consistency
     )
+    positive = component_counts > 0
+    relevance_top = relevance_logits.argmax(1)
+    best_query_accuracy = (
+        (relevance_top[positive] == best_query[positive]).float().mean()
+        if positive.any()
+        else zero
+    )
+    positive_target_accuracy = (
+        relevance_targets[positive].gather(1, relevance_top[positive][:, None]).float().mean()
+        if positive.any()
+        else zero
+    )
+    best_query_dice = full_dice_scores.gather(1, best_query[:, None]).squeeze(1)
     return {
         "loss": total,
-        "loss_mask_bce": mask_bce.detach(),
-        "loss_mask_dice": mask_dice.detach(),
-        "loss_mask_tversky": mask_tversky.detach(),
-        "loss_proposal_cls": proposal_cls.detach(),
-        "loss_condition_cls": condition_cls.detach(),
-        "loss_evidence_cls": evidence_cls.detach(),
-        "loss_visual_evidence_cls": visual_evidence_cls.detach(),
-        "loss_condition_rank": condition_rank.detach(),
-        "loss_evidence_rank": evidence_rank.detach(),
-        "loss_visual_evidence_rank": visual_evidence_rank.detach(),
-        "loss_selection_rank": selection_rank.detach(),
-        "condition_rank_acc": condition_rank_acc.detach(),
-        "evidence_rank_acc": evidence_rank_acc.detach(),
-        "visual_evidence_rank_acc": visual_evidence_rank_acc.detach(),
-        "selection_rank_acc": selection_rank_acc.detach(),
-        "proposal_target_mass": proposal_target.sum(dim=1).detach(),
-        "proposal_target_positive_count": (proposal_target > 1.0e-4).float().sum(dim=1).detach(),
-        "loss_proposal_mask": (
-            proposal_mask_bce + proposal_mask_dice + float(mask_tversky_weight) * proposal_mask_tversky
-        ).detach(),
-        "loss_empty_mask": empty_mask.detach(),
-        "loss_empty_proposal": empty_proposal.detach(),
-        "loss_query_diversity": diversity.detach(),
-        "loss_proposal_mask_diversity": mask_diversity.detach(),
-        "loss_gate_entropy": gate_entropy.detach(),
-        "loss_query_usage_balance": query_usage_balance.detach(),
-        "query_usage_entropy": query_usage_entropy.detach(),
+        "loss_mask_bce": final_bce.detach(),
+        "loss_mask_dice": final_dice.detach(),
+        "loss_proposal_set": proposal_set.detach(),
+        "loss_proposal_coarse": coarse_proposal.detach(),
+        "loss_proposal_coverage": coverage.detach(),
+        "loss_semantic_verifier": verifier.detach(),
         "loss_boundary": boundary.detach(),
-        "sample_weight_normalized_mean": weights.detach(),
-        "sample_weight_normalized_min": weights.min().detach(),
-        "sample_weight_normalized_max": weights.max().detach(),
+        "loss_missing_modality_consistency": consistency.detach(),
         "best_query": best_query.detach(),
-        "best_query_dice": dice_scores.gather(1, best_query.view(-1, 1)).squeeze(1).detach(),
+        "best_query_dice": best_query_dice.detach(),
+        "verifier_best_query_accuracy": best_query_accuracy.detach(),
+        "verifier_positive_target_accuracy": positive_target_accuracy.detach(),
+        "proposal_target_mass": relevance_targets.sum(1).detach(),
+        "proposal_target_positive_count": relevance_targets.sum(1).detach(),
+        "proposal_component_count": component_counts.detach(),
+        "proposal_matching_coverage_mode": coverage_modes.detach(),
     }

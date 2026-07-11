@@ -2,12 +2,15 @@
 # -*- coding: utf-8 -*-
 """构建 QPSALM 核心 instruction 索引缓存。
 
-脚本作用：从 benchmark 的 instruction JSONL 中过滤 Phase 1 核心模板，生成更小的
-训练/验证 JSONL，减少真实训练启动时的大索引扫描开销。
-主要输入：indexes/instruction_{train,val,test}.jsonl。
-主要输出：outputs/qpsalm_index_cache/qpsalm_core_{train,val,test}.jsonl 与 summary.json。
-是否改写原始数据：不会。
-典型用法：python -m qpsalm_seg.cli.cache_index --config SEG_Multi-Source_Landslides/configs/qpsalm_tiny_text_probe.yaml。
+用途：过滤核心 instruction 模板，并按模态组合整理 train/val/test JSONL。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.cache_index --config
+SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml
+--output-dir outputs/qpsalm_index_cache --split both --strategy round-robin-canonical
+主要输入：benchmark 的 indexes/instruction_{train,val,test}.jsonl。
+主要输出：qpsalm_core_{train,val,test}.jsonl 和 summary.json。
+写入行为：只写 --output-dir，不修改 benchmark 原始索引。
+所属流程：QPSALM 训练/评估准备；应先完成 instruction 数据构建。
 """
 
 from __future__ import annotations
@@ -24,10 +27,10 @@ from qpsalm_seg.indexing import (
     iter_jsonl,
     normalization_combo,
     raw_modality_combo,
-    resolve_repo_path,
     sensor_combo,
     should_skip_row,
 )
+from qpsalm_seg.paths import resolve_repo_path
 
 
 def interleave_by_canonical_combo(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -60,9 +63,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None, help="Optional kept-row cap per split.")
     parser.add_argument(
         "--strategy",
-        choices=["first", "balanced-canonical"],
+        choices=["first", "round-robin-canonical", "balanced-canonical"],
         default="first",
-        help="first keeps source order; balanced-canonical keeps up to N samples per canonical combo.",
+        help="round-robin-canonical keeps all rows but interleaves combos; balanced-canonical also caps each combo.",
     )
     parser.add_argument("--samples-per-combo", type=int, default=8)
     parser.add_argument(
@@ -164,7 +167,7 @@ def cache_split(
         normalization_combos[normalization_combo(row)] += 1
         if max_samples is not None and rows_kept >= max_samples:
             break
-    output_rows = interleave_by_canonical_combo(selected) if strategy == "balanced-canonical" else selected
+    output_rows = interleave_by_canonical_combo(selected) if strategy in {"round-robin-canonical", "balanced-canonical"} else selected
     with out_path.open("w", encoding="utf-8") as out:
         for row in output_rows:
             out.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -175,7 +178,11 @@ def cache_split(
         "rows_seen": rows_seen,
         "rows_kept": rows_kept,
         "strategy": strategy,
-        "output_order": "round_robin_canonical_combo" if strategy == "balanced-canonical" else "source_order",
+        "output_order": (
+            "round_robin_canonical_combo"
+            if strategy in {"round-robin-canonical", "balanced-canonical"}
+            else "source_order"
+        ),
         "samples_per_combo": samples_per_combo if strategy == "balanced-canonical" else None,
         "skipped": dict(sorted(skipped.items())),
         "templates": dict(templates.most_common()),
@@ -194,7 +201,10 @@ def cache_split(
 def main() -> None:
     args = parse_args()
     config = load_light_config(args.config)
-    benchmark_dir = Path(args.benchmark_dir or str(config["benchmark_dir"]))
+    benchmark_ref = args.benchmark_dir or str(config["benchmark_dir"])
+    benchmark_dir = resolve_repo_path(benchmark_ref)
+    if benchmark_dir is None:
+        raise FileNotFoundError(benchmark_ref)
     output_dir = resolve_repo_path(args.output_dir)
     if output_dir is None:
         raise FileNotFoundError(args.output_dir)

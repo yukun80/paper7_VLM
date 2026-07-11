@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """mask 可视化工具。
 
-脚本作用：把验证 batch 输出成 RGB/GT/final/best proposal/bbox prior 五联图，
-并额外导出 final/best/GT/bbox 二值 PNG，用于观察 PSALM-style proposal
+脚本作用：把验证 batch 输出成 RGB/GT/final/best proposal 四联图，
+并额外导出 final/best/GT 二值 PNG，用于观察 PSALM-style proposal
 decoder 是否真的在学习候选 mask。推理阶段可额外导出完整多模态 overview。
 主要输入：dataloader batch 与 model outputs。
 主要输出：PNG overlay 图。
@@ -22,26 +22,17 @@ import torch
 from PIL import Image, ImageDraw
 
 from .data import (
-    CANONICAL_MODALITIES,
-    canonical_modality_name,
     load_npy_array,
     normalize_modality,
     resize_pad_tensor,
     safe_slug,
 )
+from .indexing import canonical_modality_name
 
 
 def _to_rgb(batch: dict[str, Any], sample_idx: int) -> np.ndarray:
-    """从 canonical modalities 中取一个可视化 RGB。"""
-    availability = batch["availability"][sample_idx]
-    chosen = None
-    for name in ["hr_optical", "s2", "s1", "dem", "insar"]:
-        idx = CANONICAL_MODALITIES.index(name)
-        if float(availability[idx].item()) > 0:
-            chosen = batch["modalities"][name][sample_idx].detach().cpu()
-            break
-    if chosen is None:
-        chosen = torch.zeros((3, 128, 128))
+    """读取 dataloader 已构造的稳定 preview。"""
+    chosen = batch["visual_preview"][sample_idx].detach().cpu()
     if chosen.shape[0] == 1:
         rgb = chosen.repeat(3, 1, 1)
     elif chosen.shape[0] == 2:
@@ -133,7 +124,6 @@ def _save_multimodal_overview(
     gt: np.ndarray,
     final_pred: np.ndarray,
     best_pred: np.ndarray,
-    bbox_prior: np.ndarray,
     best_query: int,
 ) -> str | None:
     """导出每个样本一张完整多模态总览图。"""
@@ -161,7 +151,6 @@ def _save_multimodal_overview(
             _label_panel(_overlay_mask(rgb, gt, (0, 230, 80)), "GT"),
             _label_panel(_overlay_mask(rgb, final_pred, (255, 40, 40)), "Final"),
             _label_panel(_overlay_mask(rgb, best_pred, (255, 190, 40)), f"BestQ {best_query}"),
-            _label_panel(_overlay_mask(rgb, bbox_prior, (30, 220, 255), alpha=0.35), "BBox"),
         ]
     )
     header = [
@@ -178,24 +167,15 @@ def _save_multimodal_overview(
 
 
 def _best_query_index(outputs: dict[str, torch.Tensor], sample_idx: int) -> int:
-    """优先使用 loss 中的 best_query；没有 GT 时退化为 proposal score 最大项。"""
+    """优先使用 GT matching 的 best query；无监督时退化为 relevance 最大项。"""
     if "best_query" in outputs:
         return int(outputs["best_query"].detach().cpu()[sample_idx].item())
-    if "selection_logits" in outputs:
-        return int(torch.argmax(outputs["selection_logits"].detach().cpu()[sample_idx]).item())
-    proposal_logits = outputs["proposal_logits"].detach().cpu()
-    condition_scores = outputs.get("condition_scores")
-    scores = proposal_logits[sample_idx, :, 1]
-    if condition_scores is not None:
-        scores = scores + condition_scores.detach().cpu()[sample_idx]
-    return int(torch.argmax(scores).item())
+    return int(torch.argmax(outputs["proposal_relevance_logits"].detach().cpu()[sample_idx]).item())
 
 
 def _selected_query_index(outputs: dict[str, torch.Tensor], sample_idx: int) -> int:
-    """返回最终 selection logits 选中的 query。"""
-    if "selection_logits" in outputs:
-        return int(torch.argmax(outputs["selection_logits"].detach().cpu()[sample_idx]).item())
-    return _best_query_index(outputs, sample_idx)
+    """返回统一 semantic verifier 选中的 query。"""
+    return int(torch.argmax(outputs["proposal_relevance_logits"].detach().cpu()[sample_idx]).item())
 
 
 def _compose_diagnostic(
@@ -203,16 +183,14 @@ def _compose_diagnostic(
     gt: np.ndarray,
     final_pred: np.ndarray,
     best_pred: np.ndarray,
-    bbox_prior: np.ndarray,
     best_query: int,
 ) -> Image.Image:
-    """生成五联诊断图。"""
+    """生成 RGB、GT、final 和 best proposal 四联诊断图。"""
     panels = [
         _label_panel(rgb, "RGB"),
         _label_panel(_overlay_mask(rgb, gt, (0, 230, 80)), "GT"),
         _label_panel(_overlay_mask(rgb, final_pred, (255, 40, 40)), "Final"),
         _label_panel(_overlay_mask(rgb, best_pred, (255, 190, 40)), f"BestQ {best_query}"),
-        _label_panel(_overlay_mask(rgb, bbox_prior, (30, 220, 255), alpha=0.35), "BBox"),
     ]
     width = sum(panel.size[0] for panel in panels)
     height = max(panel.size[1] for panel in panels)
@@ -230,14 +208,19 @@ def _save_binary_mask(path: Path, mask: np.ndarray) -> None:
     Image.fromarray((mask.astype(np.uint8) * 255), mode="L").save(path)
 
 
-def _save_mask_exports(out_dir: Path, stem: str, final_pred: np.ndarray, best_pred: np.ndarray, gt: np.ndarray, bbox: np.ndarray) -> dict[str, str]:
+def _save_mask_exports(
+    out_dir: Path,
+    stem: str,
+    final_pred: np.ndarray,
+    best_pred: np.ndarray,
+    gt: np.ndarray,
+) -> dict[str, str]:
     """导出单独二值 mask，便于下游检查或复用。"""
     export_dir = out_dir / "mask_exports"
     exports = {
         "final": final_pred,
         "best_proposal": best_pred,
         "gt": gt,
-        "bbox_prior": bbox,
     }
     paths: dict[str, str] = {}
     for name, mask in exports.items():
@@ -247,7 +230,7 @@ def _save_mask_exports(out_dir: Path, stem: str, final_pred: np.ndarray, best_pr
     return paths
 
 
-def _restore_mask_to_original(mask: np.ndarray, transform: dict[str, Any] | None) -> np.ndarray | None:
+def restore_mask_to_original(mask: np.ndarray, transform: dict[str, Any] | None) -> np.ndarray | None:
     """把 target canvas 上的 mask 反变换回原始 H/W。"""
     if not isinstance(transform, dict):
         return None
@@ -264,7 +247,7 @@ def _restore_mask_to_original(mask: np.ndarray, transform: dict[str, Any] | None
     crop = mask[pad_top : pad_top + resized_h, pad_left : pad_left + resized_w]
     if crop.size == 0:
         return None
-    image = Image.fromarray((crop.astype(np.uint8) * 255), mode="L")
+    image = Image.fromarray(crop.astype(np.uint8) * 255)
     restored = image.resize((src_w, src_h), resample=Image.Resampling.NEAREST)
     return (np.asarray(restored) >= 128).astype(np.uint8)
 
@@ -273,7 +256,7 @@ def _restore_masks(masks: dict[str, np.ndarray], transform: dict[str, Any] | Non
     """批量恢复 mask 到原始 H/W。"""
     restored_masks: dict[str, np.ndarray] = {}
     for name, mask in masks.items():
-        restored = _restore_mask_to_original(mask, transform)
+        restored = restore_mask_to_original(mask, transform)
         if restored is not None:
             restored_masks[name] = restored
     return restored_masks
@@ -297,20 +280,22 @@ def _append_visualization_manifest(out_dir: Path, record: dict[str, Any]) -> Non
         f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def _sample_modality_values(tensor: torch.Tensor | None, sample_idx: int) -> dict[str, float] | None:
+def _sample_modality_values(
+    tensor: torch.Tensor | None,
+    sample_idx: int,
+    names: list[str],
+) -> dict[str, float] | None:
     """把 [B,M] 模态权重/可用性张量转为可读 dict。"""
     if tensor is None:
         return None
     row = tensor.detach().float().cpu()[sample_idx]
-    return {
-        name: float(row[idx].item())
-        for idx, name in enumerate(CANONICAL_MODALITIES)
-    }
+    return {names[idx] if idx < len(names) else f"modality_{idx}": float(row[idx].item()) for idx in range(row.numel())}
 
 
 def _sample_query_modality_values(
     tensor: torch.Tensor | None,
     sample_idx: int,
+    names: list[str],
     query_idx: int | None = None,
 ) -> dict[str, float] | None:
     """把 [B,Q,M] query modality attention 转为样本级可读 dict。"""
@@ -320,10 +305,7 @@ def _sample_query_modality_values(
     if values.ndim != 2:
         return None
     row = values.mean(dim=0) if query_idx is None else values[int(query_idx)]
-    return {
-        name: float(row[idx].item())
-        for idx, name in enumerate(CANONICAL_MODALITIES)
-    }
+    return {names[idx] if idx < len(names) else f"modality_{idx}": float(row[idx].item()) for idx in range(row.numel())}
 
 
 def _sample_query_score_values(
@@ -331,24 +313,15 @@ def _sample_query_score_values(
     sample_idx: int,
     query_idx: int,
 ) -> dict[str, float | None]:
-    """记录某个 query 的 proposal/condition/evidence/selection 分数。"""
-    values: dict[str, float | None] = {}
-    if "proposal_logits" in outputs:
-        proposal_prob = torch.softmax(outputs["proposal_logits"].detach().float().cpu(), dim=-1)[..., 1]
-        values["proposal_fg_prob"] = float(proposal_prob[sample_idx, query_idx].item())
-    for out_key, record_key in [
-        ("condition_scores", "condition_score"),
-        ("evidence_scores", "evidence_score"),
-        ("visual_evidence_scores", "visual_evidence_score"),
-        ("selection_logits", "selection_logit"),
-    ]:
-        tensor = outputs.get(out_key)
-        values[record_key] = (
+    """记录统一 semantic-evidence verifier 对某个 query 的 relevance。"""
+    tensor = outputs.get("proposal_relevance_logits")
+    return {
+        "relevance_logit": (
             float(tensor.detach().float().cpu()[sample_idx, query_idx].item())
             if torch.is_tensor(tensor)
             else None
         )
-    return values
+    }
 
 
 def save_visualizations(
@@ -360,44 +333,43 @@ def save_visualizations(
     threshold: float = 0.5,
     export_multimodal_overview: bool = False,
 ) -> list[str]:
-    """保存五联诊断图，并导出可复用二值 mask PNG。"""
+    """保存四联诊断图，并导出可复用二值 mask PNG。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     probs = torch.sigmoid(outputs["final_mask_logits"]).detach().cpu()
-    proposal_probs = torch.sigmoid(outputs["pred_masks"]).detach().cpu()
+    proposal_probs = torch.sigmoid(outputs["proposal_mask_logits"]).detach().cpu()
     targets = batch["mask"].detach().cpu()
-    bbox_prior = batch.get("bbox_prior")
-    bbox_prior_cpu = bbox_prior.detach().cpu() if torch.is_tensor(bbox_prior) else None
-    gate_tensor = outputs.get("modality_gate_weights")
-    active_tensor = outputs.get("modality_active_mask")
-    query_gate_tensor = outputs.get("query_modality_weights")
+    valid_masks = batch["valid_mask"].detach().cpu()
+    reliability_tensor = outputs.get("modality_reliability_weights")
+    active_tensor = outputs.get("modality_active")
+    query_attention_tensor = outputs.get("query_modality_attention")
     paths: list[str] = []
     n = min(max_items, probs.shape[0])
     for idx in range(n):
         rgb = _to_rgb(batch, idx)
         final_pred = (probs[idx, 0].numpy() >= float(threshold)).astype(np.uint8)
         gt = (targets[idx, 0].numpy() >= 0.5).astype(np.uint8)
+        valid = (valid_masks[idx, 0].numpy() >= 0.5).astype(np.uint8)
+        final_pred *= valid
+        gt *= valid
         best_query = _best_query_index(outputs, idx)
         selected_query = _selected_query_index(outputs, idx)
         best_pred = (proposal_probs[idx, best_query].numpy() >= float(threshold)).astype(np.uint8)
-        if bbox_prior_cpu is not None:
-            bbox = (bbox_prior_cpu[idx, 0].numpy() >= 0.5).astype(np.uint8)
-        else:
-            bbox = np.zeros_like(gt)
-        diagnostic = _compose_diagnostic(rgb, gt, final_pred, best_pred, bbox, best_query)
+        best_pred *= valid
+        diagnostic = _compose_diagnostic(rgb, gt, final_pred, best_pred, best_query)
 
         meta = batch["metadata"][idx]
+        modality_names = [str(item.get("name", f"modality_{j}")) for j, item in enumerate(meta.get("raw_modalities") or [])]
         stem = safe_slug(f"{prefix}_{idx}_{meta.get('sample_id', 'sample')}")
         overview_path = (
-            _save_multimodal_overview(out_dir, stem, meta, rgb, gt, final_pred, best_pred, bbox, best_query)
+            _save_multimodal_overview(out_dir, stem, meta, rgb, gt, final_pred, best_pred, best_query)
             if export_multimodal_overview
             else None
         )
-        mask_paths = _save_mask_exports(out_dir, stem, final_pred, best_pred, gt, bbox)
+        mask_paths = _save_mask_exports(out_dir, stem, final_pred, best_pred, gt)
         masks_for_restore = {
             "final": final_pred,
             "best_proposal": best_pred,
             "gt": gt,
-            "bbox_prior": bbox,
         }
         restored_masks = _restore_masks(masks_for_restore, meta.get("resize_transform"))
         restored_mask_paths = _save_restored_mask_exports(out_dir, stem, restored_masks)
@@ -420,17 +392,17 @@ def save_visualizations(
                     "final": int(final_pred.sum()),
                     "best_proposal": int(best_pred.sum()),
                     "gt": int(gt.sum()),
-                    "bbox_prior": int(bbox.sum()),
+                    "valid_pixels": int(valid.sum()),
                 },
                 "restored_mask_area": {
                     name: int(mask.sum())
                     for name, mask in restored_masks.items()
                 },
-                "modality_gate_weights": _sample_modality_values(gate_tensor, idx),
-                "modality_active_mask": _sample_modality_values(active_tensor, idx),
-                "query_modality_mean_weights": _sample_query_modality_values(query_gate_tensor, idx),
-                "query_modality_best_query_weights": _sample_query_modality_values(query_gate_tensor, idx, best_query),
-                "query_modality_selected_query_weights": _sample_query_modality_values(query_gate_tensor, idx, selected_query),
+                "modality_reliability_weights": _sample_modality_values(reliability_tensor, idx, modality_names),
+                "modality_active": _sample_modality_values(active_tensor, idx, modality_names),
+                "query_modality_mean_attention": _sample_query_modality_values(query_attention_tensor, idx, modality_names),
+                "query_modality_best_query_attention": _sample_query_modality_values(query_attention_tensor, idx, modality_names, best_query),
+                "query_modality_selected_query_attention": _sample_query_modality_values(query_attention_tensor, idx, modality_names, selected_query),
                 "best_query_scores": _sample_query_score_values(outputs, idx, best_query),
                 "selected_query_scores": _sample_query_score_values(outputs, idx, selected_query),
                 "metadata": {
@@ -449,7 +421,6 @@ def save_visualizations(
                     "visual_preview_source": meta.get("visual_preview_source"),
                     "mask_original_size": meta.get("mask_original_size"),
                     "resize_transform": meta.get("resize_transform"),
-                    "bbox_xyxy": meta.get("bbox_xyxy"),
                     "condition_prompt": meta.get("condition_prompt"),
                     "instruction": meta.get("instruction"),
                     "proposal_context_text": meta.get("proposal_context_text"),

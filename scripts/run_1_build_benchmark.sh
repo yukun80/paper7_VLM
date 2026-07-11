@@ -1,32 +1,52 @@
 #!/usr/bin/env bash
-# 批运行脚本：构建多源滑坡 benchmark。
+# 用途：批量构建多源滑坡 benchmark。
+# 推荐运行命令：bash scripts/run_1_build_benchmark.sh small
+# 也可运行：bash scripts/run_1_build_benchmark.sh full
+#          bash scripts/run_1_build_benchmark.sh both
+#          SMALL_LIMIT=100 bash scripts/run_1_build_benchmark.sh small
 #
-# 脚本作用：按固定顺序运行 1-1 到 1-7，完成数据清单、统一索引、
+# 按固定顺序运行 1-1 到 1-7，完成数据清单、统一索引、
 # source 校验、真实物化预处理、final 校验、split、指代目标构建、
 # referring_target 校验和统计报告构建。
-# 主要输入：datasets/ 原始数据目录，以及 MODE=small/full/both。
-# 主要输出：benchmark/multisource_landslide_v1_<mode>/ 下的自包含 .npy 数据、索引和报告。
-# 是否改写原始数据：不会改写 datasets/，只写 benchmark/ 派生产物。
+# 主要输入：仓库同级 datasets/ 原始数据目录，以及 MODE=small/full/both。
+# 主要输出：仓库同级 benchmark/multisource_landslide_v1_<mode>/ 下的自包含数据、索引和报告。
+# 写入行为：不会改写 datasets/，只写 benchmark/ 派生产物。
+# 所属流程：主数据流程第 1 阶段；完成后再运行 run_2_build_instruction_dataset.sh。
 # 特别说明：1-6 不读取 datasets/，只基于已物化的 benchmark/data/**/mask.npy 生成结构化指代目标；训练文本由 2-instruction 生成。
 # 环境变量覆盖：SMALL_LIMIT 默认 1000，可用 SMALL_LIMIT=100 临时降低；
 # DATASETS_ROOT、BENCHMARK_PREFIX、SEED、PYTHON_BIN、USE_EXTENDED_POOL、SEN12_MODAL_POLICY 也可覆盖；
 # 默认 PYTHON_BIN=python，建议先 conda activate qwen3vl。
 #
-# 用法：
-#   bash scripts/run_1_build_benchmark.sh small
-#   bash scripts/run_1_build_benchmark.sh full
-#   bash scripts/run_1_build_benchmark.sh both
-#   SMALL_LIMIT=100 bash scripts/run_1_build_benchmark.sh small
-
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+WORKSPACE_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
+cd "${REPO_ROOT}"
 
 MODE="${1:-small}"
 SMALL_LIMIT="${SMALL_LIMIT:-1000}"
 SEED="${SEED:-42}"
-DATASETS_ROOT="${DATASETS_ROOT:-datasets}"
-BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-benchmark/multisource_landslide_v1}"
+DEFAULT_DATASETS_ROOT="${WORKSPACE_ROOT}/datasets"
+DEFAULT_BENCHMARK_ROOT="${WORKSPACE_ROOT}/benchmark"
+if [[ ! -d "${DEFAULT_DATASETS_ROOT}" && -d "${REPO_ROOT}/datasets" ]]; then
+  DEFAULT_DATASETS_ROOT="${REPO_ROOT}/datasets"
+fi
+if [[ ! -d "${DEFAULT_BENCHMARK_ROOT}" && -d "${REPO_ROOT}/benchmark" ]]; then
+  DEFAULT_BENCHMARK_ROOT="${REPO_ROOT}/benchmark"
+fi
+DATASETS_ROOT="${DATASETS_ROOT:-${PAPER7_DATASETS_ROOT:-${DEFAULT_DATASETS_ROOT}}}"
+BENCHMARK_ROOT="${PAPER7_BENCHMARK_ROOT:-${DEFAULT_BENCHMARK_ROOT}}"
+BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-${BENCHMARK_ROOT}/multisource_landslide_v1}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SEN12_MODAL_POLICY="${SEN12_MODAL_POLICY:-require_s2}"
+
+# 让各 Python 阶段使用相同物理根目录，同时继续写可移植逻辑路径。
+export PAPER7_DATASETS_ROOT="${DATASETS_ROOT}"
+export PAPER7_BENCHMARK_ROOT="$(dirname "${BENCHMARK_PREFIX}")"
+
+echo "datasets_root=${PAPER7_DATASETS_ROOT}"
+echo "benchmark_root=${PAPER7_BENCHMARK_ROOT}"
 
 run_one_mode() {
   local mode="$1"

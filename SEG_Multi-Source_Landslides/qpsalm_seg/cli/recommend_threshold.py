@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """从 QPSALM 报告中推荐二值化阈值。
 
-脚本作用：读取 run_summary.json、eval_report.json 或 run 目录中的 threshold_sweep，
-输出 overall 与分组最佳阈值，并生成可复制的 best-threshold eval 命令。
+用途：读取 threshold sweep，推荐 overall 与分组阈值并生成可复制 eval 命令。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.recommend_threshold --run outputs/RUN --output outputs/RUN/threshold_recommendations.json
 主要输入：QPSALM run 目录或 JSON 报告。
 主要输出：阈值推荐 JSON，可选写入 threshold_recommendations.json。
-是否改写原始数据：只在指定 --output 时写报告。
-典型用法：python -m qpsalm_seg.cli.recommend_threshold --run outputs/.../baseline。
+写入行为：只在指定 --output 时写报告。
+所属流程：评估完成后的 threshold calibration；不重新训练模型。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import argparse
 import json
 from pathlib import Path
 
-from qpsalm_seg.data import resolve_repo_path
+from qpsalm_seg.paths import resolve_repo_path
 from qpsalm_seg.thresholding import recommend_thresholds
 
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""导出 QPSALM 指标、多源 gate 与 proposal 诊断 CSV。
+"""导出 QPSALM 指标、QMEF 证据使用与 PMRD proposal 诊断 CSV。
 
-脚本作用：从 eval_report.json、validation_latest.json 或 run_summary.json 中抽取
-Dice/IoU/Precision/Recall、modality gate summary 与样本级 proposal 选择诊断，
-写成 CSV 表格。
+用途：从验证/评估报告中抽取指标、modality reliability、query attention 和 proposal 诊断。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.export_tables --input outputs/RUN/eval_report.json
+--output-dir outputs/RUN/tables
 主要输入：一个或多个 QPSALM JSON 报告。
-主要输出：metrics.csv、modality_gates.csv、proposal_diagnostics.csv、
+主要输出：metrics.csv、modality_reliability.csv、query_modality_attention.csv、proposal_diagnostics.csv、
 analysis_tables_manifest.json。
-是否改写原始数据：不会，只写指定 output-dir。
-典型用法：python -m qpsalm_seg.cli.export_tables --input outputs/.../eval_report.json --output-dir outputs/.../tables。
+写入行为：只写 --output-dir，不修改输入报告或 checkpoint。
+所属流程：训练/评估后的论文表格和算法诊断导出。
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from qpsalm_seg.analysis_tables import export_analysis_tables
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export QPSALM metrics, modality gates, and proposal diagnostics to CSV.")
+    parser = argparse.ArgumentParser(description="Export QPSALM metrics, QMEF evidence, and PMRD proposal diagnostics.")
     parser.add_argument(
         "--input",
         action="append",

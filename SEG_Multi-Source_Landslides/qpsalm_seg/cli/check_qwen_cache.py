@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""检查 Qwen condition cache 是否覆盖当前训练/验证文本。
+"""检查 Qwen 文本缓存是否覆盖当前训练/验证文本。
 
-脚本作用：不启动训练、不加载 Qwen 模型，只读取 JSONL index 和
-condition_embedding_cache，验证 PSALM 双文本 schema 的 embedding 覆盖情况。
+用途：不加载 Qwen 模型，核对 JSONL 所需文本与 condition embedding cache 的覆盖关系。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.check_qwen_cache --config
+SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml
+--condition-embedding-cache outputs/qpsalm_condition_cache.pt
 主要输入：YAML 配置、train/val index、condition embedding cache。
 主要输出：coverage JSON；默认 coverage 不完整时以非零状态退出。
-是否改写原始数据：不会；仅在 --output 指定时写报告 JSON。
-典型用法：python -m qpsalm_seg.cli.check_qwen_cache --config ... --condition-embedding-cache ...
+写入行为：仅在指定 --output 时写报告，不修改缓存或 benchmark。
+所属流程：Qwen cache 训练前检查。
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from qpsalm_seg.config import load_config
-from qpsalm_seg.data import resolve_repo_path
+from qpsalm_seg.paths import resolve_repo_path
 from qpsalm_seg.qwen_cache import verify_qwen_cache_coverage
 
 

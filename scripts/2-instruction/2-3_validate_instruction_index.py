@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """步骤 2-3：验证 instruction segmentation 索引。
 
-脚本作用：检查 instruction_*.jsonl 中的模板字段、任务类别、mask 路径、
+用途：检查 instruction_*.jsonl 中的模板字段、任务类别、mask 路径、
 模态路径和 evidence-aware 指令与实际模态是否匹配。
 主要输入：indexes/instruction_all.jsonl、模板 YAML、可选 referring_target_all.jsonl。
 主要输出：reports/instruction_validation_report.json。
-是否改写原始数据：不会改写 datasets/；只写 benchmark/ 下的验证报告。
-典型用法：
+写入行为：不会改写 datasets/ 或 instruction 索引，只写验证报告。
+所属流程：instruction 构建 2-3，是训练前的数据门禁。
+推荐运行命令：
   python scripts/2-instruction/2-3_validate_instruction_index.py \
     --benchmark-dir benchmark/multisource_landslide_v1_small
 """
@@ -21,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 from geohazard_instruction_common import (
-    ACTIVE_OR_CHANGE_WORDS,
     DEFAULT_BENCHMARK_ROOT,
     DEFAULT_TEMPLATE_CONFIG,
     INSAR_MODALITIES,
@@ -33,6 +33,7 @@ from geohazard_instruction_common import (
     has_any,
     instruction_index_paths,
     load_template_config,
+    project_path_arg,
     modality_names,
     template_map,
     to_repo_rel,
@@ -104,9 +105,6 @@ def validate_evidence_template(sample: dict[str, Any]) -> tuple[list[str], list[
             errors.append(f"{sid}: insar_evidence_landslide_v1 缺少 DEM/slope 模态")
         if not has_all(names, INSAR_MODALITIES):
             errors.append(f"{sid}: insar_evidence_landslide_v1 缺少 insar_vel 模态")
-    text = f"{(sample.get('instruction') or {}).get('text', '')} {(sample.get('instruction') or {}).get('text_zh', '')}".lower()
-    if any(word in text for word in ACTIVE_OR_CHANGE_WORDS):
-        warnings.append(f"{sid}: 第一版不应把活动/新增滑坡作为独立监督目标，请确认模板语义")
     return errors, warnings
 
 
@@ -177,8 +175,8 @@ def validate_instruction_sample(sample: dict[str, Any], benchmark_dir: Path, tem
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="验证 instruction segmentation 索引。")
-    parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="目标 benchmark 目录。")
-    parser.add_argument("--template-config", type=Path, default=DEFAULT_TEMPLATE_CONFIG, help="任务指令模板 YAML 路径。")
+    parser.add_argument("--benchmark-dir", type=project_path_arg, default=DEFAULT_BENCHMARK_ROOT, help="目标 benchmark 目录。")
+    parser.add_argument("--template-config", type=project_path_arg, default=DEFAULT_TEMPLATE_CONFIG, help="任务指令模板 YAML 路径。")
     return parser.parse_args()
 
 

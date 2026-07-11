@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """多源滑坡 benchmark 指代目标公共规则库。
 
-脚本作用：集中维护方位、尺度、形态、数量四类 rule-based referring target
+用途：集中维护方位、尺度、形态、数量四类 rule-based referring target
 生成规则，供 1-6_build_referring_targets.py 调用。
 主要输入：已物化的二值 mask、父样本元数据和可选 preview 底图。
 主要输出：referring_targets、target-level mask.npy 和 referring preview。
-是否改写原始数据：不会读取或改写 datasets/；只由调用方传入 benchmark 输出目录。
-典型用法：由 1-6_build_referring_targets.py import 后复用，不建议单独运行。
+写入行为：不会自行改写 datasets；文件写入由 1-6 调用方控制。
+运行方式：内部公共模块，不作为独立程序运行；由 1-6_build_referring_targets.py import。
 """
 
 from __future__ import annotations

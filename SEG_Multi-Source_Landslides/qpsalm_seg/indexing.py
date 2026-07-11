@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .paths import resolve_repo_path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 MODALITY_TO_CANONICAL = {
     "optical_rgb": "hr_optical",
     "optical_multiband": "hr_optical",
@@ -38,15 +38,6 @@ class DatasetStats:
     by_shape: dict[str, dict[str, int]]
     gsd_tokens: dict[str, int]
     quality_flags: dict[str, int]
-
-
-def resolve_repo_path(path_ref: str | Path | None) -> Path | None:
-    if path_ref is None:
-        return None
-    p = Path(path_ref)
-    if p.is_absolute():
-        return p
-    return REPO_ROOT / p
 
 
 def iter_jsonl(path: Path, max_rows: int | None = None) -> Iterable[dict[str, Any]]:

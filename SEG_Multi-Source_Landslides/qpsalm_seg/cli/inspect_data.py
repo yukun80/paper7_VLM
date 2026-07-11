@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 """检查 Multi-Source Qwen-PSALM-Seg 训练索引。
 
-脚本作用：统计 instruction 索引中的核心模板样本、模态组合、形状、GSD token
-和被跳过的大场景/非核心模板样本。
-主要输入：benchmark/multisource_landslide_v1_small/indexes/instruction_*.jsonl。
+用途：统计核心模板样本、模态组合、shape、GSD 和被跳过的索引行。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.inspect_data --config
+SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml --split train --limit 16
+主要输入：benchmark 的 indexes/instruction_{train,val,test}.jsonl。
 主要输出：终端文本或 JSON。
-是否改写原始数据：不会。
-典型用法：qpsalm-inspect-data --config SEG_Multi-Source_Landslides/configs/qpsalm_tiny_text_probe.yaml --limit 16。
+写入行为：只读检查，不写 benchmark 或 outputs。
+所属流程：数据构建后的质量检查，也可用于训练前核对模态分布。
 """
 
 from __future__ import annotations
@@ -17,7 +19,8 @@ import dataclasses
 import json
 from pathlib import Path
 
-from qpsalm_seg.indexing import iter_jsonl, resolve_repo_path, stats_to_text, summarize_rows
+from qpsalm_seg.indexing import iter_jsonl, stats_to_text, summarize_rows
+from qpsalm_seg.paths import resolve_repo_path
 
 
 DEFAULT_CORE_TEMPLATES = [
@@ -85,7 +88,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = load_light_config(args.config)
-    benchmark_dir = Path(args.benchmark_dir or str(config["benchmark_dir"]))
+    benchmark_ref = args.benchmark_dir or str(config["benchmark_dir"])
+    benchmark_dir = resolve_repo_path(benchmark_ref)
+    if benchmark_dir is None:
+        raise FileNotFoundError(benchmark_ref)
     if args.split == "train":
         index_rel = str(config["train_index"])
     elif args.split == "val":

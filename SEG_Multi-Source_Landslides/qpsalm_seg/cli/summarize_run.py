@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """汇总 QPSALM 训练/eval 运行产物。
 
-脚本作用：读取 checkpoint、train_history、validation/eval report 和 PNG 可视化，
-生成一个便于验收 Phase 1 闭环的 run_summary.json。
+用途：汇总 checkpoint、训练历史、验证/评估报告、分析表和可视化覆盖情况。
+推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
+qpsalm_seg.cli.summarize_run --run-dir outputs/RUN/train --eval-dir outputs/RUN/eval
 主要输入：outputs/qpsalm_* 运行目录，可选 eval 目录。
 主要输出：run_summary.json 和终端 JSON。
-是否改写原始数据：只写 summary JSON，不改 benchmark 或模型权重。
-典型用法：python -m qpsalm_seg.cli.summarize_run --run-dir outputs/qpsalm_small_qwen_cached_core。
+写入行为：只写 summary 和可选分析表，不修改 benchmark 或模型权重。
+所属流程：训练/eval 完成后的结果归档，也是 compare/diagnose 的推荐前置步骤。
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Any
 import yaml
 
 from qpsalm_seg.analysis_tables import export_analysis_tables
-from qpsalm_seg.data import resolve_repo_path
+from qpsalm_seg.paths import resolve_repo_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=None)
     parser.add_argument("--min-visualizations", type=int, default=4)
     parser.add_argument("--no-export-tables", action="store_true")
+    parser.add_argument("--print-full-report", action="store_true")
     return parser.parse_args()
 
 
@@ -63,7 +65,7 @@ def count_diagnostic_pngs(path: Path) -> int:
 
 
 def mask_export_counts(path: Path, export_dir_name: str = "mask_exports") -> dict[str, int]:
-    names = ["final", "best_proposal", "gt", "bbox_prior"]
+    names = ["final", "best_proposal", "gt"]
     counts = {name: 0 for name in names}
     if not path.exists():
         return counts
@@ -110,30 +112,30 @@ def manifest_record_summary(path: Path) -> dict[str, Any]:
         "records": len(records),
         "unique_samples": len(sample_ids),
         "canonical_combos": dict(sorted(combos.items())),
-        "modality_gate_summary": summarize_manifest_gates(records),
-        "query_modality_summary": summarize_manifest_query_gates(records),
+        "modality_reliability_summary": summarize_manifest_reliability(records),
+        "query_modality_attention_summary": summarize_manifest_query_attention(records),
     }
 
 
 def average_modality_dict(rows: list[dict[str, float] | None]) -> dict[str, float]:
     """对 manifest 中的 name->float 模态字段求均值。"""
-    names = ["hr_optical", "s2", "s1", "dem", "insar"]
     usable = [row for row in rows if isinstance(row, dict)]
     if not usable:
         return {}
+    names = sorted({str(name) for row in usable for name in row})
     return {
         name: sum(float(row.get(name, 0.0)) for row in usable) / len(usable)
         for name in names
     }
 
 
-def summarize_manifest_gates(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """汇总可视化 manifest 中的样本级模态 gate。"""
-    with_gate = [row for row in records if isinstance(row.get("modality_gate_weights"), dict)]
-    if not with_gate:
+def summarize_manifest_reliability(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """汇总可视化 manifest 中的样本级模态可靠性。"""
+    usable = [row for row in records if isinstance(row.get("modality_reliability_weights"), dict)]
+    if not usable:
         return {}
-    groups: dict[str, list[dict[str, Any]]] = {"overall": with_gate}
-    for row in with_gate:
+    groups: dict[str, list[dict[str, Any]]] = {"overall": usable}
+    for row in usable:
         meta = row.get("metadata") or {}
         groups.setdefault(f"canonical_combo={meta.get('canonical_combo', 'unknown')}", []).append(row)
         groups.setdefault(f"sensor_combo={meta.get('sensor_combo', 'unknown')}", []).append(row)
@@ -143,19 +145,19 @@ def summarize_manifest_gates(records: list[dict[str, Any]]) -> dict[str, Any]:
     for name, rows in sorted(groups.items()):
         out[name] = {
             "n": len(rows),
-            "mean_weights": average_modality_dict([row.get("modality_gate_weights") for row in rows]),
-            "mean_active": average_modality_dict([row.get("modality_active_mask") for row in rows]),
+            "mean_weights": average_modality_dict([row.get("modality_reliability_weights") for row in rows]),
+            "mean_active": average_modality_dict([row.get("modality_active") for row in rows]),
         }
     return out
 
 
-def summarize_manifest_query_gates(records: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_manifest_query_attention(records: list[dict[str, Any]]) -> dict[str, Any]:
     """汇总可视化 manifest 中的 query-level modality attention。"""
-    with_gate = [row for row in records if isinstance(row.get("query_modality_mean_weights"), dict)]
-    if not with_gate:
+    usable = [row for row in records if isinstance(row.get("query_modality_mean_attention"), dict)]
+    if not usable:
         return {}
-    groups: dict[str, list[dict[str, Any]]] = {"overall": with_gate}
-    for row in with_gate:
+    groups: dict[str, list[dict[str, Any]]] = {"overall": usable}
+    for row in usable:
         meta = row.get("metadata") or {}
         groups.setdefault(f"canonical_combo={meta.get('canonical_combo', 'unknown')}", []).append(row)
         groups.setdefault(f"sensor_combo={meta.get('sensor_combo', 'unknown')}", []).append(row)
@@ -165,12 +167,12 @@ def summarize_manifest_query_gates(records: list[dict[str, Any]]) -> dict[str, A
     for name, rows in sorted(groups.items()):
         out[name] = {
             "n": len(rows),
-            "mean_query_weights": average_modality_dict([row.get("query_modality_mean_weights") for row in rows]),
+            "mean_query_weights": average_modality_dict([row.get("query_modality_mean_attention") for row in rows]),
             "mean_selected_query_weights": average_modality_dict(
-                [row.get("query_modality_selected_query_weights") for row in rows]
+                [row.get("query_modality_selected_query_attention") for row in rows]
             ),
             "mean_best_query_weights": average_modality_dict(
-                [row.get("query_modality_best_query_weights") for row in rows]
+                [row.get("query_modality_best_query_attention") for row in rows]
             ),
         }
     return out
@@ -191,11 +193,15 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
     out = {
         "loss": report.get("loss"),
         "overall": metrics.get("overall"),
+        "positive_only": metrics.get("positive_only"),
+        "negative_only": metrics.get("negative_only"),
         "threshold": report.get("threshold"),
         "threshold_sweep": report.get("threshold_sweep") or {},
         "loss_components": report.get("loss_components") or {},
-        "modality_gate_summary": report.get("modality_gate_summary") or {},
-        "query_modality_summary": report.get("query_modality_summary") or {},
+        "metrics_original_size": report.get("metrics_original_size") or {},
+        "canvas_vs_original_delta": report.get("canvas_vs_original_delta") or {},
+        "modality_reliability_summary": report.get("modality_reliability_summary") or {},
+        "query_modality_attention_summary": report.get("query_modality_attention_summary") or {},
     }
     proposal_diagnostics = report.get("proposal_diagnostics")
     if isinstance(proposal_diagnostics, dict):
@@ -298,66 +304,35 @@ def key_config(config: dict[str, Any] | None) -> dict[str, Any]:
         "controller",
         "qwen_model_path",
         "condition_embedding_cache",
+        "visual_evidence_cache",
+        "preset",
         "target_size",
+        "size_buckets",
+        "max_native_size",
         "batch_size",
         "grad_accum_steps",
         "max_steps",
+        "num_epochs",
         "max_val_batches",
         "decoder_dim",
         "num_mask_tokens",
         "modality_dropout",
-        "use_gsd_film",
-        "use_spatial_modality_gate",
-        "use_query_modality_attention",
-        "query_modality_feature_weight",
-        "use_evidence_reasoning",
-        "evidence_reasoning_weight",
-        "selection_evidence_weight",
-        "selection_visual_evidence_weight",
-        "use_visual_evidence",
-        "visual_evidence_cache",
-        "visual_evidence_weight",
-        "visual_evidence_feature_weight",
+        "deformable_points",
+        "use_query_spatial_attention",
+        "use_mask_refinement",
         "train_hflip_prob",
         "train_vflip_prob",
-        "use_box_prior",
-        "use_focal_loss",
         "boundary_loss_weight",
-        "condition_ranking_loss_weight",
-        "selection_ranking_loss_weight",
-        "foreground_bce_pos_weight",
-        "mask_bce_weight",
-        "mask_dice_weight",
-        "mask_tversky_weight",
-        "tversky_alpha",
-        "tversky_beta",
-        "proposal_cls_weight",
-        "condition_cls_weight",
-        "proposal_mask_weight",
-        "empty_mask_suppression_weight",
-        "empty_proposal_suppression_weight",
-        "proposal_positive_weight",
-        "condition_positive_weight",
-        "evidence_positive_weight",
-        "query_diversity_loss_weight",
-        "proposal_mask_diversity_loss_weight",
-        "gate_entropy_loss_weight",
-        "proposal_soft_target_topk",
-        "proposal_soft_target_temperature",
-        "query_usage_balance_loss_weight",
-        "evidence_cls_weight",
-        "evidence_ranking_loss_weight",
-        "visual_evidence_cls_weight",
-        "visual_evidence_ranking_loss_weight",
-        "selection_proposal_weight",
-        "selection_condition_weight",
-        "selection_temperature",
-        "final_foreground_gate_weight",
-        "final_mask_fusion",
-        "final_topk",
-        "final_noisy_or_epsilon",
-        "canonical_combo_loss_weights",
+        "final_bce_weight",
+        "final_dice_weight",
+        "proposal_set_loss_weight",
+        "coarse_proposal_loss_weight",
+        "semantic_verifier_loss_weight",
+        "missing_modality_consistency_weight",
+        "min_component_area_fraction",
+        "min_component_area_pixels",
         "eval_threshold",
+        "checkpoint_metric",
         "threshold_sweep",
         "train_index",
         "val_index",
@@ -408,7 +383,7 @@ def summarize_run(
     history_info = train_history_summary(train_history if isinstance(train_history, list) else None)
     last_loss = (history_info.get("last") or {}).get("loss") if isinstance(history_info.get("last"), dict) else None
     finite_last_loss = isinstance(last_loss, (int, float)) and math.isfinite(float(last_loss))
-    min_mask_exports = int(min_visualizations) * 4
+    min_mask_exports = int(min_visualizations) * 3
     acceptance = {
         "checkpoint_last_exists": bool(checkpoint["exists"]),
         "validation_latest_exists": validation is not None,
@@ -425,7 +400,7 @@ def summarize_run(
         "enough_train_visualization_manifest_records": train_manifest_records["records"] >= int(min_visualizations),
         "enough_eval_visualization_manifest_records": eval_manifest_records["records"] >= int(min_visualizations),
     }
-    acceptance["phase1_smoke_ready"] = all(
+    acceptance["research_pipeline_ready"] = all(
         [
             acceptance["checkpoint_last_exists"],
             acceptance["validation_latest_exists"],
@@ -443,7 +418,7 @@ def summarize_run(
             "path": str(run_dir / "run_manifest.json"),
             "exists": manifest is not None,
             "created_at_utc": manifest.get("created_at_utc") if isinstance(manifest, dict) else None,
-            "mode": manifest.get("mode") if isinstance(manifest, dict) else None,
+            "preset": manifest.get("preset") if isinstance(manifest, dict) else None,
         },
         "eval_manifest": {
             "path": str(eval_dir / "eval_manifest.json"),
@@ -499,7 +474,18 @@ def main() -> None:
         min_visualizations=args.min_visualizations,
         export_tables=not args.no_export_tables,
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.print_full_report:
+        payload = summary
+    else:
+        payload = {
+            "run_summary": str(resolve_repo_path(args.output) if args.output else resolve_repo_path(args.run_dir) / "run_summary.json"),
+            "preset": (summary.get("config") or {}).get("preset"),
+            "validation_overall": (summary.get("validation") or {}).get("overall"),
+            "eval_overall": (summary.get("eval") or {}).get("overall"),
+            "acceptance": summary.get("acceptance"),
+            "analysis_tables": summary.get("analysis_tables"),
+        }
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":

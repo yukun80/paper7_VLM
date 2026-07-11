@@ -2,15 +2,16 @@
 # -*- coding: utf-8 -*-
 """步骤 1-6：基于已物化 benchmark 构建结构化指代目标。
 
-脚本作用：在 1-4 物化和 1-5 split 后，基于 benchmark 内部 mask/mask.npy
+用途：在 1-4 物化和 1-5 split 后，基于 benchmark 内部 mask/mask.npy
 生成方位、尺度、形态、数量四类 referring targets。这里不生成训练文本，
 只生成 expression-level target mask、grounding 和类别/子类结构化字段。
 主要输入：benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl、
 data/**/mask/mask.npy 和已有 preview/visual.png。
 主要输出：data/**/referring/**/mask.npy、preview/referring.png、
 indexes/referring_target_*.jsonl 和 sample_meta.json 中的 referring_targets。
-是否改写原始数据：不会读取或改写 datasets/，也不会重写已有模态 .npy。
-典型用法：
+写入行为：不会读取或改写 datasets/，也不会重写已有模态 .npy；会写 referring 派生产物。
+所属流程：benchmark 构建 1-6；当前主模型不直接使用 referring 数据，但 benchmark 流程保留该产物。
+推荐运行命令：
   python scripts/1-benchmark/1-6_build_referring_targets.py \
     --benchmark-dir benchmark/multisource_landslide_v1_small
 """
@@ -36,6 +37,7 @@ from geohazard_benchmark_common import (
     final_index_paths,
     flatten_referring_target_samples,
     modality_combo,
+    project_path_arg,
     read_jsonl,
     referring_target_index_paths,
     resolve_repo_path,
@@ -255,7 +257,7 @@ def add_referring_target_sampling_weights(samples: list[dict[str, Any]]) -> list
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="基于已物化 benchmark 构建结构化 referring target。")
-    parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_ROOT, help="目标 benchmark 目录。")
+    parser.add_argument("--benchmark-dir", type=project_path_arg, default=DEFAULT_BENCHMARK_ROOT, help="目标 benchmark 目录。")
     parser.add_argument("--overwrite", action="store_true", help="已有 referring_targets 时重新生成。")
     parser.add_argument("--dry-run", action="store_true", help="只统计可生成数量，不写文件。")
     parser.add_argument("--max-samples", type=int, default=None, help="调试用：最多处理多少个样本。")

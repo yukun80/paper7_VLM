@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""语义控制器：Qwen3-VL 冻结路径与 tiny text-probe fallback。
+"""冻结 Qwen 文本控制器与 development-only text probe。
 
-脚本作用：把 instruction、condition prompt、模态/GSD token 编码成 decoder
-可用的 condition embedding。
-主要输入：batch["condition_text"]。
-主要输出：[B, decoder_dim] condition embedding。
+脚本作用：分别编码 task context、condition prompt 和 evidence reasoning，视觉
+证据由独立的 multi-view cache v2 提供，并在 SemanticEvidence 中统一融合。
 是否改写原始数据：不会。
 典型用法：build_controller(config, device)。
 """
@@ -20,17 +18,12 @@ import torch
 from torch import nn
 
 from .config import QPSalmConfig
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from .paths import resolve_repo_path
 
 
 def resolve_local_path(path_ref: str | Path) -> Path:
-    """解析 repo 相对路径。"""
-    path = Path(path_ref)
-    if path.is_absolute():
-        return path
-    return REPO_ROOT / path
+    """使用项目统一 resolver 解析模型/cache 路径。"""
+    return resolve_repo_path(path_ref) or Path(path_ref)
 
 
 def validate_qwen_model_dir(model_path: str | Path) -> Path:
@@ -112,11 +105,7 @@ class TextProbeController(nn.Module):
 
 
 class FrozenQwenController(nn.Module):
-    """冻结 Qwen3-VL 语义控制器。
-
-    第一版只用文本路径编码 instruction/condition/modality/scale token；多源像素
-    特征由本项目的 modality adapters 处理。
-    """
+    """冻结 Qwen3-VL 文本路径；多视图 token 由离线 visual cache 提供。"""
 
     def __init__(self, model_path: str | Path, decoder_dim: int, device: torch.device, allow_cpu: bool = False) -> None:
         super().__init__()
@@ -198,15 +187,13 @@ class FrozenQwenController(nn.Module):
 class CachedQwenController(nn.Module):
     """缓存式冻结 Qwen controller。
 
-    预计算阶段用本地 Qwen3-VL 把 condition text 编码为原始 hidden state；
+    预计算阶段用本地 Qwen3-VL 把 semantic-evidence text 编码为 hidden state；
     训练阶段只加载这些 hidden state，并训练一个轻量 projection 接入 mask decoder。
     """
 
     def __init__(self, cache_path: str | Path, decoder_dim: int) -> None:
         super().__init__()
-        path = Path(cache_path)
-        if not path.is_absolute():
-            path = Path(__file__).resolve().parents[2] / path
+        path = resolve_local_path(cache_path)
         if not path.exists():
             raise FileNotFoundError(f"Qwen condition embedding cache 不存在: {path}")
         payload = torch.load(path, map_location="cpu")

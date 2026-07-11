@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from qpsalm_seg.data import resolve_repo_path
+from qpsalm_seg.paths import resolve_repo_path
 
 
 def read_json(path_ref: str | Path) -> dict[str, Any]:
