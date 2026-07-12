@@ -68,14 +68,42 @@ DEFAULT_BENCHMARK_STORAGE_ROOT = _resolve_root_override(
     _benchmark_override,
     _default_external_root("benchmark"),
 )
-DEFAULT_BENCHMARK_PREFIX = DEFAULT_BENCHMARK_STORAGE_ROOT / "multisource_landslide_v1"
+DEFAULT_BENCHMARK_PREFIX = DEFAULT_BENCHMARK_STORAGE_ROOT / "multisource_landslide_v2"
 DEFAULT_BENCHMARK_ROOT = DEFAULT_BENCHMARK_PREFIX.with_name(f"{DEFAULT_BENCHMARK_PREFIX.name}_small")
 BUCKETS = [32, 64, 128, 224, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
-LANDSLIDE4SENSE_S2_BANDS = [f"B{i}" for i in range(1, 13)]
+LANDSLIDE4SENSE_S2_BANDS = [f"B{i:02d}" for i in range(1, 13)]
 LANDSLIDE4SENSE_MODALITY_SHAPES = {
     "multispectral": [12, 128, 128],
     "slope": [1, 128, 128],
     "dem": [1, 128, 128],
+}
+BENCHMARK_SCHEMA_VERSION = "multisource_landslide_schema_v2"
+MODALITY_FAMILIES = {"optical", "multispectral", "sar", "terrain", "deformation"}
+PRODUCT_TYPES = {
+    "rgb",
+    "multiband_optical",
+    "surface_reflectance",
+    "sar_backscatter",
+    "elevation",
+    "slope",
+    "aspect",
+    "curvature",
+    "los_velocity",
+}
+S2_BAND_PHYSICS = {
+    "B01": (443.0, 20.0, 60.0),
+    "B02": (490.0, 65.0, 10.0),
+    "B03": (560.0, 35.0, 10.0),
+    "B04": (665.0, 30.0, 10.0),
+    "B05": (705.0, 15.0, 20.0),
+    "B06": (740.0, 15.0, 20.0),
+    "B07": (783.0, 20.0, 20.0),
+    "B08": (842.0, 115.0, 10.0),
+    "B8A": (865.0, 20.0, 20.0),
+    "B09": (945.0, 20.0, 60.0),
+    "B10": (1375.0, 30.0, 60.0),
+    "B11": (1610.0, 90.0, 20.0),
+    "B12": (2190.0, 180.0, 20.0),
 }
 
 
@@ -109,7 +137,7 @@ def ensure_dir(path: Path) -> Path:
 
 
 def benchmark_dir_for_mode(mode: str, prefix: Path | None = None) -> Path:
-    """按后缀式命名返回 benchmark 目录，例如 multisource_landslide_v1_small。"""
+    """按后缀式命名返回 benchmark 目录，例如 multisource_landslide_v2_small。"""
     base = prefix or DEFAULT_BENCHMARK_PREFIX
     if mode not in {"small", "full"}:
         raise ValueError(f"未知 benchmark 模式: {mode}")
@@ -384,11 +412,15 @@ def landslide4sense_source_modalities(path: Path) -> dict[str, dict[str, Any]]:
             fmt="hdf5",
             band_names=LANDSLIDE4SENSE_S2_BANDS,
             shape=LANDSLIDE4SENSE_MODALITY_SHAPES["multispectral"],
-            gsd_m=10,
+            native_gsd_m=10,
             internal_key="img",
             role="sentinel2_multispectral",
             source="Sentinel-2_B1_B12",
+            family="multispectral",
             sensor="sentinel2",
+            product_type="surface_reflectance",
+            units="reflectance",
+            signed=False,
             value_encoding="landslide4sense_hdf5_float",
         ),
         "slope": modality_entry(
@@ -396,20 +428,30 @@ def landslide4sense_source_modalities(path: Path) -> dict[str, dict[str, Any]]:
             fmt="hdf5",
             band_names=["slope"],
             shape=LANDSLIDE4SENSE_MODALITY_SHAPES["slope"],
-            gsd_m=10,
+            native_gsd_m=10,
             internal_key="img",
             role="terrain_slope",
             source="ALOS_PALSAR_B13",
+            family="terrain",
+            sensor="alos_palsar_dem",
+            product_type="slope",
+            units="degree",
+            signed=False,
         ),
         "dem": modality_entry(
             path,
             fmt="hdf5",
             band_names=["DEM"],
             shape=LANDSLIDE4SENSE_MODALITY_SHAPES["dem"],
-            gsd_m=10,
+            native_gsd_m=10,
             internal_key="img",
             role="terrain_dem",
             source="ALOS_PALSAR_B14",
+            family="terrain",
+            sensor="alos_palsar_dem",
+            product_type="elevation",
+            units="meter",
+            signed=True,
         ),
     }
 
@@ -429,30 +471,80 @@ def modality_entry(
     fmt: str,
     band_names: list[str] | None = None,
     shape: list[int] | None = None,
-    gsd_m: float | None = None,
+    native_gsd_m: float | None = None,
     internal_key: str | list[str] | int | None = None,
     available: bool = True,
     role: str | None = None,
     source: str | None = None,
-    sensor: str | None = None,
-    value_encoding: str | None = None,
+    family: str,
+    sensor: str,
+    product_type: str,
+    units: str,
+    signed: bool,
+    orbit: str = "unknown",
+    value_encoding: str = "source_native",
+    quality: float = 1.0,
+    nodata_value: float | None = None,
 ) -> dict[str, Any]:
+    if family not in MODALITY_FAMILIES:
+        raise ValueError(f"未知 modality family={family!r}")
+    if product_type not in PRODUCT_TYPES:
+        raise ValueError(f"未知 product_type={product_type!r}")
+    if not sensor or sensor == "unknown":
+        raise ValueError(f"benchmark v2 要求明确 sensor: path={path}")
+    names = [str(name) for name in (band_names or [])]
+    if sensor == "sentinel2":
+        names = [
+            f"B{int(name[1:]):02d}"
+            if name.upper().startswith("B") and name[1:].isdigit()
+            else name.upper()
+            for name in names
+        ]
+    band_metadata: list[dict[str, Any]] = []
+    for name in names:
+        normalized = name.upper()
+        center, bandwidth, band_gsd = S2_BAND_PHYSICS.get(normalized, (None, None, native_gsd_m))
+        polarization = normalized if normalized in {"VV", "VH", "HH", "HV"} else None
+        band_metadata.append(
+            {
+                "name": name,
+                "native_gsd_m": band_gsd,
+                "center_wavelength_nm": center,
+                "bandwidth_nm": bandwidth,
+                "polarization": polarization,
+                "units": units,
+                "signed": bool(signed),
+                "measurement_geometry": "line_of_sight" if product_type == "los_velocity" else None,
+                "sign_convention": "source_defined" if product_type == "los_velocity" else None,
+            }
+        )
     entry = {
         "path": to_repo_rel(path) if path else None,
         "format": fmt,
         "internal_key": internal_key,
-        "band_names": band_names or [],
+        "family": family,
+        "sensor": sensor,
+        "product_type": product_type,
+        "band_names": names,
+        "band_metadata": band_metadata,
         "shape": shape,
-        "gsd_m": gsd_m,
+        "native_gsd_m": native_gsd_m,
+        "units": units,
+        "signed": bool(signed),
+        "orbit": orbit,
+        "quality": float(max(0.0, min(1.0, quality))),
         "available": available,
         "role": role,
+        "value_encoding": value_encoding,
+        "normalization": {"method": "source_native", "parameters": {}},
+        "valid_mask": {
+            "path": None,
+            "status": "derive_from_finite_and_nodata",
+            "nodata_value": nodata_value,
+        },
     }
     if source:
         entry["source"] = source
-    if sensor:
-        entry["sensor"] = sensor
-    if value_encoding:
-        entry["value_encoding"] = value_encoding
     return entry
 
 
@@ -506,6 +598,7 @@ def make_sample(
     original_size = sizes[0] if sizes else None
     sample_id = make_sample_id(dataset_name, subset or "main", source_key)
     return {
+        "schema_version": BENCHMARK_SCHEMA_VERSION,
         "sample_id": sample_id,
         "dataset_name": dataset_name,
         "subset": subset or "main",
@@ -532,7 +625,7 @@ def make_sample(
 
 
 def infer_sample_gsd(modalities: dict[str, dict[str, Any]]) -> float | None:
-    gsds = [m.get("gsd_m") for m in modalities.values() if m.get("gsd_m") is not None]
+    gsds = [m.get("native_gsd_m") for m in modalities.values() if m.get("native_gsd_m") is not None]
     return gsds[0] if gsds else None
 
 
@@ -619,6 +712,7 @@ def make_referring_target_sample(parent: dict[str, Any], target: dict[str, Any])
     item["source_key"] = f"{parent.get('source_key')}/{target_id}"
     item["category"] = target.get("category")
     item["subtype"] = target.get("subtype")
+    item["parent_mask"] = copy.deepcopy(parent.get("mask"))
     item["target_mask"] = copy.deepcopy(target.get("target_mask"))
     item["grounding"] = copy.deepcopy(target.get("grounding") or {})
     item["confidence"] = target.get("confidence")

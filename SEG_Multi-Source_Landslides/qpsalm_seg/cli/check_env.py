@@ -4,7 +4,7 @@
 
 用途：检查 Python、benchmark 索引、Qwen 本地文件、torch/GPU 和动态库线索。
 推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
-qpsalm_seg.cli.check_env --benchmark-dir benchmark/multisource_landslide_v1_small
+qpsalm_seg.cli.check_env --benchmark-dir benchmark/multisource_landslide_v2_small
 主要输入：本地 repo 与 qwen3vl Python 环境。
 主要输出：终端 JSON。
 写入行为：只读检查，不修改任何数据或配置。
@@ -87,7 +87,7 @@ def run_torch_import_profile(python: str, timeout: int) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check QPSALM runtime environment.")
     parser.add_argument("--python", default=sys.executable, help="Python executable to probe.")
-    parser.add_argument("--benchmark-dir", default="benchmark/multisource_landslide_v1_small")
+    parser.add_argument("--benchmark-dir", default="benchmark/multisource_landslide_v2_small")
     parser.add_argument("--qwen-dir", default="models_zoo/Qwen3-VL-2B-Instruct")
     parser.add_argument("--torch-timeout", type=int, default=120)
     parser.add_argument("--profile-torch-import", action="store_true")

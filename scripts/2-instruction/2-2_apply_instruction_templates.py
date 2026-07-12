@@ -11,7 +11,7 @@ reports/instruction_build_report.json。
 所属流程：instruction 构建 2-2；应先通过模板校验。
 推荐运行命令：
   python scripts/2-instruction/2-2_apply_instruction_templates.py \
-    --benchmark-dir benchmark/multisource_landslide_v1_small
+    --benchmark-dir benchmark/multisource_landslide_v2_small
 """
 
 from __future__ import annotations
@@ -66,9 +66,9 @@ def build_parent_instruction_rows(
             continue
         mask = sample.get("mask") or {}
         if mask.get("empty_mask") is True:
-            tids = ["negative_aware_landslide_v1"]
+            tids = ["negative_aware_landslide_v2"]
         else:
-            tids = ["generic_landslide_v1"]
+            tids = ["generic_landslide_v2"]
             if include_evidence_extra:
                 evidence_tid = choose_evidence_template(sample)
                 if evidence_tid and evidence_tid not in tids:
@@ -86,7 +86,7 @@ def build_referring_instruction_rows(
     config: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """从 referring_target_all.jsonl 生成 instruction 行，文本由 YAML 模板渲染。"""
-    template = templates["referring_rule_based_v1"]
+    template = templates["referring_rule_based_v2"]
     return [make_referring_instruction_sample(sample, template, config) for sample in referring_targets]
 
 

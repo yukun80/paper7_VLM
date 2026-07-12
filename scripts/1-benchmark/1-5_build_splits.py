@@ -4,12 +4,12 @@
 
 用途：整理统一索引的最终 split 文件，并写入后续 dataloader 可用的
 dataset-balanced、modality-combo-balanced 采样权重。
-主要输入：benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl。
+主要输入：benchmark/multisource_landslide_v2_<mode>/indexes/all.jsonl。
 主要输出：indexes/train.jsonl、val.jsonl、test.jsonl、unlabeled.jsonl、
 reports/split_report.json。
 写入行为：不会改写 datasets/；会重写 benchmark 下的最终 split 索引。
 所属流程：benchmark 构建 1-5；应在物化与 final 验证后运行。
-推荐运行命令：python scripts/1-benchmark/1-5_build_splits.py --benchmark-dir benchmark/multisource_landslide_v1_small
+推荐运行命令：python scripts/1-benchmark/1-5_build_splits.py --benchmark-dir benchmark/multisource_landslide_v2_small
 """
 
 from __future__ import annotations

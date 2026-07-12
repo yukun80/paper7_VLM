@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qpsalm-seg"
-version = "0.1.0"
+version = "0.2.0"
 description = "Multi-Source Qwen-PSALM-Seg research prototype for landslide instruction segmentation."
 requires-python = ">=3.11"
 dependencies = [
@@ -14,6 +14,8 @@ dependencies = [
   "scipy",
   "torch",
   "transformers",
+  "peft",
+  "bitsandbytes",
   "tqdm",
 ]
 
@@ -21,9 +23,10 @@ dependencies = [
 qpsalm-inspect-data = "qpsalm_seg.cli.inspect_data:main"
 qpsalm-cache-index = "qpsalm_seg.cli.cache_index:main"
 qpsalm-check-env = "qpsalm_seg.cli.check_env:main"
-qpsalm-cache-qwen-embeddings = "qpsalm_seg.cli.cache_qwen_embeddings:main"
-qpsalm-cache-qwen-visual-evidence = "qpsalm_seg.cli.cache_qwen_visual_evidence:main"
-qpsalm-check-qwen-cache = "qpsalm_seg.cli.check_qwen_cache:main"
+qpsalm-cache-qwen-vision-features = "qpsalm_seg.cli.cache_qwen_vision_features:main"
+qpsalm-integration-check = "qpsalm_seg.cli.integration_check:main"
+qpsalm-ablation-report = "qpsalm_seg.cli.ablation_report:main"
+qpsalm-eval-ablation-suite = "qpsalm_seg.cli.eval_ablation_suite:main"
 qpsalm-train = "qpsalm_seg.cli.train:main"
 qpsalm-eval = "qpsalm_seg.cli.eval:main"
 qpsalm-summarize-run = "qpsalm_seg.cli.summarize_run:main"

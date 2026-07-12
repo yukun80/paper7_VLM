@@ -38,7 +38,7 @@ from geohazard_benchmark_common import (  # noqa: E402
 )
 
 
-DEFAULT_TEMPLATE_CONFIG = REPO_ROOT / "configs" / "instruction_templates" / "multisource_landslide_v1.yaml"
+DEFAULT_TEMPLATE_CONFIG = REPO_ROOT / "configs" / "instruction_templates" / "multisource_landslide_v2.yaml"
 INSTRUCTION_SPLITS = ["train", "val", "test", "unlabeled", "extended_pool"]
 OPTICAL_MODALITIES = {"optical_rgb", "optical_multiband", "multispectral"}
 TERRAIN_MODALITIES = {"dem", "slope"}
@@ -117,13 +117,14 @@ def validate_templates(config: dict[str, Any]) -> tuple[list[str], list[str]]:
         if template.get("task_family") == "referring_landslide_segmentation" and not template.get("template_id_pattern"):
             warnings.append(f"{tid}: referring 模板建议记录 template_id_pattern")
     expected = {
-        "generic_landslide_v1",
-        "negative_aware_landslide_v1",
-        "multisource_landslide_v1",
-        "terrain_evidence_landslide_v1",
-        "sar_terrain_landslide_v1",
-        "insar_evidence_landslide_v1",
-        "referring_rule_based_v1",
+        "generic_landslide_v2",
+        "negative_aware_landslide_v2",
+        "multisource_landslide_v2",
+        "terrain_evidence_landslide_v2",
+        "sar_terrain_landslide_v2",
+        "insar_evidence_landslide_v2",
+        "deformation_evidence_landslide_v2",
+        "referring_rule_based_v2",
     }
     for tid in sorted(expected - seen):
         errors.append(f"缺少推荐初始模板: {tid}")
@@ -154,6 +155,15 @@ def modality_names(sample: dict[str, Any]) -> set[str]:
     return {str(name) for name, info in modalities.items() if isinstance(info, dict) and info.get("available", True)}
 
 
+def modality_families(sample: dict[str, Any]) -> set[str]:
+    modalities = sample.get("modalities") or {}
+    return {
+        str(info["family"])
+        for info in modalities.values()
+        if isinstance(info, dict) and info.get("available", True)
+    }
+
+
 def has_any(names: set[str], candidates: set[str]) -> bool:
     return bool(names & candidates)
 
@@ -165,19 +175,19 @@ def has_all(names: set[str], candidates: set[str]) -> bool:
 def choose_evidence_template(sample: dict[str, Any]) -> str | None:
     """为非空监督样本选择一个额外 evidence-aware 模板。"""
     names = modality_names(sample)
+    families = modality_families(sample)
     if len(names) < 2:
         return None
-    has_optical = has_any(names, OPTICAL_MODALITIES)
-    has_terrain = has_any(names, TERRAIN_MODALITIES)
-    has_sar = has_any(names, SAR_MODALITIES)
-    has_insar = has_any(names, INSAR_MODALITIES)
-    if has_optical and has_terrain and has_sar and has_insar:
-        return "insar_evidence_landslide_v1"
-    if "multispectral" in names and has_sar and has_terrain:
-        return "sar_terrain_landslide_v1"
-    if has_optical and has_terrain:
-        return "terrain_evidence_landslide_v1"
-    return "multisource_landslide_v1"
+    has_optical = bool(families & {"optical", "multispectral"})
+    if {"multispectral", "sar", "terrain", "deformation"}.issubset(families):
+        return "insar_evidence_landslide_v2"
+    if {"multispectral", "terrain", "deformation"}.issubset(families):
+        return "deformation_evidence_landslide_v2"
+    if {"multispectral", "sar", "terrain"}.issubset(families):
+        return "sar_terrain_landslide_v2"
+    if has_optical and "terrain" in families:
+        return "terrain_evidence_landslide_v2"
+    return "multisource_landslide_v2"
 
 
 def make_instruction_object(template: dict[str, Any], *, text_en: str | None = None, text_zh: str | None = None, template_id: str | None = None) -> dict[str, Any]:
@@ -246,13 +256,21 @@ def render_referring_text(ref_target: dict[str, Any], config: dict[str, Any]) ->
     """根据 category/subtype 从 YAML referring_templates 渲染中英文指令。"""
     category = str(ref_target.get("category") or "unknown")
     subtype = str(ref_target.get("subtype") or "unknown")
+    if category == "no_target" and subtype.startswith("position_"):
+        position = subtype.removeprefix("position_").replace("-", " ")
+        template_id = f"no_target_position_{safe_template_id_part(position)}_v2"
+        return (
+            template_id,
+            f"Segment landslide regions in the {position} part of the image. If none are present there, output an empty mask.",
+            f"分割图像{position}区域内的滑坡；如果该区域不存在滑坡，输出空掩膜。",
+        )
     rule = ((config.get("referring_templates") or {}).get(category) or {}).get(subtype)
     if not isinstance(rule, dict):
         raise ValueError(f"缺少 referring target 模板: {category}/{subtype}")
     context = SafeFormatDict(referring_render_context(ref_target))
     text_en = str(rule["text_en"]).format_map(context)
     text_zh = str(rule["text_zh"]).format_map(context)
-    template_id = str(rule.get("template_id") or f"referring_{safe_template_id_part(category)}_{safe_template_id_part(subtype)}_v1")
+    template_id = str(rule.get("template_id") or f"referring_{safe_template_id_part(category)}_{safe_template_id_part(subtype)}_v2")
     return template_id, text_en, text_zh
 
 
@@ -275,9 +293,12 @@ def make_referring_instruction_sample(ref_target: dict[str, Any], template: dict
     item["task_type"] = "referring_landslide_segmentation"
     item["mask"] = target_mask
     item["referring_target"] = referring_target
-    item["instruction"] = make_instruction_object(template, text_en=text_en, text_zh=text_zh, template_id=tid)
+    is_no_target = ref_target.get("category") == "no_target"
+    instruction = make_instruction_object(template, text_en=text_en, text_zh=text_zh, template_id=tid)
+    instruction["task_family"] = "no_target_segmentation" if is_no_target else "referring_landslide_segmentation"
+    item["instruction"] = instruction
     item["template_id"] = tid
-    item["task_family"] = "referring_landslide_segmentation"
+    item["task_family"] = instruction["task_family"]
     item["target_mask_policy"] = "referring_target_mask"
     item["answer_format"] = "binary_mask"
     item["instruction_source"] = "referring_target_template"
@@ -310,7 +331,7 @@ def count_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     referring_categories = Counter(
         str((row.get("referring_target") or {}).get("category", "unknown"))
         for row in rows
-        if row.get("task_family") == "referring_landslide_segmentation"
+        if row.get("task_family") in {"referring_landslide_segmentation", "no_target_segmentation"}
     )
     return {
         "num_samples": len(rows),

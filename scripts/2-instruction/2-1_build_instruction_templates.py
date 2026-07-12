@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """步骤 2-1：生成或校验任务指令模板配置。
 
-用途：读取 configs/instruction_templates/multisource_landslide_v1.yaml，
+用途：读取 configs/instruction_templates/multisource_landslide_v2.yaml，
 检查模板字段、模板 ID、任务类别覆盖情况，并输出模板校验报告。
 主要输入：任务指令模板 YAML。
 主要输出：reports/instruction_template_report.json。
@@ -10,7 +10,7 @@
 所属流程：instruction 构建 2-1；应在 benchmark 构建完成后运行。
 推荐运行命令：
   python scripts/2-instruction/2-1_build_instruction_templates.py \
-    --benchmark-dir benchmark/multisource_landslide_v1_small
+    --benchmark-dir benchmark/multisource_landslide_v2_small
 """
 
 from __future__ import annotations

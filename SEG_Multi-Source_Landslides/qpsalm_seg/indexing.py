@@ -13,18 +13,6 @@ from typing import Any, Iterable
 
 from .paths import resolve_repo_path
 
-MODALITY_TO_CANONICAL = {
-    "optical_rgb": "hr_optical",
-    "optical_multiband": "hr_optical",
-    "multispectral": "s2",
-    "sar_asc": "s1",
-    "sar_dsc": "s1",
-    "dem": "dem",
-    "slope": "dem",
-    "insar_vel": "insar",
-}
-
-
 @dataclass
 class DatasetStats:
     num_rows: int
@@ -32,11 +20,12 @@ class DatasetStats:
     skipped_by_reason: dict[str, int]
     by_template: dict[str, int]
     by_raw_combo: dict[str, int]
-    by_canonical_combo: dict[str, int]
+    by_family_combo: dict[str, int]
     by_sensor_combo: dict[str, int]
-    by_normalization_combo: dict[str, int]
+    by_product_combo: dict[str, int]
+    by_normalization_methods: dict[str, int]
     by_shape: dict[str, dict[str, int]]
-    gsd_tokens: dict[str, int]
+    gsd_ranges: dict[str, int]
     quality_flags: dict[str, int]
 
 
@@ -64,32 +53,15 @@ def raw_modality_combo(row: dict[str, Any]) -> str:
     return "+".join(names) if names else "none"
 
 
-def canonical_modality_name(raw_name: str, item: dict[str, Any] | None = None) -> str | None:
-    item = item or {}
-    sensor = str(item.get("sensor") or "").lower()
-    role = str(item.get("role") or "").lower()
-    source = str(item.get("source") or "").lower()
-    value_encoding = str(item.get("value_encoding") or "").lower()
-    if raw_name == "optical_rgb" and (
-        sensor == "sentinel2"
-        or "sentinel-2" in source
-        or "sentinel2" in source
-        or "sentinel2" in role
-        or "sentinel2" in value_encoding
-    ):
-        return "s2"
-    return MODALITY_TO_CANONICAL.get(raw_name)
-
-
-def canonical_modality_combo(row: dict[str, Any]) -> str:
+def family_combo(row: dict[str, Any]) -> str:
     modalities = row.get("modalities") or {}
     names = sorted(
         {
-            canonical
-            for name, item in modalities.items()
+            str(item.get("family"))
+            for item in modalities.values()
             if isinstance(item, dict)
             and item.get("available", True)
-            and (canonical := canonical_modality_name(name, item)) is not None
+            and item.get("family")
         }
     )
     return "+".join(names) if names else "none"
@@ -108,11 +80,19 @@ def sensor_combo(row: dict[str, Any]) -> str:
     return metadata_combo(row, "sensor")
 
 
-def normalization_combo(row: dict[str, Any]) -> str:
-    return metadata_combo(row, "normalization")
+def product_combo(row: dict[str, Any]) -> str:
+    return metadata_combo(row, "product_type")
 
 
-def gsd_to_token(gsd: Any) -> str:
+def normalization_methods(row: dict[str, Any]) -> str:
+    methods = []
+    for name in available_modality_names(row):
+        normalization = ((row.get("modalities") or {}).get(name) or {}).get("normalization") or {}
+        methods.append(str(normalization.get("method") or "unknown"))
+    return "+".join(sorted(methods)) if methods else "none"
+
+
+def gsd_range(gsd: Any) -> str:
     if gsd is None or gsd == "" or str(gsd).lower() == "none":
         return "unknown"
     try:
@@ -134,12 +114,9 @@ def row_template_id(row: dict[str, Any]) -> str:
     return str(row.get("template_id") or row.get("task_template_id") or "")
 
 
-def should_skip_row(row: dict[str, Any], core_templates: Iterable[str]) -> str | None:
-    tid = row_template_id(row)
-    if tid not in set(core_templates):
-        return "non_core_template"
-    if row.get("task_family") == "referring_landslide_segmentation":
-        return "referring_deferred"
+def should_skip_row(row: dict[str, Any], task_families: Iterable[str]) -> str | None:
+    if row.get("task_family") not in set(task_families):
+        return "unsupported_task_family"
     if row.get("source_level") != "patch":
         return "scene_level_deferred"
     flags = set(row.get("quality_flags") or [])
@@ -152,13 +129,14 @@ def should_skip_row(row: dict[str, Any], core_templates: Iterable[str]) -> str |
     return None
 
 
-def summarize_rows(rows: Iterable[dict[str, Any]], core_templates: Iterable[str]) -> DatasetStats:
+def summarize_rows(rows: Iterable[dict[str, Any]], task_families: Iterable[str]) -> DatasetStats:
     skipped = Counter()
     by_template = Counter()
     by_raw_combo = Counter()
-    by_canonical_combo = Counter()
+    by_family_combo = Counter()
     by_sensor_combo = Counter()
-    by_normalization_combo = Counter()
+    by_product_combo = Counter()
+    by_normalization_methods = Counter()
     by_shape: dict[str, Counter[str]] = defaultdict(Counter)
     gsd_counter = Counter()
     quality_flags = Counter()
@@ -166,18 +144,19 @@ def summarize_rows(rows: Iterable[dict[str, Any]], core_templates: Iterable[str]
     num_usable = 0
     for row in rows:
         num_rows += 1
-        reason = should_skip_row(row, core_templates)
+        reason = should_skip_row(row, task_families)
         if reason is not None:
             skipped[reason] += 1
             continue
         num_usable += 1
         by_template[row_template_id(row) or "unknown"] += 1
         by_raw_combo[raw_modality_combo(row)] += 1
-        by_canonical_combo[canonical_modality_combo(row)] += 1
+        by_family_combo[family_combo(row)] += 1
         by_sensor_combo[sensor_combo(row)] += 1
-        by_normalization_combo[normalization_combo(row)] += 1
+        by_product_combo[product_combo(row)] += 1
+        by_normalization_methods[normalization_methods(row)] += 1
         spatial = row.get("spatial") or {}
-        gsd_counter[gsd_to_token(spatial.get("gsd_m"))] += 1
+        gsd_counter[gsd_range(spatial.get("gsd_m"))] += 1
         quality_flags.update(str(flag) for flag in row.get("quality_flags") or [])
         for name, item in (row.get("modalities") or {}).items():
             if not isinstance(item, dict) or not item.get("available", True):
@@ -189,11 +168,12 @@ def summarize_rows(rows: Iterable[dict[str, Any]], core_templates: Iterable[str]
         skipped_by_reason=dict(sorted(skipped.items())),
         by_template=dict(sorted(by_template.items())),
         by_raw_combo=dict(sorted(by_raw_combo.items())),
-        by_canonical_combo=dict(sorted(by_canonical_combo.items())),
+        by_family_combo=dict(sorted(by_family_combo.items())),
         by_sensor_combo=dict(sorted(by_sensor_combo.items())),
-        by_normalization_combo=dict(sorted(by_normalization_combo.items())),
+        by_product_combo=dict(sorted(by_product_combo.items())),
+        by_normalization_methods=dict(sorted(by_normalization_methods.items())),
         by_shape={key: dict(sorted(value.items())) for key, value in sorted(by_shape.items())},
-        gsd_tokens=dict(sorted(gsd_counter.items())),
+        gsd_ranges=dict(sorted(gsd_counter.items())),
         quality_flags=dict(sorted(quality_flags.items())),
     )
 
@@ -211,16 +191,19 @@ def stats_to_text(stats: DatasetStats, limit: int | None = None) -> str:
     lines.append("raw modality combos:")
     for key, value in Counter(stats.by_raw_combo).most_common(limit):
         lines.append(f"  {key}: {value}")
-    lines.append("canonical modality combos:")
-    for key, value in Counter(stats.by_canonical_combo).most_common(limit):
+    lines.append("modality family combos:")
+    for key, value in Counter(stats.by_family_combo).most_common(limit):
         lines.append(f"  {key}: {value}")
     lines.append("sensor combos:")
     for key, value in Counter(stats.by_sensor_combo).most_common(limit):
         lines.append(f"  {key}: {value}")
-    lines.append("normalization combos:")
-    for key, value in Counter(stats.by_normalization_combo).most_common(limit):
+    lines.append("product combos:")
+    for key, value in Counter(stats.by_product_combo).most_common(limit):
         lines.append(f"  {key}: {value}")
-    lines.append(f"gsd_tokens: {stats.gsd_tokens}")
+    lines.append("normalization methods:")
+    for key, value in Counter(stats.by_normalization_methods).most_common(limit):
+        lines.append(f"  {key}: {value}")
+    lines.append(f"gsd_ranges: {stats.gsd_ranges}")
     lines.append(f"quality_flags: {dict(Counter(stats.quality_flags).most_common(limit))}")
     lines.append("shapes:")
     for name, shape_counts in stats.by_shape.items():

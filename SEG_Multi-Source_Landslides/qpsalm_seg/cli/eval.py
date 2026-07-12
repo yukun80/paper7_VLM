@@ -5,9 +5,9 @@
 用途：加载新格式 checkpoint，计算分组指标并导出预测 mask 和多模态总览。
 推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
 qpsalm_seg.cli.eval --config
-SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml
---preset sane_qmef_pmrd --checkpoint outputs/RUN/checkpoint_best.pt --split val
---condition-embedding-cache CACHE.pt --output-dir outputs/RUN/eval --device cuda --skip-torch-preflight
+SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml
+--preset qwen_psalm_full --checkpoint outputs/RUN/checkpoint_best.pt --split val
+--vision-feature-cache CACHE_DIR --output-dir outputs/RUN/eval --device cuda --skip-torch-preflight
 主要输入：配置、preset、checkpoint、val/test 索引和对应 Qwen cache。
 主要输出：eval_report.json、eval_manifest.json、mask exports、诊断表和可视化。
 写入行为：写入 --output-dir；--overwrite-output 会清空该评估目录。
@@ -42,15 +42,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-index", default=None)
     parser.add_argument("--test-index", default=None)
     parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--controller", choices=["qwen", "qwen_cache", "cached_qwen", "text_probe"], default=None)
+    parser.add_argument("--controller", choices=["qwen_mask_query", "text_probe"], default=None)
     parser.add_argument("--qwen-model-path", default=None)
-    parser.add_argument("--condition-embedding-cache", default=None)
-    parser.add_argument("--visual-evidence-cache", default=None)
+    parser.add_argument("--vision-feature-cache", default=None)
+    parser.add_argument("--qwen-view-pooling", choices=["tokens", "image-end", "attention"], default=None)
+    parser.add_argument("--instruction-ablation", choices=["normal", "shuffled", "fixed-generic", "no-semantic"], default=None)
+    parser.add_argument(
+        "--visual-ablation",
+        default=None,
+        help="normal, shuffled, text-only, image-text-delta, or remove:<family>",
+    )
     parser.add_argument("--allow-qwen-cpu", action="store_true")
     parser.add_argument("--num-visualizations", type=int, default=None)
     parser.add_argument("--visualize-all", action="store_true")
     parser.add_argument("--export-multimodal-overview", action="store_true")
     parser.add_argument("--eval-threshold", type=float, default=None)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--torch-timeout", type=int, default=120)
     parser.add_argument("--skip-torch-preflight", action="store_true")
     parser.add_argument("--print-full-report", action="store_true")
@@ -75,11 +82,14 @@ def main() -> None:
             "output_dir": args.output_dir,
             "controller": args.controller,
             "qwen_model_path": args.qwen_model_path,
-            "condition_embedding_cache": args.condition_embedding_cache,
-            "visual_evidence_cache": args.visual_evidence_cache,
+            "vision_feature_cache": args.vision_feature_cache,
+            "qwen_view_pooling": args.qwen_view_pooling,
+            "instruction_ablation": args.instruction_ablation,
+            "visual_ablation": args.visual_ablation,
             "allow_qwen_cpu": True if args.allow_qwen_cpu else None,
             "num_visualizations": args.num_visualizations,
             "eval_threshold": args.eval_threshold,
+            "seed": args.seed,
         },
     )
     if not args.skip_torch_preflight:
@@ -88,31 +98,13 @@ def main() -> None:
             raise RuntimeError(f"PyTorch runtime is not ready: {message}")
         print(f"torch_preflight={message}")
 
-    import torch
-    from qpsalm_seg.data import MultiSourceLandslideDataset, SizeBucketBatchSampler, qpsalm_collate
+    from qpsalm_seg.engine.checkpoint import load_checkpoint
+    from qpsalm_seg.engine.common import build_eval_loader, build_model, resolve_device, utc_now, write_json
+    from qpsalm_seg.engine.evaluator import evaluate
     from qpsalm_seg.paths import resolve_repo_path
-    from qpsalm_seg.qwen_cache import assert_qwen_cache_coverage
-    from qpsalm_seg.train_eval import build_model, evaluate, load_checkpoint, resolve_device, utc_now, write_json
 
     device = resolve_device(args.device)
-    cache_report = assert_qwen_cache_coverage(config, splits=(args.split,))
-    if cache_report.get("ok"):
-        print(
-            "qwen_cache_coverage="
-            f"required_texts={cache_report['required']['num_texts']} "
-            f"cached_texts={cache_report['cache']['num_texts']} "
-            f"backend={cache_report['cache'].get('backend')}"
-        )
-    dataset = MultiSourceLandslideDataset(config, split=args.split, max_samples=config.max_val_samples)
-    loader_kwargs = {"num_workers": config.num_workers, "collate_fn": qpsalm_collate}
-    if config.size_buckets:
-        loader = torch.utils.data.DataLoader(
-            dataset,
-            batch_sampler=SizeBucketBatchSampler(dataset, config.batch_size, shuffle=False, seed=config.seed),
-            **loader_kwargs,
-        )
-    else:
-        loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=False, **loader_kwargs)
+    loader = build_eval_loader(config, args.split)
     model = build_model(config, device)
     step = load_checkpoint(args.checkpoint, model)
     out_dir = resolve_repo_path(config.output_dir) or Path(config.output_dir)

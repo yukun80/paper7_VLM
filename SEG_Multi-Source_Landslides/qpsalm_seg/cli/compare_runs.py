@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """比较两个 QPSALM 训练运行的指标。
 
-用途：比较 baseline/candidate 的 overall、模态分组、loss 和 proposal diagnostics。
+用途：比较 baseline/candidate 的 positive-only、指令、component-set、模态分组和 loss；
+重复传入三组成对 summary 时执行 2/3-seed 模块准入门槛。
 推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
 qpsalm_seg.cli.compare_runs --baseline-summary outputs/BASELINE
 --candidate-summary outputs/CANDIDATE --output outputs/comparison.json
@@ -27,10 +28,11 @@ METRIC_KEYS = ["dice", "iou", "precision", "recall", "loss", "n"]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare two QPSALM run summaries.")
-    parser.add_argument("--baseline-summary", required=True)
-    parser.add_argument("--candidate-summary", required=True)
+    parser.add_argument("--baseline-summary", action="append", required=True)
+    parser.add_argument("--candidate-summary", action="append", required=True)
     parser.add_argument("--baseline-name", default="baseline")
     parser.add_argument("--candidate-name", default="candidate")
+    parser.add_argument("--min-delta", type=float, default=0.0)
     parser.add_argument("--output", default=None)
     return parser.parse_args()
 
@@ -128,14 +130,16 @@ def proposal_primary_deltas(base_summary: dict[str, Any], cand_summary: dict[str
     base_overall = base_summary.get("overall") if isinstance(base_summary.get("overall"), dict) else {}
     cand_overall = cand_summary.get("overall") if isinstance(cand_summary.get("overall"), dict) else {}
     fields = [
-        "mean_selected_matches_best",
-        "mean_selected_query_dice",
-        "mean_best_query_dice",
-        "mean_dice_gap_selected_minus_best",
+        "mean_selected_is_matched",
+        "mean_matched_mean_dice",
+        "mean_component_recall",
+        "mean_component_precision",
+        "mean_unmatched_rejection",
+        "mean_relevance_ap",
+        "mean_matched_relevance_mean_rank",
+        "mean_matched_relevance_rank_score",
+        "mean_proposal_union_dice",
         "mean_selected_relevance_logit",
-        "mean_best_relevance_logit",
-        "mean_best_query_relevance_rank",
-        "mean_relevance_gap_selected_minus_best",
         "mean_final_dice",
         "mean_final_iou",
     ]
@@ -159,11 +163,17 @@ def compare_run_summaries(
     base_source, base_block = choose_metric_block(baseline_summary)
     cand_source, cand_block = choose_metric_block(candidate_summary)
     overall = compare_metric_dict(base_block.get("overall"), cand_block.get("overall"))
+    positive_only = compare_metric_dict(base_block.get("positive_only"), cand_block.get("positive_only"))
+    instruction = compare_metric_dict(
+        base_block.get("instruction_sensitivity"), cand_block.get("instruction_sensitivity")
+    )
     proposal_summary_base = proposal_summary_from_block(base_block)
     proposal_summary_cand = proposal_summary_from_block(cand_block)
     proposal_summary_delta = compare_group_maps(proposal_summary_base, proposal_summary_cand)
     dice_delta = (overall.get("dice") or {}).get("delta")
     iou_delta = (overall.get("iou") or {}).get("delta")
+    positive_dice_delta = (positive_only.get("dice") or {}).get("delta")
+    positive_iou_delta = (positive_only.get("iou") or {}).get("delta")
     proposal_deltas = proposal_primary_deltas(proposal_summary_base, proposal_summary_cand)
     return {
         "baseline_name": baseline_name,
@@ -179,19 +189,35 @@ def compare_run_summaries(
             "candidate_pipeline_ready": (candidate_summary.get("acceptance") or {}).get("research_pipeline_ready"),
         },
         "overall": overall,
+        "positive_only": positive_only,
+        "instruction_sensitivity": instruction,
         "primary_deltas": {
             "dice": dice_delta,
             "iou": iou_delta,
-            "proposal_selected_matches_best": (
-                proposal_deltas.get("mean_selected_matches_best") or {}
+            "positive_only_dice": positive_dice_delta,
+            "positive_only_iou": positive_iou_delta,
+            "proposal_selected_is_matched": (
+                proposal_deltas.get("mean_selected_is_matched") or {}
             ).get("delta"),
-            "proposal_selected_query_dice": (
-                proposal_deltas.get("mean_selected_query_dice") or {}
+            "proposal_union_dice": (
+                proposal_deltas.get("mean_proposal_union_dice") or {}
+            ).get("delta"),
+            "proposal_matched_mean_dice": (
+                proposal_deltas.get("mean_matched_mean_dice") or {}
+            ).get("delta"),
+            "proposal_component_recall": (
+                proposal_deltas.get("mean_component_recall") or {}
+            ).get("delta"),
+            "instruction_contrast_ratio": (
+                instruction.get("instruction_contrast_ratio_16") or {}
+            ).get("delta"),
+            "no_target_empty_prediction_rate": (
+                instruction.get("no_target_empty_prediction_rate") or {}
             ).get("delta"),
         },
-        "canonical_combos": compare_group_maps(
-            base_block.get("canonical_combos") if isinstance(base_block, dict) else None,
-            cand_block.get("canonical_combos") if isinstance(cand_block, dict) else None,
+        "family_combos": compare_group_maps(
+            base_block.get("family_combos") if isinstance(base_block, dict) else None,
+            cand_block.get("family_combos") if isinstance(cand_block, dict) else None,
         ),
         "raw_combos": compare_group_maps(
             base_block.get("raw_combos") if isinstance(base_block, dict) else None,
@@ -208,6 +234,59 @@ def compare_run_summaries(
     }
 
 
+GATE_METRICS = (
+    "positive_only_dice", "positive_only_iou", "proposal_selected_is_matched",
+    "proposal_union_dice", "proposal_matched_mean_dice", "proposal_component_recall",
+    "instruction_contrast_ratio", "no_target_empty_prediction_rate",
+)
+
+
+def compare_seed_series(
+    baselines: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    *,
+    baseline_name: str,
+    candidate_name: str,
+    min_delta: float,
+) -> dict[str, Any]:
+    if len(baselines) != len(candidates):
+        raise ValueError("baseline/candidate seed 数量必须相同")
+    if not baselines:
+        raise ValueError("至少需要一对 seed run")
+    comparisons = [
+        compare_run_summaries(base, candidate, f"{baseline_name}_seed{index}", f"{candidate_name}_seed{index}")
+        for index, (base, candidate) in enumerate(zip(baselines, candidates), start=1)
+    ]
+    seed_results = []
+    for index, comparison in enumerate(comparisons, start=1):
+        deltas = comparison["primary_deltas"]
+        improved = {
+            name: float(value)
+            for name in GATE_METRICS
+            if isinstance((value := deltas.get(name)), (int, float)) and float(value) > float(min_delta)
+        }
+        pipeline_ready = comparison["acceptance"].get("candidate_pipeline_ready") is True
+        seed_results.append({
+            "seed_pair": index,
+            "candidate_pipeline_ready": pipeline_ready,
+            "improved_metrics": improved,
+            "passed": pipeline_ready and bool(improved),
+        })
+    required = max(1, (2 * len(seed_results) + 2) // 3)
+    successes = sum(bool(item["passed"]) for item in seed_results)
+    return {
+        "baseline_name": baseline_name,
+        "candidate_name": candidate_name,
+        "num_seed_pairs": len(seed_results),
+        "min_delta": float(min_delta),
+        "required_successes": required,
+        "successful_seeds": successes,
+        "passed_2_of_3_gate": successes >= required,
+        "seed_results": seed_results,
+        "comparisons": comparisons,
+    }
+
+
 def write_json(path_ref: str | Path, payload: dict[str, Any]) -> Path:
     path = resolve_repo_path(path_ref)
     if path is None:
@@ -219,13 +298,18 @@ def write_json(path_ref: str | Path, payload: dict[str, Any]) -> Path:
 
 def main() -> None:
     args = parse_args()
-    baseline = read_run_summary(args.baseline_summary)
-    candidate = read_run_summary(args.candidate_summary)
-    comparison = compare_run_summaries(
-        baseline,
-        candidate,
-        baseline_name=args.baseline_name,
-        candidate_name=args.candidate_name,
+    baselines = [read_run_summary(value) for value in args.baseline_summary]
+    candidates = [read_run_summary(value) for value in args.candidate_summary]
+    comparison = (
+        compare_run_summaries(
+            baselines[0], candidates[0],
+            baseline_name=args.baseline_name, candidate_name=args.candidate_name,
+        )
+        if len(baselines) == len(candidates) == 1
+        else compare_seed_series(
+            baselines, candidates, baseline_name=args.baseline_name,
+            candidate_name=args.candidate_name, min_delta=args.min_delta,
+        )
     )
     if args.output:
         output_path = write_json(args.output, comparison)

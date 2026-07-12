@@ -4,11 +4,11 @@
 
 用途：汇总样本数、数据集分布、模态组合、尺寸 bucket、标注状态、
 指代目标分布和质量标记，为论文图表和实验记录准备统计结果。
-主要输入：benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl。
+主要输入：benchmark/multisource_landslide_v2_<mode>/indexes/all.jsonl。
 主要输出：reports/statistics.json 和 reports/cleaning_report.md。
 写入行为：不会改写 datasets/ 或索引，只写 benchmark/ 下的统计报告。
 所属流程：benchmark 构建 1-7，作为数据构建的最终汇总阶段。
-推荐运行命令：python scripts/1-benchmark/1-7_summarize_benchmark.py --benchmark-dir benchmark/multisource_landslide_v1_small
+推荐运行命令：python scripts/1-benchmark/1-7_summarize_benchmark.py --benchmark-dir benchmark/multisource_landslide_v2_small
 """
 
 from __future__ import annotations

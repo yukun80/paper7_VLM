@@ -34,7 +34,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query-collapse-frac", type=float, default=0.80)
     parser.add_argument("--reliability-collapse-weight", type=float, default=0.85)
     parser.add_argument("--query-attention-collapse-peak", type=float, default=0.85)
-    parser.add_argument("--weak-evidence-score-gap", type=float, default=0.05)
     parser.add_argument("--empty-fp-area", type=float, default=128.0)
     parser.add_argument("--print-full-report", action="store_true")
     return parser.parse_args()
@@ -50,7 +49,6 @@ def default_diagnose_args(**overrides: Any) -> argparse.Namespace:
         "query_collapse_frac": 0.80,
         "reliability_collapse_weight": 0.85,
         "query_attention_collapse_peak": 0.85,
-        "weak_evidence_score_gap": 0.05,
         "empty_fp_area": 128.0,
     }
     values.update(overrides)
@@ -136,14 +134,14 @@ def check_validation_coverage(block_name: str, block: dict[str, Any], config: di
                 {"metric_block": block_name, "n": n, "max_val_samples": max_val_samples},
             )
         )
-    canonical = block.get("canonical_combos") if isinstance(block.get("canonical_combos"), dict) else {}
-    if len(canonical) <= 1:
+    families = block.get("family_combos") if isinstance(block.get("family_combos"), dict) else {}
+    if len(families) <= 1:
         issues.append(
             issue(
                 "warning",
                 "limited_modality_coverage",
-                "当前指标只覆盖很少的 canonical modality combo，不能代表完整多源能力。",
-                {"num_canonical_combos": len(canonical), "groups": sorted(canonical.keys())},
+                "当前指标只覆盖很少的 modality family combo，不能代表完整多源能力。",
+                {"num_family_combos": len(families), "groups": sorted(families.keys())},
             )
         )
     target_area_bins = block.get("target_area_px_bins") if isinstance(block.get("target_area_px_bins"), dict) else {}
@@ -163,25 +161,6 @@ def check_validation_coverage(block_name: str, block: dict[str, Any], config: di
                 "limited_target_area_strata",
                 "当前验证只覆盖一个目标面积分层，小目标/大目标泛化结论不充分。",
                 {"metric_block": block_name, "groups": sorted(target_area_bins.keys())},
-            )
-        )
-    gsd_tokens = block.get("gsd_tokens") if isinstance(block.get("gsd_tokens"), dict) else {}
-    if not gsd_tokens:
-        issues.append(
-            issue(
-                "info",
-                "missing_gsd_strata",
-                "缺少 GSD 分层指标，无法判断尺度差异对分割性能的影响。",
-                {"metric_block": block_name},
-            )
-        )
-    elif all(str(name).endswith("=unknown") for name in gsd_tokens):
-        issues.append(
-            issue(
-                "info",
-                "gsd_unknown_or_missing",
-                "当前验证样本的 GSD 全部为 unknown，scale-aware 模块只能依赖弱文本/数据集线索。",
-                {"metric_block": block_name, "groups": sorted(gsd_tokens.keys())},
             )
         )
     ground_area_bins = block.get("ground_area_m2_bins") if isinstance(block.get("ground_area_m2_bins"), dict) else {}
@@ -247,23 +226,23 @@ def check_threshold_sweep(block: dict[str, Any], args: argparse.Namespace) -> tu
         recommendations.append(f"尝试设置 EVAL_THRESHOLD={best_threshold:.2f} 重新 eval；若稳定，再作为默认推理阈值。")
     elif not sweep:
         issues.append(issue("info", "missing_threshold_sweep", "报告中缺少 threshold_sweep，无法判断阈值校准收益。"))
-    canonical_thresholds: dict[str, float] = {}
+    family_thresholds: dict[str, float] = {}
     for group, values in per_group.items():
-        if not isinstance(group, str) or not group.startswith("canonical_combo=") or "/" in group or not isinstance(values, dict):
+        if not isinstance(group, str) or not group.startswith("family_combo=") or "/" in group or not isinstance(values, dict):
             continue
         threshold = values.get("threshold")
         if isinstance(threshold, (int, float)):
-            canonical_thresholds[group] = float(threshold)
-    if len(set(canonical_thresholds.values())) >= 2:
+            family_thresholds[group] = float(threshold)
+    if len(set(family_thresholds.values())) >= 2:
         issues.append(
             issue(
                 "info",
                 "combo_specific_thresholds",
-                "不同 canonical modality combo 的最佳阈值不同，可能需要按模态组合校准。",
-                canonical_thresholds,
+                "不同 modality family combo 的最佳阈值不同，可能需要按模态组合校准。",
+                family_thresholds,
             )
         )
-        recommendations.append("查看 threshold_sweep.csv 的 canonical_combo 行，判断是否需要为不同模态组合报告 calibrated metrics。")
+        recommendations.append("查看 threshold_sweep.csv 的 family_combo 行，判断是否需要按证据族报告 calibrated metrics。")
     return issues, recommendations
 
 
@@ -286,7 +265,8 @@ def check_proposals(block: dict[str, Any], args: argparse.Namespace) -> list[dic
     if not records:
         return [issue("info", "missing_proposal_records", "缺少 proposal_diagnostics.records，无法分析 query 选择。")]
     selected = [int(row.get("selected_query")) for row in records if isinstance(row.get("selected_query"), int)]
-    if selected:
+    num_queries = max((int(row.get("num_queries", 1)) for row in records), default=1)
+    if selected and num_queries > 1:
         counts = Counter(selected)
         query, count = counts.most_common(1)[0]
         frac = count / max(1, len(selected))
@@ -299,15 +279,15 @@ def check_proposals(block: dict[str, Any], args: argparse.Namespace) -> list[dic
                     {"top_query": query, "fraction": frac, "num_records": len(selected)},
                 )
             )
-    mean_match = mean_numeric_field(records, "selected_matches_best")
+    mean_match = mean_numeric_field(records, "selected_is_matched")
     if mean_match is not None:
         if mean_match < 0.70:
             issues.append(
                 issue(
                     "warning",
-                    "combined_selector_misses_best_query",
-                    "combined selector 经常没有选择 Dice 最好的 proposal。",
-                    {"mean_selected_matches_best": mean_match},
+                    "verifier_selects_unmatched_query",
+                    "统一 verifier 经常选择未匹配任何组件的 proposal。",
+                    {"mean_selected_is_matched": mean_match},
                 )
             )
     return issues
@@ -333,33 +313,12 @@ def check_semantic_verifier(block: dict[str, Any], config: dict[str, Any], args:
             )
         )
         return issues
-    wrong_gaps = [
-        numeric(row.get("relevance_gap_selected_minus_best"))
-        for row in records
-        if numeric(row.get("selected_matches_best"), 1.0) < 0.5
-        and isinstance(row.get("relevance_gap_selected_minus_best"), (int, float))
-    ]
-    match = mean_numeric_field(records, "selected_matches_best")
-    if wrong_gaps:
-        mean_gap = sum(wrong_gaps) / len(wrong_gaps)
-        if mean_gap > float(args.weak_evidence_score_gap):
-            issues.append(
-                issue(
-                    "warning",
-                    "semantic_verifier_confidently_misses_best_query",
-                    "统一 verifier 对错误 query 给出明显更高 relevance，正在拖累 proposal selection。",
-                    {"mean_wrong_relevance_gap": mean_gap, "match_rate": match, "num_wrong": len(wrong_gaps)},
-                )
-            )
-        elif match is not None and match < 0.70:
-            issues.append(
-                issue(
-                    "info",
-                    "weak_semantic_verifier_separation",
-                    "统一 verifier 的 best-query 命中率较低且错误 query 分差很小，语义证据区分度不足。",
-                    {"mean_wrong_relevance_gap": mean_gap, "match_rate": match, "num_wrong": len(wrong_gaps)},
-                )
-            )
+    relevance_ap = mean_numeric_field(records, "relevance_ap")
+    rejection = mean_numeric_field(records, "unmatched_rejection")
+    if relevance_ap is not None and relevance_ap < 0.7:
+        issues.append(issue("warning", "weak_relevance_ap", "统一 verifier 的 relevance AP 偏低。", {"relevance_ap": relevance_ap}))
+    if rejection is not None and rejection < 0.7:
+        issues.append(issue("warning", "weak_unmatched_rejection", "未匹配 proposal 抑制不足。", {"unmatched_rejection": rejection}))
     return issues
 
 
@@ -405,6 +364,13 @@ def check_modality_reliability(block: dict[str, Any], args: argparse.Namespace) 
         active = payload.get("mean_active") if isinstance(payload.get("mean_active"), dict) else {}
         names = sorted(set(weights) | set(active))
         active_count = sum(numeric(active.get(name)) for name in names)
+        null_weight = numeric(payload.get("mean_null_evidence_weight"))
+        if group == "overall" and null_weight >= 0.90:
+            issues.append(issue(
+                "warning", "null_evidence_collapse",
+                "QMEF 几乎总是选择 null evidence，多源特征未被有效使用。",
+                {"group": group, "mean_null_evidence_weight": null_weight},
+            ))
         if active_count <= 1.2:
             continue
         top_name = None
@@ -433,7 +399,7 @@ def check_query_modality_attention(block: dict[str, Any], args: argparse.Namespa
     if not query_summary:
         return [issue("info", "missing_query_modality_attention_summary", "缺少 query-level modality attention 汇总，无法判断 proposal 是否按区域选择证据。")]
     for group, payload in query_summary.items():
-        if not isinstance(group, str) or not group.startswith("canonical_combo=") or not isinstance(payload, dict):
+        if not isinstance(group, str) or not group.startswith("family_combo=") or not isinstance(payload, dict):
             continue
         combo = group.split("=", 1)[1]
         if "+" not in combo:
@@ -474,23 +440,23 @@ def build_recommendations(issues: list[dict[str, Any]]) -> list[str]:
     if "query_selection_collapse" in codes:
         recs.append("检查 proposal set matching 的组件覆盖与 relevance target，确认 mask tokens 是否学到不同连通区域。")
     if "empty_mask_false_positives" in codes:
-        recs.append("启用 empty mask suppression，并用更高阈值 sweep 检查 negative-aware 样本的误报面积是否下降。")
-    if "combined_selector_misses_best_query" in codes:
-        recs.append("检查 proposal_diagnostics.csv 的 relevance rank 与 Dice-best query，校准统一 semantic verifier 的监督。")
+        recs.append("检查 no-target 样本的 verifier rejection 与 final BCE，再用 threshold sweep 定位空 mask 误报来源。")
+    if "verifier_selects_unmatched_query" in codes or "weak_relevance_ap" in codes or "weak_unmatched_rejection" in codes:
+        recs.append("检查 ProposalAssignment 的 relevance target、AP 和 unmatched rejection，校准统一 semantic verifier。")
     if "missing_semantic_verifier_scores" in codes:
         recs.append("重新运行 eval，确认 proposal diagnostics 已包含统一 relevance logit。")
-    if "semantic_verifier_confidently_misses_best_query" in codes or "weak_semantic_verifier_separation" in codes:
-        recs.append("比较 sane_qmef 与 sane_qmef_pmrd，定位错误来自 proposal 质量还是统一 verifier；再检查 visual-view removal/shuffle 消融。")
     if "modality_reliability_collapse" in codes:
         recs.append("核对 SANE quality/GSD/sensor 元数据，并做单模态移除实验，判断可靠性集中是否符合数据质量。")
+    if "null_evidence_collapse" in codes:
+        recs.append("检查 valid coverage、quality prior 与 renderer/cache 版本，确认 QMEF 未把有效模态系统性判为无证据。")
     if "missing_query_modality_attention_summary" in codes:
-        recs.append("使用 sane_qmef 或更高 preset 重新 eval，导出 query-level modality attention 后再比较多源组合。")
+        recs.append("使用 raw_sane_qmef 或更高 preset 重新 eval，导出 query-level modality attention 后再比较多源组合。")
     if "query_modality_attention_collapse" in codes:
         recs.append("查看 query_modality_attention.csv，并结合 view-removal 对照判断局部证据集中是否合理。")
     if "missing_target_area_strata" in codes or "limited_target_area_strata" in codes:
         recs.append("重新用新版 eval/summary 生成 target_area_px_bin 与 target_area_fraction_bin 分组，单独检查 tiny/small 滑坡斑块的 Dice/Recall。")
-    if "missing_gsd_strata" in codes or "gsd_unknown_or_missing" in codes or "ground_area_unknown" in codes:
-        recs.append("优先完善 benchmark 中的 gsd_m/resize_transform 元数据，再比较 gsd_token 与 ground_area_m2_bin 下的分割性能。")
+    if "ground_area_unknown" in codes:
+        recs.append("优先完善 benchmark 中的连续 gsd_m/resize_transform，再比较 ground_area_m2_bin 下的性能。")
     if "missing_best_checkpoint" in codes:
         recs.append("重新训练以生成 checkpoint_best.pt，并用 best checkpoint 做最终 eval。")
     return recs

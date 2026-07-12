@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """mask 可视化工具。
 
-脚本作用：把验证 batch 输出成 RGB/GT/final/best proposal 四联图，
-并额外导出 final/best/GT 二值 PNG，用于观察 PSALM-style proposal
-decoder 是否真的在学习候选 mask。推理阶段可额外导出完整多模态 overview。
+脚本作用：把验证 batch 输出成 RGB/GT/final/selected/oracle proposal 诊断图，
+并导出对应二值 PNG。oracle proposal 由 GT assignment 产生，仅用于测量
+proposal 上限与 verifier selection gap，不属于可部署模型输出。
 主要输入：dataloader batch 与 model outputs。
 主要输出：PNG overlay 图。
 是否改写原始数据：不会。
@@ -22,17 +22,21 @@ import torch
 from PIL import Image, ImageDraw
 
 from .data import (
-    load_npy_array,
-    normalize_modality,
     resize_pad_tensor,
-    safe_slug,
 )
-from .indexing import canonical_modality_name
+from .schema import ModalityInstance
+
+
+def safe_slug(value: str) -> str:
+    return "".join(char if char.isalnum() or char in "-_" else "_" for char in value)[:180]
 
 
 def _to_rgb(batch: dict[str, Any], sample_idx: int) -> np.ndarray:
-    """读取 dataloader 已构造的稳定 preview。"""
-    chosen = batch["visual_preview"][sample_idx].detach().cpu()
+    """从活动模态中构造诊断 RGB；该图不进入模型 forward。"""
+    instances = batch["instances"][sample_idx]
+    chosen_item = next((item for item in instances if item.family in {"optical", "multispectral"}), instances[0])
+    chosen = chosen_item.image.detach().cpu()
+    chosen, _ = resize_pad_tensor(chosen, batch["mask"].shape[-1], mode="bilinear")
     if chosen.shape[0] == 1:
         rgb = chosen.repeat(3, 1, 1)
     elif chosen.shape[0] == 2:
@@ -58,16 +62,8 @@ def _tensor_to_rgb(tensor: torch.Tensor) -> np.ndarray:
     return (rgb.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
 
 
-def _render_raw_modality(item: dict[str, Any], target_size: int) -> np.ndarray:
-    """按 benchmark raw modality 元数据加载 .npy 并渲染为 target canvas RGB。"""
-    raw_name = str(item.get("name") or "unknown")
-    path = item.get("path")
-    if not path:
-        return np.zeros((target_size, target_size, 3), dtype=np.uint8)
-    arr = load_npy_array(str(path))
-    canonical = item.get("canonical") or canonical_modality_name(raw_name, item)
-    tensor = normalize_modality(arr, item=item, raw_name=raw_name, canonical=str(canonical) if canonical else None)
-    tensor, _ = resize_pad_tensor(tensor, target_size, mode="bilinear")
+def _render_modality(item: ModalityInstance, target_size: int) -> np.ndarray:
+    tensor, _ = resize_pad_tensor(item.image.detach().cpu(), target_size, mode="bilinear")
     return _tensor_to_rgb(tensor)
 
 
@@ -123,41 +119,42 @@ def _save_multimodal_overview(
     rgb: np.ndarray,
     gt: np.ndarray,
     final_pred: np.ndarray,
-    best_pred: np.ndarray,
-    best_query: int,
+    selected_pred: np.ndarray,
+    selected_query: int,
+    oracle_pred: np.ndarray,
+    oracle_query: int,
+    instances: list[ModalityInstance],
 ) -> str | None:
     """导出每个样本一张完整多模态总览图。"""
     target_size = int(final_pred.shape[-1])
-    raw_items = list(meta.get("raw_modalities") or [])
     panels: list[Image.Image] = []
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
+    for item in instances:
         try:
-            raw_rgb = _render_raw_modality(item, target_size=target_size)
+            raw_rgb = _render_modality(item, target_size=target_size)
         except Exception as exc:  # noqa: BLE001 - 可视化失败不应阻断推理
             raw_rgb = np.zeros((target_size, target_size, 3), dtype=np.uint8)
             raw_rgb[:24, :, :] = 60
-            label = f"{item.get('name', 'modality')} load_error={type(exc).__name__}"
+            label = f"{item.name} load_error={type(exc).__name__}"
         else:
-            label = (
-                f"{item.get('name', 'modality')} "
-                f"[{item.get('sensor') or 'unknown'}|{item.get('normalization') or 'unknown'}]"
-            )
+            label = f"{item.name} [{item.sensor}|{item.product_type}|{item.units}]"
         panels.append(_label_panel(raw_rgb, label))
     panels.extend(
         [
-            _label_panel(rgb, "visual_preview"),
+            _label_panel(rgb, "reference view"),
             _label_panel(_overlay_mask(rgb, gt, (0, 230, 80)), "GT"),
             _label_panel(_overlay_mask(rgb, final_pred, (255, 40, 40)), "Final"),
-            _label_panel(_overlay_mask(rgb, best_pred, (255, 190, 40)), f"BestQ {best_query}"),
+            _label_panel(_overlay_mask(rgb, selected_pred, (255, 190, 40)), f"SelectedQ {selected_query}"),
+            _label_panel(
+                _overlay_mask(rgb, oracle_pred, (60, 150, 255)),
+                f"OracleMatchedQ {oracle_query}" if oracle_query >= 0 else "OracleMatchedQ none",
+            ),
         ]
     )
     header = [
         f"sample={meta.get('sample_id')} dataset={meta.get('dataset_name')} template={meta.get('template_id')}",
-        f"canonical={meta.get('canonical_combo')} raw={meta.get('raw_combo')}",
-        f"sensor={meta.get('sensor_combo')} normalization={meta.get('normalization_combo')}",
-        f"condition={meta.get('condition_prompt')} gsd={meta.get('gsd_m')} token={meta.get('gsd_token')}",
+        f"families={meta.get('family_combo')} active={meta.get('active_subset')}",
+        f"sensor={meta.get('sensor_combo')} gsd={meta.get('gsd_m')}",
+        f"instruction={meta.get('instruction')}",
     ]
     overview = _compose_grid(panels, header_lines=header)
     path = out_dir / "multimodal_overviews" / f"{stem}_overview.png"
@@ -166,31 +163,36 @@ def _save_multimodal_overview(
     return path.as_posix()
 
 
-def _best_query_index(outputs: dict[str, torch.Tensor], sample_idx: int) -> int:
-    """优先使用 GT matching 的 best query；无监督时退化为 relevance 最大项。"""
-    if "best_query" in outputs:
-        return int(outputs["best_query"].detach().cpu()[sample_idx].item())
-    return int(torch.argmax(outputs["proposal_relevance_logits"].detach().cpu()[sample_idx]).item())
-
-
 def _selected_query_index(outputs: dict[str, torch.Tensor], sample_idx: int) -> int:
     """返回统一 semantic verifier 选中的 query。"""
     return int(torch.argmax(outputs["proposal_relevance_logits"].detach().cpu()[sample_idx]).item())
+
+
+def _oracle_matched_query_index(outputs: dict[str, torch.Tensor], sample_idx: int) -> int:
+    """返回 GT assignment 中 Dice 最高的 matched query；空目标为 -1。"""
+    values = outputs.get("proposal_oracle_matched_query")
+    return int(values.detach().long().cpu()[sample_idx].item()) if torch.is_tensor(values) else -1
 
 
 def _compose_diagnostic(
     rgb: np.ndarray,
     gt: np.ndarray,
     final_pred: np.ndarray,
-    best_pred: np.ndarray,
-    best_query: int,
+    selected_pred: np.ndarray,
+    selected_query: int,
+    oracle_pred: np.ndarray,
+    oracle_query: int,
 ) -> Image.Image:
-    """生成 RGB、GT、final 和 best proposal 四联诊断图。"""
+    """生成 final、模型选中 proposal 与仅供诊断的 GT-oracle proposal。"""
     panels = [
         _label_panel(rgb, "RGB"),
         _label_panel(_overlay_mask(rgb, gt, (0, 230, 80)), "GT"),
         _label_panel(_overlay_mask(rgb, final_pred, (255, 40, 40)), "Final"),
-        _label_panel(_overlay_mask(rgb, best_pred, (255, 190, 40)), f"BestQ {best_query}"),
+        _label_panel(_overlay_mask(rgb, selected_pred, (255, 190, 40)), f"SelectedQ {selected_query}"),
+        _label_panel(
+            _overlay_mask(rgb, oracle_pred, (60, 150, 255)),
+            f"OracleMatchedQ {oracle_query}" if oracle_query >= 0 else "OracleMatchedQ none",
+        ),
     ]
     width = sum(panel.size[0] for panel in panels)
     height = max(panel.size[1] for panel in panels)
@@ -205,21 +207,23 @@ def _compose_diagnostic(
 def _save_binary_mask(path: Path, mask: np.ndarray) -> None:
     """保存 0/255 单通道 PNG。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray((mask.astype(np.uint8) * 255), mode="L").save(path)
+    Image.fromarray(mask.astype(np.uint8) * 255).save(path)
 
 
 def _save_mask_exports(
     out_dir: Path,
     stem: str,
     final_pred: np.ndarray,
-    best_pred: np.ndarray,
+    selected_pred: np.ndarray,
+    oracle_pred: np.ndarray,
     gt: np.ndarray,
 ) -> dict[str, str]:
     """导出单独二值 mask，便于下游检查或复用。"""
     export_dir = out_dir / "mask_exports"
     exports = {
         "final": final_pred,
-        "best_proposal": best_pred,
+        "selected_proposal": selected_pred,
+        "oracle_matched_proposal": oracle_pred,
         "gt": gt,
     }
     paths: dict[str, str] = {}
@@ -236,16 +240,40 @@ def restore_mask_to_original(mask: np.ndarray, transform: dict[str, Any] | None)
         return None
     source_hw = transform.get("source_hw")
     resized_hw = transform.get("resized_hw")
-    if not isinstance(source_hw, list) or not isinstance(resized_hw, list) or len(source_hw) != 2 or len(resized_hw) != 2:
+    target_hw = transform.get("target_hw")
+    if (
+        not isinstance(source_hw, list)
+        or not isinstance(resized_hw, list)
+        or not isinstance(target_hw, list)
+        or len(source_hw) != 2
+        or len(resized_hw) != 2
+        or len(target_hw) != 2
+    ):
         return None
     src_h, src_w = int(source_hw[0]), int(source_hw[1])
     resized_h, resized_w = int(resized_hw[0]), int(resized_hw[1])
-    if src_h <= 0 or src_w <= 0 or resized_h <= 0 or resized_w <= 0:
+    target_h, target_w = int(target_hw[0]), int(target_hw[1])
+    if (
+        src_h <= 0
+        or src_w <= 0
+        or resized_h <= 0
+        or resized_w <= 0
+        or target_h <= 0
+        or target_w <= 0
+        or tuple(mask.shape[-2:]) != (target_h, target_w)
+    ):
         return None
     pad_top = int(transform.get("pad_top", 0))
     pad_left = int(transform.get("pad_left", 0))
+    if (
+        pad_top < 0
+        or pad_left < 0
+        or pad_top + resized_h > target_h
+        or pad_left + resized_w > target_w
+    ):
+        return None
     crop = mask[pad_top : pad_top + resized_h, pad_left : pad_left + resized_w]
-    if crop.size == 0:
+    if crop.shape != (resized_h, resized_w):
         return None
     image = Image.fromarray(crop.astype(np.uint8) * 255)
     restored = image.resize((src_w, src_h), resample=Image.Resampling.NEAREST)
@@ -315,12 +343,33 @@ def _sample_query_score_values(
 ) -> dict[str, float | None]:
     """记录统一 semantic-evidence verifier 对某个 query 的 relevance。"""
     tensor = outputs.get("proposal_relevance_logits")
+    gates = outputs.get("proposal_relevance_gates")
+    targets = outputs.get("proposal_relevance_targets")
     return {
         "relevance_logit": (
             float(tensor.detach().float().cpu()[sample_idx, query_idx].item())
             if torch.is_tensor(tensor)
             else None
-        )
+        ),
+        "relevance_gate": (
+            float(gates.detach().float().cpu()[sample_idx, query_idx].item())
+            if torch.is_tensor(gates) else None
+        ),
+        "assignment_target": (
+            float(targets.detach().float().cpu()[sample_idx, query_idx].item())
+            if torch.is_tensor(targets) else None
+        ),
+    }
+
+
+def _sample_query_geometry(outputs, sample_idx: int, query_idx: int) -> dict[str, Any] | None:
+    reference = outputs.get("query_sampling_reference")
+    grid = outputs.get("query_sampling_grid")
+    if not torch.is_tensor(reference) or not torch.is_tensor(grid):
+        return None
+    return {
+        "reference_xy": reference.detach().float().cpu()[sample_idx, query_idx].tolist(),
+        "scale_point_xy": grid.detach().float().cpu()[sample_idx, query_idx].tolist(),
     }
 
 
@@ -333,7 +382,7 @@ def save_visualizations(
     threshold: float = 0.5,
     export_multimodal_overview: bool = False,
 ) -> list[str]:
-    """保存四联诊断图，并导出可复用二值 mask PNG。"""
+    """保存模型输出和显式标注为 GT-only 的 oracle assignment 诊断。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     probs = torch.sigmoid(outputs["final_mask_logits"]).detach().cpu()
     proposal_probs = torch.sigmoid(outputs["proposal_mask_logits"]).detach().cpu()
@@ -351,24 +400,37 @@ def save_visualizations(
         valid = (valid_masks[idx, 0].numpy() >= 0.5).astype(np.uint8)
         final_pred *= valid
         gt *= valid
-        best_query = _best_query_index(outputs, idx)
         selected_query = _selected_query_index(outputs, idx)
-        best_pred = (proposal_probs[idx, best_query].numpy() >= float(threshold)).astype(np.uint8)
-        best_pred *= valid
-        diagnostic = _compose_diagnostic(rgb, gt, final_pred, best_pred, best_query)
+        selected_pred = (proposal_probs[idx, selected_query].numpy() >= float(threshold)).astype(np.uint8)
+        selected_pred *= valid
+        oracle_query = _oracle_matched_query_index(outputs, idx)
+        oracle_pred = (
+            (proposal_probs[idx, oracle_query].numpy() >= float(threshold)).astype(np.uint8)
+            if oracle_query >= 0
+            else np.zeros_like(final_pred)
+        )
+        oracle_pred *= valid
+        diagnostic = _compose_diagnostic(
+            rgb, gt, final_pred, selected_pred, selected_query, oracle_pred, oracle_query
+        )
 
         meta = batch["metadata"][idx]
-        modality_names = [str(item.get("name", f"modality_{j}")) for j, item in enumerate(meta.get("raw_modalities") or [])]
+        sample_instances = batch["instances"][idx]
+        modality_names = [item.name for item in sample_instances]
         stem = safe_slug(f"{prefix}_{idx}_{meta.get('sample_id', 'sample')}")
         overview_path = (
-            _save_multimodal_overview(out_dir, stem, meta, rgb, gt, final_pred, best_pred, best_query)
+            _save_multimodal_overview(
+                out_dir, stem, meta, rgb, gt, final_pred, selected_pred, selected_query,
+                oracle_pred, oracle_query, sample_instances
+            )
             if export_multimodal_overview
             else None
         )
-        mask_paths = _save_mask_exports(out_dir, stem, final_pred, best_pred, gt)
+        mask_paths = _save_mask_exports(out_dir, stem, final_pred, selected_pred, oracle_pred, gt)
         masks_for_restore = {
             "final": final_pred,
-            "best_proposal": best_pred,
+            "selected_proposal": selected_pred,
+            "oracle_matched_proposal": oracle_pred,
             "gt": gt,
         }
         restored_masks = _restore_masks(masks_for_restore, meta.get("resize_transform"))
@@ -385,12 +447,18 @@ def save_visualizations(
                 "multimodal_overview_path": overview_path,
                 "mask_paths": mask_paths,
                 "restored_mask_paths": restored_mask_paths,
-                "best_query": best_query,
                 "selected_query": selected_query,
+                "oracle_matched_query": oracle_query,
+                "oracle_matched_dice": (
+                    float(outputs["proposal_oracle_matched_dice"].detach().float().cpu()[idx].item())
+                    if torch.is_tensor(outputs.get("proposal_oracle_matched_dice")) else None
+                ),
+                "oracle_is_gt_diagnostic_only": True,
                 "threshold": float(threshold),
                 "mask_area": {
                     "final": int(final_pred.sum()),
-                    "best_proposal": int(best_pred.sum()),
+                    "selected_proposal": int(selected_pred.sum()),
+                    "oracle_matched_proposal": int(oracle_pred.sum()),
                     "gt": int(gt.sum()),
                     "valid_pixels": int(valid.sum()),
                 },
@@ -401,32 +469,57 @@ def save_visualizations(
                 "modality_reliability_weights": _sample_modality_values(reliability_tensor, idx, modality_names),
                 "modality_active": _sample_modality_values(active_tensor, idx, modality_names),
                 "query_modality_mean_attention": _sample_query_modality_values(query_attention_tensor, idx, modality_names),
-                "query_modality_best_query_attention": _sample_query_modality_values(query_attention_tensor, idx, modality_names, best_query),
                 "query_modality_selected_query_attention": _sample_query_modality_values(query_attention_tensor, idx, modality_names, selected_query),
-                "best_query_scores": _sample_query_score_values(outputs, idx, best_query),
                 "selected_query_scores": _sample_query_score_values(outputs, idx, selected_query),
+                "selected_query_sampling": _sample_query_geometry(outputs, idx, selected_query),
+                "oracle_matched_query_scores": (
+                    _sample_query_score_values(outputs, idx, oracle_query) if oracle_query >= 0 else None
+                ),
+                "oracle_matched_query_sampling": (
+                    _sample_query_geometry(outputs, idx, oracle_query) if oracle_query >= 0 else None
+                ),
+                "null_evidence_weight": (
+                    float(outputs["null_evidence_weight"].detach().float().cpu()[idx].item())
+                    if torch.is_tensor(outputs.get("null_evidence_weight")) else None
+                ),
+                "real_evidence_mass": (
+                    float(outputs["real_evidence_mass"].detach().float().cpu()[idx].item())
+                    if torch.is_tensor(outputs.get("real_evidence_mass")) else None
+                ),
+                "visual_evidence_delta_norm": (
+                    float(outputs["visual_evidence_delta_norm"].detach().float().cpu()[idx].item())
+                    if torch.is_tensor(outputs.get("visual_evidence_delta_norm")) else None
+                ),
                 "metadata": {
                     "sample_id": meta.get("sample_id"),
                     "parent_sample_id": meta.get("parent_sample_id"),
                     "dataset_name": meta.get("dataset_name"),
                     "template_id": meta.get("template_id"),
                     "task_family": meta.get("task_family"),
-                    "raw_combo": meta.get("raw_combo"),
-                    "canonical_combo": meta.get("canonical_combo"),
+                    "family_combo": meta.get("family_combo"),
+                    "active_subset": meta.get("active_subset"),
                     "sensor_combo": meta.get("sensor_combo"),
-                    "normalization_combo": meta.get("normalization_combo"),
-                    "quality_flags": meta.get("quality_flags"),
-                    "gsd_token": meta.get("gsd_token"),
                     "gsd_m": meta.get("gsd_m"),
-                    "visual_preview_source": meta.get("visual_preview_source"),
+                    "canvas_gsd_m": meta.get("canvas_gsd_m"),
                     "mask_original_size": meta.get("mask_original_size"),
                     "resize_transform": meta.get("resize_transform"),
-                    "condition_prompt": meta.get("condition_prompt"),
                     "instruction": meta.get("instruction"),
-                    "proposal_context_text": meta.get("proposal_context_text"),
-                    "condition_prompt_text": meta.get("condition_prompt_text"),
-                    "evidence_reasoning_text": meta.get("evidence_reasoning_text"),
-                    "raw_modalities": meta.get("raw_modalities"),
+                    "condition_prompt": batch["condition_prompt_text"][idx],
+                    "evidence_reasoning": batch["evidence_reasoning_text"][idx],
+                    "modalities": [
+                        {
+                            "name": item.name,
+                            "family": item.family,
+                            "sensor": item.sensor,
+                            "product_type": item.product_type,
+                            "units": item.units,
+                            "source_native_gsd_m": item.metadata.get("source_native_gsd_m"),
+                            "encoder_native_gsd_m": item.native_gsd_m,
+                            "encoder_aligned_gsd_m": item.aligned_gsd_m,
+                            "native_resize_factor": item.metadata.get("native_resize_factor"),
+                        }
+                        for item in sample_instances
+                    ],
                 },
             },
         )

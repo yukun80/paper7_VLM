@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Single source of truth for main SANE/QMEF/PMRD experiment presets."""
+"""Single source of truth for benchmark-v2 algorithm presets."""
 
 from __future__ import annotations
 
@@ -10,31 +10,24 @@ from typing import Any
 from .config import QPSalmConfig
 
 
+_RAW_COMMON: dict[str, Any] = {
+    "controller": "text_probe",
+    "decoder_dim": 256,
+    "num_heads": 8,
+    "num_decoder_layers": 2,
+    "size_buckets": [64, 128, 256, 384],
+    "max_native_size": 384,
+    "qwen_view_pooling": "tokens",
+    "use_pretrained_sane": False,
+}
+
+
 PRESETS: dict[str, dict[str, Any]] = {
-    "dev_smoke": {
-        "decoder_dim": 64,
-        "num_heads": 4,
-        "num_decoder_layers": 1,
-        "size_buckets": [],
-        "target_size": 64,
-        "max_native_size": 64,
-        "num_mask_tokens": 4,
-        "modality_dropout": 0.0,
-        "use_query_spatial_attention": True,
-        "use_mask_refinement": True,
-        "proposal_set_loss_weight": 0.5,
-        "coarse_proposal_loss_weight": 0.25,
-        "semantic_verifier_loss_weight": 0.2,
-        "missing_modality_consistency_weight": 0.0,
-    },
-    "sane_baseline": {
-        "decoder_dim": 256,
-        "num_heads": 8,
-        "num_decoder_layers": 2,
-        "size_buckets": [64, 128, 256, 384],
-        "max_native_size": 384,
+    "raw_sane_baseline": {
+        **_RAW_COMMON,
         "num_mask_tokens": 1,
         "modality_dropout": 0.0,
+        "use_qmef": False,
         "use_query_spatial_attention": False,
         "use_mask_refinement": False,
         "proposal_set_loss_weight": 0.0,
@@ -42,14 +35,11 @@ PRESETS: dict[str, dict[str, Any]] = {
         "semantic_verifier_loss_weight": 0.0,
         "missing_modality_consistency_weight": 0.0,
     },
-    "sane_qmef": {
-        "decoder_dim": 256,
-        "num_heads": 8,
-        "num_decoder_layers": 2,
-        "size_buckets": [64, 128, 256, 384],
-        "max_native_size": 384,
+    "raw_sane_qmef": {
+        **_RAW_COMMON,
         "num_mask_tokens": 1,
         "modality_dropout": 0.2,
+        "use_qmef": True,
         "use_query_spatial_attention": True,
         "use_mask_refinement": False,
         "proposal_set_loss_weight": 0.0,
@@ -57,14 +47,11 @@ PRESETS: dict[str, dict[str, Any]] = {
         "semantic_verifier_loss_weight": 0.1,
         "missing_modality_consistency_weight": 0.05,
     },
-    "sane_qmef_pmrd": {
-        "decoder_dim": 256,
-        "num_heads": 8,
-        "num_decoder_layers": 2,
-        "size_buckets": [64, 128, 256, 384],
-        "max_native_size": 384,
+    "raw_sane_qmef_pmrd": {
+        **_RAW_COMMON,
         "num_mask_tokens": 16,
         "modality_dropout": 0.2,
+        "use_qmef": True,
         "use_query_spatial_attention": True,
         "use_mask_refinement": True,
         "proposal_set_loss_weight": 0.75,
@@ -72,20 +59,36 @@ PRESETS: dict[str, dict[str, Any]] = {
         "semantic_verifier_loss_weight": 0.25,
         "missing_modality_consistency_weight": 0.05,
     },
-    "full_multiview": {
-        "decoder_dim": 256,
-        "num_heads": 8,
-        "num_decoder_layers": 2,
-        "size_buckets": [64, 128, 256, 384],
-        "max_native_size": 384,
+    "pretrained_sane_qmef_pmrd": {
+        **_RAW_COMMON,
         "num_mask_tokens": 16,
         "modality_dropout": 0.2,
+        "use_pretrained_sane": True,
+        "use_qmef": True,
         "use_query_spatial_attention": True,
         "use_mask_refinement": True,
         "proposal_set_loss_weight": 0.75,
         "coarse_proposal_loss_weight": 0.25,
         "semantic_verifier_loss_weight": 0.25,
         "missing_modality_consistency_weight": 0.1,
+    },
+    "qwen_psalm_full": {
+        **_RAW_COMMON,
+        "controller": "qwen_mask_query",
+        "num_mask_tokens": 16,
+        "modality_dropout": 0.2,
+        "use_pretrained_sane": True,
+        "use_qmef": True,
+        "use_query_spatial_attention": True,
+        "use_mask_refinement": True,
+        "proposal_set_loss_weight": 0.75,
+        "coarse_proposal_loss_weight": 0.25,
+        "semantic_verifier_loss_weight": 0.25,
+        "missing_modality_consistency_weight": 0.1,
+        "batch_size": 1,
+        "grad_accum_steps": 4,
+        "size_buckets": [64, 128, 256],
+        "max_native_size": 256,
     },
 }
 
@@ -94,7 +97,13 @@ PRESET_CHOICES = tuple(PRESETS)
 
 
 def apply_preset(config: QPSalmConfig, name: str | None) -> QPSalmConfig:
-    preset = str(name or config.preset or "sane_qmef_pmrd")
+    preset = str(name or config.preset or "raw_sane_qmef_pmrd")
     if preset not in PRESETS:
         raise ValueError(f"未知 preset={preset!r}; 可选: {', '.join(PRESET_CHOICES)}")
-    return replace(config, preset=preset, **PRESETS[preset])
+    switching = name is not None and preset != str(config.preset)
+    defaults = QPSalmConfig()
+    resolved = {}
+    for key, value in PRESETS[preset].items():
+        current = getattr(config, key)
+        resolved[key] = value if switching or current == getattr(defaults, key) else current
+    return replace(config, preset=preset, **resolved)

@@ -6,9 +6,9 @@
 #
 # 按固定顺序运行 2-1 到 2-3，完成任务指令模板校验、
 # instruction_*.jsonl 生成和 instruction 索引验证。
-# 主要输入：仓库同级 benchmark/multisource_landslide_v1_<mode>/indexes/all.jsonl、
+# 主要输入：仓库同级 benchmark/multisource_landslide_v2_<mode>/indexes/all.jsonl、
 # indexes/referring_target_all.jsonl，以及 configs/instruction_templates/*.yaml。
-# 主要输出：benchmark/multisource_landslide_v1_<mode>/indexes/instruction_*.jsonl
+# 主要输出：benchmark/multisource_landslide_v2_<mode>/indexes/instruction_*.jsonl
 # 和 reports/instruction_*.json。
 # 写入行为：不会改写 datasets/；不会覆盖 1-benchmark 生成的 all/referring_target 索引。
 # 所属流程：主数据流程第 2 阶段；必须先完成对应 small/full benchmark。
@@ -28,8 +28,8 @@ if [[ ! -d "${DEFAULT_BENCHMARK_ROOT}" && -d "${REPO_ROOT}/benchmark" ]]; then
   DEFAULT_BENCHMARK_ROOT="${REPO_ROOT}/benchmark"
 fi
 BENCHMARK_ROOT="${PAPER7_BENCHMARK_ROOT:-${DEFAULT_BENCHMARK_ROOT}}"
-BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-${BENCHMARK_ROOT}/multisource_landslide_v1}"
-TEMPLATE_CONFIG="${TEMPLATE_CONFIG:-configs/instruction_templates/multisource_landslide_v1.yaml}"
+BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-${BENCHMARK_ROOT}/multisource_landslide_v2}"
+TEMPLATE_CONFIG="${TEMPLATE_CONFIG:-configs/instruction_templates/multisource_landslide_v2.yaml}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 export PAPER7_BENCHMARK_ROOT="$(dirname "${BENCHMARK_PREFIX}")"

@@ -9,7 +9,7 @@ landslide4sense、Sen12Landslides、multimodal-landslide-dataset。
 主要输出：source_manifest.csv 和 dataset_inventory.json。
 写入行为：不会改写 datasets/，只写 benchmark/ 下的清单文件。
 所属流程：benchmark 构建 1-1；也可由 scripts/run_1_build_benchmark.sh 调用。
-推荐运行命令：python scripts/1-benchmark/1-1_scan_sources.py --datasets-root datasets --out-dir benchmark/multisource_landslide_v1_small
+推荐运行命令：python scripts/1-benchmark/1-1_scan_sources.py --datasets-root datasets --out-dir benchmark/multisource_landslide_v2_small
 """
 
 from __future__ import annotations
@@ -265,7 +265,7 @@ def scan_sen12(root: Path) -> list[dict[str, Any]]:
         gsd_m=10,
         label_status="mixed_annotated_flag",
         region="15_events",
-        task_type="multisource_temporal_landslide_segmentation",
+        task_type="multisource_landslide_segmentation",
         warning=f"S2∩S1asc={len(keys_asc)}, S2∩S1dsc={len(keys_dsc)}, S2∩S1asc∩S1dsc={len(keys_triple)}",
     ))
     return rows

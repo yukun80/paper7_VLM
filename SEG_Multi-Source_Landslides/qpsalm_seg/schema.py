@@ -9,6 +9,12 @@ from typing import Any, Iterator, Mapping
 
 import torch
 
+from qpsalm_seg.matching import calibrated_relevance_gates
+
+
+MODALITY_FAMILIES = ("optical", "multispectral", "sar", "terrain", "deformation")
+MODALITY_FAMILY_IDS = {"unknown": 0, **{name: index + 1 for index, name in enumerate(MODALITY_FAMILIES)}}
+
 
 @dataclass
 class ModalityInstance:
@@ -17,8 +23,12 @@ class ModalityInstance:
     name: str
     family: str
     sensor: str
+    product_type: str
     band_names: tuple[str, ...]
+    band_metadata: tuple[dict[str, Any], ...]
     orbit: str
+    units: str
+    signed: bool
     image: torch.Tensor
     valid_mask: torch.Tensor
     native_gsd_m: float | None
@@ -31,8 +41,12 @@ class ModalityInstance:
             name=self.name,
             family=self.family,
             sensor=self.sensor,
+            product_type=self.product_type,
             band_names=self.band_names,
+            band_metadata=self.band_metadata,
             orbit=self.orbit,
+            units=self.units,
+            signed=self.signed,
             image=self.image.to(device),
             valid_mask=self.valid_mask.to(device),
             native_gsd_m=self.native_gsd_m,
@@ -42,19 +56,33 @@ class ModalityInstance:
         )
 
 
+@dataclass(frozen=True)
+class ActiveModalitySubset:
+    """Single source of truth for the modalities visible to one student sample."""
+
+    active_names: tuple[str, ...]
+    dropped_names: tuple[str, ...]
+    signature: str
+    is_full: bool
+
+
 @dataclass
 class ModalityBatch(Mapping[str, Any]):
     """Variable-cardinality multimodal batch with a common segmentation canvas."""
 
     instances: list[list[ModalityInstance]]
+    full_instances: list[list[ModalityInstance]]
+    active_subsets: list[ActiveModalitySubset]
     mask: torch.Tensor
     valid_mask: torch.Tensor
     metadata: list[dict[str, Any]]
     proposal_context_text: list[str]
     condition_prompt_text: list[str]
     evidence_reasoning_text: list[str]
+    full_proposal_context_text: list[str]
+    full_condition_prompt_text: list[str]
+    full_evidence_reasoning_text: list[str]
     visual_evidence_key: list[str]
-    visual_preview: torch.Tensor
 
     @property
     def batch_size(self) -> int:
@@ -66,19 +94,14 @@ class ModalityBatch(Mapping[str, Any]):
 
     @property
     def availability(self) -> torch.Tensor:
-        families = ("optical", "multispectral", "sar", "terrain", "deformation")
-        result = torch.zeros((self.batch_size, len(families)), dtype=torch.float32)
+        result = torch.zeros((self.batch_size, len(MODALITY_FAMILIES)), dtype=torch.float32)
         for batch_index, sample in enumerate(self.instances):
             available = {item.family for item in sample}
-            for family_index, family in enumerate(families):
+            for family_index, family in enumerate(MODALITY_FAMILIES):
                 result[batch_index, family_index] = float(family in available)
         return result
 
     def __getitem__(self, key: str) -> Any:
-        if key == "availability":
-            return self.availability
-        if key == "modalities":
-            raise KeyError("Typed ModalityBatch does not expose fixed canonical modality tensors")
         if hasattr(self, key):
             return getattr(self, key)
         raise KeyError(key)
@@ -87,20 +110,24 @@ class ModalityBatch(Mapping[str, Any]):
         return iter(
             (
                 "instances",
+                "full_instances",
+                "active_subsets",
                 "mask",
                 "valid_mask",
                 "metadata",
                 "proposal_context_text",
                 "condition_prompt_text",
                 "evidence_reasoning_text",
+                "full_proposal_context_text",
+                "full_condition_prompt_text",
+                "full_evidence_reasoning_text",
                 "visual_evidence_key",
-                "visual_preview",
                 "availability",
             )
         )
 
     def __len__(self) -> int:
-        return 10
+        return 14
 
 
 @dataclass
@@ -109,9 +136,11 @@ class ModalityPyramid:
 
     instance: ModalityInstance
     high: torch.Tensor
+    detail: torch.Tensor
     mid: torch.Tensor
     low: torch.Tensor
     high_valid: torch.Tensor
+    detail_valid: torch.Tensor
     mid_valid: torch.Tensor
     low_valid: torch.Tensor
     metadata_token: torch.Tensor
@@ -135,7 +164,10 @@ class SemanticEvidence:
     task_token: torch.Tensor
     condition_token: torch.Tensor
     global_token: torch.Tensor
+    mask_query_states: torch.Tensor | None = None
+    evidence_anchors: torch.Tensor | None = None
     visual_token_count: int = 0
+    visual_delta_norm: torch.Tensor | None = None
 
 
 @dataclass
@@ -151,10 +183,18 @@ class EvidenceFeatures:
     modality_high: torch.Tensor
     modality_mid: torch.Tensor
     modality_low: torch.Tensor
+    modality_detail: torch.Tensor
+    modality_valid_high: torch.Tensor
     modality_valid_mid: torch.Tensor
+    modality_valid_low: torch.Tensor
+    modality_valid_detail: torch.Tensor
     modality_active: torch.Tensor
     reliability_logits: torch.Tensor
     reliability_weights: torch.Tensor
+    null_reliability: torch.Tensor
+    real_reliability_mass: torch.Tensor
+    coverage_ratio: torch.Tensor
+    modality_semantic_anchors: torch.Tensor
     modality_names: list[list[str]]
 
 
@@ -168,6 +208,7 @@ class ProposalSet:
     query_embeddings: torch.Tensor
     query_evidence: torch.Tensor
     query_modality_attention: torch.Tensor
+    query_scale_attention: torch.Tensor
     query_spatial_entropy: torch.Tensor
 
 
@@ -182,16 +223,15 @@ class SegmentationOutput(Mapping[str, torch.Tensor]):
 
     def _mapping(self) -> dict[str, torch.Tensor]:
         relevance = self.proposals.relevance_logits
-        num_queries = int(relevance.shape[1])
-        relevance_offset = torch.log(relevance.new_tensor(float(max(1, num_queries - 1))))
         values = {
             "final_mask_logits": self.final_mask_logits,
             "proposal_mask_logits": self.proposals.mask_logits,
             "proposal_coarse_mask_logits": self.proposals.coarse_mask_logits,
             "proposal_relevance_logits": relevance,
-            "proposal_relevance_gates": torch.sigmoid(relevance - relevance_offset),
+            "proposal_relevance_gates": calibrated_relevance_gates(relevance),
             "query_embeddings": self.proposals.query_embeddings,
             "query_modality_attention": self.proposals.query_modality_attention,
+            "query_scale_attention": self.proposals.query_scale_attention,
             "query_spatial_entropy": self.proposals.query_spatial_entropy,
             **self.diagnostics,
             **self.losses,

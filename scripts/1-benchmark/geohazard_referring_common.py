@@ -118,6 +118,16 @@ def position_from_point(x: float, y: float, width: int, height: int) -> str:
     return REFERRING_POSITION_ORDER[row * 3 + col]
 
 
+def occupied_grid_positions(binary: Any) -> set[str]:
+    """返回所有含前景像素的 3x3 网格，而不是只看被筛选的候选目标。"""
+    mask = mask_to_2d(binary) > 0
+    height, width = mask.shape
+    ys, xs = np.where(mask)
+    columns = np.where(xs < width / 3.0, 0, np.where(xs < 2.0 * width / 3.0, 1, 2))
+    rows = np.where(ys < height / 3.0, 0, np.where(ys < 2.0 * height / 3.0, 1, 2))
+    return {REFERRING_POSITION_ORDER[int(row * 3 + column)] for row, column in zip(rows, columns)}
+
+
 def analyze_mask_components(binary: Any) -> tuple[Any, list[dict[str, Any]]]:
     """使用 scipy.ndimage.label 做 8 邻域连通域分析。"""
     structure = np.ones((3, 3), dtype=np.uint8)
@@ -477,6 +487,34 @@ def build_referring_targets(
     selected = select_referring_candidates(candidates)
     if not selected:
         return [], None, errors, flags
+    occupied_positions = occupied_grid_positions(binary)
+    all_positions = (
+        "upper-left",
+        "upper",
+        "upper-right",
+        "left",
+        "center",
+        "right",
+        "lower-left",
+        "lower",
+        "lower-right",
+    )
+    missing_position = next((position for position in all_positions if position not in occupied_positions), None)
+    if missing_position is not None:
+        selected.append(
+            {
+                "category": "no_target",
+                "subtype": f"position_{missing_position}",
+                "target_key": "empty",
+                "grounding": {
+                    "rule": "counterfactual_empty_position",
+                    "grid": missing_position,
+                    "component_labels": [],
+                },
+                "confidence": "rule_high",
+                "quality_flags": ["counterfactual_no_target"],
+            }
+        )
 
     referring_dir = ensure_dir(sample_dir / "referring")
     target_cache: dict[str, dict[str, Any]] = {}
@@ -487,7 +525,7 @@ def build_referring_targets(
         if target_key in target_cache:
             target_mask = target_mask_from_key(binary, labels, target_key)
             return copy.deepcopy(target_cache[target_key]), target_mask
-        target_mask = target_mask_from_key(binary, labels, target_key)
+        target_mask = np.zeros_like(binary, dtype=np.uint8) if target_key == "empty" else target_mask_from_key(binary, labels, target_key)
         bbox, bbox_status, positive, empty_mask = bbox_from_binary_mask(target_mask)
         if target_key == "full":
             entry = copy.deepcopy(final_mask)
@@ -501,7 +539,9 @@ def build_referring_targets(
                 "path": to_repo_rel(out_path),
                 "format": "npy",
                 "internal_key": None,
-                "label_type": "binary_landslide_referring_target",
+                "label_type": (
+                    "binary_landslide_no_target" if target_key == "empty" else "binary_landslide_referring_target"
+                ),
                 "shape": list(target_mask.shape),
                 "dtype": "uint8",
                 "positive_pixels": positive,
@@ -525,7 +565,7 @@ def build_referring_targets(
             "category": candidate["category"],
             "subtype": candidate["subtype"],
             "target_mask": target_entry,
-            "grounding": {**(candidate.get("grounding") or {}), "generator": "rule_based_mask_components_v1"},
+            "grounding": {**(candidate.get("grounding") or {}), "generator": "rule_based_mask_components_v2"},
             "confidence": candidate["confidence"],
             "quality_flags": target_flags,
         })

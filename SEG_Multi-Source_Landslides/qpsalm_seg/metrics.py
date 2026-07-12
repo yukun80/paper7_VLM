@@ -76,11 +76,12 @@ class MetricAccumulator:
             self.groups[polarity].append(item)
             for group in (
                 f"raw_combo={meta.get('raw_combo', 'unknown')}",
-                f"canonical_combo={meta.get('canonical_combo', 'unknown')}",
+                f"family_combo={meta.get('family_combo', 'unknown')}",
                 f"sensor_combo={meta.get('sensor_combo', 'unknown')}",
-                f"normalization_combo={meta.get('normalization_combo', 'unknown')}",
+                f"product_combo={meta.get('product_combo', 'unknown')}",
+                f"task_family={meta.get('task_family', 'unknown')}",
+                f"instruction_ablation={meta.get('instruction_ablation', 'normal')}",
                 f"dataset={meta.get('dataset_name', 'unknown')}",
-                f"gsd_token={meta.get('gsd_token', 'unknown')}",
                 f"target_area_px_bin={meta.get('target_area_px_bin', 'unknown')}",
                 f"target_area_fraction_bin={meta.get('target_area_fraction_bin', 'unknown')}",
                 f"ground_area_m2_bin={meta.get('ground_area_m2_bin', 'unknown')}",

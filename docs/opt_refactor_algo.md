@@ -1,420 +1,456 @@
-# Multi-Source Qwen-PSALM-Seg 算法改进重构指导方针
+# Multi-Source Qwen-PSALM-Seg 二次重构问题与修改方案
 
-## 一、重构目标与基本原则
+## 一、重构定位
 
-当前模型已经具备多源模态适配、空间门控、query 级模态注意力、Qwen 文本与视觉证据、PSALM-style mask proposals、多尺度融合和多种 verifier，但这些能力分别以独立小模块叠加，导致同一种功能被多次实现。例如，全局模态 gate、尺度 gate、空间 gate 和 query modality attention 都在解决“选择什么模态”；condition scorer、evidence scorer 和 visual-evidence scorer 都在解决“选择哪个 proposal”；本地 visual evidence adapter 和 Qwen visual evidence cache 又都在承担视觉语义增强。当前代码因此面临模块职责不清、损失目标重复、消融组合过多和论文逻辑难以概括的问题。
+后续重构继续保留 **SANE—QMEF—PMRD** 三模块主框架，不再增加新的一级模块。17 个问题应分别收敛到三条主线：SANE 负责预训练密集视觉特征与传感器结构表达，QMEF 负责无泄漏的多源语义证据融合，PMRD 负责经 Qwen 更新的 mask queries、query-specific 像素特征与 proposal-set 分割。
 
-重构的总体目标不是删除所有现有能力，而是将功能相近的小模块整合为三个有明确边界的核心模块，使整个算法形成一条清晰逻辑链：
-
-**多源遥感数据如何保留原生尺度和传感器差异 → Qwen 如何提供任务语义并调度多源证据 → PSALM mask queries 如何生成和细化滑坡 mask。**
-
-PSALM 最值得保留的是“任务指令、条件提示和 mask tokens 的统一输入范式”，以及“mask proposal 生成与条件分类解耦”的设计，而不是完整照搬其旧视觉主干。PSALM 的 mask generator 本身接收多层视觉特征、mask tokens 和 condition embeddings，并通过匹配机制训练 proposals。 Qwen3-VL-Seg 最值得借鉴的是多尺度空间特征注入、高分辨率细节融合和 mask-aware iterative refinement，而不是必须复现 box grounding。
-
-重构后的主模型必须遵循三个原则。第一，每个核心模块只能回答一个主要问题，不能同时承担模态编码、语义推理、proposal 选择和像素恢复。第二，任何额外分支都必须能通过独立消融说明其作用，否则不进入主模型。第三，正式方法应避免依赖人工设置的弱模态权重、GT bbox 或大量辅助正则来维持性能。
+PSALM 的关键依据是：task instruction、condition prompt 和 mask tokens 均进入 LMM，经过 LMM 更新后的 mask-token hidden states 再用于 mask proposal 生成；其消融结果表明，mask tokens 不经过 LMM 会降低 referring 和开放词汇分割表现。 Qwen3-VL-Seg 则说明，预训练视觉编码器的中间层特征、高分辨率浅层特征和 mask-aware query refinement 对精细边界恢复具有实际作用。
 
 ---
 
-## 二、收缩研究范围，彻底删除灾前灾后相关设计
+## 1. Mask tokens 尚未进入 Qwen
 
-当前研究范围已经调整为**单时相或同期多源遥感条件下的滑坡分割**，不再包含灾前灾后变化检测。因此，项目中的数据定义、任务模板、模型接口、配置、注释、实验脚本和文档必须同步收缩。
+### 当前问题
 
-需要删除所有关于以下内容的表述与预留：
+当前 mask tokens 只存在于 PMRD 内部。Qwen 输出 task、condition、reasoning 和 visual evidence，随后 PMRD 再独立初始化 queries。这使 mask queries 虽然受到 Qwen semantic token 的加法或 attention 条件控制，但没有真正经过 Qwen 的多模态语义更新，与 PSALM 的核心机制仍有明显差异。
 
-* `pre_optical`、`post_optical`、`pre_image`、`post_image`；
-* change detection、new landslide、post-disaster change；
-* temporal token、change-aware branch、difference feature；
-* 灾前灾后配准、时间顺序和变化区域分割；
-* 与变化检测有关的 prompt、task type、损失和评价指标。
+### 修改方案
 
-不能仅在训练时不使用这些字段而继续在框架中保留。保留未使用接口会增加数据 schema 和模型逻辑复杂度，也容易让后续学生误以为需要维护一个并不存在的变化检测任务。
+在 Qwen 输入序列末尾加入固定数量的专用 `<MASK_i>` tokens，使任务指令、条件提示、多源视觉 token 和 mask tokens 在同一序列内交互。Qwen 输出位置对应的 hidden states 应直接作为 PMRD 的初始 coarse queries，替代当前独立的 `mask_tokens + task_to_query` 初始化。
 
-重构后的任务范围应只包括：
+考虑单卡算力，不重新在线运行完整 Qwen 视觉编码。多源视觉 token 可继续离线缓存，训练阶段只加载缓存视觉 token，与在线文本 token 和 learnable mask tokens 拼接后进入 Qwen language decoder。Qwen3-VL-2B 主体冻结，仅对最后若干 LM block 施加 QLoRA/LoRA，并训练新增 mask-token embedding。这样既能让 mask tokens 真正进入 Qwen，又避免重复计算视觉塔。
 
-1. 普通滑坡语义分割；
-2. 多源证据约束滑坡分割；
-3. 困难负样本感知滑坡分割；
-4. 后续可扩展的语言指令或 referring segmentation。
-
-其中多源证据只来自当前有效的高分辨率光学、Sentinel-2、Sentinel-1、DEM/地形变量和 InSAR 形变速率。
+PMRD 仍负责 dense mask decoding，Qwen 只负责将 mask query 更新成与指令和多源证据一致的语义 query。主模型中不应同时保留“Qwen 更新 query”和“独立 PMRD mask token 初始化”两套平行机制。
 
 ---
 
-# 三、重构后的三个核心模块
+## 2. VLM 指令作用不可辨识
 
-## 模块一：传感器感知的原生尺度多源编码器
+### 当前问题
 
-### Sensor-Aware Native-Scale Encoder，简称 SANE
+普通滑坡、多源证据、DEM 证据、SAR 证据和 InSAR 证据等指令，大多对应同一个 parent semantic mask。即使模型完全忽略文本指令，也可能得到同样的监督结果。当前训练协议因此无法证明 Qwen、condition prompt 和 evidence reasoning 确实影响了分割目标。
 
-该模块只负责解决两个问题：
+### 修改方案
 
-**不同传感器和波段如何被正确编码，以及不同尺寸和空间分辨率如何在不丢失原生尺度信息的情况下形成统一的多尺度特征。**
+训练集中必须加入“同一图像、不同指令、不同目标 mask”的样本。优先使用现有 mask 自动派生以下监督：指定位置的滑坡、最大滑坡、小型滑坡斑块、狭长滑坡、碎片化滑坡、指定连通域、多目标滑坡和 no-target 指令。
 
-当前实现将原始模态压入 `hr_optical/s2/s1/dem/insar` 五个固定槽位，并规定固定通道数，例如高分光学 5 通道、S1 4 通道、DEM 2 通道。超过容量的通道会被截断。  这个设计适合快速原型，但不适合作为最终方法，因为它掩盖了波段、极化、升降轨和地形变量的真实语义。
+还应构造反事实样本，例如要求分割不存在的位置或不存在的特征，目标为空 mask；或交换同一图像不同区域的 referring expression，要求模型拒绝错误指令。这样才能区分“理解指令”与“固定语义分割”。
 
-重构后，输入单位不再是固定通道槽位，而是“模态实例”。每个输入实例至少应携带：
+训练任务至少应包含三类：
 
-* 模态族：optical、multispectral、SAR、terrain、deformation；
-* 传感器类型；
-* 波段或极化标识；
-* 原生 GSD；
-* 当前对齐后 GSD；
-* 有效像素掩码；
-* 可选质量信息；
-* 实际图像张量。
+1. `global semantic segmentation`：分割全部滑坡；
+2. `referring/conditional segmentation`：按位置、尺度、形态或指定区域分割；
+3. `no-target segmentation`：指令描述目标不存在时输出空 mask。
 
-同一模态族可以共享主 adapter，但必须通过 sensor embedding、band embedding、orbit embedding、GSD embedding 和 quality embedding 保留差异。这样既不会为每种传感器单独建立完整网络，也不会把不同物理含义的通道盲目拼接。
+正式消融必须比较正常指令、随机打乱指令、固定通用指令和删除 Qwen 语义输入。若打乱指令后结果不下降，说明 VLM 部分尚未发挥作用。
 
-当前 `RemoteSensingModalityAdapter` 中的通道注意力、梯度特征和空洞上下文可以保留，但应作为 SANE 的内部实现，而不是独立方法贡献。SAR、DEM 和 InSAR 使用梯度信息的思路是合理的，能够保留散射变化、地形坡度和形变梯度。
+---
 
-SANE 的最终输出应是每个模态的原生尺度层级特征，而不是已经融合的单一 feature map。输出形式应类似：
+## 3. Modality dropout 与 Qwen 视觉证据存在信息泄漏
+
+### 当前问题
+
+当前 semantic evidence 和 Qwen 多视图缓存可能基于完整模态集合生成，而 SANE 之后才随机丢弃模态。此时 student dense branch 虽然缺少某个模态，Qwen visual token 和 prompt 仍可能包含该模态的信息，缺失模态实验不再真实。
+
+### 修改方案
+
+模态子集必须在所有语义和视觉证据构造之前确定。每次训练首先生成 `active_modality_subset`，然后统一作用于：
+
+* SANE 输入实例；
+* availability metadata；
+* Qwen prompt；
+* evidence reasoning text；
+* Qwen visual view mask；
+* QMEF reliability prior。
+
+Qwen multi-view cache 应增加 `subset_signature`。不必为每个样本缓存所有可能组合，可以为每个样本缓存完整组合、各单模态组合以及训练计划中实际使用的若干随机子集。训练时 modality dropout 只能选择已经具有匹配 Qwen evidence cache 的 subset。
+
+missing-modality consistency 的 teacher 使用完整模态及完整 evidence，student 使用明确记录的子模态及相应 Qwen evidence。任何 student 不可见的模态，其文本描述和视觉 token 也必须被移除。
+
+---
+
+## 4. 不引入地理坐标识别模块
+
+### 当前处理原则
+
+本研究面向已经完成 patch 级配准和数据预处理的遥感图像分割，不要求模型理解 CRS、经纬度、仿射变换或地理坐标。因此不增加地理坐标编码、空间参考系转换或地图坐标 attention。
+
+### 保留要求
+
+“原生尺度”在本文中应严格定义为：
+
+> 保留不同模态的原始 H/W、通道结构和 GSD 信息，并在 feature level 完成尺度对齐。
+
+数据构建阶段必须保证同一样本各模态覆盖相同或基本一致的地表范围。模型只处理剩余的分辨率差异和轻微空间误差，不承担完整遥感配准任务。论文和文档中避免使用“地理坐标对齐”，改用“GSD-aware native-resolution feature alignment”。
+
+---
+
+## 5. Qwen multi-view token 尚不是真正的多源推理
+
+### 当前问题
+
+当前方案主要从各图像 token 内部池化得到 per-view embedding。由于 Qwen 是因果语言模型，图像 token 本身不一定能访问其后出现的总结指令，也不代表模型已经完成所有传感器之间的联合推理。
+
+### 修改方案
+
+在所有传感器 view 和文字说明之后，追加明确的 evidence query anchors，例如：
+
+* `<GLOBAL_EVIDENCE>`；
+* `<OPTICAL_EVIDENCE>`；
+* `<SAR_EVIDENCE>`；
+* `<TERRAIN_EVIDENCE>`；
+* `<DEFORMATION_EVIDENCE>`。
+
+缓存的最终证据不应以图像 token mean pooling 为主，而应提取这些位于完整多视图上下文之后的 anchor hidden states。它们能够访问前面全部图像和文本，更适合作为 Qwen 的多源推理输出。
+
+per-view visual tokens仍可保留，用于局部传感器证据；post-context global token用于跨视图综合。SemanticEvidenceController 最终接收：
 
 [
-{F_m^{1/4},F_m^{1/8},F_m^{1/16},V_m,Q_m,S_m}_{m=1}^{M}
+E={E_{\text{task}},E_{\text{condition}},
+E_{\text{global}},E_{\text{view}*1},...,E*{\text{view}_M}}
 ]
 
-其中 (V_m) 是有效区域，(Q_m) 是质量或可靠性，(S_m) 是尺度信息。
-
-该模块不读取自然语言指令，也不进行 proposal 生成。它只负责形成可信、可比较的多源密集空间特征。
+需要继续保留 image shuffle、view removal、text-only 和 image-text-delta 消融。若图像被打乱后 global evidence 和最终性能基本不变，则不能将其表述为真正的视觉推理。
 
 ---
 
-## 模块二：Qwen 引导的多源语义证据融合器
+## 6. SANE 不再从零训练，改用预训练模型中间层特征
 
-### Qwen-Guided Multi-Source Evidence Fusion，简称 QMEF
+### 当前问题
 
-该模块只负责解决一个问题：
+当前 SharedBandPyramid 和 family-specific blocks 基本随机初始化。对异构且规模有限的滑坡数据，从零学习光学纹理、小目标边界、SAR 结构和多尺度空间模式风险较高。
 
-**当前任务条件下，哪些模态、哪些位置和哪些尺度上的证据应该被使用。**
+### 修改方案
 
-当前实现同时使用 sample-level gate、scale gate、spatial gate 和 query-level modality attention。   这些设计逐步解决了不同层级的证据选择问题，但功能严重重叠，且每个 gate 都需要独立参数、正则和诊断。
+SANE 改造成**预训练特征适配器**，而不是独立从零训练的视觉主干。
 
-重构后只保留两级机制。
+主推荐方案是复用 Qwen3-VL 视觉编码器的多层中间特征。对每个模态实例先生成物理意义明确的 sensor-aware 视图，再由冻结的 Qwen3-VL vision tower提取若干层视觉特征，例如浅层、中层和高层特征。Qwen3-VL-Seg 已证明中间 ViT 特征经过轻量 spatial injection 后，能够为 dense prediction 提供比单一顶层表示更充分的空间信息。
 
-第一级是**模态可靠性先验**。它根据 availability、传感器、GSD、质量信息和全局统计，输出每个模态的基础可靠度。它回答的是：“这个样本中哪些模态总体可信？”
-
-第二级是**query-spatial cross-modal attention**。它根据任务语义，在每个空间位置或 mask query 上动态读取不同模态特征。它回答的是：“当前候选滑坡区域在这个位置应使用哪种证据？”
-
-不再单独维护 scale gate。尺度信息通过多尺度 token 和 scale positional embedding 进入统一 cross-modal attention。这样可以将当前的四层 gate 压缩为“可靠度 prior + query-spatial attention”两层逻辑。
-
-Qwen3-VL 在该模块中只承担语义控制和多源证据理解。Qwen 输入应包括自然语言任务和多源视觉概览，输出一个统一的 semantic-evidence embedding，而不再分别构造 condition、evidence-text 和 visual-evidence 三个相互竞争的 embedding。
-
-当前代码中三个 scorer 本质上都使用同一种 `ConditionAwareProposalScorer`，且最终通过固定权重相加。  这一部分需要合并为一个统一的 semantic-evidence verifier。它的输入是：
-
-* 指令语义；
-* Qwen 多源视觉证据；
-* 当前 mask query；
-* 模态可靠性信息。
-
-它的输出是一个 proposal relevance score。
-
-重构后不再分别设置：
-
-* `condition_scorer`；
-* `evidence_scorer`；
-* `visual_evidence_scorer`；
-* 三组分类损失；
-* 三组 ranking loss；
-* 三组手工 selection weight。
-
-如果确实需要区分文本证据和视觉证据，应在统一 verifier 内使用两个子 token，通过 attention 自动融合，而不是建立三个独立排序器。
-
----
-
-## 模块三：PSALM-style 滑坡 proposal 与 mask 细化解码器
-
-### Proposal-Set Mask Refinement Decoder，简称 PMRD
-
-该模块负责解决最后一个问题：
-
-**如何从融合后的多源证据中生成一个或多个滑坡候选区域，并恢复精确边界。**
-
-该模块保留 PSALM 的 mask token 和 proposal—classification 解耦思想。PSALM 的关键价值在于 mask tokens 先经多模态模型更新，再由 mask generator 生成 proposals，condition embedding 用于分类，而不是用一个 segmentation token 直接输出唯一 mask。
-
-当前 Transformer mask decoder、mask embeddings 和多 proposal 输出可以保留。但需要重新定义多个 query 的语义，避免目前“多个 proposal 都学习整幅 GT，同时又被 diversity loss 要求不同”的矛盾。
-
-如果一幅 patch 中的滑坡 mask 可以可靠分解为多个连通域，应将每个连通域视为一个滑坡实例，使用 Hungarian matching 将 queries 与连通域匹配。PSALM 本身也采用 bipartite matching 来分配 proposals 和 GT。
-
-如果连通域不能可靠表示单独滑坡，则应将多 query 定义为“覆盖集合”，训练目标改为：
-
-* proposal union 覆盖完整滑坡 mask；
-* proposal 间减少冗余重叠；
-* 每个滑坡区域至少被一个 proposal 覆盖。
-
-不能继续让多个 top-k proposal 都独立逼近整幅语义 GT，再通过 noisy-or 合并。
-
-PMRD 中应引入 Qwen3-VL-Seg 的两个核心思想：
-
-第一，**高分辨率细节注入**。浅层高分辨率特征只用于边界恢复，不再重复承担语义编码。
-
-第二，**mask-aware iterative refinement**。第一轮 mask 产生后，用 soft mask 从多源高分辨率特征中聚合区域证据，将其反馈给 query，再进行第二轮 mask 预测。Qwen3-VL-Seg 通过第一轮 mask 对像素特征进行加权池化，再更新 query，证明这种 coarse-to-fine 路线适合轻量 mask decoder。
-
-这个 refinement 直接替代 box prior。正式模型中应删除 `box_prior_adapter` 和 GT bbox 主路径。若需要与 Qwen3-VL-Seg 做对照，box prior 只能放在独立的 legacy ablation 中，不能进入主模型。
-
----
-
-# 四、原生多尺度建模模块的重构方针
-
-## 1. 当前问题
-
-当前实现将所有模态 resize 和 padding 到同一个 target size，然后在统一尺寸的 feature 上用卷积下采样形成 high/mid/low 金字塔。
-
-因此，目前的“多尺度”只表示网络内部的特征金字塔，不表示不同传感器原生空间尺度。高分辨率光学和 10 m Sentinel-2 最终都在同一个像素网格中编码，它们的真实尺度差异主要依靠 GSD embedding 补偿。
-
-此外，当前 `MultiScaleFeatureFusion` 使用卷积下采样、双线性上采样和特征相加形成 mask/memory features。 FPN 本身并非无效，但这种简单加和式 FPN 已不适合承担本文的主要创新，也无法充分解决多传感器原生尺度差异。
-
-## 2. 重构目标
-
-多尺度建模应单独成为 SANE 中的核心子系统，命名为：
-
-**Native-Scale Spatial Aggregator，原生尺度空间聚合器。**
-
-该模块应采用以下逻辑：
-
-不同模态先在各自合理的输入尺度上编码，形成各自的多层特征；随后不是将所有特征直接 resize 后相加，而是通过 scale-aware deformable attention 或可变采样位置的 cross-attention，将不同模态的信息映射到一组统一的 decoder reference grids。
-
-PSALM 的 mask generator采用 Mask2Former-style multi-scale deformable attention，而 Qwen3-VL-Seg采用轻量 spatial injection 加高分辨率细节恢复。  重构后的模块可以综合两者：
-
-* 中低分辨率语义特征通过轻量多尺度 deformable attention 聚合；
-* 高分辨率边界特征通过 shallow detail branch 保留；
-* GSD 和 scale embedding用于控制采样范围；
-* decoder query 根据目标区域动态读取不同尺度，而不是固定上采样相加。
-
-为了满足单卡条件，可限制为三层特征、少量 deformable attention 层和较低 decoder dimension。目标不是复制完整 Mask2Former，而是用更现代的可变位置特征聚合替代当前固定 FPN 加和。
-
-## 3. 数据与 batch 策略
-
-不能再将所有样本无条件压缩到唯一 target size。建议采用尺寸分桶，例如 128、192、256、384，同一个 batch 内使用相近尺寸。
-
-样本内部如果不同模态必须完成地理配准，可以在数据层统一到共同地理范围，但应保留每个模态的原生 GSD 和缩放比例。模型对齐应主要发生在 feature level，而不是依赖输入层的反复重采样。
-
-正式论文中应将当前表述从“支持任意大小图像”改为更准确的：
-
-**支持不同原始尺寸、不同 GSD 和不同传感器尺度的动态编码与 feature-level 对齐。**
-
----
-
-# 五、padding 无效区域的统一处理方案
-
-当前等比例 resize 后使用零值 padding，但 loss、proposal matching 和 metrics 仍对完整 target canvas 计算。  这会把 padding 当作真实背景，影响小目标、非方形样本和不同尺寸样本之间的公平比较。
-
-数据层必须在 resize/pad 时同步生成：
+原始多波段、SAR、DEM 和 InSAR 数值不能完全依赖三通道渲染，因此保留轻量 raw-physical adapter。其作用从“主视觉编码器”降级为“物理残差分支”：
 
 [
-V\in{0,1}^{H\times W}
+F_m^l =
+A_l(F_{\text{Qwen-ViT},m}^l)
++\alpha_l P_l(F_{\text{raw},m}^l)
 ]
 
-其中有效影像区域为 1，padding 区域为 0。
+其中 (A_l) 是中间层适配器，(P_l) 是原始波段投影，(\alpha_l) 采用接近零的初始化，保证训练初期主要继承预训练视觉表示。
 
-该 valid mask 必须贯穿整个训练与评价流程。
+不建议同时引入多个大型预训练 backbone。首先使用 Qwen3-VL vision tower保持模型统一；若实验显示 S1/S2 表征明显不足，再单独将 CROMA 或 AnySat 作为遥感预训练 backbone 替代方案进行对比，而不是与 Qwen、CROMA、AnySat 同时堆叠。
 
-在 BCE/Focal 中，只累计 (V=1) 的像素，并用有效像素数量归一化。Dice、IoU 和 Tversky 中，交集、预测面积和 GT 面积都必须乘以 (V)。proposal 与 GT 的 Dice matching 也必须使用 valid mask，否则 proposal ranking 仍会受 padding 影响。
-
-Boundary loss 需要进一步收缩 valid mask 边缘，避免真实影像与 padding 的接缝被当作目标边界。注意力模块应将无效 token 作为 key padding mask，禁止 decoder 从 padding 区域读取特征。
-
-验证时建议同时保留两套方式：
-
-1. 在 target canvas 上使用 valid mask 计算；
-2. 去除 padding 并恢复到原始 H/W 后计算。
-
-两者结果应基本一致。若差异明显，说明 resize 或恢复逻辑存在问题。
-
-此外，空 mask 样本不能继续只用“预测和 GT 均为空则 IoU=1”混入总体均值。应分别报告：
-
-* positive-only IoU/Dice；
-* negative sample accuracy；
-* empty false-positive rate；
-* overall IoU/Dice。
+Qwen vision tower 默认冻结，允许对最后一到两层或 spatial adapters 使用较小学习率微调。SANE 的创新重点应从“重新学习视觉特征”转为“如何适配和融合预训练中间层特征与遥感原始物理通道”。
 
 ---
 
-# 六、真正的 Qwen 多源视觉证据方案
+## 7. QMEF reliability pooling 未排除无效区域
 
-## 1. 当前问题
+### 当前问题
 
-当前 `build_visual_preview` 只按优先顺序选择第一个可用模态，通常是高分光学或 S2。
+当前 reliability 使用整幅特征均值进行 pooling，padding、nodata 和无效覆盖区域的零值会进入统计，使不同有效覆盖比例的模态产生偏差。
 
-这意味着即使一个样本同时包含 S2、S1、DEM 和 InSAR，Qwen3-VL 也可能只看到一张 S2 三通道图。当前 Qwen visual evidence 因此不能称为真正的多源视觉证据。
+### 修改方案
 
-此外，直接选前三个通道也存在物理含义错误：
+所有 reliability pooling 改成 valid-mask weighted pooling：
 
-* S2 前三通道不一定构成正确 RGB；
-* SAR 需要 VV/VH/ratio 等明确视图；
-* DEM 应使用 elevation、slope 或 hillshade；
-* InSAR 应保留正负形变方向，不能简单裁剪到 `[0,1]`；
-* 不同 sensor view 应向 Qwen 显式说明其类型。
+[
+\bar F_m=
+\frac{\sum_{x,y}V_m(x,y)F_m(x,y)}
+{\sum_{x,y}V_m(x,y)+\epsilon}
+]
 
-## 2. 重构目标
+同时增加有效覆盖比例：
 
-建立独立的：
+[
+c_m=\frac{\sum V_m}{HW}
+]
 
-**Sensor-Aware Multi-View Renderer，多源传感器视觉渲染器。**
+将 (c_m) 作为 reliability head 的显式输入。对有效面积过小的模态设置最小可靠度上限，避免极少有效像素被错误赋予高权重。
 
-每个可用模态生成一张或少量具备明确物理含义的可视图：
-
-* 高分辨率光学：自然 RGB；
-* Sentinel-2：真彩色和 NIR/SWIR 假彩色；
-* Sentinel-1：VV、VH 和 ratio 合成；
-* DEM：高程、坡度或 hillshade；
-* InSAR：以零为中心的发散色图，并标注单位与方向。
-
-Qwen3-VL 使用多图输入，而不是将这些 view 拼成一个大图或只选择优先模态。每个 view 前应附加简短类型说明，例如该图是 S1 SAR、DEM slope 或 InSAR velocity。
-
-Qwen 输出只作为**全局语义证据 embedding**进入 QMEF 和 proposal verifier，不应直接承担密集像素编码。密集边界仍由 SANE 的原始数值特征提供。
-
-## 3. 删除重复的本地 visual evidence 分支
-
-当前 `VisualEvidenceAdapter` 又用 CNN 对三通道 preview 生成 dense features，并直接加到 mask features 和 memory features。
-
-这与原始模态 adapter 重复编码同一视觉信息。重构后建议删除该 dense preview branch。高分辨率细节统一由 SANE 和 PMRD 的 detail branch 提供，Qwen multi-view 只提供语义证据。
-
-若需要保留一个快速非 Qwen 对照，应将其明确命名为 `local_preview_baseline`，只用于消融，不进入主模型。
-
-## 4. Qwen pooling 与真实性验证
-
-当前 Qwen 图文 cache 对全部有效 token 做 mean pooling。 长文本可能使 embedding 主要反映 prompt，而不是图像。
-
-需要比较以下 pooling 方案：
-
-* vision-token pooling；
-* image-end token；
-* learnable attention pooling；
-* image-text embedding 与 text-only embedding 的差值。
-
-必须增加两个真实性测试：
-
-第一，将图像随机打乱而保留文本不变，观察 verifier 性能是否明显下降。
-第二，将文本保持不变，只删除某一模态 view，观察对应 evidence score 是否变化。
-
-若图像打乱后性能基本不变，说明所谓 visual evidence 实际仍是文本条件，不能作为方法贡献。
-
-Qwen visual cache key 还必须包含 preview 内容 hash、renderer version、模型 revision 和 processor revision，不能只依赖 sample ID 和 prompt 文本。
+high、mid、low 特征均需要对应尺度的 valid mask。QMEF 中任何 global pooling、attention key 和 reliability 计算都必须使用有效区域。
 
 ---
 
-# 七、proposal 与损失函数的简化方针
+## 8. Reliability softmax 强制所有模态权重和为 1
 
-当前完整配置同时启用了大量损失：最终 mask、proposal mask、proposal 分类、condition 分类、evidence 分类、visual evidence 分类、多个 ranking、空 mask 抑制、query diversity、proposal diversity、gate entropy 和 query usage balance。
+### 当前问题
 
-这种设计适合调试，但不适合作为最终算法。它会导致性能提升无法归因，且不同正则可能互相冲突。
+softmax 必须在可用模态中选择至少一个，即使所有模态质量都很差，仍会人为提高某个模态的权重，模型无法表达“当前所有证据均不可靠”。
 
-重构后的主损失建议只保留四类。
+### 修改方案
 
-第一类是最终 mask loss，由 BCE/Focal、Dice/Tversky 和可选 Boundary loss 组成。
+在 reliability 分布中加入一个 learnable `null evidence` 槽位：
 
-第二类是 proposal set matching loss。根据连通域或 coverage-set 定义，对 proposals 进行 Hungarian matching 或 set coverage 监督。
+[
+[r_1,\ldots,r_M,r_{\varnothing}]
+=\operatorname{softmax}(z_1,\ldots,z_M,z_{\varnothing})
+]
 
-第三类是统一 semantic-evidence verifier loss。只保留一个 proposal relevance classification/ranking 目标。
+真实模态融合只使用 (r_1,\ldots,r_M)，不再重新归一化到 1。若 null evidence 权重较高，融合特征整体幅度相应降低，并向 PMRD 输出较高不确定性。
 
-第四类是 missing-modality consistency loss。对同一样本的完整模态和随机子模态预测进行一致性约束。
+另一种实现是独立 sigmoid gate，但 null-slot softmax更容易保持训练稳定，也能直接解释“没有可信辅助证据”的状态。
 
-query diversity、gate entropy、query usage balance 和人工 hard-combo 权重不应默认进入主模型。只有在消融证明 query 塌缩或模态塌缩无法由结构解决时，才作为训练技巧启用。
-
-当前 `canonical_combo_loss_weights` 对弱组合进行手动加权。 主模型应改为均衡采样、modality dropout 和 reliability-aware fusion，不应把人工组合权重作为核心方法的一部分。
-
----
-
-# 八、代码“屎山”问题的重构方针
-
-当前代码的问题不只是文件数量，而是算法逻辑、实验逻辑和历史兼容逻辑混在一起。模型 forward 中同时处理 Qwen 文本、evidence 文本、visual cache、本地 preview、GSD FiLM、多源 adapter、box prior、fusion、decoder 和十余种 loss；训练脚本和 shell 又分别维护一套 loss stage 和 verifier stage。
-
-代码整理应遵循“算法边界即代码边界”。
-
-## 1. 模型代码只保留三大模块
-
-模型主干只依赖：
-
-* SANE；
-* QMEF；
-* PMRD。
-
-总装模型只负责调用三者，不再在 forward 中直接实现 evidence 权重、GSD 调制、visual feature 加法或多个 scorer 的组合逻辑。
-
-## 2. 建立统一输入和输出数据结构
-
-所有模块通过统一的数据对象传递：
-
-* `ModalityBatch`；
-* `MultiScaleFeatures`；
-* `SemanticEvidence`；
-* `ProposalSet`；
-* `SegmentationOutput`。
-
-避免当前通过大型字典和字符串 key 隐式约定几十个字段。统一结构必须包含 shape、valid mask、GSD、availability 和 modality metadata。
-
-## 3. 配置只能有一个事实来源
-
-当前 Python 配置和 shell 脚本都在维护 loss stage 和 verifier stage。重构后所有 preset 只能定义在 Python 配置层，shell 只负责选择实验名称和传入少量参数。
-
-不允许 shell 脚本逐项改写几十个 loss 权重。否则配置文件、命令行和 shell 默认值会不断漂移。
-
-## 4. 主算法与实验消融分离
-
-以下能力不应继续存在于主模型内部：
-
-* legacy box prior；
-* local preview baseline；
-* text probe；
-* hash-smoke；
-* hard-combo weighting；
-* verifier 独立实验；
-  -旧 FPN 兼容路径。
-
-这些可以作为插件、实验 wrapper 或 development utility 存在，但不能污染主模型 forward。
-
-## 5. 删除所有历史兼容 shim 和无效接口
-
-当新版训练和 checkpoint迁移完成后，应删除：
-
-* 旧 `model.py` 兼容导入；
-* 废弃参数；
-* 灾前灾后字段；
-* box-prior 主线参数；
-* 未使用的 prompt builder；
-* 重复的 modality mapping；
-* 同时存在于 `data.py` 和 `indexing.py` 的重复逻辑。
-
-必要的旧 checkpoint 兼容应通过单独的 conversion script 完成，而不是长期在主模型中保留条件分支。
-
-## 6. 每个核心模块必须有独立测试
-
-SANE 测试任意模态组合、不同通道数、不同 GSD、不同 H/W 和 valid mask。
-
-QMEF 测试缺失模态、模态顺序交换、错误 view、图像 shuffle 和 evidence attention。
-
-PMRD 测试空 mask、单连通域、多连通域、不同 proposal 数量和 valid-region matching。
-
-训练系统测试 checkpoint reload、cache version、配置一致性和单卡 smoke run。
+QMEF 日志中应增加 null reliability、有效模态总质量和 reliability calibration，而不仅记录最大模态权重。
 
 ---
 
-# 九、建议的重构实施顺序
+## 9. Query attention 只使用 mid-level 特征
 
-第一阶段先做**范围和正确性清理**。删除灾前灾后相关内容；加入 valid pixel mask；区分 positive 与 empty 指标；将 box prior 移出主线；统一 Python 配置；更新 README 和算法说明。该阶段不改变主体网络，优先保证现有实验结果可信。
+### 当前问题
 
-第二阶段完成**三模块结构重组**。将现有 adapter、GSD 和多尺度编码重组为 SANE；将多个 gate 和多个 verifier 合并为 QMEF；将 mask token、proposal 和 refinement 重组为 PMRD。主模型图中只允许出现这三个模块。
+当前 query-spatial attention 只读取 1/8 特征，虽然能够选择不同模态，但无法同时利用高分辨率边界和低分辨率大范围地貌上下文。
 
-第三阶段完成**原生多尺度建模**。引入尺寸 bucket、per-modality GSD、多尺度 deformable aggregator 和有效区域 attention mask，替换当前简单 FPN 加和。
+### 修改方案
 
-第四阶段完成**Qwen 多源视觉证据**。建立多传感器 renderer、多图 Qwen cache、vision-token pooling、image-shuffle 评价，并删除主线中的本地 preview dense branch。
+将 high、mid、low 三层特征组织为统一的 multi-scale evidence memory，并为每层加入 scale embedding。每个 query 在三个尺度上进行少量 deformable sampling：
 
-第五阶段完成**proposal 监督重定义**。选择 connected-component matching 或 coverage-set supervision，加入 mask-aware iterative refinement，简化 loss。
+[
+Z_q=\sum_{l\in{h,m,l}}
+\sum_{m,p}A_{q,l,m,p}V_{l,m,p}
+]
 
-最后阶段再进行代码清理、模块单测、配置冻结和正式消融实验。
+不再恢复独立的 high/mid/low gate。尺度选择、模态选择和空间位置选择由同一个 query-conditioned deformable attention 完成。
+
+为了控制显存，每个 query 每个尺度只采样固定数量位置，例如 4 个点，不对所有 high-resolution pixels 展开全局 attention。
 
 ---
 
-# 十、重构完成后的算法逻辑与创新点
+## 10. Query 选择的模态没有形成 query-specific pixel feature
 
-重构后的论文方法应只强调三个实质性模块。
+### 当前问题
 
-第一，**传感器感知的原生尺度多源编码器**，解决不同传感器、不同波段、不同 GSD 和任意模态组合的统一密集表示问题。
+query attention 目前只更新 query embedding，最终动态 mask kernel仍作用于所有 query共享的 fused high feature。不同 query 即使选择了不同模态，实际像素特征仍相同，query-level 模态选择对 mask边界的影响较弱。
 
-第二，**Qwen 引导的多源语义证据融合器**，利用多图 Qwen 语义证据和 query-spatial cross-modal attention，在不同任务条件下动态选择光学、SAR、DEM 和 InSAR 证据。
+### 修改方案
 
-第三，**PSALM-style proposal set 与 mask-aware refinement decoder**，通过多个 mask tokens、proposal—classification 解耦和迭代区域证据回放，生成不规则、多斑块滑坡 mask，而不依赖 box grounding。
+PMRD refinement阶段根据 query-modality-spatial attention生成 query-specific pixel feature：
 
-这三个模块分别对应：
+[
+F_q(x,y)=
+\sum_m A_{q,m}(x,y)F_m^{detail}(x,y)
+]
 
-**看懂不同传感器 → 拼好不同证据 → 分出精确滑坡区域。**
+随后第 (q) 个 mask embedding只作用于 (F_q)，而不是共享的 (F_{\text{fused}})。
 
-最终模型图、代码主干、实验消融和论文贡献都应围绕这三步展开。任何不能明确归入这三步、且无法通过独立实验说明必要性的模块，都不应进入最终主模型。
+为避免显存过高，不必长期保存完整的 `[B,Q,D,H,W]`。可按 query 分块计算，或将 attention分解为：
+
+[
+A_{q,m}(x,y)\approx a_{q,m}\cdot s_q(x,y)
+]
+
+先按 query 模态权重融合，再用 coarse mask或空间 attention做局部调制。
+
+这一修改应与第 9 项合并实现，使“query选择哪些证据”和“query用哪些像素生成 mask”成为同一逻辑。
+
+---
+
+## 11. 高分辨率细节只有 1/4 分辨率
+
+### 当前问题
+
+当前 PMRD detail branch输入仍是 1/4 feature，最终 mask主要通过插值恢复至原分辨率。对高分辨率光学影像中的小滑坡、细长边界和碎片化目标，细节恢复能力可能不足。
+
+### 修改方案
+
+SANE 保留一条 1/2 分辨率的 shallow detail feature，来源优先采用预训练 vision tower浅层中间特征，并融合轻量原始图像卷积分支。该 feature只提供给 PMRD refinement，不进入复杂全局语义融合。
+
+由于没有 box prior，使用第一轮 coarse mask形成 soft spatial gate：
+
+[
+F^{detail}*q=
+\sigma(M_q^{coarse})\odot F^{1/2}*{detail}
+]
+
+再与上采样后的语义特征融合。这样可借鉴 Qwen3-VL-Seg 的高分辨率像素融合思想，同时用 coarse mask替代 box，降低无关浅层纹理干扰。
+
+最终 mask在 1/2 特征上预测，再插值一次恢复原分辨率。只有边界指标仍明显不足时，才考虑 full-resolution stem，不应一开始使用全分辨率重型分支。
+
+---
+
+## 12. Verifier 诊断指标与 component-set 监督不一致
+
+### 当前问题
+
+proposal 已经按连通域进行 Hungarian matching，但当前部分诊断仍使用“proposal 与完整 semantic union mask 的 Dice”定义 best query。正确分割单个连通域的 query未必对完整 union mask具有最高 Dice，因此 verifier accuracy可能产生误导。
+
+### 修改方案
+
+诊断指标改为与 component-set matching一致：
+
+* matched proposal mean Dice；
+* component recall；
+* component precision；
+* unmatched proposal rejection rate；
+* relevance AP/AUC；
+* matched proposal relevance rank；
+* proposal union Dice；
+* missed-component rate；
+* duplicate-component rate。
+
+`best_query_dice against full semantic mask` 仅在 `num_mask_tokens=1` 的 semantic baseline中使用。多 query模型不再以它作为 verifier主指标或 checkpoint选择依据。
+
+Verifier训练目标也应明确：matched proposal为正，unmatched proposal为负；当一个 proposal覆盖多个连通域时，另行记录 merge error；多个 proposal匹配同一连通域时记录 duplicate error。
+
+---
+
+## 13. Prompt 中仍包含 dataset name 和 normalization 信息
+
+### 当前问题
+
+dataset name、normalization combo 和内部数据处理信息进入 Qwen prompt，可能让模型利用数据集来源和预处理方式作为捷径。这些内容也不是自然语言分割任务所需的语义。
+
+### 修改方案
+
+从 Qwen prompt 中彻底删除：
+
+* dataset name；
+* normalization method；
+* 文件来源；
+* 内部 value encoding 名称；
+* 采样和清洗标记。
+
+Qwen prompt只保留：
+
+* 分割任务指令；
+* 目标条件；
+* 当前可用的证据类型；
+* 简短的遥感证据角色说明；
+* 必要的尺度描述。
+
+sensor、band、orbit、GSD、quality和availability全部通过 SANE/QMEF结构化 embedding输入，不重复写入自然语言 prompt。
+
+正式实验应加入“完整语义 prompt”和“仅任务指令 prompt”对比，判断长 evidence reasoning是否真正有益。
+
+---
+
+## 14. 模态 family 映射仍依赖旧 canonical 名称
+
+### 当前问题
+
+虽然模型内部已经使用 `ModalityInstance`，但 family 仍通过旧 raw modality名称映射得到。新增传感器、波段产品或地形变量仍需要修改代码中的映射表。
+
+### 修改方案
+
+benchmark schema直接保存标准字段：
+
+```text
+family
+sensor
+product_type
+band_names
+orbit
+native_gsd_m
+units
+quality
+```
+
+Dataset优先读取 `family` 和 `product_type`，旧 canonical映射只作为历史数据 fallback，并在读取时输出迁移警告。
+
+`canonical_combo` 只用于数据统计和结果分组，不再参与模型输入构建和训练逻辑。完成数据迁移后逐步删除旧 canonical依赖。
+
+---
+
+## 15. Hash bucket embedding 存在碰撞和弱语义
+
+### 当前问题
+
+sensor和band name通过字符串 hash映射到固定 embedding bucket，可能产生碰撞；同时 `R`、`red`、`B04` 等同义波段无法共享语义，模型也无法知道不同光谱波段的物理关系。
+
+### 修改方案
+
+建立标准传感器与波段注册表。已知波段使用标准 ID，并增加连续物理描述：
+
+* 中心波长；
+* 波段宽度；
+* 极化类型；
+* terrain variable type；
+* deformation type；
+* 单位；
+* signed/unsigned 标志。
+
+band token由离散 ID embedding和连续物理属性 projection共同构成。未知传感器或未知波段才使用 hash fallback。
+
+对于 Sentinel-2 混合分辨率波段，增加 per-band GSD；也可以按 10 m、20 m band group拆成多个 ModalityInstance，避免一个实例只保存单一 GSD。
+
+---
+
+## 16. Qwen 多视图 renderer 的物理问题
+
+### 当前问题
+
+当前 renderer已经支持光学真彩色、S2假彩色、SAR组合、terrain view和signed InSAR，但仍存在物理表达不严格的问题。
+
+### 修改方案
+
+SAR 第三通道当前若计算的是 `VV - VH`，描述必须写成 difference，而不能称为 ratio。若输入为 dB，`VV_dB - VH_dB` 可解释为线性域比值的对数形式；若输入为线性值，则应显式计算安全 ratio。
+
+Terrain renderer必须根据 `product_type` 区分 DEM、slope、aspect和curvature。只有 DEM可以派生 hillshade和坡度；输入本身为 slope时不能再次将其当高程求坡度。
+
+InSAR使用以零为中心的固定发散色图，并在描述中写明单位、LOS方向和正负号约定。为保留跨样本形变幅度差异，优先使用数据集级或区域级固定裁剪范围，而不是完全使用每张图自己的 98% 分位缩放。可以同时提供“固定尺度 view”和“局部增强 view”。
+
+所有 renderer必须应用 valid mask。nodata区域统一显示为中性灰色，并在 view description中说明灰色区域无有效数据。
+
+S2 true/false-color必须根据标准 band name索引，不允许在未知 band顺序下静默取前三通道。fallback view必须明确标记为 `uncertain_band_order`，并可在正式 Qwen evidence中选择禁用。
+
+---
+
+## 17. 代码工程仍需整理
+
+### 当前问题
+
+重构后算法主模块已经清晰，但 `data.py` 和 `train_eval.py` 仍承担过多职责。部分历史字段如 `visual_preview` 已不参与主模型，却仍保留在核心 batch接口中。缓存、数据、prompt、评估和诊断逻辑尚未完全解耦。
+
+### 修改方案
+
+`data.py` 应拆分为数据索引读取、模态归一化、空间变换、prompt生成、Dataset和Sampler。`train_eval.py` 应拆分为 trainer、evaluator、checkpoint manager、threshold evaluator和diagnostics exporter。
+
+核心 `ModalityBatch` 只保留模型训练必需字段。`visual_preview`、可视化路径和调试信息移入可选 diagnostics/meta对象，不再作为主模型必需输入。
+
+Qwen text cache和multi-view cache必须采用严格版本校验，至少检查：
+
+* 模型 revision；
+* processor revision；
+* renderer version；
+* pooling method；
+* subset signature；
+* 内容 hash；
+* prompt version。
+
+配置继续以 Python dataclass和preset为唯一事实来源。shell脚本只负责编排，不能重新维护算法参数。
+
+测试体系需要补充四类真实集成测试：真实 benchmark sample完成 forward/backward；Qwen text cache与mask-token QLoRA链路；subset-aware multi-view cache；CUDA mixed-precision单步训练。合成单元测试继续保留，但不能作为完成训练闭环的唯一依据。
+
+---
+
+# 实施优先级
+
+第一优先级是解决科学有效性问题，包括第 2、3、7、12、13 项。它们分别决定指令是否有效、缺失模态是否真实、指标是否可信以及模型是否利用数据集捷径。
+
+第二优先级是增强模型核心能力，包括第 1、5、6、9、10、11 项。完成后，mask tokens、Qwen多源语义、预训练视觉中间层、query-level多尺度融合和高分辨率细化才能真正形成闭环。
+
+第三优先级是完善结构表达和工程质量，包括第 8、14、15、16、17 项。它们影响模型扩展性、物理合理性和代码长期维护。
+
+第 4 项不增加模型模块，只需在论文和数据规范中明确：本研究假定输入 patch已经配准，不研究地理坐标理解。
+
+# 重构后的目标链路
+
+最终模型应形成如下唯一主链：
+
+[
+\text{预训练多源中间层特征}
+\rightarrow
+\text{Qwen更新的mask queries}
+\rightarrow
+\text{subset-aware多源证据融合}
+\rightarrow
+\text{query-specific多尺度像素特征}
+\rightarrow
+\text{proposal set与mask-aware refinement}
+]
+
+该链路分别对应三个一级模块：
+
+**SANE**：预训练视觉中间层与遥感物理通道适配；
+**QMEF**：无泄漏、多尺度、可拒绝的多源证据融合；
+**PMRD**：经 Qwen 更新的 mask queries、component-set proposals和高分辨率 mask细化。
+
+后续新增设计必须归入这三者之一，不能再建立作用相似的平行 scorer、gate或视觉分支。

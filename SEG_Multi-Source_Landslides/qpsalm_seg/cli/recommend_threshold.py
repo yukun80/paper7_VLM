@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
         "--group-prefix",
         action="append",
         default=None,
-        help="Group prefix to include, e.g. canonical_combo=. Can be repeated. Default: canonical_combo=.",
+        help="Group prefix to include, e.g. family_combo=. Can be repeated. Default: family_combo=.",
     )
     parser.add_argument("--limit", type=int, default=32)
     parser.add_argument("--eval-device", default="cuda")
@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    prefixes = tuple(args.group_prefix or ["canonical_combo="])
+    prefixes = tuple(args.group_prefix or ["family_combo="])
     report = recommend_thresholds(
         args.run,
         block_name=args.block,

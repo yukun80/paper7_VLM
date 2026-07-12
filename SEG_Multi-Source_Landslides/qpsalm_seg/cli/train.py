@@ -5,13 +5,13 @@
 用途：按 YAML runtime 配置和 Python preset 执行训练、周期验证、checkpoint 与可视化。
 推荐运行命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
 qpsalm_seg.cli.train --config
-SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml
---preset sane_qmef_pmrd --device cuda --condition-embedding-cache CACHE.pt
+SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml
+--preset qwen_psalm_full --device cuda --vision-feature-cache CACHE_DIR
 --train-index TRAIN.jsonl --val-index VAL.jsonl --output-dir outputs/RUN --skip-torch-preflight
-主要输入：配置、preset、核心 train/val 索引和 Qwen 文本/可选视觉缓存。
+主要输入：benchmark-v2 配置、preset、train/val 索引和 Qwen vision cache v3。
 主要输出：checkpoint_best.pt、checkpoint_last.pt、训练日志、验证报告与 mask 可视化。
 写入行为：写入 --output-dir；--overwrite-output 会清空该运行目录。
-所属流程：主模型训练；通常优先使用 scripts/run_qwen_phase1_full.sh 编排完整流程。
+所属流程：主模型训练；通常优先使用 scripts/run_qpsalm_experiment.sh 编排完整流程。
 """
 
 from __future__ import annotations
@@ -43,10 +43,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-index", default=None)
     parser.add_argument("--val-index", default=None)
     parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--controller", choices=["qwen", "qwen_cache", "cached_qwen", "text_probe"], default=None)
+    parser.add_argument("--controller", choices=["qwen_mask_query", "text_probe"], default=None)
     parser.add_argument("--qwen-model-path", default=None)
-    parser.add_argument("--condition-embedding-cache", default=None)
-    parser.add_argument("--visual-evidence-cache", default=None)
+    parser.add_argument("--vision-feature-cache", default=None)
+    parser.add_argument("--qwen-view-pooling", choices=["tokens", "image-end", "attention"], default=None)
+    parser.add_argument("--instruction-ablation", choices=["normal", "shuffled", "fixed-generic", "no-semantic"], default=None)
+    parser.add_argument(
+        "--visual-ablation",
+        default=None,
+        help="normal, shuffled, text-only, image-text-delta, or remove:<family>",
+    )
     parser.add_argument("--allow-qwen-cpu", action="store_true")
     parser.add_argument("--val-interval", type=int, default=None)
     parser.add_argument("--save-interval", type=int, default=None)
@@ -92,8 +98,10 @@ def main() -> None:
             "output_dir": args.output_dir,
             "controller": args.controller,
             "qwen_model_path": args.qwen_model_path,
-            "condition_embedding_cache": args.condition_embedding_cache,
-            "visual_evidence_cache": args.visual_evidence_cache,
+            "vision_feature_cache": args.vision_feature_cache,
+            "qwen_view_pooling": args.qwen_view_pooling,
+            "instruction_ablation": args.instruction_ablation,
+            "visual_ablation": args.visual_ablation,
             "allow_qwen_cpu": True if args.allow_qwen_cpu else None,
             "val_interval": args.val_interval,
             "save_interval": args.save_interval,
@@ -122,7 +130,7 @@ def main() -> None:
         output_path = config.output_path()
         if output_path.exists():
             shutil.rmtree(output_path)
-    from qpsalm_seg.train_eval import train
+    from qpsalm_seg.engine.trainer import train
 
     result = train(config, device_name=args.device, resume=args.resume)
     if args.print_full_report:

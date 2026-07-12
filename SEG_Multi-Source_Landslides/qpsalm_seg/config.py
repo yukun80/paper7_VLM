@@ -13,13 +13,12 @@ import yaml
 from .paths import resolve_project_path
 
 
-CORE_TEMPLATES = [
-    "generic_landslide_v1",
-    "negative_aware_landslide_v1",
-    "multisource_landslide_v1",
-    "terrain_evidence_landslide_v1",
-    "sar_terrain_landslide_v1",
-    "insar_evidence_landslide_v1",
+TASK_FAMILIES = [
+    "global_landslide_segmentation",
+    "negative_aware_segmentation",
+    "multisource_evidence_segmentation",
+    "referring_landslide_segmentation",
+    "no_target_segmentation",
 ]
 
 
@@ -27,28 +26,41 @@ CORE_TEMPLATES = [
 class QPSalmConfig:
     """One resolved configuration is the only algorithmic truth for a run."""
 
-    benchmark_dir: str = "benchmark/multisource_landslide_v1_small"
+    benchmark_dir: str = "benchmark/multisource_landslide_v2_small"
     output_dir: str = "outputs/qpsalm_refactor"
     train_index: str = "indexes/instruction_train.jsonl"
     val_index: str = "indexes/instruction_val.jsonl"
     test_index: str = "indexes/instruction_test.jsonl"
-    preset: str = "sane_qmef_pmrd"
+    preset: str = "raw_sane_qmef_pmrd"
 
-    controller: str = "qwen"
+    controller: str = "qwen_mask_query"
     qwen_model_path: str = "models_zoo/Qwen3-VL-2B-Instruct"
     allow_qwen_cpu: bool = False
-    condition_embedding_cache: str | None = None
-    visual_evidence_cache: str | None = None
+    vision_feature_cache: str | None = None
+    visual_ablation: str = "normal"
+    instruction_ablation: str = "normal"
+    qwen_4bit: bool = True
+    qwen_lora_rank: int = 8
+    qwen_lora_alpha: int = 16
+    qwen_lora_dropout: float = 0.05
+    qwen_lora_last_n_layers: int = 4
+    qwen_max_text_tokens: int = 192
+    qwen_view_tokens_per_view: int = 8
+    qwen_view_pooling: str = "tokens"
 
     target_size: int = 128
     size_buckets: list[int] = field(default_factory=list)
-    max_native_size: int = 384
+    use_size_buckets: bool = True
+    max_native_size: int = 256
     batch_size: int = 1
     num_workers: int = 4
     max_train_samples: int | None = None
     max_val_samples: int | None = 256
     train_hflip_prob: float = 0.5
     train_vflip_prob: float = 0.5
+    task_sampling_ratios: dict[str, float] = field(
+        default_factory=lambda: {"global": 0.4, "referring": 0.4, "no_target": 0.2}
+    )
 
     max_steps: int | None = 1000
     num_epochs: int | None = None
@@ -74,6 +86,9 @@ class QPSalmConfig:
     num_heads: int = 8
     modality_dropout: float = 0.2
     deformable_points: int = 4
+    query_chunk_size: int = 4
+    use_pretrained_sane: bool = False
+    use_qmef: bool = True
     use_query_spatial_attention: bool = True
     use_mask_refinement: bool = True
 
@@ -92,7 +107,7 @@ class QPSalmConfig:
     threshold_sweep: list[float] = field(
         default_factory=lambda: [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70]
     )
-    core_templates: list[str] = field(default_factory=lambda: list(CORE_TEMPLATES))
+    task_families: list[str] = field(default_factory=lambda: list(TASK_FAMILIES))
 
     def benchmark_path(self) -> Path:
         path = resolve_project_path(self.benchmark_dir)

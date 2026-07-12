@@ -1,542 +1,375 @@
 # Multi-Source Qwen-PSALM-Seg
 
-本仓库用于构建多源遥感滑坡 instruction segmentation benchmark，并研究可处理任意模态组合、不同空间分辨率和缺失模态的 Multi-Source Qwen-PSALM-Seg。当前主模型采用 **SANE -> QMEF -> PMRD** 架构，Qwen3-VL 作为冻结的 semantic/evidence controller，不生成 bbox，也不承担密集像素编码。
+本仓库构建多源遥感滑坡 instruction-segmentation benchmark，并实现面向单时相或同期多源证据的
+**SANE -> QMEF -> PMRD** 研究模型。当前主协议为 benchmark v2；v1 benchmark、旧 checkpoint、
+text cache v1 和 visual cache v2 均不兼容。
 
-本 README 是仓库唯一的完整运行手册。算法细节见 [SEG_Multi-Source_Landslides/ALGORITHM.md](SEG_Multi-Source_Landslides/ALGORITHM.md)，研究任务说明见 [docs/Task_Introduction.md](docs/Task_Introduction.md)。
+## 目录约定
 
-## 1. 环境与目录约定
-
-所有命令均从 `paper7_VLM` 仓库根目录执行，并假设已经激活 `qwen3vl` 环境：
-
-```bash
-cd /home/yukun80/codes/paper7_VLM
-conda activate qwen3vl
-```
-
-当前大体量数据目录位于仓库同级：
+默认从 `paper7_VLM` 根目录运行命令，并使用同级大数据目录：
 
 ```text
 /home/yukun80/codes/
-├── datasets/                         # 原始数据
-├── benchmark/                        # 派生 benchmark
+├── datasets/
+├── benchmark/
 └── paper7_VLM/
-    ├── SEG_Multi-Source_Landslides/  # 模型、训练、评估和实验配置
-    ├── scripts/                       # benchmark 与 instruction 数据流程
-    ├── configs/                       # instruction 模板
-    ├── models_zoo/                    # 本地 Qwen3-VL 权重
-    ├── outputs/                       # 训练和推理产物
-    ├── external/                      # 第三方参考实现
-    └── docs/                          # 研究文档
 ```
 
-JSONL 和 YAML 中继续使用可移植逻辑路径 `datasets/...`、`benchmark/...`。运行时默认映射到仓库同级目录，也可覆盖：
+可用 `PAPER7_DATASETS_ROOT` 和 `PAPER7_BENCHMARK_ROOT` 覆盖物理位置。JSONL 始终保存
+`datasets/...`、`benchmark/...` 逻辑路径，不写机器绑定的绝对路径。
+
+推荐环境：
 
 ```bash
-export PAPER7_DATASETS_ROOT=/path/to/datasets
-export PAPER7_BENCHMARK_ROOT=/path/to/benchmark
-```
-
-QPSALM CLI 推荐直接使用模块入口，无需安装包：
-
-```bash
+conda activate qwen3vl
 export PYTHONPATH=SEG_Multi-Source_Landslides${PYTHONPATH:+:${PYTHONPATH}}
-python -m qpsalm_seg.cli.inspect_data --help
 ```
 
-也可以执行可编辑安装后使用短命令：
+也可安装命令别名：
 
 ```bash
 python -m pip install -e SEG_Multi-Source_Landslides
-qpsalm-inspect-data --help
 ```
 
-## 2. 构建 Benchmark
+## 构建 Benchmark V2
 
-### 2.1 推荐总控命令
-
-Small benchmark 用于开发和固定 split 实验：
+构建 small：
 
 ```bash
 bash scripts/run_1_build_benchmark.sh small
+bash scripts/run_2_build_instruction_dataset.sh small
 ```
 
-Full benchmark 用于完整训练：
+构建 full：
 
 ```bash
 bash scripts/run_1_build_benchmark.sh full
-```
-
-连续构建 small 和 full：
-
-```bash
-bash scripts/run_1_build_benchmark.sh both
-```
-
-Small 模式默认每个 `dataset_name + split` 最多取 1000 条，可临时降低：
-
-```bash
-SMALL_LIMIT=100 bash scripts/run_1_build_benchmark.sh small
-```
-
-脚本不会改写 `datasets/`，主要输出为 `benchmark/multisource_landslide_v1_{small,full}` 下的物化数组、统一索引、验证报告和统计报告。
-
-### 2.2 独立阶段程序
-
-通常不需要逐个运行这些程序；它们用于重新执行或调试某个 benchmark 阶段。
-
-| 阶段 | 程序 | 用途 | 主要输出 |
-| --- | --- | --- | --- |
-| 1-1 | `1-1_scan_sources.py` | 扫描原始数据和格式 | `source_manifest.csv`、`dataset_inventory.json` |
-| 1-2 | `1-2_build_index.py` | 构建统一 source JSONL | `indexes/source_*.jsonl` |
-| 1-3 | `1-3_validate_index.py` | 验证 source/final/referring 索引 | `reports/validation_report*.json` |
-| 1-4 | `1-4_preprocess_samples.py` | 物化模态和 mask 数组 | `data/**`、`indexes/all.jsonl` |
-| 1-5 | `1-5_build_splits.py` | 生成最终 split 和采样权重 | `indexes/{train,val,test,unlabeled}.jsonl` |
-| 1-6 | `1-6_build_referring_targets.py` | 构建派生 referring targets | `referring_target_*.jsonl`、target masks |
-| 1-7 | `1-7_summarize_benchmark.py` | 汇总数据质量和分布 | `statistics.json`、`cleaning_report.md` |
-
-```bash
-python scripts/1-benchmark/1-1_scan_sources.py \
-  --datasets-root datasets \
-  --out-dir benchmark/multisource_landslide_v1_small
-
-python scripts/1-benchmark/1-2_build_index.py \
-  --mode small --small-limit 1000 --seed 42 \
-  --datasets-root datasets \
-  --out-dir benchmark/multisource_landslide_v1_small
-
-python scripts/1-benchmark/1-3_validate_index.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small --stage source
-
-python scripts/1-benchmark/1-4_preprocess_samples.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small --strategy materialize
-
-python scripts/1-benchmark/1-3_validate_index.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small --stage final
-
-python scripts/1-benchmark/1-5_build_splits.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small
-
-python scripts/1-benchmark/1-6_build_referring_targets.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small
-
-python scripts/1-benchmark/1-3_validate_index.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small --stage referring_target
-
-python scripts/1-benchmark/1-7_summarize_benchmark.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small
-```
-
-## 3. 构建 Instruction 数据
-
-必须先完成同一规模的 benchmark。
-
-```bash
-bash scripts/run_2_build_instruction_dataset.sh small
 bash scripts/run_2_build_instruction_dataset.sh full
-# 或连续处理两种规模
-bash scripts/run_2_build_instruction_dataset.sh both
 ```
 
-主要输出为 benchmark 目录内的 `indexes/instruction_*.jsonl` 和 `reports/instruction_*.json`。独立阶段命令如下：
+输出分别位于同级：
 
-```bash
-python scripts/2-instruction/2-1_build_instruction_templates.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small \
-  --template-config configs/instruction_templates/multisource_landslide_v1.yaml
-
-python scripts/2-instruction/2-2_apply_instruction_templates.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small \
-  --template-config configs/instruction_templates/multisource_landslide_v1.yaml
-
-python scripts/2-instruction/2-3_validate_instruction_index.py \
-  --benchmark-dir benchmark/multisource_landslide_v1_small \
-  --template-config configs/instruction_templates/multisource_landslide_v1.yaml
+```text
+../benchmark/multisource_landslide_v2_small
+../benchmark/multisource_landslide_v2_full
 ```
 
-## 4. 数据检查与核心索引缓存
+质量门要求 source、final、referring-target 和 instruction validation 的 `errors == []`。
+v2 每个模态必须显式包含 `family`、`sensor`、`product_type`、band metadata、GSD、units、
+signed、quality、结构化 normalization 和归一化前物化的 valid mask。
 
-检查 instruction 数据、模态组合、sensor、normalization 和 GSD：
+独立阶段入口：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.inspect_data \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --split train --limit 16
+python scripts/1-benchmark/1-1_scan_sources.py --datasets-root datasets --out-dir benchmark/multisource_landslide_v2_small
+python scripts/1-benchmark/1-2_build_index.py --mode small --datasets-root datasets --out-dir benchmark/multisource_landslide_v2_small
+python scripts/1-benchmark/1-3_validate_index.py --benchmark-dir benchmark/multisource_landslide_v2_small --stage source
+python scripts/1-benchmark/1-4_preprocess_samples.py --benchmark-dir benchmark/multisource_landslide_v2_small --strategy materialize
+python scripts/1-benchmark/1-3_validate_index.py --benchmark-dir benchmark/multisource_landslide_v2_small --stage final
+python scripts/1-benchmark/1-5_build_splits.py --benchmark-dir benchmark/multisource_landslide_v2_small
+python scripts/1-benchmark/1-6_build_referring_targets.py --benchmark-dir benchmark/multisource_landslide_v2_small
+python scripts/1-benchmark/1-3_validate_index.py --benchmark-dir benchmark/multisource_landslide_v2_small --stage referring_target
+python scripts/1-benchmark/1-7_summarize_benchmark.py --benchmark-dir benchmark/multisource_landslide_v2_small
+python scripts/2-instruction/2-1_build_instruction_templates.py --benchmark-dir benchmark/multisource_landslide_v2_small
+python scripts/2-instruction/2-2_apply_instruction_templates.py --benchmark-dir benchmark/multisource_landslide_v2_small
+python scripts/2-instruction/2-3_validate_instruction_index.py --benchmark-dir benchmark/multisource_landslide_v2_small
 ```
 
-生成保留全部核心样本、按 canonical combo 交错排序的 train/val 缓存：
+## 模型 Preset
+
+主 preset 由 `qpsalm_seg/presets.py` 定义：
+
+| Preset | 作用 |
+|---|---|
+| `raw_sane_baseline` | 单 query、无语义 reliability/null gate 的均匀多源 SANE 基线 |
+| `raw_sane_qmef` | 增加 null-aware、query-conditioned QMEF |
+| `raw_sane_qmef_pmrd` | 增加 proposal set 与两轮 PMRD |
+| `pretrained_sane_qmef_pmrd` | 使用 Qwen-ViT cache v3 的中间空间特征 |
+| `qwen_psalm_full` | 在线 4-bit Qwen language decoder + QLoRA mask-query states |
+
+正式 Qwen 路线固定使用离线视觉塔和在线语言 decoder。Qwen 不生成 bbox；它负责语义条件、
+多视图证据 token、evidence anchors 和 mask-query hidden states。
+
+## Smoke 回归
+
+先重建 small v2，再运行：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.cache_index \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --benchmark-dir benchmark/multisource_landslide_v1_small \
-  --output-dir outputs/qpsalm_index_cache_small \
-  --split both --strategy round-robin-canonical
+bash SEG_Multi-Source_Landslides/scripts/run_qpsalm_smoke.sh
 ```
 
-只缓存完整多模态 test 样本：
+该入口使用 development-only `text_probe`，执行 5-step forward/backward、validation、
+checkpoint reload 和可视化，不加载 Qwen 权重。
+
+## 正式训练
+
+small：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.cache_index \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml \
-  --benchmark-dir benchmark/multisource_landslide_v1_full \
-  --output-dir outputs/qpsalm_eval_indices/full_multimodal_test \
-  --split test --strategy round-robin-canonical --require-multimodal
-```
-
-## 5. Smoke 回归
-
-Smoke 使用 hash text cache，不加载真实 Qwen 权重，只验证数据、模型、loss、checkpoint reload、评估和可视化闭环：
-
-```bash
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_smoke.sh
-```
-
-可选覆盖：
-
-```bash
-DEVICE=cpu MAX_STEPS=5 OUTPUT_DIR=outputs/qpsalm_refactor_smoke \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_smoke.sh
-```
-
-## 6. 正式训练
-
-正式入口会依次生成核心索引、Qwen 文本 cache、可选多视图 cache，训练模型，reload checkpoint 评估，并输出 summary 与 diagnose report。
-
-### 6.1 Small 消融顺序
-
-```bash
-BENCHMARK_SIZE=small PRESET=sane_baseline RUN_NAME=sane_baseline_small \
+BENCHMARK_SIZE=small \
+PRESET=qwen_psalm_full \
+SEED=42 \
+RUN_NAME=small_qwen_psalm_seed42 \
 RUN_CONTROL=--overwrite \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-
-BENCHMARK_SIZE=small PRESET=sane_qmef RUN_NAME=sane_qmef_small \
-RUN_CONTROL=--overwrite \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-
-BENCHMARK_SIZE=small PRESET=sane_qmef_pmrd RUN_NAME=sane_qmef_pmrd_small \
-RUN_CONTROL=--overwrite \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-
-BENCHMARK_SIZE=small PRESET=full_multiview RUN_NAME=full_multiview_small \
-RUN_CONTROL=--overwrite \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
+bash SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh
 ```
 
-Preset 含义：
-
-| Preset | 研究能力 |
-| --- | --- |
-| `sane_baseline` | Sensor-Aware Native-Scale Encoder 基线 |
-| `sane_qmef` | 增加多源可靠性 prior 与 query-spatial attention |
-| `sane_qmef_pmrd` | 增加 proposal set、统一 verifier 和两轮 refinement |
-| `full_multiview` | 在主线模型中接入 Qwen 多视图视觉证据 cache |
-| `dev_smoke` | 仅用于开发回归，不用于正式精度结论 |
-
-### 6.2 Full 训练
-
-只建议将通过 small 固定 split 验证的 preset 用于 full benchmark：
+full：
 
 ```bash
-BENCHMARK_SIZE=full PRESET=sane_qmef_pmrd RUN_NAME=sane_qmef_pmrd_full \
+BENCHMARK_SIZE=full \
+PRESET=qwen_psalm_full \
+SEED=42 \
+RUN_NAME=full_qwen_psalm_seed42 \
 RUN_CONTROL=--overwrite \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
+bash SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh
 ```
 
-多视图 full 训练：
+24GB 单卡默认使用 `batch_size=1`、`grad_accum_steps=4`、最大 bucket 256。脚本只接受
+benchmark、preset、seed、device、run name 和运行控制；算法参数在 Python preset/YAML 中维护。
+
+## Vision Cache V3
+
+单独准备 small cache：
 
 ```bash
-BENCHMARK_SIZE=full PRESET=full_multiview RUN_NAME=full_multiview_full \
-RUN_CONTROL=--overwrite \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
+python -m qpsalm_seg.cli.cache_qwen_vision_features \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --output-dir outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --backend qwen --device cuda --overwrite
 ```
 
-续训已有运行：
+cache 按 parent sample 和 view 分片，默认将物理视图渲染为 256，并以 `16/8/6/4`
+保存 ViT layers 5/11/17/23
+空间特征，使浅层保留更多边界、深层压缩语义上下文；同时保存原生 view tokens、
+grid/padding transform、content hash、renderer/model/processor/prompt revision、pooling method、
+full-subset signature 和 preset/尺寸 input protocol。训练时按
+`ActiveModalitySubset` 动态选择，多个 instruction 不重复编码同一父图像。
+cache 构建采用流式 parent 编码：Qwen 视觉塔只加载一次，内存中最多保留
+`--shard-size` 个已编码父样本，写出 shard 后立即释放。`manifest.json` 中的
+`peak_buffer_records` 可用于核对实际缓存上界；full 数据不再先把所有渲染视图驻留内存。
+manifest 同时绑定 train/val/test instruction index 的 SHA-256；benchmark 或 instruction
+索引重建后，`--verify-only` 会拒绝旧 cache。正式脚本使用 `RUN_CONTROL=--overwrite`
+时会重新构建视觉 cache，而 `--resume-existing` 只接受协议和索引指纹均匹配的 cache。
+本地 Qwen revision 对配置和全部权重文件计算完整 SHA-256；每个进程只计算一次，因此首次
+启动会多一次顺序读盘，但不会用仅哈希 `config.json` 的弱 revision 误判权重一致。
+
+开发结构测试可使用：
 
 ```bash
-BENCHMARK_SIZE=full PRESET=sane_qmef_pmrd RUN_NAME=sane_qmef_pmrd_full \
-RUN_CONTROL=--resume-existing \
-bash SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
+python -m qpsalm_seg.cli.cache_qwen_vision_features \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_smoke.yaml \
+  --output-dir /tmp/qpsalm_vision_v3_smoke --backend hash-smoke --max-samples 4 --overwrite
 ```
 
-模型、batch、epoch、loss 和 optimizer 参数由 YAML 与 `qpsalm_seg/presets.py` 管理。Shell 只负责 benchmark 规模、preset、run name、device、路径和覆盖/续训控制。
-
-### 6.3 直接调用训练 CLI
-
-需要精细覆盖单次实验参数时可绕过总控 Shell：
+校验已有 cache 的 renderer/prompt/pooling/revision/subset 协议：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.cache_qwen_vision_features \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --output-dir outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 --verify-only
+```
+
+## 独立训练与评估
+
+```bash
 python -m qpsalm_seg.cli.train \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --preset sane_qmef_pmrd \
-  --benchmark-dir benchmark/multisource_landslide_v1_small \
-  --controller qwen_cache \
-  --condition-embedding-cache outputs/RUN/condition_cache.pt \
-  --train-index outputs/RUN/index_cache/qpsalm_core_train.jsonl \
-  --val-index outputs/RUN/index_cache/qpsalm_core_val.jsonl \
-  --output-dir outputs/RUN/train \
-  --device cuda --skip-torch-preflight --overwrite-output
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full --device cuda \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --output-dir outputs/qpsalm_v2/manual_run --skip-torch-preflight
 ```
 
-## 7. Qwen 文本与多视图缓存
-
-### 7.1 文本 cache
+验证集：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.cache_qwen_embeddings \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --train-index outputs/RUN/index_cache/qpsalm_core_train.jsonl \
-  --val-index outputs/RUN/index_cache/qpsalm_core_val.jsonl \
-  --output outputs/RUN/condition_cache.pt \
-  --backend qwen --device cuda --overwrite
-```
-
-检查文本覆盖率：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.check_qwen_cache \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --train-index outputs/RUN/index_cache/qpsalm_core_train.jsonl \
-  --val-index outputs/RUN/index_cache/qpsalm_core_val.jsonl \
-  --condition-embedding-cache outputs/RUN/condition_cache.pt
-```
-
-### 7.2 Qwen 多视图视觉 cache
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.cache_qwen_visual_evidence \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --train-index outputs/RUN/index_cache/qpsalm_core_train.jsonl \
-  --val-index outputs/RUN/index_cache/qpsalm_core_val.jsonl \
-  --output outputs/RUN/multiview_cache_v2.pt \
-  --backend qwen --device cuda --pooling-method vision-token --overwrite
-```
-
-真实性消融使用相同入口：
-
-```bash
-# 跨样本打乱 view
-PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.cache_qwen_visual_evidence \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --output outputs/qpsalm_multiview_shuffled.pt --backend qwen --device cuda \
-  --shuffle-views-across-samples --overwrite
-
-# 移除 SAR view
-PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.cache_qwen_visual_evidence \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_cached_core.yaml \
-  --output outputs/qpsalm_multiview_no_sar.pt --backend qwen --device cuda \
-  --drop-view-pattern sar --overwrite
-```
-
-## 8. Val/Test 推理与可视化
-
-### 8.1 Val 推理
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
 python -m qpsalm_seg.cli.eval \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml \
-  --preset sane_qmef_pmrd \
-  --checkpoint outputs/RUN/train/checkpoint_best.pt \
-  --split val \
-  --val-index outputs/RUN/index_cache/qpsalm_core_val.jsonl \
-  --condition-embedding-cache outputs/RUN/condition_cache.pt \
-  --output-dir outputs/RUN/eval_val \
-  --device cuda --skip-torch-preflight --overwrite-output
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full --checkpoint outputs/qpsalm_v2/manual_run/checkpoint_best.pt \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --split val --device cuda --output-dir outputs/qpsalm_v2/manual_run/eval_val \
+  --export-multimodal-overview --skip-torch-preflight
 ```
 
-### 8.2 完整多模态 Test 推理
-
-第一步，生成多模态 test index：
+测试集需先生成 test 专用 cache：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.cache_index \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml \
-  --benchmark-dir benchmark/multisource_landslide_v1_full \
-  --split test \
-  --output-dir outputs/qpsalm_eval_indices/full_multimodal_test \
-  --strategy round-robin-canonical --require-multimodal
-```
-
-第二步，为 test prompt 建立文本 cache：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.cache_qwen_embeddings \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml \
-  --eval-index outputs/qpsalm_eval_indices/full_multimodal_test/qpsalm_core_test.jsonl \
-  --eval-split test \
-  --output outputs/qpsalm_eval_indices/full_multimodal_test/condition_cache.pt \
+python -m qpsalm_seg.cli.cache_qwen_vision_features \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_full.yaml \
+  --preset qwen_psalm_full \
+  --eval-index indexes/instruction_test.jsonl --eval-split test \
+  --output-dir outputs/qpsalm_v2/cache/full_qwen_psalm_full_test_vision_v3 \
   --backend qwen --device cuda --overwrite
 ```
 
-第三步，对全部样本推理并为每个样本生成一张多模态总览：
+然后将 eval 命令改为 `--split test --vision-feature-cache outputs/qpsalm_v2/cache/full_qwen_psalm_full_test_vision_v3`。
+
+## 消融与真实性测试
+
+instruction 消融：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.eval \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml \
-  --preset sane_qmef_pmrd \
-  --checkpoint outputs/RUN/train/checkpoint_best.pt \
-  --split test \
-  --test-index outputs/qpsalm_eval_indices/full_multimodal_test/qpsalm_core_test.jsonl \
-  --condition-embedding-cache outputs/qpsalm_eval_indices/full_multimodal_test/condition_cache.pt \
-  --output-dir outputs/RUN/eval_multimodal_test_full \
-  --max-val-samples 0 --visualize-all --export-multimodal-overview \
-  --device cuda --skip-torch-preflight --overwrite-output
+python -m qpsalm_seg.cli.eval ... --instruction-ablation shuffled
+python -m qpsalm_seg.cli.eval ... --instruction-ablation fixed-generic
+python -m qpsalm_seg.cli.eval ... --instruction-ablation no-semantic
 ```
 
-使用 `full_multiview` checkpoint 时，还需为 test index 建立 visual cache，并向 eval 传入 `--visual-evidence-cache`：
+`shuffled` instruction 同样要求至少两个不同 parent 和不同文本；不能构造有效反事实时会
+直接报错。
+
+视觉真实性消融：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.cache_qwen_visual_evidence \
-  --config SEG_Multi-Source_Landslides/configs/qpsalm_full_qwen_cached_core.yaml \
-  --eval-index outputs/qpsalm_eval_indices/full_multimodal_test/qpsalm_core_test.jsonl \
-  --output outputs/qpsalm_eval_indices/full_multimodal_test/multiview_cache_v2.pt \
-  --backend qwen --device cuda --overwrite
+python -m qpsalm_seg.cli.eval ... --visual-ablation shuffled
+python -m qpsalm_seg.cli.eval ... --visual-ablation text-only
+python -m qpsalm_seg.cli.eval ... --visual-ablation image-text-delta
+python -m qpsalm_seg.cli.eval ... --visual-ablation remove:deformation
+python -m qpsalm_seg.cli.eval ... --visual-ablation remove:sar
 ```
 
-## 9. 结果汇总、比较与诊断
+`visual_ablation` 只改变送入 Qwen language decoder 的语义 view tokens，不改变 SANE
+读取的当前样本 Qwen-ViT 空间特征。因此这些实验衡量的是 Qwen 多视图 evidence 的作用，
+不会同时替换 dense visual backbone。`image-text-delta` 使用完整图文上下文与 text-only
+上下文的 post-context evidence anchor 差值进行 QMEF/verifier 消融，PMRD mask query 仍取
+完整图文序列的 Qwen hidden states。
+`shuffled` 要求 cache 中每种 raw modality 或 family 组合至少有两个不同 parent；否则评估
+会明确报错，不会静默使用原图冒充 shuffle。
 
-汇总训练和 eval 产物：
+推荐使用单进程 suite，只加载一次 Qwen/checkpoint 并自动生成全部评估和证据报告：
 
 ```bash
 PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.summarize_run \
-  --run-dir outputs/RUN/train --eval-dir outputs/RUN/eval_val
+python -m qpsalm_seg.cli.eval_ablation_suite \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full --checkpoint outputs/RUN/checkpoint_best.pt \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --split val --device cuda \
+  --visual-remove terrain --visual-remove sar --visual-remove deformation \
+  --include-image-text-delta --min-delta 0 \
+  --output-dir outputs/RUN/ablation_suite --overwrite-output --skip-torch-preflight
 ```
 
-比较两个 preset：
+suite 依次切换 Dataset instruction 和 Qwen token-only visual evidence，SANE dense features
+始终不变。每个条件仍生成标准 `eval_report.json/eval_manifest.json`，最后自动写
+`ablation_evidence.json`；任一必需消融未出现性能退化时非零退出。
+
+已有独立 eval 目录时，也可以单独生成严格成对证据报告：
 
 ```bash
 PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.ablation_report \
+  --normal outputs/ablations/normal \
+  --instruction-shuffled outputs/ablations/instruction_shuffled \
+  --instruction-fixed-generic outputs/ablations/instruction_fixed \
+  --instruction-no-semantic outputs/ablations/instruction_no_semantic \
+  --visual-shuffled outputs/ablations/visual_shuffled \
+  --visual-text-only outputs/ablations/visual_text_only \
+  --visual-remove terrain=outputs/ablations/remove_terrain \
+  --visual-remove sar=outputs/ablations/remove_sar \
+  --image-text-delta outputs/ablations/image_text_delta \
+  --min-delta 0 --output outputs/ablations/ablation_evidence.json
+```
+
+汇总器要求所有目录包含 `eval_report.json` 和 `eval_manifest.json`，并严格检查 checkpoint、
+step、split、preset 与 sample IDs 完全相同。Instruction 比较联合逐样本 proposal/final-mask
+退化与 paired/no-target sensitivity；`remove:<family>` 只在确实包含该 family 的样本上比较。
+normal 未优于任意必需消融时命令非零退出，不能据此声称模型使用了对应语义或视觉证据。
+
+Qwen view token pooling 需要分别训练，可通过
+`--qwen-view-pooling tokens|image-end|attention` 选择。`tokens` 是主路线；`image-end`
+仅保留每个 view 的最后一个视觉 token；`attention` 使用可学习查询池化。该选项属于
+checkpoint architecture protocol，不能在加载同一权重时临时切换。
+
+报告包含 positive-only IoU/Dice、negative accuracy、empty false-positive rate、component
+recall/precision、relevance AP/AUC、unmatched rejection、merge/duplicate/missed-component rate、
+proposal-union Dice、同 parent paired target/prediction IoU、instruction contrast ratio 和
+no-target rejection。proposal CSV、mask export 和可视化同时保留 verifier 实际选择的
+`selected_proposal` 与由 GT assignment 得到的 `oracle_matched_proposal`；后者只用于测量
+proposal capacity 与 selection gap，不是推理时可用的模型输出。
+
+## 真实集成门槛
+
+重建 small-v2 并生成正式 vision cache 后，在三 seed 实验前运行一次严格单卡检查：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.integration_check \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --mode all --device cuda \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --max-memory-gib 23 \
+  --output outputs/qpsalm_v2/real_integration_report.json
+```
+
+`raw` 检查会从真实 train split 各选择 global、referring 和 no-target 样本并完成一次
+optimizer step。`qwen` 检查要求真实多模态样本形成 dropped-modality subset，核对实际进入
+Qwen 的 source modalities，然后执行 NF4、QLoRA、BF16 backward 和 optimizer step；只有
+LoRA 梯度非零、loss/梯度有限且峰值 reserved memory 不超过 23 GiB 时才通过。结果写入
+`qpsalm_real_integration_v1` JSON，任一检查失败时命令非零退出。
+
+## 数据与结果工具
+
+```bash
+python -m qpsalm_seg.cli.inspect_data --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml --split train
+python -m qpsalm_seg.cli.cache_index --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml --output-dir outputs/qpsalm_v2/index_cache --split both --strategy round-robin-family
+python -m qpsalm_seg.cli.summarize_run --run-dir outputs/qpsalm_v2/RUN --eval-dir outputs/qpsalm_v2/RUN/eval_val
+python -m qpsalm_seg.cli.compare_runs --help
+python -m qpsalm_seg.cli.diagnose_run --help
+python -m qpsalm_seg.cli.recommend_threshold --help
+python -m qpsalm_seg.cli.export_tables --help
+```
+
+三组固定 seed 的模块准入检查可重复传入成对 summary；只有至少 2/3 seed 的 candidate
+pipeline ready，且 positive-only、instruction sensitivity 或 component-set 主指标超过
+`--min-delta`，报告中的 `passed_2_of_3_gate` 才为 true：
+
+```bash
 python -m qpsalm_seg.cli.compare_runs \
-  --baseline-summary outputs/sane_baseline/train \
-  --candidate-summary outputs/sane_qmef_pmrd/train \
-  --output outputs/preset_comparison.json
+  --baseline-summary outputs/base_s42/run_summary.json \
+  --candidate-summary outputs/candidate_s42/run_summary.json \
+  --baseline-summary outputs/base_s123/run_summary.json \
+  --candidate-summary outputs/candidate_s123/run_summary.json \
+  --baseline-summary outputs/base_s3407/run_summary.json \
+  --candidate-summary outputs/candidate_s3407/run_summary.json \
+  --min-delta 0 --output outputs/seed_gate.json
 ```
 
-诊断低精度、query selection 和模态 attention：
+可编辑安装后的命令别名：
+
+| 命令 | 模块 |
+|---|---|
+| `qpsalm-inspect-data` | `qpsalm_seg.cli.inspect_data` |
+| `qpsalm-cache-index` | `qpsalm_seg.cli.cache_index` |
+| `qpsalm-check-env` | `qpsalm_seg.cli.check_env` |
+| `qpsalm-cache-qwen-vision-features` | `qpsalm_seg.cli.cache_qwen_vision_features` |
+| `qpsalm-integration-check` | `qpsalm_seg.cli.integration_check` |
+| `qpsalm-ablation-report` | `qpsalm_seg.cli.ablation_report` |
+| `qpsalm-eval-ablation-suite` | `qpsalm_seg.cli.eval_ablation_suite` |
+| `qpsalm-train` | `qpsalm_seg.cli.train` |
+| `qpsalm-eval` | `qpsalm_seg.cli.eval` |
+| `qpsalm-summarize-run` | `qpsalm_seg.cli.summarize_run` |
+| `qpsalm-compare-runs` | `qpsalm_seg.cli.compare_runs` |
+| `qpsalm-diagnose-run` | `qpsalm_seg.cli.diagnose_run` |
+| `qpsalm-recommend-threshold` | `qpsalm_seg.cli.recommend_threshold` |
+| `qpsalm-export-tables` | `qpsalm_seg.cli.export_tables` |
+
+## 静态检查与单元测试
 
 ```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.diagnose_run \
-  --run outputs/RUN/train/run_summary.json \
-  --output outputs/RUN/train/diagnose_report.json
+bash -n scripts/run_1_build_benchmark.sh scripts/run_2_build_instruction_dataset.sh \
+  SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh \
+  SEG_Multi-Source_Landslides/scripts/run_qpsalm_smoke.sh
+
+python -B -m py_compile $(find scripts/1-benchmark scripts/2-instruction \
+  SEG_Multi-Source_Landslides/qpsalm_seg -name '*.py' -type f)
+
+PYTHONPATH=SEG_Multi-Source_Landslides python -B -m unittest \
+  SEG_Multi-Source_Landslides/tests/test_benchmark_v2.py \
+  SEG_Multi-Source_Landslides/tests/test_refactor_core.py \
+  SEG_Multi-Source_Landslides/tests/test_renderer.py \
+  SEG_Multi-Source_Landslides/tests/test_v2_integration.py -v
 ```
 
-推荐二值化阈值：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.recommend_threshold \
-  --run outputs/RUN/eval_val \
-  --output outputs/RUN/eval_val/threshold_recommendations.json
-```
-
-导出指标、QMEF 和 PMRD 诊断表：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.export_tables \
-  --input outputs/RUN/eval_val/eval_report.json \
-  --output-dir outputs/RUN/eval_val/tables
-```
-
-## 10. 全部 QPSALM CLI 索引
-
-`SEG_Multi-Source_Landslides/pyproject.toml` 注册了以下 13 个命令。表中的模块命令无需安装包即可运行；短命令需要先执行 `python -m pip install -e SEG_Multi-Source_Landslides`。
-
-| 短命令 | Python 模块 | 用途 |
-| --- | --- | --- |
-| `qpsalm-inspect-data` | `qpsalm_seg.cli.inspect_data` | 检查 instruction 数据和模态分布 |
-| `qpsalm-cache-index` | `qpsalm_seg.cli.cache_index` | 缓存核心 train/val/test 索引 |
-| `qpsalm-check-env` | `qpsalm_seg.cli.check_env` | 可选环境诊断 |
-| `qpsalm-cache-qwen-embeddings` | `qpsalm_seg.cli.cache_qwen_embeddings` | 缓存 Qwen 文本证据 |
-| `qpsalm-cache-qwen-visual-evidence` | `qpsalm_seg.cli.cache_qwen_visual_evidence` | 缓存 Qwen 多视图视觉证据 |
-| `qpsalm-check-qwen-cache` | `qpsalm_seg.cli.check_qwen_cache` | 检查文本 cache 覆盖率 |
-| `qpsalm-train` | `qpsalm_seg.cli.train` | 直接训练 SANE/QMEF/PMRD |
-| `qpsalm-eval` | `qpsalm_seg.cli.eval` | val/test 推理、指标和可视化 |
-| `qpsalm-summarize-run` | `qpsalm_seg.cli.summarize_run` | 汇总训练与 eval 产物 |
-| `qpsalm-compare-runs` | `qpsalm_seg.cli.compare_runs` | 比较两个实验运行 |
-| `qpsalm-diagnose-run` | `qpsalm_seg.cli.diagnose_run` | 诊断精度、proposal 和模态证据 |
-| `qpsalm-recommend-threshold` | `qpsalm_seg.cli.recommend_threshold` | 推荐 mask 二值化阈值 |
-| `qpsalm-export-tables` | `qpsalm_seg.cli.export_tables` | 导出指标和算法诊断 CSV |
-
-统一查看帮助：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.train --help
-# 或完成可编辑安装后
-qpsalm-train --help
-```
-
-## 11. 测试与静态检查
-
-运行全部单元测试：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m unittest discover -s SEG_Multi-Source_Landslides/tests -p 'test_*.py' -v
-```
-
-分别运行核心模型和 renderer 测试：
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m unittest SEG_Multi-Source_Landslides/tests/test_refactor_core.py -v
-
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m unittest SEG_Multi-Source_Landslides/tests/test_renderer.py -v
-```
-
-Python 语法检查：
-
-```bash
-python -B -m py_compile \
-  scripts/1-benchmark/*.py \
-  scripts/2-instruction/*.py \
-  SEG_Multi-Source_Landslides/qpsalm_seg/*.py \
-  SEG_Multi-Source_Landslides/qpsalm_seg/models/*.py \
-  SEG_Multi-Source_Landslides/qpsalm_seg/cli/*.py
-```
-
-Shell 语法检查：
-
-```bash
-bash -n scripts/run_1_build_benchmark.sh
-bash -n scripts/run_2_build_instruction_dataset.sh
-bash -n SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_full.sh
-bash -n SEG_Multi-Source_Landslides/scripts/run_qwen_phase1_smoke.sh
-```
-
-可选环境诊断，不属于正常训练前置步骤：
-
-```bash
-python env_test.py
-
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -m qpsalm_seg.cli.check_env \
-  --benchmark-dir benchmark/multisource_landslide_v1_small
-```
-
-## 12. 主要输出
-
-正式训练默认只维护 `checkpoint_best.pt` 和 `checkpoint_last.pt`。主要产物包括：
-
-- `validation_best.json` / `eval_report.json`：canvas 与原尺寸指标，包括 overall、positive-only、negative accuracy 和 empty false-positive rate。
-- `proposal_diagnostics.csv`：PMRD Dice-best query 与 relevance-top query 的差异。
-- `modality_reliability.csv`：QMEF 样本级模态可靠性 prior。
-- `query_modality_attention.csv`：每个 proposal 的跨模态证据注意力。
-- `visualization_manifest.jsonl`：模态元数据、final mask、best proposal 和原尺寸恢复路径。
-- `run_summary.json` / `diagnose_report.json`：实验完整性汇总和低精度诊断。
-
-大型数据、benchmark、模型权重、checkpoint、日志和第三方仓库不应提交到 Git。
+算法设计与阶段门见 [docs/opt_refactor_algo.md](docs/opt_refactor_algo.md)。

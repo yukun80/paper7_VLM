@@ -20,25 +20,39 @@ PROPOSAL_FIELDS = [
     "template_id",
     "task_family",
     "raw_combo",
-    "canonical_combo",
+    "family_combo",
     "sensor_combo",
-    "normalization_combo",
-    "condition_prompt",
-    "gsd_token",
+    "product_combo",
+    "parent_sample_id",
+    "referring_category",
     "target_area_px_bin",
     "target_area_fraction_bin",
     "ground_area_m2",
     "ground_area_m2_bin",
-    "best_query",
     "selected_query",
-    "selected_matches_best",
-    "best_query_dice",
-    "selected_query_dice",
-    "dice_gap_selected_minus_best",
+    "num_queries",
+    "selected_is_matched",
     "selected_relevance_logit",
-    "best_relevance_logit",
-    "best_query_relevance_rank",
-    "relevance_gap_selected_minus_best",
+    "oracle_matched_query",
+    "oracle_matched_dice",
+    "oracle_relevance_logit",
+    "matched_relevance_mean_rank",
+    "matched_relevance_rank_score",
+    "selected_scale_attention_high",
+    "selected_scale_attention_mid",
+    "selected_scale_attention_low",
+    "matched_mean_dice",
+    "component_recall",
+    "component_precision",
+    "unmatched_rejection",
+    "relevance_ap",
+    "relevance_auc",
+    "merge_error_rate",
+    "duplicate_error_rate",
+    "missed_component_rate",
+    "proposal_union_dice",
+    "component_count",
+    "coverage_mode",
     "final_dice",
     "final_iou",
     "final_precision",
@@ -46,7 +60,7 @@ PROPOSAL_FIELDS = [
     "target_area",
     "final_mask_area",
     "selected_mask_area",
-    "best_mask_area",
+    "oracle_mask_area",
 ]
 
 
@@ -60,7 +74,7 @@ def read_json(path_ref: str | Path) -> dict[str, Any]:
 
 
 def group_type_and_value(group: str) -> tuple[str, str]:
-    """把 canonical_combo=... 这类 group 拆成 type/value。"""
+    """把 family_combo=... 这类 group 拆成 type/value。"""
     if "=" not in group:
         return group, group
     group_type, value = group.split("=", 1)
@@ -95,6 +109,7 @@ def reliability_rows_from_summary(summaries: dict[str, Any], source: str) -> lis
         group_type, group_value = group_type_and_value(str(group))
         weights = values.get("mean_weights") or {}
         active = values.get("mean_active") or {}
+        coverage = values.get("mean_coverage") or {}
         row: dict[str, Any] = {
             "source": source,
             "group": group,
@@ -103,6 +118,9 @@ def reliability_rows_from_summary(summaries: dict[str, Any], source: str) -> lis
             "n": values.get("n"),
             "mean_weights_json": json.dumps(weights, ensure_ascii=False, sort_keys=True),
             "mean_active_json": json.dumps(active, ensure_ascii=False, sort_keys=True),
+            "mean_coverage_json": json.dumps(coverage, ensure_ascii=False, sort_keys=True),
+            "mean_null_evidence_weight": values.get("mean_null_evidence_weight"),
+            "mean_real_evidence_mass": values.get("mean_real_evidence_mass"),
         }
         rows.append(row)
     return rows
@@ -117,7 +135,6 @@ def query_attention_rows_from_summary(summaries: dict[str, Any], source: str) ->
         group_type, group_value = group_type_and_value(str(group))
         mean_weights = values.get("mean_query_weights") or {}
         selected_weights = values.get("mean_selected_query_weights") or {}
-        best_weights = values.get("mean_best_query_weights") or {}
         row: dict[str, Any] = {
             "source": source,
             "group": group,
@@ -128,7 +145,6 @@ def query_attention_rows_from_summary(summaries: dict[str, Any], source: str) ->
             "mean_peak": values.get("mean_peak"),
             "mean_attention_json": json.dumps(mean_weights, ensure_ascii=False, sort_keys=True),
             "selected_attention_json": json.dumps(selected_weights, ensure_ascii=False, sort_keys=True),
-            "best_attention_json": json.dumps(best_weights, ensure_ascii=False, sort_keys=True),
         }
         rows.append(row)
     return rows
@@ -238,11 +254,10 @@ def rows_from_compact_summary(payload: dict[str, Any], source: str) -> tuple[
         metrics: dict[str, Any] = {}
         if isinstance(block.get("overall"), dict):
             metrics["overall"] = block["overall"]
-        metrics.update(block.get("canonical_combos") if isinstance(block.get("canonical_combos"), dict) else {})
+        metrics.update(block.get("family_combos") if isinstance(block.get("family_combos"), dict) else {})
         metrics.update(block.get("raw_combos") if isinstance(block.get("raw_combos"), dict) else {})
         metrics.update(block.get("sensor_combos") if isinstance(block.get("sensor_combos"), dict) else {})
-        metrics.update(block.get("normalization_combos") if isinstance(block.get("normalization_combos"), dict) else {})
-        metrics.update(block.get("gsd_tokens") if isinstance(block.get("gsd_tokens"), dict) else {})
+        metrics.update(block.get("product_combos") if isinstance(block.get("product_combos"), dict) else {})
         metrics.update(block.get("target_area_px_bins") if isinstance(block.get("target_area_px_bins"), dict) else {})
         metrics.update(block.get("target_area_fraction_bins") if isinstance(block.get("target_area_fraction_bins"), dict) else {})
         metrics.update(block.get("ground_area_m2_bins") if isinstance(block.get("ground_area_m2_bins"), dict) else {})

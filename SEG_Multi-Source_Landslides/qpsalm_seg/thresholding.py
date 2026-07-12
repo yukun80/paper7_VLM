@@ -101,7 +101,7 @@ def build_eval_command(
 def recommend_thresholds(
     report_ref: str | Path,
     block_name: str = "auto",
-    group_prefixes: tuple[str, ...] = ("canonical_combo=",),
+    group_prefixes: tuple[str, ...] = ("family_combo=",),
     limit: int = 32,
     eval_device: str = "cuda",
 ) -> dict[str, Any]:
@@ -144,13 +144,13 @@ def recommend_thresholds(
         },
         "best_by_dice": best_by_dice,
         "best_by_iou": best_by_iou,
-        "canonical_or_selected_groups_by_dice": sorted_group_recommendations(
+        "selected_groups_by_dice": sorted_group_recommendations(
             per_group_dice,
             group_prefixes=group_prefixes,
             metric="dice",
             limit=limit,
         ),
-        "canonical_or_selected_groups_by_iou": sorted_group_recommendations(
+        "selected_groups_by_iou": sorted_group_recommendations(
             per_group_iou,
             group_prefixes=group_prefixes,
             metric="iou",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""SANE -> QMEF -> PMRD assembly for Multi-Source Qwen-PSALM-Seg."""
+"""SANE -> QMEF -> PMRD assembly for benchmark-v2 experiments."""
 
 from __future__ import annotations
 
@@ -8,154 +8,140 @@ import torch
 from torch import nn
 
 from qpsalm_seg.config import QPSalmConfig
+from qpsalm_seg.controllers import (
+    build_controller,
+    local_model_revision,
+    local_processor_revision,
+    validate_qwen_model_dir,
+)
 from qpsalm_seg.losses import proposal_set_losses
 from qpsalm_seg.schema import ModalityBatch, SegmentationOutput, SemanticEvidence
 
 from .pmrd import ProposalSetMaskRefinementDecoder
 from .qmef import QwenGuidedEvidenceFusion
 from .sane import SensorAwareNativeScaleEncoder
-from .visual_evidence import CachedQwenVisualEvidenceBank
-
-
-class SemanticEvidenceController(nn.Module):
-    """Fuse task, condition, reasoning and visual tokens into one evidence object."""
-
-    def __init__(self, dim: int, num_heads: int) -> None:
-        super().__init__()
-        self.type_embedding = nn.Parameter(torch.randn(4, dim) * 0.02)
-        self.pool_token = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
-        self.pool_attention = nn.MultiheadAttention(dim, num_heads, batch_first=True)
-        self.norm = nn.LayerNorm(dim)
-
-    def forward(
-        self,
-        task: torch.Tensor,
-        condition: torch.Tensor,
-        reasoning: torch.Tensor,
-        visual_tokens: torch.Tensor | None,
-        visual_mask: torch.Tensor | None = None,
-    ) -> SemanticEvidence:
-        tokens = [
-            task + self.type_embedding[0],
-            condition + self.type_embedding[1],
-            reasoning + self.type_embedding[2],
-        ]
-        visual_count = 0
-        if visual_tokens is not None:
-            if visual_tokens.ndim == 2:
-                visual_tokens = visual_tokens[:, None]
-            visual_count = int(visual_tokens.shape[1])
-            visual_tokens = visual_tokens + self.type_embedding[3][None, None]
-            tokens.extend(visual_tokens.unbind(dim=1))
-        stacked = torch.stack(tokens, dim=1)
-        token_mask = torch.ones(stacked.shape[:2], dtype=torch.bool, device=stacked.device)
-        if visual_count and visual_mask is not None:
-            token_mask[:, -visual_count:] = visual_mask.to(device=stacked.device, dtype=torch.bool)
-        query = self.pool_token.expand(stacked.shape[0], -1, -1)
-        pooled, _ = self.pool_attention(
-            query,
-            stacked,
-            stacked,
-            key_padding_mask=~token_mask,
-            need_weights=False,
-        )
-        global_token = self.norm(pooled[:, 0] + task)
-        return SemanticEvidence(
-            tokens=stacked,
-            token_mask=token_mask,
-            task_token=task,
-            condition_token=condition,
-            global_token=global_token,
-            visual_token_count=visual_count,
-        )
+from .vision_cache import QwenVisionFeatureBank, vision_input_protocol
 
 
 class MultiSourceQwenPSALMSeg(nn.Module):
-    """Three-module research model for instruction-conditioned landslide masks."""
+    """Strict v2 model: subset-first evidence, Qwen queries, proposal-set masks."""
 
-    def __init__(self, config: QPSalmConfig, controller: nn.Module) -> None:
+    def __init__(self, config: QPSalmConfig, device: torch.device) -> None:
         super().__init__()
         self.config = config
         dim = int(config.decoder_dim)
-        self.controller = controller
-        self.semantic_controller = SemanticEvidenceController(dim, int(config.num_heads))
+        cache_path = config.vision_feature_cache
+        needs_cache = bool(config.use_pretrained_sane or config.controller == "qwen_mask_query")
+        if needs_cache and not cache_path:
+            raise ValueError(f"preset={config.preset} 需要 vision_feature_cache v3")
+        self.vision_bank = (
+            QwenVisionFeatureBank(cache_path, dim, visual_ablation=config.visual_ablation)
+            if needs_cache and cache_path else None
+        )
+        if self.vision_bank is not None:
+            expected_input_protocol = vision_input_protocol(config)
+            if self.vision_bank.manifest.get("input_protocol") != expected_input_protocol:
+                raise ValueError(
+                    "Qwen vision cache input protocol 与模型不一致: "
+                    f"cache={self.vision_bank.manifest.get('input_protocol')} "
+                    f"model={expected_input_protocol}"
+                )
+            cached_view_tokens = int(self.vision_bank.manifest.get("view_tokens_per_view") or 0)
+            if cached_view_tokens < int(config.qwen_view_tokens_per_view):
+                raise ValueError(
+                    f"Qwen vision cache 每 view 仅有 {cached_view_tokens} tokens，"
+                    f"模型请求 {config.qwen_view_tokens_per_view}"
+                )
+        if self.vision_bank is not None and self.vision_bank.manifest.get("backend") != "hash-smoke":
+            model_dir = validate_qwen_model_dir(config.qwen_model_path)
+            expected = {
+                "model_revision": local_model_revision(model_dir),
+                "processor_revision": local_processor_revision(model_dir),
+            }
+            mismatched = {
+                key: {"cache": self.vision_bank.manifest.get(key), "local": value}
+                for key, value in expected.items()
+                if self.vision_bank.manifest.get(key) != value
+            }
+            if mismatched:
+                raise ValueError(f"Qwen vision cache revision 与本地模型不一致: {mismatched}")
+        self.controller = build_controller(config, device, self.vision_bank)
         self.sane = SensorAwareNativeScaleEncoder(
             dim,
-            modality_dropout=float(config.modality_dropout),
+            pretrained_bank=self.vision_bank if config.use_pretrained_sane else None,
         )
-        self.qmef = QwenGuidedEvidenceFusion(
-            dim,
-            deformable_points=int(getattr(config, "deformable_points", 4)),
-        )
+        self.qmef = QwenGuidedEvidenceFusion(dim, deformable_points=int(config.deformable_points))
         self.pmrd = ProposalSetMaskRefinementDecoder(
             dim,
             num_queries=int(config.num_mask_tokens),
             num_layers=int(config.num_decoder_layers),
             num_heads=int(config.num_heads),
+            query_chunk_size=int(config.query_chunk_size),
         )
-        visual_cache = getattr(config, "visual_evidence_cache", None)
-        self.visual_cache = CachedQwenVisualEvidenceBank(visual_cache, dim) if visual_cache else None
 
-    def _semantic_evidence(self, batch: ModalityBatch, device: torch.device) -> SemanticEvidence:
-        task = self.controller(batch.proposal_context_text, device=device)
-        condition = self.controller(batch.condition_prompt_text, device=device)
-        reasoning = self.controller(batch.evidence_reasoning_text, device=device)
-        visual_tokens = None
-        visual_mask = None
-        if self.visual_cache is not None:
-            visual_tokens, visual_mask = self.visual_cache(batch.visual_evidence_key, device=device)
-            visual_tokens = visual_tokens.to(task.dtype)
-        return self.semantic_controller(task, condition, reasoning, visual_tokens, visual_mask)
-
-    def _decode(
-        self,
-        batch: ModalityBatch,
-        semantic: SemanticEvidence,
-        apply_modality_dropout: bool,
-    ) -> SegmentationOutput:
-        pyramids = self.sane(batch, apply_dropout=apply_modality_dropout)
-        evidence = self.qmef(pyramids, semantic)
-        coarse_queries, coarse_masks = self.pmrd.propose(evidence, semantic.task_token, batch.reference_hw)
-        if bool(getattr(self.config, "use_query_spatial_attention", True)):
-            query_evidence, modality_weights, spatial_entropy = self.qmef.attend_queries(coarse_queries, evidence)
+    def _decode(self, batch: ModalityBatch, semantic: SemanticEvidence, *, use_full: bool) -> SegmentationOutput:
+        pyramids = self.sane(batch, use_full=use_full)
+        evidence = self.qmef(
+            pyramids,
+            semantic,
+            enable_semantic=bool(self.config.use_qmef),
+            enable_reliability=bool(self.config.use_qmef),
+        )
+        coarse_queries, coarse_masks = self.pmrd.propose(evidence, semantic, batch.reference_hw)
+        if self.config.use_query_spatial_attention:
+            (
+                query_evidence,
+                modality_weights,
+                scale_weights,
+                spatial_entropy,
+                sampling_reference,
+                sampling_grid,
+            ) = self.qmef.attend_queries(coarse_queries, evidence, coarse_masks)
         else:
             pooled = evidence.fused_mid.mean(dim=(2, 3))
             query_evidence = pooled[:, None].expand_as(coarse_queries)
             modality_weights = evidence.reliability_weights[:, None].expand(-1, coarse_queries.shape[1], -1)
+            scale_weights = coarse_queries.new_full((*coarse_queries.shape[:2], 3), 1.0 / 3.0)
             spatial_entropy = coarse_queries.new_zeros(coarse_queries.shape[:2])
-        if bool(getattr(self.config, "use_mask_refinement", True)):
+            sampling_reference = coarse_queries.new_zeros((*coarse_queries.shape[:2], 2))
+            sampling_grid = coarse_queries.new_zeros((
+                *coarse_queries.shape[:2], 3, int(self.config.deformable_points), 2
+            ))
+        if self.config.use_mask_refinement:
             queries, masks = self.pmrd.refine(
-                coarse_queries,
-                coarse_masks,
-                query_evidence,
-                evidence,
-                batch.reference_hw,
+                coarse_queries, coarse_masks, query_evidence, modality_weights, evidence, batch.reference_hw
             )
         else:
             queries, masks = coarse_queries, coarse_masks
-        if queries.shape[1] == 1 and float(getattr(self.config, "semantic_verifier_loss_weight", 0.0)) <= 0.0:
+        if queries.shape[1] == 1 and self.config.semantic_verifier_loss_weight <= 0:
             relevance = masks.new_full((masks.shape[0], 1), 8.0)
         else:
             relevance = self.qmef.verify(queries, query_evidence, semantic)
         proposals = self.pmrd.build_proposal_set(
-            masks,
-            coarse_masks,
-            relevance,
-            queries,
-            query_evidence,
-            modality_weights,
-            spatial_entropy,
+            masks, coarse_masks, relevance, queries, query_evidence,
+            modality_weights, scale_weights, spatial_entropy,
         )
-        final_logits = self.pmrd.compose_final_mask(masks, relevance)
         return SegmentationOutput(
-            final_mask_logits=final_logits,
+            final_mask_logits=self.pmrd.compose_final_mask(masks, relevance),
             proposals=proposals,
             diagnostics={
                 "modality_reliability_weights": evidence.reliability_weights.detach(),
-                "modality_active": evidence.modality_active.detach(),
                 "modality_reliability_logits": evidence.reliability_logits.detach(),
-                "query_spatial_entropy_mean": spatial_entropy.mean(dim=1).detach(),
-                "query_modality_attention_peak": modality_weights.max(dim=2).values.mean(dim=1).detach(),
+                "modality_coverage_ratio": evidence.coverage_ratio.detach(),
+                "modality_semantic_anchor_norm": evidence.modality_semantic_anchors.float().norm(dim=-1).detach(),
+                "modality_active": evidence.modality_active.detach(),
+                "null_evidence_weight": evidence.null_reliability.detach(),
+                "real_evidence_mass": evidence.real_reliability_mass.detach(),
+                "query_spatial_entropy_mean": spatial_entropy.mean(1).detach(),
+                "query_modality_attention_peak": modality_weights.max(2).values.mean(1).detach(),
+                "query_scale_attention_peak": scale_weights.max(2).values.mean(1).detach(),
+                "query_sampling_reference": sampling_reference.detach(),
+                "query_sampling_grid": sampling_grid.detach(),
+                **(
+                    {"visual_evidence_delta_norm": semantic.visual_delta_norm.detach()}
+                    if semantic.visual_delta_norm is not None
+                    else {}
+                ),
             },
         )
 
@@ -164,18 +150,30 @@ class MultiSourceQwenPSALMSeg(nn.Module):
         values = (torch.sigmoid(student) - torch.sigmoid(teacher)).square() * valid
         return values.sum() / valid.sum().clamp_min(1.0)
 
+    def _teacher_mask_logits(self, batch: ModalityBatch) -> torch.Tensor:
+        modules = list(self.modules())
+        training_states = [module.training for module in modules]
+        try:
+            for module in modules:
+                module.training = False
+            with torch.no_grad():
+                semantic = self.controller.encode_batch(batch, use_full=True)
+                return self._decode(batch, semantic, use_full=True).final_mask_logits.detach()
+        finally:
+            for module, training in zip(modules, training_states):
+                module.training = training
+
     def forward(self, batch: ModalityBatch) -> SegmentationOutput:
         if not isinstance(batch, ModalityBatch):
-            raise TypeError(f"MultiSourceQwenPSALMSeg expects ModalityBatch, got {type(batch).__name__}")
-        device = next(self.parameters()).device
-        semantic = self._semantic_evidence(batch, device)
-        consistency_weight = float(getattr(self.config, "missing_modality_consistency_weight", 0.0))
+            raise TypeError(f"expected ModalityBatch, got {type(batch).__name__}")
+        consistency_weight = float(self.config.missing_modality_consistency_weight)
         teacher_logits = None
-        if self.training and consistency_weight > 0.0 and any(len(items) > 1 for items in batch.instances):
-            with torch.no_grad():
-                teacher_logits = self._decode(batch, semantic, apply_modality_dropout=False).final_mask_logits.detach()
-        output = self._decode(batch, semantic, apply_modality_dropout=True)
-        valid = batch.valid_mask.to(device=device, dtype=output.final_mask_logits.dtype)
+        has_dropped = any(not subset.is_full for subset in batch.active_subsets)
+        if self.training and consistency_weight > 0 and has_dropped:
+            teacher_logits = self._teacher_mask_logits(batch)
+        semantic = self.controller.encode_batch(batch, use_full=False)
+        output = self._decode(batch, semantic, use_full=False)
+        valid = batch.valid_mask.to(device=output.final_mask_logits.device, dtype=output.final_mask_logits.dtype)
         consistency = (
             self._consistency_loss(output.final_mask_logits, teacher_logits, valid)
             if teacher_logits is not None
@@ -185,16 +183,16 @@ class MultiSourceQwenPSALMSeg(nn.Module):
             proposal_set_losses(
                 output,
                 batch,
-                final_bce_weight=float(getattr(self.config, "final_bce_weight", 1.0)),
-                final_dice_weight=float(getattr(self.config, "final_dice_weight", 1.0)),
-                proposal_set_weight=float(getattr(self.config, "proposal_set_loss_weight", 0.75)),
-                coarse_proposal_weight=float(getattr(self.config, "coarse_proposal_loss_weight", 0.25)),
-                verifier_weight=float(getattr(self.config, "semantic_verifier_loss_weight", 0.25)),
-                boundary_weight=float(getattr(self.config, "boundary_loss_weight", 0.0)),
+                final_bce_weight=self.config.final_bce_weight,
+                final_dice_weight=self.config.final_dice_weight,
+                proposal_set_weight=self.config.proposal_set_loss_weight,
+                coarse_proposal_weight=self.config.coarse_proposal_loss_weight,
+                verifier_weight=self.config.semantic_verifier_loss_weight,
+                boundary_weight=self.config.boundary_loss_weight,
                 missing_modality_consistency=consistency,
                 consistency_weight=consistency_weight,
-                min_component_area_fraction=float(getattr(self.config, "min_component_area_fraction", 5.0e-5)),
-                min_component_area_pixels=int(getattr(self.config, "min_component_area_pixels", 4)),
+                min_component_area_fraction=self.config.min_component_area_fraction,
+                min_component_area_pixels=self.config.min_component_area_pixels,
             )
         )
         return output

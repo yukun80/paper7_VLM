@@ -106,12 +106,12 @@ def manifest_record_summary(path: Path) -> dict[str, Any]:
     }
     combos: dict[str, int] = {}
     for row in records:
-        combo = (row.get("metadata") or {}).get("canonical_combo") or "unknown"
+        combo = (row.get("metadata") or {}).get("family_combo") or "unknown"
         combos[combo] = combos.get(combo, 0) + 1
     return {
         "records": len(records),
         "unique_samples": len(sample_ids),
-        "canonical_combos": dict(sorted(combos.items())),
+        "family_combos": dict(sorted(combos.items())),
         "modality_reliability_summary": summarize_manifest_reliability(records),
         "query_modality_attention_summary": summarize_manifest_query_attention(records),
     }
@@ -137,10 +137,10 @@ def summarize_manifest_reliability(records: list[dict[str, Any]]) -> dict[str, A
     groups: dict[str, list[dict[str, Any]]] = {"overall": usable}
     for row in usable:
         meta = row.get("metadata") or {}
-        groups.setdefault(f"canonical_combo={meta.get('canonical_combo', 'unknown')}", []).append(row)
+        groups.setdefault(f"family_combo={meta.get('family_combo', 'unknown')}", []).append(row)
         groups.setdefault(f"sensor_combo={meta.get('sensor_combo', 'unknown')}", []).append(row)
-        groups.setdefault(f"normalization_combo={meta.get('normalization_combo', 'unknown')}", []).append(row)
-        groups.setdefault(f"condition={meta.get('condition_prompt', 'unknown')}", []).append(row)
+        groups.setdefault(f"product_combo={meta.get('product_combo', 'unknown')}", []).append(row)
+        groups.setdefault(f"task_family={meta.get('task_family', 'unknown')}", []).append(row)
     out: dict[str, Any] = {}
     for name, rows in sorted(groups.items()):
         out[name] = {
@@ -159,10 +159,10 @@ def summarize_manifest_query_attention(records: list[dict[str, Any]]) -> dict[st
     groups: dict[str, list[dict[str, Any]]] = {"overall": usable}
     for row in usable:
         meta = row.get("metadata") or {}
-        groups.setdefault(f"canonical_combo={meta.get('canonical_combo', 'unknown')}", []).append(row)
+        groups.setdefault(f"family_combo={meta.get('family_combo', 'unknown')}", []).append(row)
         groups.setdefault(f"sensor_combo={meta.get('sensor_combo', 'unknown')}", []).append(row)
-        groups.setdefault(f"normalization_combo={meta.get('normalization_combo', 'unknown')}", []).append(row)
-        groups.setdefault(f"condition={meta.get('condition_prompt', 'unknown')}", []).append(row)
+        groups.setdefault(f"product_combo={meta.get('product_combo', 'unknown')}", []).append(row)
+        groups.setdefault(f"task_family={meta.get('task_family', 'unknown')}", []).append(row)
     out: dict[str, Any] = {}
     for name, rows in sorted(groups.items()):
         out[name] = {
@@ -170,9 +170,6 @@ def summarize_manifest_query_attention(records: list[dict[str, Any]]) -> dict[st
             "mean_query_weights": average_modality_dict([row.get("query_modality_mean_attention") for row in rows]),
             "mean_selected_query_weights": average_modality_dict(
                 [row.get("query_modality_selected_query_attention") for row in rows]
-            ),
-            "mean_best_query_weights": average_modality_dict(
-                [row.get("query_modality_best_query_attention") for row in rows]
             ),
         }
     return out
@@ -202,6 +199,7 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         "canvas_vs_original_delta": report.get("canvas_vs_original_delta") or {},
         "modality_reliability_summary": report.get("modality_reliability_summary") or {},
         "query_modality_attention_summary": report.get("query_modality_attention_summary") or {},
+        "instruction_sensitivity": report.get("instruction_sensitivity") or {},
     }
     proposal_diagnostics = report.get("proposal_diagnostics")
     if isinstance(proposal_diagnostics, dict):
@@ -209,10 +207,10 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
             "summary": proposal_diagnostics.get("summary") or {},
             "records": proposal_diagnostics.get("records") or [],
         }
-    canonical = {
+    families = {
         key: value
         for key, value in metrics.items()
-        if isinstance(key, str) and key.startswith("canonical_combo=")
+        if isinstance(key, str) and key.startswith("family_combo=")
     }
     raw = {
         key: value
@@ -224,15 +222,10 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         for key, value in metrics.items()
         if isinstance(key, str) and key.startswith("sensor_combo=")
     }
-    normalization = {
+    products = {
         key: value
         for key, value in metrics.items()
-        if isinstance(key, str) and key.startswith("normalization_combo=")
-    }
-    gsd_tokens = {
-        key: value
-        for key, value in metrics.items()
-        if isinstance(key, str) and key.startswith("gsd_token=")
+        if isinstance(key, str) and key.startswith("product_combo=")
     }
     target_area_px_bins = {
         key: value
@@ -249,26 +242,23 @@ def compact_metrics(report: dict[str, Any] | None) -> dict[str, Any]:
         for key, value in metrics.items()
         if isinstance(key, str) and key.startswith("ground_area_m2_bin=")
     }
-    out["canonical_combos"] = dict(sorted(canonical.items()))
+    out["family_combos"] = dict(sorted(families.items()))
     out["raw_combos"] = dict(sorted(raw.items()))
     out["sensor_combos"] = dict(sorted(sensor.items()))
-    out["normalization_combos"] = dict(sorted(normalization.items()))
-    out["gsd_tokens"] = dict(sorted(gsd_tokens.items()))
+    out["product_combos"] = dict(sorted(products.items()))
     out["target_area_px_bins"] = dict(sorted(target_area_px_bins.items()))
     out["target_area_fraction_bins"] = dict(sorted(target_area_fraction_bins.items()))
     out["ground_area_m2_bins"] = dict(sorted(ground_area_m2_bins.items()))
     out["coverage"] = {
         "n": (metrics.get("overall") or {}).get("n") if isinstance(metrics.get("overall"), dict) else None,
-        "num_canonical_combos": len(canonical),
-        "canonical_combo_names": sorted(canonical.keys()),
+        "num_family_combos": len(families),
+        "family_combo_names": sorted(families.keys()),
         "num_raw_combos": len(raw),
         "raw_combo_names": sorted(raw.keys()),
         "num_sensor_combos": len(sensor),
         "sensor_combo_names": sorted(sensor.keys()),
-        "num_normalization_combos": len(normalization),
-        "normalization_combo_names": sorted(normalization.keys()),
-        "num_gsd_tokens": len(gsd_tokens),
-        "gsd_token_names": sorted(gsd_tokens.keys()),
+        "num_product_combos": len(products),
+        "product_combo_names": sorted(products.keys()),
         "num_target_area_px_bins": len(target_area_px_bins),
         "target_area_px_bin_names": sorted(target_area_px_bins.keys()),
         "num_target_area_fraction_bins": len(target_area_fraction_bins),
@@ -303,8 +293,7 @@ def key_config(config: dict[str, Any] | None) -> dict[str, Any]:
     keys = [
         "controller",
         "qwen_model_path",
-        "condition_embedding_cache",
-        "visual_evidence_cache",
+        "vision_feature_cache",
         "preset",
         "target_size",
         "size_buckets",
@@ -319,6 +308,7 @@ def key_config(config: dict[str, Any] | None) -> dict[str, Any]:
         "modality_dropout",
         "deformable_points",
         "use_query_spatial_attention",
+        "use_qmef",
         "use_mask_refinement",
         "train_hflip_prob",
         "train_vflip_prob",
@@ -403,10 +393,12 @@ def summarize_run(
     acceptance["research_pipeline_ready"] = all(
         [
             acceptance["checkpoint_last_exists"],
+            bool(checkpoint_best["exists"]),
             acceptance["validation_latest_exists"],
             acceptance["train_history_exists"],
             acceptance["finite_last_loss"],
             acceptance["validation_overall_metrics"],
+            acceptance["eval_overall_metrics"],
             train_png_count + eval_png_count >= int(min_visualizations),
         ]
     )

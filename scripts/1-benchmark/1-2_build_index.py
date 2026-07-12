@@ -10,7 +10,7 @@
 source_test.jsonl、source_unlabeled.jsonl。
 写入行为：不会改写 datasets/；.npy/HDF5/NetCDF 使用虚拟引用，不拆大文件。
 所属流程：benchmark 构建 1-2；应在 1-1 后运行，也可由总控 Shell 调用。
-推荐运行命令：python scripts/1-benchmark/1-2_build_index.py --mode small --small-limit 1000 --datasets-root datasets --out-dir benchmark/multisource_landslide_v1_small
+推荐运行命令：python scripts/1-benchmark/1-2_build_index.py --mode small --small-limit 1000 --datasets-root datasets --out-dir benchmark/multisource_landslide_v2_small
 """
 
 from __future__ import annotations
@@ -149,7 +149,12 @@ def build_gdcld(root: Path, mode: str, small_limit: int, seed: int) -> list[dict
                 source_level="patch",
                 subset="patch",
                 modalities={
-                    "optical_rgb": modality_entry(img_path, fmt="image", band_names=["R", "G", "B"], shape=shape, role="vlm_visual"),
+                    "optical_rgb": modality_entry(
+                        img_path, fmt="image", band_names=["R", "G", "B"], shape=shape,
+                        role="vlm_visual", family="optical", sensor="generic_rgb",
+                        product_type="rgb", units="digital_number", signed=False,
+                        value_encoding="image_rgb",
+                    ),
                 },
                 mask=binary_mask_from_path(mask_path),
                 region="mixed",
@@ -172,7 +177,12 @@ def build_gdcld(root: Path, mode: str, small_limit: int, seed: int) -> list[dict
                 source_level="scene",
                 subset="scene",
                 modalities={
-                    "optical_rgb": modality_entry(img_path, fmt="geotiff_or_image", band_names=["R", "G", "B"], shape=shape, role="vlm_visual"),
+                    "optical_rgb": modality_entry(
+                        img_path, fmt="geotiff_or_image", band_names=["R", "G", "B"], shape=shape,
+                        role="vlm_visual", family="optical", sensor="generic_rgb",
+                        product_type="rgb", units="digital_number", signed=False,
+                        value_encoding="image_rgb",
+                    ),
                 },
                 mask=binary_mask_from_path(mask_path),
                 region=region_dir.name,
@@ -233,7 +243,12 @@ def build_landslidebench(root: Path, mode: str, small_limit: int, seed: int) -> 
                 subset="qwen3vl_jsonl",
                 source_level="patch",
                 modalities={
-                    "optical_rgb": modality_entry(img_path, fmt="png", band_names=["R", "G", "B"], shape=shape, role="vlm_visual"),
+                    "optical_rgb": modality_entry(
+                        img_path, fmt="png", band_names=["R", "G", "B"], shape=shape,
+                        role="vlm_visual", family="optical", sensor="generic_rgb",
+                        product_type="rgb", units="digital_number", signed=False,
+                        value_encoding="image_rgb",
+                    ),
                 },
                 mask=mask_entry(mask_path, fmt="png", shape=[1, 512, 512], empty_mask=True if is_negative else None, bbox_status="pending_pixel_read"),
                 region="mixed",
@@ -282,6 +297,12 @@ def build_lmhld_block(root: Path, subset_name: str, subset_root: Path, mode: str
                             shape=shape,
                             internal_key=idx,
                             role="multiband_visual",
+                            family="optical",
+                            sensor="generic_multiband_optical",
+                            product_type="multiband_optical",
+                            units="source_native",
+                            signed=False,
+                            value_encoding="npy_multiband",
                         ),
                     },
                     mask=mask_entry(f"{to_repo_rel(lab_npy)}::{idx}", fmt="npy", shape=mask_shape, internal_key=idx, bbox_status="pending_array_read"),
@@ -395,7 +416,7 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int, modal_policy
     for region, sample_no in keys:
         modalities: dict[str, dict[str, Any]] = {}
         mask_path = None
-        flags = ["netcdf_virtual_multitemporal_sample"]
+        flags = ["netcdf_event_aligned_single_timestamp"]
         if modal_policy != "union":
             flags.append(f"sen12_modal_policy_{modal_policy}")
         if (region, sample_no) in data["s2"]:
@@ -405,11 +426,15 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int, modal_policy
                 fmt="netcdf",
                 band_names=s2_bands,
                 shape=[15, len(s2_bands), 128, 128],
-                gsd_m=10,
+                native_gsd_m=10,
                 internal_key=s2_bands,
                 role="sentinel2_multispectral",
                 source="Sentinel-2_B02_B12",
+                family="multispectral",
                 sensor="sentinel2",
+                product_type="surface_reflectance",
+                units="reflectance",
+                signed=False,
                 value_encoding="sen12_netcdf_reflectance",
             )
             modalities["dem"] = modality_entry(
@@ -417,11 +442,15 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int, modal_policy
                 fmt="netcdf",
                 band_names=["DEM"],
                 shape=[15, 1, 128, 128],
-                gsd_m=10,
+                native_gsd_m=10,
                 internal_key="DEM",
                 role="terrain_dem",
                 source="Sen12Landslides_S2_file_DEM",
-                sensor="dem",
+                family="terrain",
+                sensor="generic_dem",
+                product_type="elevation",
+                units="meter",
+                signed=True,
                 value_encoding="sen12_netcdf_dem",
             )
             mask_path = p
@@ -432,11 +461,16 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int, modal_policy
                 fmt="netcdf",
                 band_names=["VV", "VH"],
                 shape=[15, 2, 128, 128],
-                gsd_m=10,
+                native_gsd_m=10,
                 internal_key=["VV", "VH"],
                 role="sentinel1_ascending",
                 source="Sentinel-1_ASC_VV_VH",
+                family="sar",
                 sensor="sentinel1",
+                product_type="sar_backscatter",
+                units="dB",
+                signed=True,
+                orbit="ascending",
                 value_encoding="sen12_netcdf_sar",
             )
             mask_path = mask_path or p
@@ -447,11 +481,16 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int, modal_policy
                 fmt="netcdf",
                 band_names=["VV", "VH"],
                 shape=[15, 2, 128, 128],
-                gsd_m=10,
+                native_gsd_m=10,
                 internal_key=["VV", "VH"],
                 role="sentinel1_descending",
                 source="Sentinel-1_DSC_VV_VH",
+                family="sar",
                 sensor="sentinel1",
+                product_type="sar_backscatter",
+                units="dB",
+                signed=True,
+                orbit="descending",
                 value_encoding="sen12_netcdf_sar",
             )
             mask_path = mask_path or p
@@ -479,7 +518,7 @@ def build_sen12(root: Path, mode: str, small_limit: int, seed: int, modal_policy
             dataset_name="Sen12Landslides",
             split=split,
             split_source="derived_hash_from_region_id",
-            task_type="multisource_temporal_landslide_segmentation",
+            task_type="multisource_landslide_segmentation",
             source_key=f"{region}/{sample_no}",
             subset="aligned_union",
             source_level="patch",
@@ -556,14 +595,28 @@ def build_multimodal(root: Path, mode: str, small_limit: int, seed: int, use_ext
                         fmt="geotiff",
                         band_names=["R", "G", "B"],
                         shape=shape_rgb,
-                        gsd_m=10,
+                        native_gsd_m=10,
                         role="sentinel2_rgb",
                         source="Sentinel-2_RGB",
+                        family="multispectral",
                         sensor="sentinel2",
+                        product_type="rgb",
+                        units="reflectance",
+                        signed=False,
                         value_encoding="multimodal_rgb_int16",
                     ),
-                    "dem": modality_entry(dem, fmt="geotiff", band_names=["DEM"], shape=shape_aux, role="terrain"),
-                    "insar_vel": modality_entry(insar, fmt="geotiff", band_names=["insar_velocity"], shape=shape_aux, role="deformation"),
+                    "dem": modality_entry(
+                        dem, fmt="geotiff", band_names=["DEM"], shape=shape_aux,
+                        role="terrain", family="terrain", sensor="generic_dem",
+                        product_type="elevation", units="meter", signed=True,
+                        value_encoding="geotiff_elevation",
+                    ),
+                    "insar_vel": modality_entry(
+                        insar, fmt="geotiff", band_names=["insar_velocity"], shape=shape_aux,
+                        role="deformation", family="deformation", sensor="generic_insar",
+                        product_type="los_velocity", units="source_native_velocity", signed=True,
+                        value_encoding="geotiff_signed_velocity", quality=0.6,
+                    ),
                 },
                 mask=mask_entry(label, fmt="geotiff", shape=[1, 128, 128], bbox_status="pending_pixel_read"),
                 region=region,
@@ -575,7 +628,7 @@ def build_multimodal(root: Path, mode: str, small_limit: int, seed: int, use_ext
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构建多源滑坡分割 benchmark 的统一 JSONL 索引。")
     parser.add_argument("--datasets-root", type=project_path_arg, default=DEFAULT_DATASETS_ROOT, help="原始 datasets 根目录。")
-    parser.add_argument("--out-dir", type=project_path_arg, default=None, help="当前模式 benchmark 输出目录，默认使用后缀式 multisource_landslide_v1_<mode>。")
+    parser.add_argument("--out-dir", type=project_path_arg, default=None, help="当前模式 benchmark 输出目录，默认使用后缀式 multisource_landslide_v2_<mode>。")
     parser.add_argument("--mode", choices=["small", "full"], default="small", help="small 抽样模式或 full 完整模式。")
     parser.add_argument("--small-limit", type=int, default=1000, help="small 模式下每个 dataset_name + split 的最大样本数，默认 1000。")
     parser.add_argument("--seed", type=int, default=42, help="确定性抽样随机种子。")

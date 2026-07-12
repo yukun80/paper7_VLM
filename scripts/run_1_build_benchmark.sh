@@ -9,7 +9,7 @@
 # source 校验、真实物化预处理、final 校验、split、指代目标构建、
 # referring_target 校验和统计报告构建。
 # 主要输入：仓库同级 datasets/ 原始数据目录，以及 MODE=small/full/both。
-# 主要输出：仓库同级 benchmark/multisource_landslide_v1_<mode>/ 下的自包含数据、索引和报告。
+# 主要输出：仓库同级 benchmark/multisource_landslide_v2_<mode>/ 下的自包含数据、索引和报告。
 # 写入行为：不会改写 datasets/，只写 benchmark/ 派生产物。
 # 所属流程：主数据流程第 1 阶段；完成后再运行 run_2_build_instruction_dataset.sh。
 # 特别说明：1-6 不读取 datasets/，只基于已物化的 benchmark/data/**/mask.npy 生成结构化指代目标；训练文本由 2-instruction 生成。
@@ -37,7 +37,7 @@ if [[ ! -d "${DEFAULT_BENCHMARK_ROOT}" && -d "${REPO_ROOT}/benchmark" ]]; then
 fi
 DATASETS_ROOT="${DATASETS_ROOT:-${PAPER7_DATASETS_ROOT:-${DEFAULT_DATASETS_ROOT}}}"
 BENCHMARK_ROOT="${PAPER7_BENCHMARK_ROOT:-${DEFAULT_BENCHMARK_ROOT}}"
-BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-${BENCHMARK_ROOT}/multisource_landslide_v1}"
+BENCHMARK_PREFIX="${BENCHMARK_PREFIX:-${BENCHMARK_ROOT}/multisource_landslide_v2}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SEN12_MODAL_POLICY="${SEN12_MODAL_POLICY:-require_s2}"
 

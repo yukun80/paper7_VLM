@@ -10,7 +10,7 @@ referring_target 阶段读取 indexes/referring_target_all.jsonl。
 validation_report_referring_target.json。
 写入行为：不会改写 datasets/ 或索引，只写 benchmark/ 下的验证报告。
 所属流程：benchmark 构建的 source/final/referring_target 阶段门禁。
-推荐运行命令：python scripts/1-benchmark/1-3_validate_index.py --stage final --benchmark-dir benchmark/multisource_landslide_v1_small
+推荐运行命令：python scripts/1-benchmark/1-3_validate_index.py --stage final --benchmark-dir benchmark/multisource_landslide_v2_small
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import numpy as np
 from PIL import Image
 
 from geohazard_benchmark_common import (
+    BENCHMARK_SCHEMA_VERSION,
     DEFAULT_BENCHMARK_ROOT,
     LANDSLIDE4SENSE_MODALITY_SHAPES,
     final_index_paths,
@@ -37,6 +38,7 @@ from geohazard_benchmark_common import (
     to_repo_rel,
     write_json,
 )
+from geohazard_referring_common import occupied_grid_positions
 
 
 def check_path(path_ref: str | None) -> tuple[bool, str]:
@@ -71,7 +73,7 @@ def validate_referring_target_sample(sample: dict[str, Any], benchmark_dir: Path
             errors.append(f"{sid}: 1-benchmark referring target 不应包含文本/模板字段: {forbidden}")
 
     category = sample.get("category")
-    if category not in {"position", "scale", "morphology", "count"}:
+    if category not in {"position", "scale", "morphology", "count", "no_target"}:
         errors.append(f"{sid}: referring target category 非法: {category}")
     if not sample.get("subtype"):
         errors.append(f"{sid}: referring target 缺少 subtype")
@@ -79,12 +81,31 @@ def validate_referring_target_sample(sample: dict[str, Any], benchmark_dir: Path
         errors.append(f"{sid}: referring target 缺少 grounding")
 
     target = sample.get("target_mask") or {}
+    parent_mask = sample.get("parent_mask") or {}
+    if parent_mask.get("format") != "npy" or not path_is_inside_benchmark(parent_mask.get("path"), benchmark_dir):
+        errors.append(f"{sid}: referring target 缺少 benchmark 内 parent_mask.npy")
     if target.get("format") != "npy":
         errors.append(f"{sid}: target_mask 必须是 benchmark 内 npy，当前 format={target.get('format')}")
     if target.get("dtype") != "uint8":
         errors.append(f"{sid}: target_mask dtype 应为 uint8，当前 {target.get('dtype')}")
-    if target.get("empty_mask") is True or int(target.get("positive_pixels") or 0) <= 0:
-        errors.append(f"{sid}: target_mask 必须是非空 mask")
+    is_no_target = category == "no_target"
+    is_empty = bool(target.get("empty_mask")) or int(target.get("positive_pixels") or 0) <= 0
+    if is_no_target and not is_empty:
+        errors.append(f"{sid}: no_target 指令必须对应空 mask")
+    if is_no_target and parent_mask.get("path"):
+        parent_path = resolve_repo_path(parent_mask.get("path"))
+        grid = str((sample.get("grounding") or {}).get("grid") or "")
+        if parent_path is None or not parent_path.exists():
+            errors.append(f"{sid}: no_target parent_mask 路径不存在: {parent_mask.get('path')}")
+        elif grid:
+            try:
+                occupied = occupied_grid_positions(np.load(parent_path, mmap_mode="r"))
+                if grid in occupied:
+                    errors.append(f"{sid}: no_target grid={grid} 实际包含滑坡前景")
+            except Exception as exc:
+                errors.append(f"{sid}: no_target parent_mask 无法验证: {exc}")
+    if not is_no_target and is_empty:
+        errors.append(f"{sid}: 正 referring target 必须是非空 mask")
     if "bbox_xyxy" not in target:
         errors.append(f"{sid}: target_mask 缺少 bbox_xyxy")
     if not path_is_inside_benchmark(target.get("path"), benchmark_dir):
@@ -247,6 +268,11 @@ def validate_sample(sample: dict[str, Any], *, stage: str, benchmark_dir: Path) 
     modalities_key = "source_modalities" if stage == "source" else "modalities"
     mask_key = "source_mask" if stage == "source" else "mask"
 
+    if sample.get("schema_version") != BENCHMARK_SCHEMA_VERSION:
+        errors.append(
+            f"{sid}: schema_version 必须是 {BENCHMARK_SCHEMA_VERSION}，当前 {sample.get('schema_version')!r}"
+        )
+
     if not sample.get("dataset_name"):
         errors.append(f"{sid}: 缺少 dataset_name")
     if not sample.get("split"):
@@ -266,6 +292,61 @@ def validate_sample(sample: dict[str, Any], *, stage: str, benchmark_dir: Path) 
             errors.append(f"{sid}: 最终模态 {name} 路径不在 benchmark 目录内: {modality.get('path')}")
         if modality.get("format") in {"hdf5", "netcdf"} and not modality.get("internal_key"):
             warnings.append(f"{sid}: 模态 {name} 是 {modality.get('format')}，但 internal_key 为空")
+        required_fields = {
+            "family",
+            "sensor",
+            "product_type",
+            "band_names",
+            "band_metadata",
+            "native_gsd_m",
+            "units",
+            "signed",
+            "orbit",
+            "quality",
+            "valid_mask",
+            "normalization",
+        }
+        missing_fields = sorted(required_fields - set(modality))
+        if missing_fields:
+            errors.append(f"{sid}: 模态 {name} 缺少 benchmark v2 字段 {missing_fields}")
+        if modality.get("family") not in {"optical", "multispectral", "sar", "terrain", "deformation"}:
+            errors.append(f"{sid}: 模态 {name} family 非法: {modality.get('family')!r}")
+        bands = modality.get("band_names") or []
+        band_metadata = modality.get("band_metadata") or []
+        if len(bands) != len(band_metadata):
+            errors.append(f"{sid}: 模态 {name} band_names 与 band_metadata 数量不一致")
+        required_band_fields = {
+            "name", "native_gsd_m", "center_wavelength_nm", "bandwidth_nm",
+            "polarization", "units", "signed", "measurement_geometry", "sign_convention",
+        }
+        for band_name, band in zip(bands, band_metadata):
+            if not isinstance(band, dict):
+                errors.append(f"{sid}: 模态 {name} band={band_name} metadata 必须是 dict")
+                continue
+            missing_band_fields = sorted(required_band_fields - set(band))
+            if missing_band_fields:
+                errors.append(
+                    f"{sid}: 模态 {name} band={band_name} 缺少物理字段 {missing_band_fields}"
+                )
+            if str(band.get("name")) != str(band_name):
+                errors.append(f"{sid}: 模态 {name} band metadata 顺序或名称不一致: {band_name}")
+            if not band.get("units"):
+                errors.append(f"{sid}: 模态 {name} band={band_name} units 不能为空")
+        if modality.get("product_type") == "los_velocity":
+            for band in band_metadata:
+                if band.get("measurement_geometry") != "line_of_sight" or not band.get("sign_convention"):
+                    errors.append(f"{sid}: 模态 {name} InSAR band 缺少 LOS/sign convention")
+        if not isinstance(modality.get("normalization"), dict):
+            errors.append(f"{sid}: 模态 {name} normalization 必须是结构化 dict")
+        if not isinstance(modality.get("valid_mask"), dict):
+            errors.append(f"{sid}: 模态 {name} valid_mask 必须是结构化 dict")
+        elif stage in {"final", "referring_target"}:
+            valid_path = modality["valid_mask"].get("path")
+            ok, message = check_path(valid_path)
+            if not ok:
+                errors.append(f"{sid}: 模态 {name} valid_mask {message}")
+            elif not path_is_inside_benchmark(valid_path, benchmark_dir):
+                errors.append(f"{sid}: 模态 {name} valid_mask 路径不在 benchmark 内: {valid_path}")
         if stage == "final":
             warnings.extend(modality_array_quality_warnings(sid, name, modality))
 
@@ -310,12 +391,12 @@ def validate_sample(sample: dict[str, Any], *, stage: str, benchmark_dir: Path) 
         if flag in {"annotated_flag_missing_or_unreadable", "annotated_flag_not_detected_by_lightweight_reader"}:
             warnings.append(f"{sid}: {flag}")
 
-    if sample.get("dataset_name") == "landslide4sense":
+    if stage != "referring_target" and sample.get("dataset_name") == "landslide4sense":
         cur_errors, cur_warnings = validate_landslide4sense_sample(sample, stage=stage, modalities_key=modalities_key, mask_key=mask_key)
         errors.extend(cur_errors)
         warnings.extend(cur_warnings)
 
-    if sample.get("dataset_name") == "Sen12Landslides":
+    if stage != "referring_target" and sample.get("dataset_name") == "Sen12Landslides":
         cur_errors, cur_warnings = validate_sen12_sample(sample, stage=stage, modalities_key=modalities_key)
         errors.extend(cur_errors)
         warnings.extend(cur_warnings)
