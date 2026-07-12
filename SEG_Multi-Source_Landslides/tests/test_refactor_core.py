@@ -18,7 +18,6 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -37,7 +36,9 @@ from qpsalm_seg.cli.cache_qwen_vision_features import restore_qwen_patch_grid
 from qpsalm_seg.cli.ablation_report import build_ablation_report
 from qpsalm_seg.cli.compare_runs import compare_seed_series
 from qpsalm_seg.cli.integration_check import (
+    lora_gradient_report,
     lora_parameter_update_summary,
+    runtime_library_report,
     select_representative_batch_indices,
     snapshot_lora_parameters,
 )
@@ -69,8 +70,20 @@ from qpsalm_seg.models.vision_cache import (
 from qpsalm_seg.presets import apply_preset
 from qpsalm_seg.rendering import RENDERER_VERSION
 from qpsalm_seg.schema import ActiveModalitySubset, ModalityBatch, ModalityInstance
-from qpsalm_seg.engine.checkpoint import load_checkpoint, save_checkpoint
+from qpsalm_seg.engine.checkpoint import (
+    load_checkpoint,
+    save_checkpoint,
+    validate_checkpoint_training_schedule,
+)
 from qpsalm_seg.engine.diagnostics import collect_proposal_records, metric_metadata_with_scale
+from qpsalm_seg.engine.optimizer import (
+    apply_optimizer_schedule,
+    build_optimizer,
+    qwen_lora_gradient_summary,
+    qwen_lora_update_summary,
+    qwen_training_stage,
+    snapshot_qwen_lora,
+)
 from qpsalm_seg.engine.threshold import restored_original_space_metrics
 from qpsalm_seg.engine.trainer import validation_selection_score
 from qpsalm_seg.visualize import save_visualizations
@@ -196,7 +209,7 @@ class ValidMetricTest(unittest.TestCase):
         small = apply_preset(load_config(root / "qpsalm_v2_small.yaml"), None)
         full = apply_preset(load_config(root / "qpsalm_v2_full.yaml"), None)
         for config in (small, full):
-            self.assertEqual(config.batch_size, 6)
+            self.assertEqual(config.batch_size, 4)
             self.assertEqual(config.grad_accum_steps, 1)
             self.assertEqual(config.query_chunk_size, 16)
             self.assertEqual(config.amp_dtype, "bf16")
@@ -602,6 +615,9 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertEqual(qwen.size_buckets, [64, 128, 256])
         self.assertEqual(qwen.max_native_size, 256)
         self.assertEqual(qwen.qwen_gradient_checkpointing, "disabled")
+        frozen = apply_preset(QPSalmConfig(), "qwen_mask_query_frozen")
+        self.assertEqual(frozen.controller, "qwen_mask_query")
+        self.assertFalse(frozen.qwen_lora_trainable)
 
     def test_modality_batch_select_preserves_order_and_payload(self) -> None:
         batch = repeat_batch(
@@ -612,6 +628,37 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertEqual(selected.batch_size, 2)
         self.assertEqual([row["parent_sample_id"] for row in selected.metadata], ["parent-2", "parent-0"])
         self.assertEqual(selected.visual_evidence_key, ["qmv3-parent:synthetic-2", "qmv3-parent:synthetic-0"])
+
+    def test_student_graph_is_built_before_consistency_teacher(self) -> None:
+        optical = instance("optical_rgb", "optical", 3, 32)
+        terrain = instance("dem", "terrain", 1, 32)
+        batch = synthetic_batch([optical, terrain], components=1, size=32)
+        batch.instances[0] = [optical]
+        batch.active_subsets[0] = ActiveModalitySubset(
+            active_names=(optical.name,),
+            dropped_names=(terrain.name,),
+            signature="synthetic-dropped",
+            is_full=False,
+        )
+        model = MultiSourceQwenPSALMSeg(
+            replace(
+                self.config,
+                max_native_size=32,
+                missing_modality_consistency_weight=0.1,
+            ),
+            torch.device("cpu"),
+        ).train()
+        calls = []
+        original = model.controller.encode_batch
+
+        def record(*args, **kwargs):
+            calls.append(bool(kwargs.get("use_full", False)))
+            return original(*args, **kwargs)
+
+        with patch.object(model.controller, "encode_batch", side_effect=record):
+            output = model(batch)
+        self.assertTrue(torch.isfinite(output["loss"]))
+        self.assertEqual(calls, [False, True])
 
     def test_sane_baseline_uses_uniform_real_evidence_without_null_gate(self) -> None:
         baseline_config = replace(
@@ -749,6 +796,89 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertEqual(update["num_changed"], 1)
         self.assertGreater(update["norm_sum"], 0.0)
         self.assertTrue(update["all_finite"])
+
+    def test_two_stage_qwen_optimizer_schedule(self) -> None:
+        class FakeController(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.model = torch.nn.Module()
+                self.model.lora_A = torch.nn.Parameter(torch.ones(2, 2))
+                self.model.lora_B = torch.nn.Parameter(torch.zeros(2, 2))
+                self.mask_embeddings = torch.nn.Parameter(torch.ones(2, 2))
+                self.output_projection = torch.nn.Linear(2, 2)
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.controller = FakeController()
+                self.sane = torch.nn.Linear(2, 2)
+
+        model = FakeModel()
+        config = QPSalmConfig(
+            controller="qwen_mask_query",
+            qwen_lora_start_step=2,
+            qwen_lora_lr_scale=0.2,
+            controller_lr_scale=0.5,
+            lr=1.0e-4,
+        )
+        optimizer, _ = build_optimizer(model, config)
+        stage = apply_optimizer_schedule(model, optimizer, config, step=0, lr_multiplier=1.0)
+        self.assertEqual(stage, "decoder_warmup")
+        self.assertFalse(model.controller.model.lora_A.requires_grad)
+        lora_group = next(group for group in optimizer.param_groups if group["group_role"] == "qwen_lora")
+        self.assertEqual(float(lora_group["lr"]), 0.0)
+        stage = apply_optimizer_schedule(model, optimizer, config, step=2, lr_multiplier=1.0)
+        self.assertEqual(stage, "qlora_active")
+        self.assertTrue(model.controller.model.lora_A.requires_grad)
+        self.assertAlmostEqual(float(lora_group["lr"]), 2.0e-5)
+        self.assertEqual(qwen_training_stage(replace(config, qwen_lora_trainable=False), 100), "qwen_frozen")
+
+    def test_trainer_lora_update_diagnostics_require_real_parameter_change(self) -> None:
+        class FakeController(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.model = torch.nn.Module()
+                self.model.lora_A = torch.nn.Parameter(torch.ones(2, 2))
+                self.model.lora_B = torch.nn.Parameter(torch.ones(2, 2))
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.controller = FakeController()
+
+        model = FakeModel()
+        before = snapshot_qwen_lora(model)
+        loss = sum(parameter.square().sum() for parameter in model.parameters())
+        loss.backward()
+        gradients = qwen_lora_gradient_summary(model)
+        self.assertEqual(gradients["num_nonzero"], 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        optimizer.step()
+        update = qwen_lora_update_summary(model, before)
+        self.assertEqual(update["num_changed"], 2)
+        self.assertGreater(update["norm_sum"], 0.0)
+
+    def test_lora_gradient_report_separates_a_and_b(self) -> None:
+        class Adapter(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.lora_A = torch.nn.ModuleDict({"default": torch.nn.Linear(2, 1, bias=False)})
+                self.lora_B = torch.nn.ModuleDict({"default": torch.nn.Linear(1, 2, bias=False)})
+
+        adapter = Adapter()
+        adapter.lora_A["default"].weight.grad = torch.ones_like(adapter.lora_A["default"].weight)
+        adapter.lora_B["default"].weight.grad = torch.ones_like(adapter.lora_B["default"].weight) * 2
+        wrapper = SimpleNamespace(controller=SimpleNamespace(model=adapter))
+        report = lora_gradient_report(wrapper)
+        self.assertEqual(report["by_matrix"]["lora_A"]["num_nonzero"], 1)
+        self.assertEqual(report["by_matrix"]["lora_B"]["num_nonzero"], 1)
+        self.assertTrue(report["all_finite"])
+
+    def test_trainability_report_records_runtime_versions(self) -> None:
+        report = runtime_library_report(torch.device("cpu"))
+        self.assertIn("torch", report)
+        self.assertIn("transformers", report)
+        self.assertNotIn("device_name", report)
 
     def test_active_subset_controls_prompt_and_null_reliability(self) -> None:
         optical = instance("optical_rgb", "optical", 3, 64)
@@ -1095,7 +1225,7 @@ class ThreeModuleModelTest(unittest.TestCase):
         output = self.model(synthetic_batch([unknown], components=1, size=32))
         self.assertTrue(torch.isfinite(output["loss"]))
 
-    def test_qwen_lora_regex_selects_only_last_language_blocks(self) -> None:
+    def test_qwen_lora_selects_only_last_language_blocks(self) -> None:
         class Attention(torch.nn.Module):
             def __init__(self) -> None:
                 super().__init__()
@@ -1112,10 +1242,8 @@ class ThreeModuleModelTest(unittest.TestCase):
                 self.model.language_model = torch.nn.Module()
                 self.model.language_model.layers = torch.nn.ModuleList([Block() for _ in range(8)])
         fake = Fake()
-        pattern = QwenMaskQueryController._last_layer_projection_regex(fake, 4)
-        selected = [name for name, _ in fake.named_modules() if re.fullmatch(pattern, name)]
-        self.assertEqual(len(selected), 16)
-        self.assertTrue(all(any(f"layers.{index}." in name for index in range(4, 8)) for name in selected))
+        selected = QwenMaskQueryController._last_language_layer_indices(fake, 4)
+        self.assertEqual(selected, (4, 5, 6, 7))
 
     def test_qwen_view_projection_preserves_pretrained_hidden_space(self) -> None:
         projection = torch.nn.Linear(8, 8)
@@ -1156,6 +1284,12 @@ class ThreeModuleModelTest(unittest.TestCase):
                 self.embedding = torch.nn.Embedding(32, 8)
                 self.model = torch.nn.Module()
                 self.model.language_model = Language()
+                self.wrapper_called = False
+
+            def forward(self, inputs_embeds, **kwargs):
+                self.wrapper_called = True
+                output = self.model.language_model(inputs_embeds=inputs_embeds, **kwargs)
+                return SimpleNamespace(hidden_states=(output.last_hidden_state,))
 
             def get_input_embeddings(self):
                 return self.embedding
@@ -1204,6 +1338,7 @@ class ThreeModuleModelTest(unittest.TestCase):
         batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], components=1, size=32)
         evidence = controller.encode_batch(batch)
         self.assertEqual(tuple(evidence.mask_query_states.shape), (1, 2, 8))
+        self.assertTrue(controller.model.wrapper_called)
         self.assertFalse(torch.allclose(evidence.mask_query_states[0], controller.mask_embeddings))
         language_inputs = controller.model.model.language_model.last_inputs[0]
         embedding = controller.model.get_input_embeddings().weight.detach()
@@ -1217,6 +1352,146 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertIsNotNone(delta_evidence.visual_delta_norm)
         self.assertGreater(float(delta_evidence.visual_delta_norm[0].detach()), 0.0)
         self.assertTrue(torch.allclose(delta_evidence.mask_query_states, evidence.mask_query_states))
+
+    def test_real_tiny_qwen_peft_wrapper_trains_lora_b_then_a(self) -> None:
+        try:
+            from peft import LoraConfig, get_peft_model
+            from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
+        except ImportError as exc:
+            self.skipTest(f"Qwen/PEFT production dependencies unavailable: {exc}")
+
+        config = Qwen3VLConfig(
+            text_config={
+                "vocab_size": 32,
+                "hidden_size": 16,
+                "intermediate_size": 32,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 4,
+                "num_key_value_heads": 2,
+                "head_dim": 4,
+                "max_position_embeddings": 64,
+                "pad_token_id": 0,
+            },
+            vision_config={
+                "depth": 1,
+                "hidden_size": 16,
+                "intermediate_size": 32,
+                "num_heads": 4,
+                "out_hidden_size": 16,
+                "num_position_embeddings": 16,
+                "deepstack_visual_indexes": [],
+            },
+            image_token_id=29,
+            video_token_id=30,
+            vision_start_token_id=27,
+            vision_end_token_id=28,
+        )
+        base = Qwen3VLForConditionalGeneration(config)
+        base.model.visual = None
+        for parameter in base.parameters():
+            parameter.requires_grad_(False)
+        model = get_peft_model(
+            base,
+            LoraConfig(
+                r=2,
+                lora_alpha=4,
+                lora_dropout=0.0,
+                bias="none",
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+                layers_to_transform=[1],
+                layers_pattern="layers",
+                task_type="CAUSAL_LM",
+            ),
+        )
+        controller = QwenMaskQueryController.__new__(QwenMaskQueryController)
+        torch.nn.Module.__init__(controller)
+        controller.model = model
+        controller.lora_layer_indices = (1,)
+        controller.lora_module_names = controller._validate_lora_injection((1,))
+        optimizer = torch.optim.AdamW(
+            [parameter for parameter in model.parameters() if parameter.requires_grad],
+            lr=1.0e-2,
+            weight_decay=0.0,
+        )
+        inputs = torch.randn(1, 8, 16, requires_grad=True)
+        target = torch.linspace(-0.5, 0.5, 2 * 16).reshape(1, 2, 16)
+        reports = []
+        for _ in range(2):
+            optimizer.zero_grad(set_to_none=True)
+            with controller.trace_lora_execution() as execution:
+                output = model(
+                    inputs_embeds=inputs,
+                    attention_mask=torch.ones(1, 8, dtype=torch.long),
+                    output_hidden_states=True,
+                    return_dict=True,
+                    use_cache=False,
+                    logits_to_keep=1,
+                )
+            loss = torch.nn.functional.mse_loss(output.hidden_states[-1][:, -2:].float(), target)
+            loss.backward()
+            reports.append({
+                matrix: sum(
+                    float(parameter.grad.detach().float().norm())
+                    for name, parameter in model.named_parameters()
+                    if matrix in name and parameter.grad is not None
+                )
+                for matrix in ("lora_A", "lora_B")
+            } | {"executed": sum(value > 0 for value in execution.values())})
+            optimizer.step()
+        lora_modules = [
+            module
+            for _, module in model.named_modules()
+            if hasattr(module, "lora_A") and hasattr(module, "lora_B")
+        ]
+        self.assertEqual(len(lora_modules), 4)
+        self.assertEqual(reports[0]["executed"], 4)
+        self.assertGreater(reports[0]["lora_B"], 0.0)
+        self.assertEqual(reports[0]["lora_A"], 0.0)
+        self.assertGreater(reports[1]["lora_A"], 0.0)
+
+        # Mirror the production ordering: build the student segmentation
+        # graph first, then run a no-grad consistency teacher under outer
+        # BF16 autocast. Both LoRA matrices must remain connected.
+        mask_head = torch.nn.Linear(16, 1)
+        model.zero_grad(set_to_none=True)
+        mask_head.zero_grad(set_to_none=True)
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            student = model(
+                inputs_embeds=inputs,
+                attention_mask=torch.ones(1, 8, dtype=torch.long),
+                output_hidden_states=True,
+                return_dict=True,
+                use_cache=False,
+                logits_to_keep=1,
+            )
+            student_logits = mask_head(student.hidden_states[-1][:, -2:].float()).squeeze(-1)
+        with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16):
+            teacher = model(
+                inputs_embeds=inputs.detach(),
+                attention_mask=torch.ones(1, 8, dtype=torch.long),
+                output_hidden_states=True,
+                return_dict=True,
+                use_cache=False,
+                logits_to_keep=1,
+            )
+            teacher_logits = mask_head(teacher.hidden_states[-1][:, -2:].float()).squeeze(-1)
+        segmentation_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+            student_logits.float(), torch.ones_like(student_logits).float()
+        )
+        consistency_loss = (
+            torch.sigmoid(student_logits.float()) - torch.sigmoid(teacher_logits.float())
+        ).square().mean()
+        (segmentation_loss + 0.1 * consistency_loss).backward()
+        end_to_end = {
+            matrix: sum(
+                float(parameter.grad.detach().float().norm())
+                for name, parameter in model.named_parameters()
+                if matrix in name and parameter.grad is not None
+            )
+            for matrix in ("lora_A", "lora_B")
+        }
+        self.assertGreater(end_to_end["lora_A"], 0.0)
+        self.assertGreater(end_to_end["lora_B"], 0.0)
 
     def test_coverage_mode_when_components_exceed_queries(self) -> None:
         output = self.model(synthetic_batch([instance("optical_rgb", "optical", 3, 64)], components=10))
@@ -1400,6 +1675,34 @@ class ThreeModuleModelTest(unittest.TestCase):
             restored_scaler = FakeScaler()
             self.assertEqual(load_checkpoint(path, restored, scaler=restored_scaler), 4)
             self.assertEqual(restored_scaler.state, {"scale": 2048.0})
+
+    def test_qwen_checkpoint_schedule_validation(self) -> None:
+        config = QPSalmConfig(
+            controller="qwen_mask_query",
+            qwen_lora_start_step=300,
+            qwen_lora_lr_scale=0.2,
+            controller_lr_scale=0.5,
+        )
+        checkpoint = {
+            "step": 300,
+            "resume_training_stage": "qlora_active",
+            "runtime_spec": {
+                "qwen_lora_start_step": 300,
+                "qwen_lora_lr_scale": 0.2,
+                "controller_lr_scale": 0.5,
+            },
+        }
+        validate_checkpoint_training_schedule(checkpoint, config)
+        with self.assertRaisesRegex(RuntimeError, "training schedule"):
+            validate_checkpoint_training_schedule(
+                checkpoint,
+                replace(config, qwen_lora_start_step=400),
+            )
+        with self.assertRaisesRegex(RuntimeError, "training stage"):
+            validate_checkpoint_training_schedule(
+                {**checkpoint, "resume_training_stage": "decoder_warmup"},
+                config,
+            )
 
 
 if __name__ == "__main__":

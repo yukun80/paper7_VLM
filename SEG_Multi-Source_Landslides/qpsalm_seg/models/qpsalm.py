@@ -185,11 +185,14 @@ class MultiSourceQwenPSALMSeg(nn.Module):
         dropped_indices = [
             index for index, subset in enumerate(batch.active_subsets) if not subset.is_full
         ]
+        # Build the trainable student graph before running the stateful Qwen
+        # controller in no-grad teacher mode. This prevents teacher inference
+        # state from changing the QLoRA path used by the student forward.
+        semantic = self.controller.encode_batch(batch, use_full=False)
+        output = self._decode(batch, semantic, use_full=False)
         teacher_logits = None
         if self.training and consistency_weight > 0 and dropped_indices:
             teacher_logits = self._teacher_mask_logits(batch.select(dropped_indices))
-        semantic = self.controller.encode_batch(batch, use_full=False)
-        output = self._decode(batch, semantic, use_full=False)
         valid = batch.valid_mask.to(
             device=output.final_mask_logits.device,
             dtype=output.final_mask_logits.dtype,

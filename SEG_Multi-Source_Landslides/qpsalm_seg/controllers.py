@@ -10,9 +10,9 @@ text-only cache formats are intentionally unsupported.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
-import re
 from typing import Any, Sequence
 
 import torch
@@ -280,21 +280,28 @@ class QwenMaskQueryController(nn.Module):
             model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
         for parameter in model.parameters():
             parameter.requires_grad_(False)
-        target_regex = self._last_layer_projection_regex(model, int(config.qwen_lora_last_n_layers))
-        lora = LoraConfig(
-            r=int(config.qwen_lora_rank),
-            lora_alpha=int(config.qwen_lora_alpha),
-            lora_dropout=float(config.qwen_lora_dropout),
-            bias="none",
-            target_modules=target_regex,
-            task_type="CAUSAL_LM",
+        selected_layers = self._last_language_layer_indices(
+            model, int(config.qwen_lora_last_n_layers)
         )
-        self.model = get_peft_model(model, lora)
-        # FP16 autocast still needs FP32 adapter master weights/gradients.
-        # Otherwise GradScaler unscale can erase very small LoRA updates.
-        for name, parameter in self.model.named_parameters():
-            if "lora_" in name:
-                parameter.data = parameter.data.float()
+        if config.qwen_lora_trainable:
+            lora = LoraConfig(
+                r=int(config.qwen_lora_rank),
+                lora_alpha=int(config.qwen_lora_alpha),
+                lora_dropout=float(config.qwen_lora_dropout),
+                bias="none",
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+                layers_to_transform=list(selected_layers),
+                layers_pattern="layers",
+                task_type="CAUSAL_LM",
+            )
+            self.model = get_peft_model(model, lora)
+            # FP16 autocast still needs FP32 adapter master weights/gradients.
+            # Otherwise GradScaler unscale can erase very small LoRA updates.
+            for name, parameter in self.model.named_parameters():
+                if "lora_" in name:
+                    parameter.data = parameter.data.float()
+        else:
+            self.model = model
         self.gradient_checkpointing_mode = checkpoint_mode
         self.gradient_checkpointing_kwargs = configure_qwen_gradient_checkpointing(
             self.model, checkpoint_mode
@@ -346,14 +353,12 @@ class QwenMaskQueryController(nn.Module):
         ]
         if non_fp32_lora:
             raise RuntimeError(f"QLoRA adapter 必须保持 FP32 master weights: {non_fp32_lora[:8]}")
-
-    def _language_model(self) -> nn.Module:
-        base = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
-        container = getattr(base, "model", None)
-        language = getattr(container, "language_model", None)
-        if language is None:
-            raise RuntimeError("当前 Qwen3-VL 结构缺少 model.language_model")
-        return language
+        self.lora_layer_indices = tuple(selected_layers) if config.qwen_lora_trainable else ()
+        self.lora_module_names = (
+            self._validate_lora_injection(selected_layers)
+            if config.qwen_lora_trainable
+            else ()
+        )
 
     @staticmethod
     def _initialize_view_projection(projection: nn.Linear) -> None:
@@ -365,21 +370,80 @@ class QwenMaskQueryController(nn.Module):
             nn.init.zeros_(projection.bias)
 
     @staticmethod
-    def _last_layer_projection_regex(model: nn.Module, last_n: int) -> str:
-        candidates: list[tuple[int, str]] = []
-        pattern = re.compile(r"(?:language_model|text_model|model)\.layers\.(\d+)\..*(q_proj|k_proj|v_proj|o_proj)$")
-        for name, _ in model.named_modules():
-            if "visual" in name or "vision" in name:
-                continue
-            match = pattern.search(name)
-            if match:
-                candidates.append((int(match.group(1)), name))
-        if not candidates:
-            raise RuntimeError("无法定位 Qwen language decoder 的 q/k/v/o projection")
-        indices = sorted({index for index, _ in candidates})
-        selected = set(indices[-max(1, last_n):])
-        names = [re.escape(name) for index, name in candidates if index in selected]
-        return "(?:" + "|".join(names) + ")"
+    def _last_language_layer_indices(model: nn.Module, last_n: int) -> tuple[int, ...]:
+        container = getattr(model, "model", None)
+        language = getattr(container, "language_model", None)
+        layers = getattr(language, "layers", None)
+        if layers is None:
+            raise RuntimeError("当前 Qwen3-VL 结构缺少 model.language_model.layers")
+        count = len(layers)
+        if count <= 0:
+            raise RuntimeError("Qwen language decoder 不包含 transformer layers")
+        width = min(max(1, int(last_n)), count)
+        return tuple(range(count - width, count))
+
+    def _lora_projection_modules(self) -> dict[str, nn.Module]:
+        return {
+            name: module
+            for name, module in self.model.named_modules()
+            if hasattr(module, "lora_A") and hasattr(module, "lora_B")
+        }
+
+    def _validate_lora_injection(self, selected_layers: Sequence[int]) -> tuple[str, ...]:
+        modules = self._lora_projection_modules()
+        expected = len(tuple(selected_layers)) * 4
+        if len(modules) != expected:
+            raise RuntimeError(
+                "Qwen LoRA projection 数量不符合预期: "
+                f"observed={len(modules)} expected={expected} names={list(modules)[:8]}"
+            )
+        selected = set(int(value) for value in selected_layers)
+        for name, module in modules.items():
+            if not any(f"layers.{index}." in name for index in selected):
+                raise RuntimeError(f"LoRA 注入到非目标 language layer: {name}")
+            active = tuple(getattr(module, "active_adapters", ()))
+            if not active:
+                raise RuntimeError(f"LoRA projection 没有 active adapter: {name}")
+            if bool(getattr(module, "disable_adapters", False)):
+                raise RuntimeError(f"LoRA projection 被禁用: {name}")
+            if tuple(getattr(module, "merged_adapters", ())) or bool(getattr(module, "merged", False)):
+                raise RuntimeError(f"LoRA projection 已 merged，无法进行 QLoRA 训练: {name}")
+        return tuple(sorted(modules))
+
+    def lora_runtime_status(self) -> dict[str, Any]:
+        modules = self._lora_projection_modules()
+        return {
+            "selected_layers": list(self.lora_layer_indices),
+            "module_names": sorted(modules),
+            "module_count": len(modules),
+            "active_adapters": {
+                name: list(getattr(module, "active_adapters", ()))
+                for name, module in modules.items()
+            },
+            "disabled_modules": sorted(
+                name for name, module in modules.items()
+                if bool(getattr(module, "disable_adapters", False))
+            ),
+            "merged_modules": sorted(
+                name for name, module in modules.items()
+                if tuple(getattr(module, "merged_adapters", ())) or bool(getattr(module, "merged", False))
+            ),
+        }
+
+    @contextmanager
+    def trace_lora_execution(self):
+        counts = {name: 0 for name in self.lora_module_names}
+        handles = []
+        for name, module in self._lora_projection_modules().items():
+            def record(_module, _inputs, _output, *, module_name=name):
+                counts[module_name] += 1
+
+            handles.append(module.register_forward_hook(record))
+        try:
+            yield counts
+        finally:
+            for handle in handles:
+                handle.remove()
 
     @lru_cache(maxsize=32768)
     def _cached_segment_ids(self, text: str) -> tuple[int, ...]:
@@ -519,24 +583,33 @@ class QwenMaskQueryController(nn.Module):
             raise RuntimeError(
                 "Qwen inputs_embeds 缺少梯度链路；请检查动态 padding、controller embeddings 和 LoRA 初始化"
             )
-        outputs = self._language_model()(
-            inputs_embeds=inputs,
-            attention_mask=attention,
-            output_hidden_states=False,
-            return_dict=True,
-            use_cache=False,
-        )
-        hidden = outputs.last_hidden_state
-        task_states, condition_states, anchors, masks = [], [], [], []
-        for index, (task_pos, condition_pos, anchor_start, mask_start, _) in enumerate(positions):
-            task_states.append(hidden[index, task_pos])
-            condition_states.append(hidden[index, condition_pos])
-            anchors.append(hidden[index, anchor_start:mask_start])
-            masks.append(hidden[index, mask_start:mask_start + self.num_queries])
-        task_out = self.output_projection(torch.stack(task_states).float())
-        condition_out = self.output_projection(torch.stack(condition_states).float())
-        anchor_out = self.output_projection(torch.stack(anchors).float())
-        mask_out = self.output_projection(torch.stack(masks).float())
+        # BitsAndBytes already owns the NF4 base compute dtype. Keep QLoRA
+        # master weights and controller projections outside the dense
+        # segmentation autocast context so their autograd path is identical
+        # in controller-only probes and end-to-end training.
+        with torch.amp.autocast(device_type=device.type, enabled=False):
+            outputs = self.model(
+                inputs_embeds=inputs,
+                attention_mask=attention,
+                output_hidden_states=True,
+                return_dict=True,
+                use_cache=False,
+                logits_to_keep=1,
+            )
+            hidden_states = getattr(outputs, "hidden_states", None)
+            if not hidden_states:
+                raise RuntimeError("PEFT Qwen forward 未返回 language hidden states")
+            hidden = hidden_states[-1]
+            task_states, condition_states, anchors, masks = [], [], [], []
+            for index, (task_pos, condition_pos, anchor_start, mask_start, _) in enumerate(positions):
+                task_states.append(hidden[index, task_pos])
+                condition_states.append(hidden[index, condition_pos])
+                anchors.append(hidden[index, anchor_start:mask_start])
+                masks.append(hidden[index, mask_start:mask_start + self.num_queries])
+            task_out = self.output_projection(torch.stack(task_states).float())
+            condition_out = self.output_projection(torch.stack(condition_states).float())
+            anchor_out = self.output_projection(torch.stack(anchors).float())
+            mask_out = self.output_projection(torch.stack(masks).float())
         if self.training and not mask_out.requires_grad:
             raise RuntimeError("Qwen mask-query states 缺少梯度链路")
         token_out = torch.cat([task_out[:, None], condition_out[:, None], anchor_out], 1)

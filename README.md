@@ -91,6 +91,7 @@ python scripts/2-instruction/2-3_validate_instruction_index.py --benchmark-dir b
 | `raw_sane_qmef_pmrd` | 增加 proposal set 与两轮 PMRD |
 | `pretrained_sane_qmef_pmrd` | 使用 Qwen-ViT cache v3 的中间空间特征 |
 | `qwen_psalm_full` | 在线 4-bit Qwen language decoder + QLoRA mask-query states |
+| `qwen_mask_query_frozen` | 冻结 Qwen language decoder，仅训练软提示、SANE/QMEF/PMRD 的消融基线 |
 
 正式 Qwen 路线固定使用离线视觉塔和在线语言 decoder。Qwen 不生成 bbox；它负责语义条件、
 多视图证据 token、evidence anchors 和 mask-query hidden states。
@@ -132,10 +133,11 @@ CACHE_CONTROL=reuse \
 bash SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh
 ```
 
-24GB 单卡参数直接定义在 small/full YAML：BF16、`batch_size=6`、
+24GB 单卡参数直接定义在 small/full YAML：BF16、`batch_size=4`、
 `grad_accum_steps=1`、`query_chunk_size=16`，并关闭 Qwen gradient checkpoint。
-脚本不再接受隐藏的精度、batch或checkpoint覆盖。首次运行会对最大空间桶和最大
-多模态桶分别执行batch 6反向门禁，峰值上限为22.5 GiB；可用
+脚本不再接受隐藏的精度、batch或checkpoint覆盖。正式训练先进行 450-step decoder warmup，
+随后以 `0.2 × lr` 启用最后四层 QLoRA。首次运行使用 YAML 中的 batch 规模执行代表性反向门禁，
+峰值上限为22.5 GiB；可用
 `MEMORY_GATE=0` 显式跳过，但正式实验不建议关闭。
 
 周期验证使用固定的 parent-aware monitor subset：small 为 512 条，full 为 1024 条；
@@ -324,27 +326,54 @@ teacher consistency 生效且峰值 reserved memory 不超过 22.5 GiB 时才通
 梯度为零不作为失败条件。结果写入
 `qpsalm_real_integration_v2` JSON，任一检查失败时命令非零退出。
 
+需要定位 Qwen/PEFT 梯度链路时运行深度诊断；它额外执行 controller-only 两个优化步骤，
+第一步检查 `lora_B`，第二步检查 `lora_A`；随后分别检查 student-only segmentation 和
+full/dropped consistency 的 Qwen hidden、mask/coarse/refined query 梯度：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.integration_check \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --mode qwen --qwen-check diagnostic --device cuda \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --max-memory-gib 22.5 \
+  --output outputs/qpsalm_v2/qwen_trainability_diagnostic.json
+```
+
+门禁通过后，先运行 5-step 阶段切换 smoke；它在 step 2 启用 QLoRA，并要求 trainer 同时
+观测到非零 LoRA 梯度和真实参数更新。正式 YAML 仍保持 step 450：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full --device cuda \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --qwen-lora-start-step 2 --max-steps 5 \
+  --max-train-samples 24 --max-val-samples 12 --monitor-val-samples 12 \
+  --num-workers 0 --val-interval 5 --save-interval 5 --num-visualizations 4 \
+  --output-dir outputs/qpsalm_v2/qwen_stage_smoke \
+  --overwrite-output --skip-torch-preflight
+```
+
+成功时终端会出现一次 `[QLORA]`，详细阶段证据写入 `stage_events.jsonl`，并生成
+`checkpoint_best.pt`、`checkpoint_last.pt`、validation report 和可视化。
+
 Qwen 主训练默认关闭 activation checkpoint，以增加激活显存换取更高吞吐；显存不足时可显式
 传入 `--qwen-gradient-checkpointing reentrant`。运行时不会自动回退，实际模式会写入 resolved
 config、checkpoint protocol、训练启动日志和 integration report。当前配置还会使用 SDPA、
 序列负载分桶和 dropped-only teacher batch，减少 padding 与重复 teacher forward。
 
-完成门禁后可用独立 20-step 运行比较 batch 6/8；两次运行都关闭周期验证与可视化：
+完成门禁后可用独立 20-step batch 4 运行检查稳定吞吐，并关闭周期验证与可视化：
 
 ```bash
-PYTHONPATH=SEG_Multi-Source-Landslides python -m qpsalm_seg.cli.train \
-  --config SEG_Multi-Source-Landslides/configs/qpsalm_v2_small.yaml \
-  --preset qwen_psalm_full --device cuda --batch-size 6 --max-steps 20 \
+PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.train \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full --device cuda --batch-size 4 --max-steps 20 \
+  --qwen-lora-start-step 0 \
   --val-interval 20 --max-val-batches 1 --num-visualizations 0 \
   --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
-  --output-dir outputs/qpsalm_v2/throughput_b6_nf4 --overwrite-output --skip-torch-preflight
-
-PYTHONPATH=SEG_Multi-Source-Landslides python -m qpsalm_seg.cli.train \
-  --config SEG_Multi-Source-Landslides/configs/qpsalm_v2_small.yaml \
-  --preset qwen_psalm_full --device cuda --batch-size 8 --max-steps 20 \
-  --val-interval 20 --max-val-batches 1 --num-visualizations 0 \
-  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
-  --output-dir outputs/qpsalm_v2/throughput_b8_nf4 --overwrite-output --skip-torch-preflight
+  --output-dir outputs/qpsalm_v2/throughput_b4_nf4 --overwrite-output --skip-torch-preflight
 ```
 
 `train_history.jsonl` 会记录 `samples_per_sec`、`qwen_tokens_per_sec`、峰值显存、Qwen padding
@@ -352,9 +381,9 @@ PYTHONPATH=SEG_Multi-Source-Landslides python -m qpsalm_seg.cli.train \
 更高且峰值不超过 22.5 GiB 时才应修改正式 YAML。
 
 ```bash
-PYTHONPATH=SEG_Multi-Source-Landslides python -m qpsalm_seg.cli.summarize_run \
+PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.summarize_run \
   --run-dir outputs/qpsalm_v2/throughput_b6_nf4 --no-export-tables
-PYTHONPATH=SEG_Multi-Source-Landslides python -m qpsalm_seg.cli.summarize_run \
+PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.summarize_run \
   --run-dir outputs/qpsalm_v2/throughput_b8_nf4 --no-export-tables
 ```
 

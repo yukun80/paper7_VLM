@@ -37,6 +37,14 @@ from .diagnostics import (
     training_scalar_tensors,
 )
 from .evaluator import evaluate
+from .optimizer import (
+    apply_optimizer_schedule,
+    build_optimizer,
+    optimizer_group_summary,
+    qwen_lora_gradient_summary,
+    qwen_lora_update_summary,
+    snapshot_qwen_lora,
+)
 
 
 def write_train_manifest(out_dir: Path, config: QPSalmConfig, device: str, resume: str | None) -> None:
@@ -195,16 +203,18 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
         f"precision={config.amp_dtype} batch={config.batch_size} ga={grad_accum} "
         f"query_chunk={config.query_chunk_size} qwen_checkpoint={config.qwen_gradient_checkpointing} "
         f"qwen_base={('nf4' if config.qwen_4bit else config.amp_dtype) if config.controller == 'qwen_mask_query' else 'none'} "
+        f"qwen_lora={(f'staged@{config.qwen_lora_start_step}' if config.qwen_lora_trainable else 'frozen') if config.controller == 'qwen_mask_query' else 'none'} "
         f"attention={config.qwen_attn_implementation if config.controller == 'qwen_mask_query' else 'none'} "
         f"target={config.target_size} "
         f"steps_per_epoch={steps_per_epoch} max_steps={config.max_steps}"
     )
     model = build_model(config, device)
-    trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=config.lr, weight_decay=config.weight_decay)
+    optimizer, trainable = build_optimizer(model, config)
+    write_json(out_dir / "optimizer_groups.json", optimizer_group_summary(optimizer))
     scaler = create_grad_scaler(config, device)
     start_step = load_checkpoint(resume, model, optimizer, scaler) if resume else 0
     history_path = out_dir / "train_history.jsonl"
+    stage_events_path = out_dir / "stage_events.jsonl"
     history = load_history(history_path, start_step) if resume else []
     if resume:
         write_history(history_path, history)
@@ -215,6 +225,7 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
     autocast, dtype = autocast_enabled(config, device), amp_dtype(config, device)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
+    current_stage: str | None = None
     progress = tqdm(
         total=max(0, config.max_steps - start_step),
         desc="qpsalm-train",
@@ -225,8 +236,38 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
         optimizer_step_started = time.perf_counter()
         model.train()
         multiplier = cosine_lr(step, config.max_steps, config.warmup_steps)
-        for group in optimizer.param_groups:
-            group["lr"] = config.lr * multiplier
+        stage = apply_optimizer_schedule(
+            model,
+            optimizer,
+            config,
+            step=step,
+            lr_multiplier=multiplier,
+        )
+        stage_changed = stage != current_stage
+        stage_event = None
+        if stage_changed:
+            qwen_lr = next(
+                (
+                    float(group["lr"])
+                    for group in optimizer.param_groups
+                    if group.get("group_role") == "qwen_lora"
+                ),
+                0.0,
+            )
+            print(f"[STAGE] step={step} name={stage} qwen_lora_lr={qwen_lr:.3e}")
+            stage_event = {
+                "step": step,
+                "stage": stage,
+                "qwen_lora_lr": qwen_lr,
+                "resumed": bool(resume and step == start_step),
+            }
+            current_stage = stage
+        verify_lora_update = (
+            config.controller == "qwen_mask_query"
+            and stage == "qlora_active"
+            and stage_changed
+        )
+        lora_before = snapshot_qwen_lora(model) if verify_lora_update else {}
         optimizer.zero_grad(set_to_none=True)
         micro_rows: list[dict[str, torch.Tensor]] = []
         step_samples = 0
@@ -258,29 +299,41 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
             scaler.scale(loss / grad_accum).backward()
         if scaler.is_enabled():
             scaler.unscale_(optimizer)
-        if (
-            scaler.is_enabled()
-            and config.controller == "qwen_mask_query"
-            and step == start_step
-        ):
-            lora_gradients = [
-                parameter.grad.detach().float().norm()
-                for name, parameter in model.controller.model.named_parameters()
-                if parameter.requires_grad and "lora_" in name and parameter.grad is not None
-            ]
-            lora_norm = (
-                torch.stack(lora_gradients).sum()
-                if lora_gradients else loss.new_tensor(0.0)
-            )
-            if not torch.isfinite(lora_norm) or float(lora_norm.detach().cpu()) <= 0:
+        lora_gradients = qwen_lora_gradient_summary(model) if verify_lora_update else None
+        if lora_gradients is not None:
+            if (
+                not lora_gradients["all_finite"]
+                or int(lora_gradients["num_nonzero"]) <= 0
+                or float(lora_gradients["norm_sum"]) <= 0
+            ):
                 raise RuntimeError(
-                    "FP16 unscale 后 LoRA 梯度为零或非有限；请改用 AMP_DTYPE=bf16，"
-                    "并保留该运行的 integration report。"
+                    "QLoRA active 阶段的首步 LoRA 梯度为零或非有限；"
+                    "请运行 integration_check --qwen-check diagnostic。"
                 )
         if config.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(trainable, config.grad_clip)
         scaler.step(optimizer)
         scaler.update()
+        if verify_lora_update:
+            lora_update = qwen_lora_update_summary(model, lora_before)
+            if (
+                not lora_update["all_finite"]
+                or int(lora_update["num_changed"]) <= 0
+                or float(lora_update["norm_sum"]) <= 0
+            ):
+                raise RuntimeError(
+                    "QLoRA active 阶段的首步 optimizer 未更新 LoRA 参数；"
+                    "请检查 scaler、optimizer 参数组和学习率。"
+                )
+            stage_event["lora_gradients"] = lora_gradients
+            stage_event["lora_parameter_update"] = lora_update
+            tqdm.write(
+                f"[QLORA] step={step} grad={float(lora_gradients['norm_sum']):.3e} "
+                f"updated={int(lora_update['num_changed'])}/{int(lora_update['num_parameters'])} "
+                f"delta={float(lora_update['norm_sum']):.3e}"
+            )
+        if stage_event is not None:
+            append_history(stage_events_path, stage_event)
         window.append(mean_tensor_rows(micro_rows))
         window_elapsed += time.perf_counter() - optimizer_step_started
         window_samples += step_samples
@@ -294,7 +347,12 @@ def train(config: QPSalmConfig, device_name: str, resume: str | None = None) -> 
                 lr=config.lr * multiplier,
                 device=device,
             )
-            record = {"step_start": step - len(window), "step_end": step - 1, **summary}
+            record = {
+                "step_start": step - len(window),
+                "step_end": step - 1,
+                "training_stage": stage,
+                **summary,
+            }
             history.append(record)
             append_history(history_path, record)
             progress.set_postfix({key: f"{summary.get(key, 0):.3f}" for key in ("loss", "iou", "dice")}, refresh=False)

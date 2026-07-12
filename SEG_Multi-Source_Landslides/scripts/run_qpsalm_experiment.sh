@@ -49,13 +49,15 @@ export PYTHONPATH="SEG_Multi-Source_Landslides${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 
 RUN_DIR="outputs/qpsalm_v2/${RUN_NAME}"
-CACHE_DIR="outputs/qpsalm_v2/cache/${BENCHMARK_SIZE}_${PRESET}_qwen_vision_v3"
+CACHE_PRESET="${PRESET}"
+if [[ "${PRESET}" == "qwen_mask_query_frozen" ]]; then CACHE_PRESET="qwen_psalm_full"; fi
+CACHE_DIR="outputs/qpsalm_v2/cache/${BENCHMARK_SIZE}_${CACHE_PRESET}_qwen_vision_v3"
 EVAL_DIR="${RUN_DIR}/eval_val"
 VISION_ARGS=()
 
 echo "[RUN] benchmark=${BENCHMARK_DIR} preset=${PRESET} seed=${SEED} run=${RUN_DIR}"
 
-if [[ "${PRESET}" == "pretrained_sane_qmef_pmrd" || "${PRESET}" == "qwen_psalm_full" ]]; then
+if [[ "${PRESET}" == "pretrained_sane_qmef_pmrd" || "${PRESET}" == "qwen_psalm_full" || "${PRESET}" == "qwen_mask_query_frozen" ]]; then
   if [[ "${CACHE_CONTROL}" == "overwrite" || ! -f "${CACHE_DIR}/manifest.json" ]]; then
     if [[ "${CACHE_CONTROL}" == "verify" ]]; then
       echo "[CACHE] missing=${CACHE_DIR}/manifest.json" >&2
@@ -87,7 +89,7 @@ if [[ "${PRESET}" == "qwen_psalm_full" && "${MEMORY_GATE}" == "1" ]]; then
   GATE_REPORT="outputs/qpsalm_v2/cache/integration_${BENCHMARK_SIZE}_${PRESET}_seed${SEED}_${CONFIG_HASH}.json"
   GATE_PASSED=0
   if [[ -f "${GATE_REPORT}" ]] && "${PYTHON_BIN}" -c \
-    'import json,sys; d=json.load(open(sys.argv[1])); q=d.get("checks",{}).get("qwen",{}); ok=d.get("acceptance",{}).get("passed") and q.get("protocol_version")=="qwen_representative_batch_v4"; raise SystemExit(0 if ok else 1)' \
+    'import json,sys; d=json.load(open(sys.argv[1])); q=d.get("checks",{}).get("qwen",{}); ok=d.get("acceptance",{}).get("passed") and q.get("protocol_version")=="qwen_trainability_v6"; raise SystemExit(0 if ok else 1)' \
     "${GATE_REPORT}"; then
     GATE_PASSED=1
   fi

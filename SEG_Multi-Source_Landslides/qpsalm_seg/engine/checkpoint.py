@@ -14,21 +14,26 @@ import torch
 from qpsalm_seg.config import QPSalmConfig
 from qpsalm_seg.controllers import CONTROLLER_SEQUENCE_PROTOCOL
 from qpsalm_seg.models import MultiSourceQwenPSALMSeg
+from .optimizer import qwen_training_stage
 
 
-CHECKPOINT_FORMAT = "qpsalm_sane_qmef_pmrd_v3"
+CHECKPOINT_FORMAT = "qpsalm_sane_qmef_pmrd_v5"
 ARCHITECTURE_FIELDS = (
     "preset", "controller", "decoder_dim", "num_heads", "num_decoder_layers",
     "num_mask_tokens", "use_pretrained_sane", "use_qmef",
     "use_query_spatial_attention", "use_mask_refinement", "deformable_points",
     "qwen_4bit", "qwen_lora_rank", "qwen_lora_alpha",
-    "qwen_lora_dropout", "qwen_lora_last_n_layers",
+    "qwen_lora_dropout", "qwen_lora_last_n_layers", "qwen_lora_trainable",
     "qwen_view_tokens_per_view",
     "qwen_max_text_tokens", "qwen_view_pooling", "qwen_attn_implementation",
 )
 RUNTIME_FIELDS = (
     "batch_size", "grad_accum_steps", "query_chunk_size",
-    "qwen_gradient_checkpointing", "amp_dtype",
+    "qwen_gradient_checkpointing", "amp_dtype", "qwen_lora_start_step",
+    "qwen_lora_lr_scale", "controller_lr_scale",
+)
+TRAINING_SCHEDULE_FIELDS = (
+    "qwen_lora_start_step", "qwen_lora_lr_scale", "controller_lr_scale",
 )
 
 
@@ -50,6 +55,32 @@ def evidence_protocol(model: MultiSourceQwenPSALMSeg) -> dict[str, Any] | None:
         "input_protocol",
     )
     return {name: bank.manifest.get(name) for name in fields}
+
+
+def validate_checkpoint_training_schedule(
+    checkpoint: dict[str, Any],
+    config: QPSalmConfig,
+) -> None:
+    if config.controller != "qwen_mask_query":
+        return
+    observed_runtime = checkpoint.get("runtime_spec") or {}
+    mismatched_schedule = {
+        name: {"checkpoint": observed_runtime.get(name), "current": getattr(config, name)}
+        for name in TRAINING_SCHEDULE_FIELDS
+        if observed_runtime.get(name) != getattr(config, name)
+    }
+    if mismatched_schedule:
+        raise RuntimeError(
+            f"checkpoint QLoRA training schedule 不一致: {mismatched_schedule}"
+        )
+    checkpoint_step = int(checkpoint.get("step", 0))
+    expected_stage = qwen_training_stage(config, checkpoint_step)
+    observed_stage = checkpoint.get("resume_training_stage")
+    if observed_stage != expected_stage:
+        raise RuntimeError(
+            "checkpoint QLoRA training stage 不一致: "
+            f"checkpoint={observed_stage!r} expected={expected_stage!r} step={checkpoint_step}"
+        )
 
 
 def _atomic_save(payload: dict[str, Any], path: Path) -> None:
@@ -78,7 +109,7 @@ def save_checkpoint(
     state = {
         key: value
         for key, value in model.state_dict().items()
-        if key in trainable or not key.startswith(excluded_prefixes)
+        if key in trainable or ".lora_" in key or not key.startswith(excluded_prefixes)
     }
     payload: dict[str, Any] = {
         "format": CHECKPOINT_FORMAT,
@@ -88,6 +119,8 @@ def save_checkpoint(
         "trainable_parameter_names": sorted(trainable),
         "architecture_spec": architecture_spec(config),
         "runtime_spec": {name: getattr(config, name) for name in RUNTIME_FIELDS},
+        # ``step`` is the next optimizer step after restoring this payload.
+        "resume_training_stage": qwen_training_stage(config, step),
         "evidence_protocol": evidence_protocol(model),
         "config": dict(config.__dict__),
     }
@@ -152,6 +185,7 @@ def load_checkpoint(
             f"checkpoint 架构不一致: missing={illegal_missing[:8]} unexpected={incompatible.unexpected_keys[:8]}"
         )
     if optimizer is not None and "optimizer_state" in checkpoint:
+        validate_checkpoint_training_schedule(checkpoint, model.config)
         optimizer.load_state_dict(checkpoint["optimizer_state"])
     if scaler is not None and scaler.is_enabled() and "grad_scaler_state" in checkpoint:
         scaler.load_state_dict(checkpoint["grad_scaler_state"])

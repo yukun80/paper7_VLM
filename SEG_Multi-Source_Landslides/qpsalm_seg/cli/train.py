@@ -60,6 +60,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qwen-attn-implementation", choices=["sdpa", "eager"], default=None)
     parser.add_argument("--vision-feature-cache", default=None)
     parser.add_argument("--qwen-view-pooling", choices=["tokens", "image-end", "attention"], default=None)
+    parser.add_argument("--qwen-lora-start-step", type=int, default=None)
+    parser.add_argument("--qwen-lora-lr-scale", type=float, default=None)
+    parser.add_argument("--controller-lr-scale", type=float, default=None)
     parser.add_argument("--amp-dtype", choices=AMP_DTYPES, default=None)
     parser.add_argument(
         "--qwen-gradient-checkpointing",
@@ -123,6 +126,9 @@ def main() -> None:
             "qwen_attn_implementation": args.qwen_attn_implementation,
             "vision_feature_cache": args.vision_feature_cache,
             "qwen_view_pooling": args.qwen_view_pooling,
+            "qwen_lora_start_step": args.qwen_lora_start_step,
+            "qwen_lora_lr_scale": args.qwen_lora_lr_scale,
+            "controller_lr_scale": args.controller_lr_scale,
             "amp_dtype": args.amp_dtype,
             "qwen_gradient_checkpointing": args.qwen_gradient_checkpointing,
             "instruction_ablation": args.instruction_ablation,

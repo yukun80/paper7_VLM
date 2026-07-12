@@ -47,6 +47,10 @@ class QPSalmConfig:
     qwen_lora_alpha: int = 16
     qwen_lora_dropout: float = 0.05
     qwen_lora_last_n_layers: int = 4
+    qwen_lora_trainable: bool = True
+    qwen_lora_start_step: int = 300
+    qwen_lora_lr_scale: float = 0.2
+    controller_lr_scale: float = 0.5
     qwen_gradient_checkpointing: str = "disabled"
     qwen_max_text_tokens: int = 192
     qwen_view_tokens_per_view: int = 8

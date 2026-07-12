@@ -16,7 +16,9 @@ qpsalm_seg.cli.integration_check --config SEG_Multi-Source_Landslides/configs/qp
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
+from importlib.metadata import PackageNotFoundError, version
 import json
 import math
 from pathlib import Path
@@ -42,7 +44,7 @@ from qpsalm_seg.presets import PRESET_CHOICES, apply_preset
 
 
 REPORT_FORMAT = "qpsalm_real_integration_v2"
-INTEGRATION_PROTOCOL_VERSION = "qwen_representative_batch_v4"
+INTEGRATION_PROTOCOL_VERSION = "qwen_trainability_v6"
 
 
 class IntegrationFailure(RuntimeError):
@@ -53,6 +55,26 @@ class IntegrationFailure(RuntimeError):
         self.details = details or {}
 
 
+def runtime_library_report(device: torch.device) -> dict[str, Any]:
+    packages = {}
+    for name in ("transformers", "peft", "bitsandbytes"):
+        try:
+            packages[name] = version(name)
+        except PackageNotFoundError:
+            packages[name] = None
+    report: dict[str, Any] = {
+        "torch": torch.__version__,
+        "torch_cuda": torch.version.cuda,
+        **packages,
+    }
+    if device.type == "cuda":
+        report.update({
+            "device_name": torch.cuda.get_device_name(device),
+            "device_capability": list(torch.cuda.get_device_capability(device)),
+        })
+    return report
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Strict real benchmark-v2 integration check.")
     parser.add_argument("--config", required=True)
@@ -60,6 +82,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("raw", "qwen", "all"), default="all")
     parser.add_argument("--raw-preset", choices=PRESET_CHOICES, default="raw_sane_qmef_pmrd")
     parser.add_argument("--qwen-preset", choices=PRESET_CHOICES, default="qwen_psalm_full")
+    parser.add_argument(
+        "--qwen-check",
+        choices=("launch", "diagnostic"),
+        default="launch",
+        help="launch runs one representative end-to-end batch; diagnostic adds a two-step controller-only probe.",
+    )
     parser.add_argument("--amp-dtype", choices=AMP_DTYPES, default=None)
     parser.add_argument("--vision-feature-cache", default=None)
     parser.add_argument(
@@ -232,12 +260,32 @@ def select_representative_batch_indices(
     )
 
 
-def _lora_gradient_sum(model: torch.nn.Module) -> float:
-    return sum(
-        float(parameter.grad.detach().float().norm().cpu())
-        for name, parameter in model.controller.model.named_parameters()
-        if "lora_" in name and parameter.grad is not None
-    )
+def lora_gradient_report(model: torch.nn.Module) -> dict[str, Any]:
+    groups: dict[str, list[tuple[str, float]]] = {"lora_A": [], "lora_B": []}
+    for name, parameter in model.controller.model.named_parameters():
+        matrix = "lora_A" if "lora_A." in name else "lora_B" if "lora_B." in name else None
+        if matrix is None or parameter.grad is None:
+            continue
+        groups[matrix].append((name, float(parameter.grad.detach().float().norm().cpu())))
+
+    def summarize(values: list[tuple[str, float]]) -> dict[str, Any]:
+        norms = [value for _, value in values]
+        return {
+            "num_with_grad": len(values),
+            "num_nonzero": sum(value > 0.0 for value in norms),
+            "norm_sum": sum(norms),
+            "all_finite": all(math.isfinite(value) for value in norms),
+            "nonzero_names": [name for name, value in values if value > 0.0],
+        }
+
+    by_matrix = {name: summarize(values) for name, values in groups.items()}
+    return {
+        "by_matrix": by_matrix,
+        "num_with_grad": sum(value["num_with_grad"] for value in by_matrix.values()),
+        "num_nonzero": sum(value["num_nonzero"] for value in by_matrix.values()),
+        "norm_sum": sum(value["norm_sum"] for value in by_matrix.values()),
+        "all_finite": all(value["all_finite"] for value in by_matrix.values()),
+    }
 
 
 
@@ -256,24 +304,225 @@ def lora_parameter_update_summary(
 ) -> dict[str, Any]:
     deltas = []
     changed = 0
+    by_matrix: dict[str, list[torch.Tensor]] = {"lora_A": [], "lora_B": []}
     for name, parameter in model.controller.model.named_parameters():
         if name not in before:
             continue
         delta = (parameter.detach().float().cpu() - before[name]).norm()
         deltas.append(delta)
         changed += int(float(delta) > 0.0)
+        matrix = "lora_A" if "lora_A." in name else "lora_B" if "lora_B." in name else None
+        if matrix is not None:
+            by_matrix[matrix].append(delta)
     if not deltas:
-        return {"num_parameters": 0, "num_changed": 0, "norm_sum": 0.0, "all_finite": True}
+        return {
+            "num_parameters": 0,
+            "num_changed": 0,
+            "norm_sum": 0.0,
+            "all_finite": True,
+            "by_matrix": {},
+        }
     values = torch.stack(deltas)
     return {
         "num_parameters": len(deltas),
         "num_changed": changed,
         "norm_sum": float(values.sum()),
         "all_finite": bool(torch.isfinite(values).all()),
+        "by_matrix": {
+            name: {
+                "num_parameters": len(matrix_deltas),
+                "num_changed": sum(float(value) > 0.0 for value in matrix_deltas),
+                "norm_sum": float(torch.stack(matrix_deltas).sum()) if matrix_deltas else 0.0,
+            }
+            for name, matrix_deltas in by_matrix.items()
+        },
     }
 
 
-def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[str, Any]:
+def _controller_probe_loss(semantic) -> torch.Tensor:
+    masks = semantic.mask_query_states.float()
+    anchors = semantic.evidence_anchors.float()
+    mask_target = torch.linspace(-0.5, 0.5, masks.numel(), device=masks.device).reshape_as(masks)
+    anchor_target = torch.linspace(0.25, -0.25, anchors.numel(), device=anchors.device).reshape_as(anchors)
+    return torch.nn.functional.mse_loss(masks, mask_target) + 0.1 * torch.nn.functional.mse_loss(
+        anchors, anchor_target
+    )
+
+
+def run_controller_trainability_probe(model, batch) -> dict[str, Any]:
+    lora_parameters = [
+        parameter
+        for name, parameter in model.controller.model.named_parameters()
+        if "lora_" in name and parameter.requires_grad
+    ]
+    optimizer = torch.optim.AdamW(lora_parameters, lr=1.0e-3, weight_decay=0.0)
+    steps = []
+    for step in range(2):
+        model.zero_grad(set_to_none=True)
+        optimizer.zero_grad(set_to_none=True)
+        before = snapshot_lora_parameters(model)
+        with model.controller.trace_lora_execution() as execution:
+            semantic = model.controller.encode_batch(batch, use_full=False)
+            loss = _controller_probe_loss(semantic)
+        if not torch.isfinite(loss):
+            raise IntegrationFailure("Qwen controller-only probe loss 非有限")
+        loss.backward()
+        gradients = lora_gradient_report(model)
+        optimizer.step()
+        updates = lora_parameter_update_summary(model, before)
+        record = {
+            "step": step + 1,
+            "loss": float(loss.detach().cpu()),
+            "executed_module_count": sum(value > 0 for value in execution.values()),
+            "execution_counts": dict(execution),
+            "gradients": gradients,
+            "parameter_update": updates,
+        }
+        steps.append(record)
+        if record["executed_module_count"] <= 0:
+            raise IntegrationFailure(
+                "Qwen controller-only probe 未执行任何 LoRA projection",
+                {"controller_probe": {"steps": steps}},
+            )
+        expected = "lora_B" if step == 0 else "lora_A"
+        if gradients["by_matrix"][expected]["num_nonzero"] <= 0:
+            raise IntegrationFailure(
+                f"Qwen controller-only probe 第 {step + 1} 步 {expected} 梯度为零",
+                {"controller_probe": {"steps": steps}},
+            )
+        if updates["by_matrix"][expected]["num_changed"] <= 0:
+            raise IntegrationFailure(
+                f"Qwen controller-only probe 第 {step + 1} 步 {expected} 参数未更新",
+                {"controller_probe": {"steps": steps}},
+            )
+    return {"status": "passed", "steps": steps}
+
+
+@contextmanager
+def trace_end_to_end_query_gradients(model):
+    tensors: dict[str, list[torch.Tensor]] = {
+        "qwen_hidden_states": [],
+        "mask_query_states": [],
+        "coarse_queries": [],
+        "refined_queries": [],
+    }
+
+    def capture(name: str, predicate=None):
+        def hook(_module, _inputs, output):
+            if not torch.is_tensor(output) or not output.requires_grad:
+                return
+            if predicate is not None and not predicate(output):
+                return
+            output.retain_grad()
+            tensors[name].append(output)
+
+        return hook
+
+    def capture_input(name: str, predicate=None):
+        def hook(_module, inputs):
+            value = inputs[0]
+            if not torch.is_tensor(value) or not value.requires_grad:
+                return
+            if predicate is not None and not predicate(value):
+                return
+            value.retain_grad()
+            tensors[name].append(value)
+
+        return hook
+
+    handles = [
+        model.controller.output_projection.register_forward_pre_hook(
+            capture_input(
+                "qwen_hidden_states",
+                lambda value: value.ndim == 3 and value.shape[1] == model.controller.num_queries,
+            )
+        ),
+        model.controller.output_projection.register_forward_hook(
+            capture(
+                "mask_query_states",
+                lambda value: value.ndim == 3 and value.shape[1] == model.controller.num_queries,
+            )
+        ),
+        model.pmrd.coarse_decoder.register_forward_hook(capture("coarse_queries")),
+        model.pmrd.refine_norm.register_forward_hook(capture("refined_queries")),
+    ]
+    try:
+        yield tensors
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
+def query_gradient_report(tensors: dict[str, list[torch.Tensor]]) -> dict[str, Any]:
+    report = {}
+    for name, values in tensors.items():
+        norms = [
+            float(value.grad.detach().float().norm().cpu())
+            for value in values
+            if value.grad is not None
+        ]
+        report[name] = {
+            "num_captured": len(values),
+            "num_with_grad": len(norms),
+            "num_nonzero": sum(value > 0.0 for value in norms),
+            "norm_sum": sum(norms),
+            "all_finite": all(math.isfinite(value) for value in norms),
+        }
+    return report
+
+
+def run_student_only_end_to_end_probe(model, batch, *, autocast: bool, dtype: torch.dtype) -> dict[str, Any]:
+    model.zero_grad(set_to_none=True)
+    original_config = model.config
+    model.config = replace(model.config, missing_modality_consistency_weight=0.0)
+    try:
+        with trace_end_to_end_query_gradients(model) as query_tensors:
+            with model.controller.trace_lora_execution() as execution:
+                with torch.amp.autocast(device_type="cuda", dtype=dtype, enabled=autocast):
+                    output = model(batch)
+                    loss = output["loss"]
+        if not torch.isfinite(loss):
+            raise IntegrationFailure("Qwen student-only end-to-end probe loss 非有限")
+        loss.backward()
+    finally:
+        model.config = original_config
+    gradients = lora_gradient_report(model)
+    query_gradients = query_gradient_report(query_tensors)
+    report = {
+        "loss": float(loss.detach().float().cpu()),
+        "executed_module_count": sum(value > 0 for value in execution.values()),
+        "execution_counts": dict(execution),
+        "lora_gradients": gradients,
+        "query_gradients": query_gradients,
+    }
+    if report["executed_module_count"] <= 0:
+        raise IntegrationFailure(
+            "Qwen student-only probe 未执行任何 LoRA projection",
+            {"student_only_probe": report},
+        )
+    if not gradients["all_finite"] or gradients["num_nonzero"] <= 0:
+        raise IntegrationFailure(
+            "Qwen controller 可训练，但 student-only segmentation loss 未到达 LoRA",
+            {"student_only_probe": report},
+        )
+    if any(
+        value["num_nonzero"] <= 0 or not value["all_finite"]
+        for value in query_gradients.values()
+    ):
+        raise IntegrationFailure(
+            "Qwen student-only mask/coarse/refined query 梯度链路中断",
+            {"student_only_probe": report},
+        )
+    return {"status": "passed", **report}
+
+
+def run_qwen_check(
+    config,
+    device: torch.device,
+    max_memory_gib: float,
+    *,
+    diagnostic: bool = False,
+) -> dict[str, Any]:
     if device.type != "cuda":
         raise RuntimeError("Qwen integration 必须显式使用 CUDA device")
     if config.controller != "qwen_mask_query" or not config.use_pretrained_sane:
@@ -321,17 +570,42 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
     batch = qpsalm_collate(representative_items)
+    controller_probe = run_controller_trainability_probe(model, batch) if diagnostic else None
+    student_only_probe = None
+    if diagnostic:
+        try:
+            student_only_probe = run_student_only_end_to_end_probe(
+                model,
+                batch,
+                autocast=autocast,
+                dtype=dtype,
+            )
+        except IntegrationFailure as exc:
+            raise IntegrationFailure(
+                str(exc),
+                {
+                    "protocol_version": INTEGRATION_PROTOCOL_VERSION,
+                    "controller_probe": controller_probe,
+                    **exc.details,
+                },
+            ) from exc
+    model.zero_grad(set_to_none=True)
+    optimizer.zero_grad(set_to_none=True)
     lora_before = snapshot_lora_parameters(model)
-    with torch.amp.autocast(device_type="cuda", dtype=dtype, enabled=autocast):
-        output = model(batch)
-        loss = output["loss"]
+    tap_context = trace_end_to_end_query_gradients(model) if diagnostic else nullcontext({})
+    with tap_context as query_tensors:
+        with model.controller.trace_lora_execution() as execution:
+            with torch.amp.autocast(device_type="cuda", dtype=dtype, enabled=autocast):
+                output = model(batch)
+                loss = output["loss"]
     if not torch.isfinite(loss):
         raise RuntimeError("Qwen representative batch loss 非有限")
     scaler.scale(loss).backward()
     if scaler.is_enabled():
         scaler.unscale_(optimizer)
     gradients = _gradient_report(model)
-    lora_gradient = _lora_gradient_sum(model)
+    lora_gradients = lora_gradient_report(model)
+    query_gradients = query_gradient_report(query_tensors) if diagnostic else None
     sequence_lengths = output["controller_sequence_lengths"].detach().cpu().tolist()
     visual_counts = output["controller_visual_token_counts"].detach().cpu().tolist()
     parents = [str(item["metadata"]["parent_sample_id"]) for item in representative_items]
@@ -362,7 +636,27 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
         ),
         "loss": float(loss.detach().float().cpu()),
         "global_gradients": gradients,
-        "lora_gradient_norm_sum": lora_gradient,
+        "lora_execution": {
+            "executed_module_count": sum(value > 0 for value in execution.values()),
+            "execution_counts": dict(execution),
+        },
+        "lora_gradients": lora_gradients,
+        "lora_parameter_state": {
+            "num_parameters": len(trainable_qwen),
+            "num_requires_grad": sum(
+                parameter.requires_grad
+                for name, parameter in model.controller.model.named_parameters()
+                if "lora_" in name
+            ),
+        },
+        "lora_runtime_status": model.controller.lora_runtime_status(),
+        **({"query_gradients": query_gradients} if query_gradients is not None else {}),
+    }
+    failure_details = {
+        "protocol_version": INTEGRATION_PROTOCOL_VERSION,
+        "representative_batch": representative_batch,
+        **({"controller_probe": controller_probe} if controller_probe is not None else {}),
+        **({"student_only_probe": student_only_probe} if student_only_probe is not None else {}),
     }
     if (
         batch.batch_size != int(strict.batch_size)
@@ -375,17 +669,32 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
     ):
         raise IntegrationFailure(
             "Qwen representative batch 不符合真实训练 batch 约束",
-            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
+            failure_details,
+        )
+    if (
+        representative_batch["lora_execution"]["executed_module_count"] <= 0
+    ):
+        raise IntegrationFailure(
+            "Qwen representative batch 未执行任何 LoRA projection",
+            failure_details,
+        )
+    if diagnostic and any(
+        value["num_nonzero"] <= 0 or not value["all_finite"]
+        for value in query_gradients.values()
+    ):
+        raise IntegrationFailure(
+            "Qwen controller 可训练，但端到端 mask/coarse/refined query 梯度链路中断",
+            failure_details,
         )
     if (
         not gradients["all_finite"]
         or gradients["gradient_norm_sum"] <= 0
-        or not math.isfinite(lora_gradient)
-        or lora_gradient <= 0
+        or not lora_gradients["all_finite"]
+        or lora_gradients["num_nonzero"] <= 0
     ):
         raise IntegrationFailure(
-            f"Qwen representative batch 梯度无效: lora={lora_gradient}",
-            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
+            "Qwen LoRA projection 已执行，但端到端 segmentation loss 未产生有效 LoRA 梯度",
+            failure_details,
         )
     torch.nn.utils.clip_grad_norm_(trainable, strict.grad_clip)
     scaler.step(optimizer)
@@ -403,13 +712,13 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
     ):
         raise IntegrationFailure(
             f"Qwen representative batch LoRA 参数未更新: {lora_update}",
-            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
+            failure_details,
         )
     if peak_reserved > float(max_memory_gib):
         raise IntegrationFailure(
             f"Qwen integration 峰值显存超过门槛: reserved={peak_reserved:.3f} GiB "
             f"limit={max_memory_gib:.3f} GiB",
-            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
+            failure_details,
         )
     return {
         "status": "passed",
@@ -417,6 +726,8 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
         "preset": strict.preset,
         "device": str(device),
         "representative_batch": representative_batch,
+        **({"controller_probe": controller_probe} if controller_probe is not None else {}),
+        **({"student_only_probe": student_only_probe} if student_only_probe is not None else {}),
         "cache": {
             "format": model.vision_bank.manifest["format"],
         },
@@ -430,7 +741,9 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
                 for name, parameter in model.controller.model.named_parameters()
                 if parameter.requires_grad and "lora_" in name
             }),
+            "runtime_status": model.controller.lora_runtime_status(),
         },
+        "runtime_libraries": runtime_library_report(device),
         "memory": {
             "peak_allocated_gib": peak_allocated,
             "peak_reserved_gib": peak_reserved,
@@ -468,6 +781,7 @@ def main() -> None:
         "mode": args.mode,
         "seed": args.seed,
         "amp_dtype": base.amp_dtype,
+        "qwen_check": args.qwen_check,
         "checks": {},
     }
     errors, warnings = [], []
@@ -492,7 +806,12 @@ def main() -> None:
                     or qwen_config.qwen_gradient_checkpointing
                 ),
             )
-            report["checks"]["qwen"] = run_qwen_check(qwen_config, device, args.max_memory_gib)
+            report["checks"]["qwen"] = run_qwen_check(
+                qwen_config,
+                device,
+                args.max_memory_gib,
+                diagnostic=args.qwen_check == "diagnostic",
+            )
             memory = report["checks"]["qwen"].get("memory") or {}
             if memory.get("underutilized_warning"):
                 warnings.append(

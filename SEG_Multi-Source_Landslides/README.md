@@ -14,14 +14,20 @@ vision-start/vision-end embedding 包围每个压缩 view。模型不生成 bbox
 24GB 单卡性能路线默认关闭 Qwen activation checkpoint，用激活显存换取吞吐；显存不足时才
 显式选择 `reentrant`，运行时不会自动回退。训练 batch 按空间尺寸与 Qwen 序列负载分桶，
 consistency teacher 只计算实际 dropped-modality 样本。
+Qwen forward 始终经过 PEFT wrapper；默认先用 450 steps 训练 controller prompts、SANE、QMEF
+和 PMRD，再以 dense learning rate 的 0.2 倍启用 QLoRA。`qwen_mask_query_frozen` 提供不注入
+LoRA、只训练软提示与分割模块的科学对照。NF4 Qwen 与 FP32 LoRA/controller projection
+显式隔离于 dense segmentation autocast，避免外层混合精度改变 adapter 计算图。
 视觉 evidence 消融支持 `shuffled`、`text-only`、`image-text-delta` 和
 `remove:<family>`；它们不改变 SANE 的预训练空间特征，避免把 Qwen evidence 效果与
 dense backbone 变化混在一起。
 
-checkpoint 协议为 `qpsalm_sane_qmef_pmrd_v3`，绑定在线 Qwen mask-query 序列结构。
+checkpoint 协议为 `qpsalm_sane_qmef_pmrd_v5`，绑定在线 Qwen mask-query 序列结构和 QLoRA 阶段配置；`resume_training_stage` 明确记录恢复后下一步所处阶段。
 vision cache manifest 绑定 train/val/test instruction index 指纹，重建 benchmark 后不会静默复用旧 cache。
 `qpsalm-integration-check` 是正式实验前的硬门槛：raw 三任务检查保持不变；Qwen 侧只用一个
-同空间/负载/任务组的代表性 batch 验证聚合 LoRA 梯度、参数更新、teacher consistency 和显存。
+同空间/负载/任务组的代表性 batch 验证 LoRA projection 确实执行、A/B 梯度、参数更新、
+teacher consistency 和显存。深度诊断由 `--qwen-check diagnostic` 显式启用，依次检查
+controller-only、student-only segmentation 和 full/dropped consistency，不增加普通启动开销。
 
 评估严格区分 verifier 可部署选择与 GT-only 诊断：`selected_proposal` 来自 relevance
 argmax，`oracle_matched_proposal` 来自统一 component assignment，仅用于分析 proposal
@@ -29,7 +35,7 @@ argmax，`oracle_matched_proposal` 来自统一 component assignment，仅用于
 
 raw 与 pretrained-SANE preset 使用 `64/128/256/384` 尺寸桶；24GB 单卡主路线
 `qwen_psalm_full` 使用 `64/128/256` 尺寸桶。算法 preset 不绑定硬件参数；正式
-运行参数直接由 small/full YAML 定义，当前24GB配置为BF16、`batch_size=6`、
+运行参数直接由 small/full YAML 定义，当前24GB配置为BF16、`batch_size=4`、
 `grad_accum_steps=1`、`query_chunk_size=16`和disabled Qwen checkpoint。
 
 主 preset：
@@ -40,6 +46,7 @@ raw_sane_qmef
 raw_sane_qmef_pmrd
 pretrained_sane_qmef_pmrd
 qwen_psalm_full
+qwen_mask_query_frozen
 ```
 
 配置：

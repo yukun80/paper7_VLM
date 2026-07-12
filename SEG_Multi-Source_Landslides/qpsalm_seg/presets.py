@@ -89,6 +89,24 @@ PRESETS: dict[str, dict[str, Any]] = {
         "size_buckets": [64, 128, 256],
         "max_native_size": 256,
     },
+    "qwen_mask_query_frozen": {
+        **_RAW_COMMON,
+        "controller": "qwen_mask_query",
+        "qwen_lora_trainable": False,
+        "qwen_gradient_checkpointing": "disabled",
+        "num_mask_tokens": 16,
+        "modality_dropout": 0.2,
+        "use_pretrained_sane": True,
+        "use_qmef": True,
+        "use_query_spatial_attention": True,
+        "use_mask_refinement": True,
+        "proposal_set_loss_weight": 0.75,
+        "coarse_proposal_loss_weight": 0.25,
+        "semantic_verifier_loss_weight": 0.25,
+        "missing_modality_consistency_weight": 0.1,
+        "size_buckets": [64, 128, 256],
+        "max_native_size": 256,
+    },
 }
 
 

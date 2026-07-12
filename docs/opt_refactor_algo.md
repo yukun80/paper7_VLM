@@ -1,456 +1,483 @@
-# Multi-Source Qwen-PSALM-Seg 二次重构问题与修改方案
+# 一、结论先行
 
-## 一、重构定位
+当前训练失败**不是数据缓存、benchmark、显存或分割主干的问题，而是 Qwen 的 LoRA 参数没有进入实际反向传播计算图**。集成门禁已经确认 LoRA 参数被成功创建并标记为可训练，否则程序会更早触发“QLoRA 参数隔离失败”；完整 loss 也成功完成 backward，但最终所有 LoRA 梯度之和为 0，因此门禁在启动正式训练前正确地中止了流程。
 
-后续重构继续保留 **SANE—QMEF—PMRD** 三模块主框架，不再增加新的一级模块。17 个问题应分别收敛到三条主线：SANE 负责预训练密集视觉特征与传感器结构表达，QMEF 负责无泄漏的多源语义证据融合，PMRD 负责经 Qwen 更新的 mask queries、query-specific 像素特征与 proposal-set 分割。
+从当前代码看，**最高概率的根因是 Qwen controller 绕过了 PEFT 包装器的正式 forward 路径**。当前代码通过 `get_base_model().model.language_model` 取得底层语言模型，并直接调用该子模块；而 PEFT 官方的 `PeftModelForCausalLM.forward` 会先启用 `_enable_peft_forward_hooks`，再执行 base model。当前做法没有经过这层包装，因而存在“LoRA 参数已经注入且可训练，但实际 forward 没有激活相应 adapter 路径”的风险。
 
-PSALM 的关键依据是：task instruction、condition prompt 和 mask tokens 均进入 LMM，经过 LMM 更新后的 mask-token hidden states 再用于 mask proposal 生成；其消融结果表明，mask tokens 不经过 LMM 会降低 referring 和开放词汇分割表现。 Qwen3-VL-Seg 则说明，预训练视觉编码器的中间层特征、高分辨率浅层特征和 mask-aware query refinement 对精细边界恢复具有实际作用。
-
----
-
-## 1. Mask tokens 尚未进入 Qwen
-
-### 当前问题
-
-当前 mask tokens 只存在于 PMRD 内部。Qwen 输出 task、condition、reasoning 和 visual evidence，随后 PMRD 再独立初始化 queries。这使 mask queries 虽然受到 Qwen semantic token 的加法或 attention 条件控制，但没有真正经过 Qwen 的多模态语义更新，与 PSALM 的核心机制仍有明显差异。
-
-### 修改方案
-
-在 Qwen 输入序列末尾加入固定数量的专用 `<MASK_i>` tokens，使任务指令、条件提示、多源视觉 token 和 mask tokens 在同一序列内交互。Qwen 输出位置对应的 hidden states 应直接作为 PMRD 的初始 coarse queries，替代当前独立的 `mask_tokens + task_to_query` 初始化。
-
-考虑单卡算力，不重新在线运行完整 Qwen 视觉编码。多源视觉 token 可继续离线缓存，训练阶段只加载缓存视觉 token，与在线文本 token 和 learnable mask tokens 拼接后进入 Qwen language decoder。Qwen3-VL-2B 主体冻结，仅对最后若干 LM block 施加 QLoRA/LoRA，并训练新增 mask-token embedding。这样既能让 mask tokens 真正进入 Qwen，又避免重复计算视觉塔。
-
-PMRD 仍负责 dense mask decoding，Qwen 只负责将 mask query 更新成与指令和多源证据一致的语义 query。主模型中不应同时保留“Qwen 更新 query”和“独立 PMRD mask token 初始化”两套平行机制。
+因此，**不建议通过 `MEMORY_GATE=0` 直接绕过门禁开始正式训练**。这样虽然 SANE、QMEF、PMRD 和 controller 的自定义 embedding 可能继续更新，但 QLoRA 实际上仍然不工作，最终不能支撑“Qwen 经适配后更新 mask queries”的论文主张。
 
 ---
 
-## 2. VLM 指令作用不可辨识
+# 二、当前算法完成度重新判断
 
-### 当前问题
-
-普通滑坡、多源证据、DEM 证据、SAR 证据和 InSAR 证据等指令，大多对应同一个 parent semantic mask。即使模型完全忽略文本指令，也可能得到同样的监督结果。当前训练协议因此无法证明 Qwen、condition prompt 和 evidence reasoning 确实影响了分割目标。
-
-### 修改方案
-
-训练集中必须加入“同一图像、不同指令、不同目标 mask”的样本。优先使用现有 mask 自动派生以下监督：指定位置的滑坡、最大滑坡、小型滑坡斑块、狭长滑坡、碎片化滑坡、指定连通域、多目标滑坡和 no-target 指令。
-
-还应构造反事实样本，例如要求分割不存在的位置或不存在的特征，目标为空 mask；或交换同一图像不同区域的 referring expression，要求模型拒绝错误指令。这样才能区分“理解指令”与“固定语义分割”。
-
-训练任务至少应包含三类：
-
-1. `global semantic segmentation`：分割全部滑坡；
-2. `referring/conditional segmentation`：按位置、尺度、形态或指定区域分割；
-3. `no-target segmentation`：指令描述目标不存在时输出空 mask。
-
-正式消融必须比较正常指令、随机打乱指令、固定通用指令和删除 Qwen 语义输入。若打乱指令后结果不下降，说明 VLM 部分尚未发挥作用。
-
----
-
-## 3. Modality dropout 与 Qwen 视觉证据存在信息泄漏
-
-### 当前问题
-
-当前 semantic evidence 和 Qwen 多视图缓存可能基于完整模态集合生成，而 SANE 之后才随机丢弃模态。此时 student dense branch 虽然缺少某个模态，Qwen visual token 和 prompt 仍可能包含该模态的信息，缺失模态实验不再真实。
-
-### 修改方案
-
-模态子集必须在所有语义和视觉证据构造之前确定。每次训练首先生成 `active_modality_subset`，然后统一作用于：
-
-* SANE 输入实例；
-* availability metadata；
-* Qwen prompt；
-* evidence reasoning text；
-* Qwen visual view mask；
-* QMEF reliability prior。
-
-Qwen multi-view cache 应增加 `subset_signature`。不必为每个样本缓存所有可能组合，可以为每个样本缓存完整组合、各单模态组合以及训练计划中实际使用的若干随机子集。训练时 modality dropout 只能选择已经具有匹配 Qwen evidence cache 的 subset。
-
-missing-modality consistency 的 teacher 使用完整模态及完整 evidence，student 使用明确记录的子模态及相应 Qwen evidence。任何 student 不可见的模态，其文本描述和视觉 token 也必须被移除。
-
----
-
-## 4. 不引入地理坐标识别模块
-
-### 当前处理原则
-
-本研究面向已经完成 patch 级配准和数据预处理的遥感图像分割，不要求模型理解 CRS、经纬度、仿射变换或地理坐标。因此不增加地理坐标编码、空间参考系转换或地图坐标 attention。
-
-### 保留要求
-
-“原生尺度”在本文中应严格定义为：
-
-> 保留不同模态的原始 H/W、通道结构和 GSD 信息，并在 feature level 完成尺度对齐。
-
-数据构建阶段必须保证同一样本各模态覆盖相同或基本一致的地表范围。模型只处理剩余的分辨率差异和轻微空间误差，不承担完整遥感配准任务。论文和文档中避免使用“地理坐标对齐”，改用“GSD-aware native-resolution feature alignment”。
-
----
-
-## 5. Qwen multi-view token 尚不是真正的多源推理
-
-### 当前问题
-
-当前方案主要从各图像 token 内部池化得到 per-view embedding。由于 Qwen 是因果语言模型，图像 token 本身不一定能访问其后出现的总结指令，也不代表模型已经完成所有传感器之间的联合推理。
-
-### 修改方案
-
-在所有传感器 view 和文字说明之后，追加明确的 evidence query anchors，例如：
-
-* `<GLOBAL_EVIDENCE>`；
-* `<OPTICAL_EVIDENCE>`；
-* `<SAR_EVIDENCE>`；
-* `<TERRAIN_EVIDENCE>`；
-* `<DEFORMATION_EVIDENCE>`。
-
-缓存的最终证据不应以图像 token mean pooling 为主，而应提取这些位于完整多视图上下文之后的 anchor hidden states。它们能够访问前面全部图像和文本，更适合作为 Qwen 的多源推理输出。
-
-per-view visual tokens仍可保留，用于局部传感器证据；post-context global token用于跨视图综合。SemanticEvidenceController 最终接收：
+此次重构在算法结构和工程实现上已经相当完整。当前模型不再是简单的遥感多通道分割网络，而是建立了比较严格的三阶段链条：
 
 [
-E={E_{\text{task}},E_{\text{condition}},
-E_{\text{global}},E_{\text{view}*1},...,E*{\text{view}_M}}
+\text{多源遥感实例}
+\rightarrow
+\text{SANE预训练/物理特征编码}
+\rightarrow
+\text{Qwen更新mask queries}
+\rightarrow
+\text{QMEF证据选择}
+\rightarrow
+\text{PMRD proposal-set分割}
 ]
 
-需要继续保留 image shuffle、view removal、text-only 和 image-text-delta 消融。若图像被打乱后 global evidence 和最终性能基本不变，则不能将其表述为真正的视觉推理。
+Benchmark-v2 已经要求每个模态显式保存 family、sensor、product type、band metadata、GSD、units、signed、orbit、quality、normalization 和物化 valid mask；这使多源输入不再依赖旧 canonical 通道推断。
+
+当前完成度可以重新评估为：
+
+| 部分                       |   完成度 | 当前判断                      |
+| ------------------------ | ----: | ------------------------- |
+| Benchmark-v2 与数据契约       |   95% | 结构严格，可支撑不同传感器和变长模态组合      |
+| Referring/no-target 指令数据 |   85% | 已解决同图不同指令对应不同 mask 的基本问题  |
+| Raw SANE/QMEF/PMRD       |   90% | 已有完整 forward、loss、训练和测试闭环 |
+| Qwen-ViT 特征缓存            |   85% | 支持多视图、中间层和严格缓存协议          |
+| Qwen mask-query 控制器      |   70% | 结构已实现，但 LoRA 反向路径尚未打通     |
+| 单卡正式训练路径                 |   50% | 被集成门禁阻断，尚未证明可持续优化         |
+| 科学消融协议                   |   80% | 已有严格脚本，但尚缺真实多随机种子结果       |
+| 论文实验就绪度                  | 约 45% | 主要障碍已从架构设计变成 Qwen 梯度正确性   |
+
+最新版本仍然具有较强研究潜力。其主要创新链条已经相对清晰：变长传感器—波段建模、subset-synchronized Qwen mask queries、null-aware query-scale-modality fusion，以及无 box 的滑坡 proposal-set refinement。当前不需要再做一次大规模架构重写，应该首先修复 Qwen 的可训练性。
 
 ---
 
-## 6. SANE 不再从零训练，改用预训练模型中间层特征
+# 三、为什么 LoRA 梯度为零
 
-### 当前问题
+## 1. 当前反向链路理论上是连通的
 
-当前 SharedBandPyramid 和 family-specific blocks 基本随机初始化。对异构且规模有限的滑坡数据，从零学习光学纹理、小目标边界、SAR 结构和多尺度空间模式风险较高。
-
-### 修改方案
-
-SANE 改造成**预训练特征适配器**，而不是独立从零训练的视觉主干。
-
-主推荐方案是复用 Qwen3-VL 视觉编码器的多层中间特征。对每个模态实例先生成物理意义明确的 sensor-aware 视图，再由冻结的 Qwen3-VL vision tower提取若干层视觉特征，例如浅层、中层和高层特征。Qwen3-VL-Seg 已证明中间 ViT 特征经过轻量 spatial injection 后，能够为 dense prediction 提供比单一顶层表示更充分的空间信息。
-
-原始多波段、SAR、DEM 和 InSAR 数值不能完全依赖三通道渲染，因此保留轻量 raw-physical adapter。其作用从“主视觉编码器”降级为“物理残差分支”：
+当前设计中的预期梯度链路为：
 
 [
-F_m^l =
-A_l(F_{\text{Qwen-ViT},m}^l)
-+\alpha_l P_l(F_{\text{raw},m}^l)
+L_{\text{seg}}
+\rightarrow
+M_{\text{final}}
+\rightarrow
+\text{PMRD queries}
+\rightarrow
+\text{Qwen mask states}
+\rightarrow
+\text{Qwen LoRA}
 ]
 
-其中 (A_l) 是中间层适配器，(P_l) 是原始波段投影，(\alpha_l) 采用接近零的初始化，保证训练初期主要继承预训练视觉表示。
+PMRD 明确要求 controller 提供 `mask_query_states`，并把它们作为 coarse decoder 的 query。若 controller 不提供，则直接报错。
 
-不建议同时引入多个大型预训练 backbone。首先使用 Qwen3-VL vision tower保持模型统一；若实验显示 S1/S2 表征明显不足，再单独将 CROMA 或 AnySat 作为遥感预训练 backbone 替代方案进行对比，而不是与 Qwen、CROMA、AnySat 同时堆叠。
+当前 controller 也检查了：
 
-Qwen vision tower 默认冻结，允许对最后一到两层或 spatial adapters 使用较小学习率微调。SANE 的创新重点应从“重新学习视觉特征”转为“如何适配和融合预训练中间层特征与遥感原始物理通道”。
+* 动态 padding 后的 `inputs_embeds` 必须具有梯度链路；
+* Qwen 输出的 `mask_out` 必须具有梯度链路。
 
----
+这两个检查没有触发，说明自定义 mask embeddings、view projection、output projection 等控制器参数与 loss 是连通的。
 
-## 7. QMEF reliability pooling 未排除无效区域
+但是，“输出 tensor 有 `requires_grad=True`”只说明它依赖某些可训练参数，不代表它依赖 LoRA。当前 output projection、自定义 mask embeddings、evidence anchors 和 view projection 都是可训练的，因此即使 LoRA 完全未参与 forward，`mask_out.requires_grad` 仍会是 True。
 
-### 当前问题
+## 2. 当前最可疑的是直接调用底层 language model
 
-当前 reliability 使用整幅特征均值进行 pooling，padding、nodata 和无效覆盖区域的零值会进入统计，使不同有效覆盖比例的模态产生偏差。
-
-### 修改方案
-
-所有 reliability pooling 改成 valid-mask weighted pooling：
-
-[
-\bar F_m=
-\frac{\sum_{x,y}V_m(x,y)F_m(x,y)}
-{\sum_{x,y}V_m(x,y)+\epsilon}
-]
-
-同时增加有效覆盖比例：
-
-[
-c_m=\frac{\sum V_m}{HW}
-]
-
-将 (c_m) 作为 reliability head 的显式输入。对有效面积过小的模态设置最小可靠度上限，避免极少有效像素被错误赋予高权重。
-
-high、mid、low 特征均需要对应尺度的 valid mask。QMEF 中任何 global pooling、attention key 和 reliability 计算都必须使用有效区域。
-
----
-
-## 8. Reliability softmax 强制所有模态权重和为 1
-
-### 当前问题
-
-softmax 必须在可用模态中选择至少一个，即使所有模态质量都很差，仍会人为提高某个模态的权重，模型无法表达“当前所有证据均不可靠”。
-
-### 修改方案
-
-在 reliability 分布中加入一个 learnable `null evidence` 槽位：
-
-[
-[r_1,\ldots,r_M,r_{\varnothing}]
-=\operatorname{softmax}(z_1,\ldots,z_M,z_{\varnothing})
-]
-
-真实模态融合只使用 (r_1,\ldots,r_M)，不再重新归一化到 1。若 null evidence 权重较高，融合特征整体幅度相应降低，并向 PMRD 输出较高不确定性。
-
-另一种实现是独立 sigmoid gate，但 null-slot softmax更容易保持训练稳定，也能直接解释“没有可信辅助证据”的状态。
-
-QMEF 日志中应增加 null reliability、有效模态总质量和 reliability calibration，而不仅记录最大模态权重。
-
----
-
-## 9. Query attention 只使用 mid-level 特征
-
-### 当前问题
-
-当前 query-spatial attention 只读取 1/8 特征，虽然能够选择不同模态，但无法同时利用高分辨率边界和低分辨率大范围地貌上下文。
-
-### 修改方案
-
-将 high、mid、low 三层特征组织为统一的 multi-scale evidence memory，并为每层加入 scale embedding。每个 query 在三个尺度上进行少量 deformable sampling：
-
-[
-Z_q=\sum_{l\in{h,m,l}}
-\sum_{m,p}A_{q,l,m,p}V_{l,m,p}
-]
-
-不再恢复独立的 high/mid/low gate。尺度选择、模态选择和空间位置选择由同一个 query-conditioned deformable attention 完成。
-
-为了控制显存，每个 query 每个尺度只采样固定数量位置，例如 4 个点，不对所有 high-resolution pixels 展开全局 attention。
-
----
-
-## 10. Query 选择的模态没有形成 query-specific pixel feature
-
-### 当前问题
-
-query attention 目前只更新 query embedding，最终动态 mask kernel仍作用于所有 query共享的 fused high feature。不同 query 即使选择了不同模态，实际像素特征仍相同，query-level 模态选择对 mask边界的影响较弱。
-
-### 修改方案
-
-PMRD refinement阶段根据 query-modality-spatial attention生成 query-specific pixel feature：
-
-[
-F_q(x,y)=
-\sum_m A_{q,m}(x,y)F_m^{detail}(x,y)
-]
-
-随后第 (q) 个 mask embedding只作用于 (F_q)，而不是共享的 (F_{\text{fused}})。
-
-为避免显存过高，不必长期保存完整的 `[B,Q,D,H,W]`。可按 query 分块计算，或将 attention分解为：
-
-[
-A_{q,m}(x,y)\approx a_{q,m}\cdot s_q(x,y)
-]
-
-先按 query 模态权重融合，再用 coarse mask或空间 attention做局部调制。
-
-这一修改应与第 9 项合并实现，使“query选择哪些证据”和“query用哪些像素生成 mask”成为同一逻辑。
-
----
-
-## 11. 高分辨率细节只有 1/4 分辨率
-
-### 当前问题
-
-当前 PMRD detail branch输入仍是 1/4 feature，最终 mask主要通过插值恢复至原分辨率。对高分辨率光学影像中的小滑坡、细长边界和碎片化目标，细节恢复能力可能不足。
-
-### 修改方案
-
-SANE 保留一条 1/2 分辨率的 shallow detail feature，来源优先采用预训练 vision tower浅层中间特征，并融合轻量原始图像卷积分支。该 feature只提供给 PMRD refinement，不进入复杂全局语义融合。
-
-由于没有 box prior，使用第一轮 coarse mask形成 soft spatial gate：
-
-[
-F^{detail}*q=
-\sigma(M_q^{coarse})\odot F^{1/2}*{detail}
-]
-
-再与上采样后的语义特征融合。这样可借鉴 Qwen3-VL-Seg 的高分辨率像素融合思想，同时用 coarse mask替代 box，降低无关浅层纹理干扰。
-
-最终 mask在 1/2 特征上预测，再插值一次恢复原分辨率。只有边界指标仍明显不足时，才考虑 full-resolution stem，不应一开始使用全分辨率重型分支。
-
----
-
-## 12. Verifier 诊断指标与 component-set 监督不一致
-
-### 当前问题
-
-proposal 已经按连通域进行 Hungarian matching，但当前部分诊断仍使用“proposal 与完整 semantic union mask 的 Dice”定义 best query。正确分割单个连通域的 query未必对完整 union mask具有最高 Dice，因此 verifier accuracy可能产生误导。
-
-### 修改方案
-
-诊断指标改为与 component-set matching一致：
-
-* matched proposal mean Dice；
-* component recall；
-* component precision；
-* unmatched proposal rejection rate；
-* relevance AP/AUC；
-* matched proposal relevance rank；
-* proposal union Dice；
-* missed-component rate；
-* duplicate-component rate。
-
-`best_query_dice against full semantic mask` 仅在 `num_mask_tokens=1` 的 semantic baseline中使用。多 query模型不再以它作为 verifier主指标或 checkpoint选择依据。
-
-Verifier训练目标也应明确：matched proposal为正，unmatched proposal为负；当一个 proposal覆盖多个连通域时，另行记录 merge error；多个 proposal匹配同一连通域时记录 duplicate error。
-
----
-
-## 13. Prompt 中仍包含 dataset name 和 normalization 信息
-
-### 当前问题
-
-dataset name、normalization combo 和内部数据处理信息进入 Qwen prompt，可能让模型利用数据集来源和预处理方式作为捷径。这些内容也不是自然语言分割任务所需的语义。
-
-### 修改方案
-
-从 Qwen prompt 中彻底删除：
-
-* dataset name；
-* normalization method；
-* 文件来源；
-* 内部 value encoding 名称；
-* 采样和清洗标记。
-
-Qwen prompt只保留：
-
-* 分割任务指令；
-* 目标条件；
-* 当前可用的证据类型；
-* 简短的遥感证据角色说明；
-* 必要的尺度描述。
-
-sensor、band、orbit、GSD、quality和availability全部通过 SANE/QMEF结构化 embedding输入，不重复写入自然语言 prompt。
-
-正式实验应加入“完整语义 prompt”和“仅任务指令 prompt”对比，判断长 evidence reasoning是否真正有益。
-
----
-
-## 14. 模态 family 映射仍依赖旧 canonical 名称
-
-### 当前问题
-
-虽然模型内部已经使用 `ModalityInstance`，但 family 仍通过旧 raw modality名称映射得到。新增传感器、波段产品或地形变量仍需要修改代码中的映射表。
-
-### 修改方案
-
-benchmark schema直接保存标准字段：
+当前代码执行的是：
 
 ```text
-family
-sensor
-product_type
-band_names
-orbit
-native_gsd_m
-units
-quality
+PeftModel
+  └─ get_base_model()
+       └─ model.language_model(...)
 ```
 
-Dataset优先读取 `family` 和 `product_type`，旧 canonical映射只作为历史数据 fallback，并在读取时输出迁移警告。
+而不是：
 
-`canonical_combo` 只用于数据统计和结果分组，不再参与模型输入构建和训练逻辑。完成数据迁移后逐步删除旧 canonical依赖。
+```text
+PeftModel(...)
+```
 
----
+PEFT 官方 forward 会进入 `_enable_peft_forward_hooks`，然后调用 base model；当前实现绕过了这个入口。
 
-## 15. Hash bucket embedding 存在碰撞和弱语义
+标准 LoRA 在部分版本中即使直接调用已注入的子模块也可能生效，但这种做法并不是稳定、受支持的 PEFT 调用协议。结合当前“LoRA 参数存在、其他梯度存在、LoRA 梯度全部为零”的症状，应把它作为第一修复目标。
 
-### 当前问题
+## 3. 当前测试没有真正覆盖真实 LoRA forward
 
-sensor和band name通过字符串 hash映射到固定 embedding bucket，可能产生碰撞；同时 `R`、`red`、`B04` 等同义波段无法共享语义，模型也无法知道不同光谱波段的物理关系。
+现有单元测试验证了：
 
-### 修改方案
+* 动态 padding 能保持输入梯度；
+* mask queries 会受语言上下文影响；
+* mask embeddings 能收到梯度；
+* LoRA target regex 能找到最后四层的 q/k/v/o projection。
 
-建立标准传感器与波段注册表。已知波段使用标准 ID，并增加连续物理描述：
+但这些测试使用的是模拟 language module，没有加载真实 Qwen、PEFT 和 NF4 adapter，也没有断言真实 `lora_B` 参数在 forward/backward 后获得非零梯度。
 
-* 中心波长；
-* 波段宽度；
-* 极化类型；
-* terrain variable type；
-* deformation type；
-* 单位；
-* signed/unsigned 标志。
-
-band token由离散 ID embedding和连续物理属性 projection共同构成。未知传感器或未知波段才使用 hash fallback。
-
-对于 Sentinel-2 混合分辨率波段，增加 per-band GSD；也可以按 10 m、20 m band group拆成多个 ModalityInstance，避免一个实例只保存单一 GSD。
+所以当前集成门禁实际上是第一个真正发现 LoRA 计算图问题的测试，而不是门禁本身过严。
 
 ---
 
-## 16. Qwen 多视图 renderer 的物理问题
+# 四、最优先的代码修改
 
-### 当前问题
+## 1. 不再直接调用 `_language_model()`
 
-当前 renderer已经支持光学真彩色、S2假彩色、SAR组合、terrain view和signed InSAR，但仍存在物理表达不严格的问题。
+应将 controller 中的 Qwen forward 改为通过 `self.model(...)`，即通过 PEFT 包装后的完整模型执行。
 
-### 修改方案
+建议的调用逻辑是：
 
-SAR 第三通道当前若计算的是 `VV - VH`，描述必须写成 difference，而不能称为 ratio。若输入为 dB，`VV_dB - VH_dB` 可解释为线性域比值的对数形式；若输入为线性值，则应显式计算安全 ratio。
+```text
+outputs = self.model(
+    inputs_embeds=inputs,
+    attention_mask=attention,
+    output_hidden_states=True,
+    return_dict=True,
+    use_cache=False,
+    logits_to_keep=1,
+)
+hidden = outputs.hidden_states[-1]
+```
 
-Terrain renderer必须根据 `product_type` 区分 DEM、slope、aspect和curvature。只有 DEM可以派生 hillshade和坡度；输入本身为 slope时不能再次将其当高程求坡度。
+Qwen3-VL 的正式 forward 原生支持 `inputs_embeds`，会在进入 language model 前构造 position IDs；同时支持 `logits_to_keep`，可以只计算最后一个位置的词表 logits，避免为整个序列生成巨大词表张量。
 
-InSAR使用以零为中心的固定发散色图，并在描述中写明单位、LOS方向和正负号约定。为保留跨样本形变幅度差异，优先使用数据集级或区域级固定裁剪范围，而不是完全使用每张图自己的 98% 分位缩放。可以同时提供“固定尺度 view”和“局部增强 view”。
+当前已经把视觉塔从在线 Qwen 模型中移除。只要不传入 `pixel_values`，完整 Qwen forward仍然可以使用已有的 `inputs_embeds`。使用 `logits_to_keep=1` 后，额外 lm-head开销通常可控。
 
-所有 renderer必须应用 valid mask。nodata区域统一显示为中性灰色，并在 view description中说明灰色区域无有效数据。
+这一修改有三个好处：
 
-S2 true/false-color必须根据标准 band name索引，不允许在未知 band顺序下静默取前三通道。fallback view必须明确标记为 `uncertain_band_order`，并可在正式 Qwen evidence中选择禁用。
+第一，PEFT 的 adapter hooks会按正式路径启用。
+第二，Qwen自己的 position-id逻辑会被使用。
+第三，模型行为更接近官方 Qwen前向协议，降低版本兼容风险。
+
+## 2. 如果完整 Qwen forward显存过高，直接对 text backbone注入 LoRA
+
+长期更干净的方案是：
+
+1. 加载 Qwen3-VL；
+2. 保存 token embedding；
+3. 提取 `model.model.language_model`；
+4. 只对该 text backbone使用 PEFT；
+5. 将其作为 controller 的正式语言模型；
+6. 删除顶层 lm head和不用的视觉模块。
+
+此时 LoRA应直接注入到**实际被调用的 text backbone**，而不是先包装完整 VLM，再绕过包装器调用内部子模块。
+
+这种设计更节省显存，但改动比通过完整 PEFT forward更大。建议先用完整 wrapper验证 LoRA梯度，确认问题根因后再做 text-backbone提取。
+
+## 3. 用 layer selection 代替超长正则表达式
+
+当前通过完整模块路径正则选择最后四层 q/k/v/o projection。模型目前有28个语言层。
+
+建议改为明确的 LoRA配置：
+
+```text
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+layers_to_transform = [24, 25, 26, 27]
+layers_pattern = "layers"
+```
+
+这比依赖完整模块路径正则更稳健。初始化后必须检查：
+
+* 每个目标层的 q/k/v/o均被 LoRA包装；
+* active adapter不是空；
+* adapter没有 merged；
+* adapter没有被 disable；
+* 实际 forward时目标模块被调用。
 
 ---
 
-## 17. 代码工程仍需整理
+# 五、重新设计集成门禁
 
-### 当前问题
+当前门禁一次性混合了四件事：
 
-重构后算法主模块已经清晰，但 `data.py` 和 `train_eval.py` 仍承担过多职责。部分历史字段如 `visual_preview` 已不参与主模型，却仍保留在核心 batch接口中。缓存、数据、prompt、评估和诊断逻辑尚未完全解耦。
+1. Qwen adapter是否进入计算图；
+2. 完整 segmentation loss是否能回传；
+3. full/dropped teacher consistency是否生效；
+4. batch 6是否满足显存限制。
 
-### 修改方案
+这种做法导致当前错误只能显示 `lora=0`，却不能精确说明梯度在哪一层断开。应拆分为三个独立门禁。
 
-`data.py` 应拆分为数据索引读取、模态归一化、空间变换、prompt生成、Dataset和Sampler。`train_eval.py` 应拆分为 trainer、evaluator、checkpoint manager、threshold evaluator和diagnostics exporter。
+## 1. Controller-only 梯度门禁
 
-核心 `ModalityBatch` 只保留模型训练必需字段。`visual_preview`、可视化路径和调试信息移入可选 diagnostics/meta对象，不再作为主模型必需输入。
-
-Qwen text cache和multi-view cache必须采用严格版本校验，至少检查：
-
-* 模型 revision；
-* processor revision；
-* renderer version；
-* pooling method；
-* subset signature；
-* 内容 hash；
-* prompt version。
-
-配置继续以 Python dataclass和preset为唯一事实来源。shell脚本只负责编排，不能重新维护算法参数。
-
-测试体系需要补充四类真实集成测试：真实 benchmark sample完成 forward/backward；Qwen text cache与mask-token QLoRA链路；subset-aware multi-view cache；CUDA mixed-precision单步训练。合成单元测试继续保留，但不能作为完成训练闭环的唯一依据。
-
----
-
-# 实施优先级
-
-第一优先级是解决科学有效性问题，包括第 2、3、7、12、13 项。它们分别决定指令是否有效、缺失模态是否真实、指标是否可信以及模型是否利用数据集捷径。
-
-第二优先级是增强模型核心能力，包括第 1、5、6、9、10、11 项。完成后，mask tokens、Qwen多源语义、预训练视觉中间层、query-level多尺度融合和高分辨率细化才能真正形成闭环。
-
-第三优先级是完善结构表达和工程质量，包括第 8、14、15、16、17 项。它们影响模型扩展性、物理合理性和代码长期维护。
-
-第 4 项不增加模型模块，只需在论文和数据规范中明确：本研究假定输入 patch已经配准，不研究地理坐标理解。
-
-# 重构后的目标链路
-
-最终模型应形成如下唯一主链：
+只运行：
 
 [
-\text{预训练多源中间层特征}
-\rightarrow
-\text{Qwen更新的mask queries}
-\rightarrow
-\text{subset-aware多源证据融合}
-\rightarrow
-\text{query-specific多尺度像素特征}
-\rightarrow
-\text{proposal set与mask-aware refinement}
+L_{\text{probe}}
+================
+
+|Q_{\text{mask}}|*2^2
++
+0.1|E*{\text{anchor}}|_2^2
 ]
 
-该链路分别对应三个一级模块：
+然后检查：
 
-**SANE**：预训练视觉中间层与遥感物理通道适配；
-**QMEF**：无泄漏、多尺度、可拒绝的多源证据融合；
-**PMRD**：经 Qwen 更新的 mask queries、component-set proposals和高分辨率 mask细化。
+* `mask_query_states.grad` 是否非零；
+* 最后一层 `lora_B` 是否非零；
+* 所有 LoRA梯度是否有限；
+* 实际执行过的 LoRA目标模块数量。
 
-后续新增设计必须归入这三者之一，不能再建立作用相似的平行 scorer、gate或视觉分支。
+这个门禁不经过 SANE、QMEF、PMRD，因此可以直接回答：
+
+> Qwen mask-query controller 本身是否真的训练 LoRA？
+
+若该测试仍然为零，问题必然在 Qwen/PEFT前向协议，而不是分割 decoder。
+
+## 2. End-to-end 梯度门禁
+
+controller-only通过后，再运行完整 segmentation loss，并对下列中间变量调用 `retain_grad()`：
+
+* `semantic.mask_query_states`；
+* `semantic.evidence_anchors`；
+* coarse queries；
+* refined queries。
+
+分别报告梯度范数。若 controller-only有 LoRA梯度，而 end-to-end没有，则说明 PMRD或 loss对 Qwen query的依赖过弱或被意外截断。
+
+## 3. 显存门禁
+
+最后再以 batch 6、full/dropped混合和 consistency teacher运行峰值显存测试。
+
+显存测试不应兼任计算图测试。它只需验证：
+
+* forward/backward可完成；
+* loss有限；
+* LoRA已在前一个门禁证明可训练；
+* 峰值显存低于22.5 GiB。
+
+---
+
+# 六、LoRA 门禁应至少运行两个优化步骤
+
+当前只检查一次 backward。标准 LoRA初始化通常会使其中一个低秩矩阵初始为零，因此第一步中不同 LoRA矩阵的梯度行为并不对称。
+
+建议门禁执行两个 optimizer steps，并分开记录：
+
+* `lora_A` 梯度；
+* `lora_B` 梯度；
+* 每层参数更新量；
+* 更新参数数量。
+
+第一步至少要求部分 `lora_B` 获得非零梯度和更新；第二步再检查 `lora_A` 是否开始获得梯度。不应只报告一个聚合的 `lora_gradient_norm_sum`。
+
+当前最新门禁由原来的多步检查缩减成一个代表性 batch的一步检查，这提高了效率，但降低了诊断能力。
+
+---
+
+# 七、当前可立即采用的训练路径
+
+## 1. 不建议直接关闭门禁训练 full model
+
+下面这种方式只能用于定位问题：
+
+```bash
+MEMORY_GATE=0
+```
+
+因为当前 LoRA梯度已经明确为零。关闭门禁后，模型可能只更新：
+
+* mask embeddings；
+* evidence anchors；
+* view projection；
+* output projection；
+* SANE；
+* QMEF；
+* PMRD。
+
+这能产生一个可训练系统，但不能被称为 QLoRA适配后的 Qwen-PSALM。
+
+## 2. 可以先训练 `pretrained_sane_qmef_pmrd`
+
+为了不让整个项目停滞，可以先运行：
+
+```text
+PRESET=pretrained_sane_qmef_pmrd
+```
+
+这条路线使用缓存的 Qwen-ViT中间层特征，但不依赖在线 Qwen language decoder的 LoRA。它可以验证：
+
+* benchmark-v2；
+* 预训练 SANE；
+* QMEF；
+* PMRD；
+* proposal matching；
+* 单卡训练吞吐；
+* 分割指标。
+
+这是一条合法而且有价值的强基线，但不能替代最终 `qwen_psalm_full`。
+
+## 3. 建议增加冻结 Qwen 的中间基线
+
+新增一个明确命名的 preset，例如：
+
+```text
+qwen_mask_query_frozen
+```
+
+其结构为：
+
+* 在线 Qwen language decoder完全冻结；
+* 不注入 LoRA；
+* 训练 mask embeddings、evidence anchors、view projection和 output projection；
+* 训练 SANE/QMEF/PMRD。
+
+这个基线能够回答：
+
+> 仅训练 Qwen周围的软提示和分割模块是否已经足够？
+
+随后 `qwen_psalm_full` 与它对比，才能证明 QLoRA的额外价值。
+
+---
+
+# 八、建议采用分阶段训练，而不是所有模块同时起训
+
+当前第一次 optimizer step同时更新：
+
+* Qwen LoRA；
+* mask embeddings；
+* evidence anchors；
+* view projection；
+* SANE adapters；
+* raw physical encoder；
+* QMEF；
+* PMRD。
+
+这会使随机初始化的 PMRD与刚开始适配的 Qwen相互干扰。
+
+建议采用两阶段训练。
+
+第一阶段先冻结 Qwen LoRA，训练 200–500 steps：
+
+* controller新增 embeddings/projection；
+* SANE；
+* QMEF；
+* PMRD。
+
+此阶段让分割 decoder先建立可用梯度路径。
+
+第二阶段再开启最后4层 QLoRA，并将其学习率设为 dense模块的0.1–0.3倍。这样更接近 PSALM和 Qwen3-VL-Seg的分阶段适配思想。PSALM的关键在于 mask tokens经过 LMM更新后参与 proposal生成；Qwen3-VL-Seg则通过预训练中间视觉特征和迭代 mask refinement逐步建立 dense能力。
+
+优化器也不应继续对所有参数使用同一个学习率和 weight decay。当前 trainer将所有可训练参数放进单一 AdamW参数组。
+
+建议参数组为：
+
+| 参数组                      |    相对学习率 | Weight decay |
+| ------------------------ | -------: | -----------: |
+| Qwen LoRA                | 0.1–0.3× |            0 |
+| mask/evidence embeddings |     0.5× |            0 |
+| view/output projection   |     0.5× |         0.01 |
+| SANE raw/adapters        |       1× |         0.01 |
+| QMEF/PMRD                |       1× |         0.01 |
+| norm/bias                |      对应组 |            0 |
+
+---
+
+# 九、训练问题修复后仍需优化的设计
+
+## 1. 自定义视觉 token不是 Qwen原生图像 token
+
+当前缓存视觉 token被投影后放在 vision-start/end embedding之间，但没有使用原始 image placeholder、完整 grid信息和 Qwen原生视觉位置协议。它们更准确地是“Qwen视觉塔产生的 evidence tokens”，而不是原生图像 token。
+
+当前代码又直接调用底层 language model，因此连 Qwen3-VL完整的 position-id构造也被绕过。Qwen官方模型会在进入语言模型前计算3D position IDs。
+
+修复为完整 Qwen wrapper forward后，这一问题会得到部分缓解。但论文中仍应把它称为：
+
+> compressed multi-view evidence tokens
+
+而不是完整复现 Qwen原生视觉序列。
+
+## 2. Qwen-ViT空间特征恢复仍需真实图像测试
+
+当前通过 forward hook捕获视觉 block，并通过 `restore_qwen_patch_grid` 恢复二维特征。
+
+合成 token排列测试已经存在，但还需要用真实 Qwen视觉塔验证：
+
+* 高亮方块的位置；
+* 左右翻转；
+* 上下翻转；
+* 棋盘格；
+* 方向性条纹。
+
+如果恢复顺序错误，预训练 SANE虽能训练，但空间特征会被打乱。
+
+## 3. Raw 与 pretrained特征融合仍需 family-conditioned
+
+当前 raw residual在所有模态族上共享同一组尺度系数，并且初始化权重很低。
+
+这对 RGB可能合理，但对 SAR、DEM、InSAR和完整多光谱并不合理。Qwen-ViT只看渲染后的三通道视图，而原始物理分支保存更多信息。
+
+应让 raw/pretrained融合至少按 family和scale自适应：
+
+* optical偏向 pretrained；
+* multispectral两者并重；
+* SAR、terrain、deformation偏向 raw；
+* renderer带有质量标记时降低 pretrained权重。
+
+## 4. 多个传感器 view不应直接平均
+
+同一 Sentinel-2产品的真彩色和 SWIR/NIR假彩色包含互补信息。当前 SANE读取缓存特征时会对同一模态的多个 view做简单加权平均。
+
+建议改为轻量 learned view attention，避免真彩色和假彩色的语义被不可学习地混合。
+
+## 5. QMEF 的坐标约定仍不一致
+
+当前对齐模块先用 `align_corners=False` 插值，再用 `align_corners=True` 执行 grid sample。
+
+这会产生半像素偏移风险。应统一约定，并增加 zero-offset identity test。
+
+## 6. Coarse mask细化存在确认偏差
+
+PMRD直接以 sigmoid coarse mask乘 query-specific detail feature。
+
+若第一轮漏掉真实边缘，第二轮无法重新读取 proposal外的特征。建议使用带残差的 soft gate或适度膨胀的 coarse mask，并通过消融确定最优设置。
+
+## 7. Verifier应同时预测 relevance和 mask quality
+
+当前 verifier只判断 proposal语义相关性。建议增加轻量 mask-quality head，预测 proposal IoU/Dice质量，再与 semantic relevance共同决定 union gate。这能避免语义正确但边界很差的 proposal获得高权重。
+
+## 8. 缺失模态评价需要固定参考区域
+
+当前 active subset会参与最终 valid mask构建，不同模态组合可能在不同有效区域上评价。
+
+建议同时保留：
+
+* annotation/reference valid mask；
+* active-observable valid mask。
+
+任意模态组合主表应使用固定 reference区域，observable-area指标作为补充。
+
+---
+
+# 十、建议的验收顺序
+
+完成 LoRA修复后，不要直接启动4000步训练。建议按以下顺序验收。
+
+第一，运行 controller-only probe，要求至少一个最后四层 `lora_B` 梯度非零。
+
+第二，运行单样本完整 loss，要求：
+
+* mask-query gradient非零；
+* evidence-anchor gradient非零；
+* LoRA B梯度非零；
+* optimizer step后 LoRA参数发生变化。
+
+第三，运行两个优化步骤，要求第二步开始出现 LoRA A梯度。
+
+第四，运行 batch 2、关闭 consistency的 full model smoke test。
+
+第五，运行 batch 6、full/dropped混合 consistency和22.5 GiB显存门禁。
+
+第六，运行20步短训练，确认：
+
+* loss总体下降；
+* LoRA参数持续变化；
+* mask embeddings不塌缩；
+* null reliability不长期接近1；
+* proposal relevance不是全部相同；
+* no-target误检没有快速上升。
+
+第七，才开始 small-v2正式4000步训练。
+
+---
+
+# 最终评价
+
+当前版本的模型结构已经比较成熟，创新链条也已经建立。此次无法启动训练并不意味着整体算法设计失败，而是**在线 Qwen QLoRA 路径尚未通过真正的计算图验证**。
+
+最优先修复不是降低 batch、修改 loss权重或关闭门禁，而是：
+
+1. 通过 PEFT包装器执行 Qwen forward；
+2. 不再直接调用底层 `language_model`；
+3. 增加 controller-only LoRA梯度测试；
+4. 将一步门禁改为 controller gate、end-to-end gate和 memory gate；
+5. 采用冻结 Qwen到开启 QLoRA的两阶段训练。
+
+其中第一项最可能直接解决当前的 `lora=0`。在它修复之前，其他结构优化都不是训练启动问题的主要矛盾。
