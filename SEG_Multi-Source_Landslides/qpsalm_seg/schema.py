@@ -67,7 +67,7 @@ class ActiveModalitySubset:
 
 
 @dataclass
-class ModalityBatch(Mapping[str, Any]):
+class ModalityBatch:
     """Variable-cardinality multimodal batch with a common segmentation canvas."""
 
     instances: list[list[ModalityInstance]]
@@ -100,6 +100,48 @@ class ModalityBatch(Mapping[str, Any]):
             for family_index, family in enumerate(MODALITY_FAMILIES):
                 result[batch_index, family_index] = float(family in available)
         return result
+
+    def pin_memory(self) -> "ModalityBatch":
+        """Pin tensor payloads without letting PyTorch coerce this typed batch to dict."""
+        pinned_instances: dict[int, ModalityInstance] = {}
+
+        def pin_instance(item: ModalityInstance) -> ModalityInstance:
+            key = id(item)
+            if key not in pinned_instances:
+                pinned_instances[key] = ModalityInstance(
+                    name=item.name,
+                    family=item.family,
+                    sensor=item.sensor,
+                    product_type=item.product_type,
+                    band_names=item.band_names,
+                    band_metadata=item.band_metadata,
+                    orbit=item.orbit,
+                    units=item.units,
+                    signed=item.signed,
+                    image=item.image.pin_memory(),
+                    valid_mask=item.valid_mask.pin_memory(),
+                    native_gsd_m=item.native_gsd_m,
+                    aligned_gsd_m=item.aligned_gsd_m,
+                    quality=item.quality,
+                    metadata=item.metadata,
+                )
+            return pinned_instances[key]
+
+        return ModalityBatch(
+            instances=[[pin_instance(item) for item in sample] for sample in self.instances],
+            full_instances=[[pin_instance(item) for item in sample] for sample in self.full_instances],
+            active_subsets=self.active_subsets,
+            mask=self.mask.pin_memory(),
+            valid_mask=self.valid_mask.pin_memory(),
+            metadata=self.metadata,
+            proposal_context_text=self.proposal_context_text,
+            condition_prompt_text=self.condition_prompt_text,
+            evidence_reasoning_text=self.evidence_reasoning_text,
+            full_proposal_context_text=self.full_proposal_context_text,
+            full_condition_prompt_text=self.full_condition_prompt_text,
+            full_evidence_reasoning_text=self.full_evidence_reasoning_text,
+            visual_evidence_key=self.visual_evidence_key,
+        )
 
     def __getitem__(self, key: str) -> Any:
         if hasattr(self, key):

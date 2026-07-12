@@ -126,7 +126,11 @@ class TextProbeMaskController(nn.Module):
         nn.init.normal_(self.anchor_availability.weight, std=0.02)
         self.mask_embeddings = nn.Parameter(torch.randn(num_queries, dim) * 0.02)
         layer = nn.TransformerEncoderLayer(dim, num_heads, dim * 4, batch_first=True, norm_first=True)
-        self.encoder = nn.TransformerEncoder(layer, num_layers=2)
+        self.encoder = nn.TransformerEncoder(
+            layer,
+            num_layers=2,
+            enable_nested_tensor=False,
+        )
         self.norm = nn.LayerNorm(dim)
 
     def _text(self, values: Sequence[str], device: torch.device) -> torch.Tensor:

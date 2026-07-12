@@ -164,6 +164,8 @@ class QwenGuidedEvidenceFusion(nn.Module):
                     else semantic_global[bi]
                 )
                 modality_anchors[bi, mi] = family_semantic
+                local_features: dict[str, torch.Tensor] = {}
+                local_valids: dict[str, torch.Tensor] = {}
                 for scale in stacks:
                     aligned, aligned_valid = self.align[scale](
                         getattr(pyramid, scale), getattr(pyramid, f"{scale}_valid"), shapes[scale],
@@ -176,13 +178,18 @@ class QwenGuidedEvidenceFusion(nn.Module):
                     )
                     # Geometry validity is a hard spatial contract. FiLM may
                     # modulate valid evidence but must not recreate padding/nodata.
-                    stacks[scale][bi, mi] = torch.where(
+                    local_features[scale] = torch.where(
                         aligned_valid > 1.0e-4,
                         conditioned * aligned_valid,
                         torch.zeros_like(conditioned),
                     )
-                    valids[scale][bi, mi] = aligned_valid
-                pooled, _low_coverage = valid_weighted_pool(stacks["low"][bi, mi], valids["low"][bi, mi])
+                    local_valids[scale] = aligned_valid
+                pooled, _low_coverage = valid_weighted_pool(
+                    local_features["low"], local_valids["low"]
+                )
+                for scale in stacks:
+                    stacks[scale][bi, mi] = local_features[scale]
+                    valids[scale][bi, mi] = local_valids[scale]
                 cov = pyramid.instance.valid_mask.to(device=device, dtype=dtype).mean().clamp(0, 1)
                 coverage[bi, mi] = cov
                 if enable_reliability:

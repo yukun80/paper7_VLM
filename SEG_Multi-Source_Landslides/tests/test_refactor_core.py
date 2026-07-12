@@ -20,8 +20,10 @@ import tempfile
 import unittest
 import re
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
+from torch.utils.data._utils.pin_memory import pin_memory as torch_pin_memory
 
 from qpsalm_seg.config import QPSalmConfig
 from qpsalm_seg.controllers import QwenMaskQueryController, local_model_revision
@@ -436,6 +438,13 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertEqual(tuple(first.final_mask_logits.shape), (1, 1, 64, 64))
         self.assertTrue(torch.isfinite(first["loss"]))
         self.assertTrue(torch.allclose(first.final_mask_logits, second.final_mask_logits, atol=2.0e-5, rtol=2.0e-5))
+
+    def test_torch_pin_memory_preserves_typed_modality_batch(self) -> None:
+        batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32)
+        with patch.object(ModalityBatch, "pin_memory", autospec=True, return_value=batch) as mocked:
+            pinned = torch_pin_memory(batch)
+        self.assertIs(pinned, batch)
+        mocked.assert_called_once_with(batch)
 
     def test_switching_preset_replaces_algorithm_controls(self) -> None:
         qwen_config = replace(QPSalmConfig(), preset="qwen_psalm_full", controller="qwen_mask_query")
@@ -1064,6 +1073,35 @@ class ThreeModuleModelTest(unittest.TestCase):
         output["loss"].backward()
         gradients = [parameter.grad for parameter in model.parameters() if parameter.requires_grad and parameter.grad is not None]
         self.assertTrue(gradients)
+        self.assertTrue(all(torch.isfinite(value).all() for value in gradients))
+
+    def test_multimodal_anomaly_backward_is_finite(self) -> None:
+        model = MultiSourceQwenPSALMSeg(self.config, torch.device("cpu")).train()
+        batch = synthetic_batch(
+            [
+                instance("optical_rgb", "optical", 3, 64),
+                instance("multispectral", "multispectral", 8, 32, "sentinel2"),
+                instance("dem", "terrain", 1, 48, "dem"),
+            ],
+            components=2,
+            size=64,
+        )
+        with torch.autograd.detect_anomaly(check_nan=True):
+            output = model(batch)
+            output["loss"].backward()
+        gradients = [
+            parameter.grad
+            for parameter in model.parameters()
+            if parameter.requires_grad and parameter.grad is not None
+        ]
+        alignment_gradients = [
+            parameter.grad
+            for name, parameter in model.named_parameters()
+            if "qmef.align" in name and parameter.grad is not None
+        ]
+        self.assertTrue(torch.isfinite(output["loss"]))
+        self.assertTrue(gradients)
+        self.assertTrue(alignment_gradients)
         self.assertTrue(all(torch.isfinite(value).all() for value in gradients))
 
     def test_new_checkpoint_format_reloads(self) -> None:
