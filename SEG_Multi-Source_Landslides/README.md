@@ -20,8 +20,8 @@ dense backbone 变化混在一起。
 
 checkpoint 协议为 `qpsalm_sane_qmef_pmrd_v3`，绑定在线 Qwen mask-query 序列结构。
 vision cache manifest 绑定 train/val/test instruction index 指纹，重建 benchmark 后不会静默复用旧 cache。
-`qpsalm-integration-check` 是正式实验前的硬门槛：真实三任务 raw optimizer step 与真实
-多模态 Qwen QLoRA BF16 step 均通过后，才进入 small-v2 三 seed 对比。
+`qpsalm-integration-check` 是正式实验前的硬门槛：raw 三任务检查保持不变；Qwen 侧只用一个
+同空间/负载/任务组的代表性 batch 验证聚合 LoRA 梯度、参数更新、teacher consistency 和显存。
 
 评估严格区分 verifier 可部署选择与 GT-only 诊断：`selected_proposal` 来自 relevance
 argmax，`oracle_matched_proposal` 来自统一 component assignment，仅用于分析 proposal

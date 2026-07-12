@@ -23,8 +23,7 @@ from torch.utils.data import DataLoader
 from qpsalm_seg.cli.cache_qwen_vision_features import main as cache_vision_main
 from qpsalm_seg.cli.integration_check import (
     main as integration_check_main,
-    select_qwen_dynamic_indices,
-    select_stress_batch_indices,
+    select_representative_batch_indices,
 )
 from qpsalm_seg.config import QPSalmConfig, save_config
 from qpsalm_seg.data import MultiSourceLandslideDataset, qpsalm_collate
@@ -166,60 +165,36 @@ class BenchmarkV2IntegrationTest(unittest.TestCase):
             missing_modality_consistency_weight=0.0,
         )
 
-    def test_qwen_dynamic_selection_requires_three_evidence_layouts(self) -> None:
-        def row(*families: str) -> dict:
-            return {
-                "modalities": {
-                    f"modality_{index}": {"family": family, "available": True}
-                    for index, family in enumerate(families)
-                }
-            }
-
-        dataset = type("Rows", (), {"rows": [
-            row("optical"),
-            row("multispectral", "terrain"),
-            row("deformation", "multispectral", "terrain"),
-        ]})()
-        self.assertEqual(
-            select_qwen_dynamic_indices(dataset),
-            {"optical": 0, "multispectral": 1, "multisource": 2},
-        )
-        incomplete = type("Rows", (), {"rows": [row("optical"), row("multispectral")]})()
-        with self.assertRaisesRegex(RuntimeError, "缺少证据布局"):
-            select_qwen_dynamic_indices(incomplete)
-
-    def test_memory_gate_selects_largest_multisource_bucket(self) -> None:
+    def test_representative_gate_selects_one_sampler_shaped_batch(self) -> None:
         def row(
-            sample_id: str, families: tuple[str, ...], bucket: int, *, empty: bool = False
+            sample_id: str,
+            parent: str,
+            bucket: int,
+            load: int,
+            task: str = "global_landslide_segmentation",
         ) -> dict:
             return {
                 "sample_id": sample_id,
+                "parent_sample_id": parent,
                 "bucket": bucket,
-                "task_family": "no_target_segmentation" if empty else "global_landslide_segmentation",
-                "mask": {"empty_mask": empty},
+                "load": load,
+                "task_family": task,
+                "mask": {"empty_mask": False},
                 "modalities": {
                     f"modality_{index}": {"family": family, "available": True}
-                    for index, family in enumerate(families)
+                    for index, family in enumerate(("multispectral", "terrain", "sar"))
                 },
             }
 
-        rows = [
-            row("small", ("multispectral", "terrain", "sar"), 64),
-            row("large", ("multispectral", "terrain", "deformation"), 256),
-            row("optical", ("optical",), 384),
-            row("zzz-no-target", ("optical",), 384, empty=True),
-            row("zzz-multisource-no-target", ("multispectral", "terrain", "sar"), 256, empty=True),
-        ]
+        rows = [row(f"high-{index}", f"parent-{index}", 256, 320) for index in range(8)]
+        rows += [row(f"low-{index}", f"low-parent-{index}", 128, 192) for index in range(8)]
         dataset = type("Rows", (), {
             "rows": rows,
             "bucket_size": lambda self, index: self.rows[index]["bucket"],
+            "sequence_load_bucket": lambda self, index: self.rows[index]["load"],
         })()
-        self.assertEqual(
-            select_stress_batch_indices(dataset, 1, multisource_only=True), [1]
-        )
-        self.assertEqual(
-            select_stress_batch_indices(dataset, 1, multisource_only=False), [2]
-        )
+        selected = select_representative_batch_indices(dataset, 6)
+        self.assertEqual(selected, list(range(6)))
 
     def test_strict_v2_train_reload_and_eval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

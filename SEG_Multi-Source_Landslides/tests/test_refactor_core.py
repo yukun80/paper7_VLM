@@ -36,7 +36,11 @@ from qpsalm_seg.controllers import (
 from qpsalm_seg.cli.cache_qwen_vision_features import restore_qwen_patch_grid
 from qpsalm_seg.cli.ablation_report import build_ablation_report
 from qpsalm_seg.cli.compare_runs import compare_seed_series
-from qpsalm_seg.cli.integration_check import select_stress_batch_indices
+from qpsalm_seg.cli.integration_check import (
+    lora_parameter_update_summary,
+    select_representative_batch_indices,
+    snapshot_lora_parameters,
+)
 from qpsalm_seg.cli.summarize_run import train_history_summary
 from qpsalm_seg.data import build_prompt_triplet, modality_valid_mask, resize_pad_tensor, swap_padding_after_flip
 from qpsalm_seg.data.prompts import PROMPT_VERSION, transform_spatial_instruction
@@ -696,13 +700,14 @@ class ThreeModuleModelTest(unittest.TestCase):
             self.assertEqual(len({dataset.rows[index]["load"] for index in batch}), 1)
             self.assertEqual(len({dataset.rows[index]["parent_sample_id"] for index in batch}), len(batch))
 
-    def test_integration_stress_batch_uses_distinct_positive_parents(self) -> None:
+    def test_integration_representative_batch_matches_training_stratum(self) -> None:
         class Dataset:
             rows = [
                 {
                     "sample_id": f"sample-{index}",
                     "parent_sample_id": f"parent-{index}",
                     "task_family": "global_landslide_segmentation",
+                    "load": 224,
                     "mask": {"empty_mask": False},
                     "modalities": {
                         "s2": {"available": True, "family": "multispectral"},
@@ -716,10 +721,34 @@ class ThreeModuleModelTest(unittest.TestCase):
             def bucket_size(self, _index):
                 return 256
 
+            def sequence_load_bucket(self, index):
+                return self.rows[index]["load"]
+
         dataset = Dataset()
-        selected = select_stress_batch_indices(dataset, 6, multisource_only=True)
+        selected = select_representative_batch_indices(dataset, 6)
         self.assertEqual(len(selected), 6)
         self.assertEqual(len({dataset.rows[index]["parent_sample_id"] for index in selected}), 6)
+        self.assertEqual(len({dataset.bucket_size(index) for index in selected}), 1)
+        self.assertEqual(len({dataset.sequence_load_bucket(index) for index in selected}), 1)
+        self.assertEqual(len({task_group(dataset.rows[index]) for index in selected}), 1)
+
+    def test_lora_update_summary_detects_optimizer_change(self) -> None:
+        class LoRAModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.lora_A = torch.nn.Parameter(torch.ones(2, 2))
+
+        module = LoRAModule()
+        wrapper = SimpleNamespace(controller=SimpleNamespace(model=module))
+        before = snapshot_lora_parameters(wrapper)
+        optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
+        module.lora_A.square().sum().backward()
+        optimizer.step()
+        update = lora_parameter_update_summary(wrapper, before)
+        self.assertEqual(update["num_parameters"], 1)
+        self.assertEqual(update["num_changed"], 1)
+        self.assertGreater(update["norm_sum"], 0.0)
+        self.assertTrue(update["all_finite"])
 
     def test_active_subset_controls_prompt_and_null_reliability(self) -> None:
         optical = instance("optical_rgb", "optical", 3, 64)

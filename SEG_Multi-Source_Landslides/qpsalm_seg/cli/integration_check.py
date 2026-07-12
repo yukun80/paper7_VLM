@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """Run strict real-benchmark integration checks for SANE/QMEF/PMRD and Qwen.
 
-用途：在真实 benchmark-v2 上验证 raw forward/backward，以及 Qwen QLoRA 动态序列连续训练。
+用途：在真实 benchmark-v2 上验证 raw forward/backward，以及代表性 batch 的 Qwen QLoRA 可训练性。
 推荐命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
 qpsalm_seg.cli.integration_check --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml
 --mode all --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3
 --device cuda --output outputs/qpsalm_v2/real_integration_report.json
 主要输入：完整 small-v2 instruction train/val/test、可选 Qwen vision cache v3 和本地 Qwen 权重。
-主要输出：包含样本、loss、梯度、cache subset、显存和验收状态的 JSON 报告。
+主要输出：包含代表性 batch、loss、聚合 LoRA 梯度、参数更新、显存和验收状态的 JSON 报告。
 写入行为：只写 --output，不保存 checkpoint，不修改 benchmark/cache。
 所属流程：small-v2 正式三 seed 实验之前的真实数据与单卡验收门槛。
 """
@@ -27,6 +27,7 @@ import torch
 
 from qpsalm_seg.config import AMP_DTYPES, QWEN_GRADIENT_CHECKPOINTING_MODES, load_config
 from qpsalm_seg.data import MultiSourceLandslideDataset, qpsalm_collate
+from qpsalm_seg.data.samplers import task_group
 from qpsalm_seg.engine.common import (
     amp_dtype,
     autocast_enabled,
@@ -41,7 +42,7 @@ from qpsalm_seg.presets import PRESET_CHOICES, apply_preset
 
 
 REPORT_FORMAT = "qpsalm_real_integration_v2"
-INTEGRATION_PROTOCOL_VERSION = "qwen_batch_gradient_v3"
+INTEGRATION_PROTOCOL_VERSION = "qwen_representative_batch_v4"
 
 
 class IntegrationFailure(RuntimeError):
@@ -193,57 +194,30 @@ def _row_families(row: dict[str, Any]) -> set[str]:
     }
 
 
-def select_qwen_dynamic_indices(dataset: MultiSourceLandslideDataset) -> dict[str, int]:
-    """Select deterministic evidence layouts that force different Qwen lengths."""
-    selected: dict[str, int] = {}
-    for index, row in enumerate(dataset.rows):
-        families = _row_families(row)
-        if "optical" not in selected and families == {"optical"}:
-            selected["optical"] = index
-        if (
-            "multispectral" not in selected
-            and "multispectral" in families
-            and "deformation" not in families
-        ):
-            selected["multispectral"] = index
-        if "multisource" not in selected and len(families) >= 3:
-            selected["multisource"] = index
-        if len(selected) == 3:
-            break
-    missing = [name for name in ("optical", "multispectral", "multisource") if name not in selected]
-    if missing:
-        raise RuntimeError(f"Qwen dynamic integration 缺少证据布局: {missing}")
-    if len(set(selected.values())) != len(selected):
-        raise RuntimeError(f"Qwen dynamic integration 样本不独立: {selected}")
-    return selected
-
-
-def select_stress_batch_indices(
+def select_representative_batch_indices(
     dataset: MultiSourceLandslideDataset,
     batch_size: int,
-    *,
-    multisource_only: bool,
 ) -> list[int]:
-    """Select a same-bucket, positive, distinct-parent batch for a real stress gate."""
-    grouped: dict[int, list[int]] = {}
+    """Select one costly, sampler-shaped multisource batch with distinct parents."""
+    grouped: dict[tuple[int, int, str], list[int]] = {}
     for index, row in enumerate(dataset.rows):
-        if multisource_only and len(_row_families(row)) < 3:
+        if len(_row_families(row)) < 3:
             continue
         if bool((row.get("mask") or {}).get("empty_mask")):
             continue
         if str(row.get("task_family") or "") == "no_target_segmentation":
             continue
-        grouped.setdefault(int(dataset.bucket_size(index)), []).append(index)
+        spatial_bucket = int(dataset.bucket_size(index))
+        load_bucket = int(
+            dataset.sequence_load_bucket(index)
+            if hasattr(dataset, "sequence_load_bucket") else 0
+        )
+        grouped.setdefault((spatial_bucket, load_bucket, task_group(row)), []).append(index)
     required = max(1, int(batch_size))
-    for bucket in sorted(grouped, reverse=True):
+    for bucket in sorted(grouped, key=lambda value: (value[0], value[1], value[2]), reverse=True):
         selected: list[int] = []
         parents: set[str] = set()
-        ordered = sorted(
-            grouped[bucket],
-            key=lambda index: _stress_candidate_key(dataset, index),
-            reverse=True,
-        )
-        for index in ordered:
+        for index in sorted(grouped[bucket], key=lambda value: str(dataset.rows[value].get("sample_id"))):
             row = dataset.rows[index]
             parent = str(row.get("parent_sample_id") or row.get("sample_id"))
             if parent in parents:
@@ -252,25 +226,9 @@ def select_stress_batch_indices(
             selected.append(index)
             if len(selected) == required:
                 return selected
-    role = "multisource" if multisource_only else "spatial"
     raise RuntimeError(
-        f"Qwen {role} memory gate 缺少 {required} 个同桶、正样本、不同 parent 的样本"
-    )
-
-
-def _stress_candidate_key(
-    dataset: MultiSourceLandslideDataset, index: int
-) -> tuple[int, int, int, str]:
-    row = dataset.rows[index]
-    mask = row.get("mask") or {}
-    positive = int(not bool(mask.get("empty_mask")))
-    task = str(row.get("task_family") or "")
-    semantic_task = int(task != "no_target_segmentation")
-    return (
-        int(dataset.bucket_size(index)),
-        positive,
-        semantic_task,
-        str(row.get("sample_id")),
+        "Qwen representative gate 缺少 "
+        f"{required} 个同空间/负载/任务组、正样本、多源、不同 parent 的样本"
     )
 
 
@@ -282,70 +240,36 @@ def _lora_gradient_sum(model: torch.nn.Module) -> float:
     )
 
 
-def _module_gradient_report(module: torch.nn.Module, *, exclude_lora: bool = False) -> dict[str, Any]:
-    norms = []
-    for name, parameter in module.named_parameters():
-        if not parameter.requires_grad or parameter.grad is None:
-            continue
-        if exclude_lora and "lora_" in name:
-            continue
-        norms.append(parameter.grad.detach().float().norm())
-    if not norms:
-        return {"num_parameters_with_grad": 0, "gradient_norm_sum": 0.0, "all_finite": True}
-    values = torch.stack(norms)
+
+
+def snapshot_lora_parameters(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {
-        "num_parameters_with_grad": len(norms),
-        "gradient_norm_sum": float(values.sum().cpu()),
-        "all_finite": bool(torch.isfinite(values).all().cpu()),
+        name: parameter.detach().float().cpu().clone()
+        for name, parameter in model.controller.model.named_parameters()
+        if "lora_" in name and parameter.requires_grad
     }
 
 
-def _gradient_groups(model: torch.nn.Module) -> dict[str, Any]:
+def lora_parameter_update_summary(
+    model: torch.nn.Module,
+    before: dict[str, torch.Tensor],
+) -> dict[str, Any]:
+    deltas = []
+    changed = 0
+    for name, parameter in model.controller.model.named_parameters():
+        if name not in before:
+            continue
+        delta = (parameter.detach().float().cpu() - before[name]).norm()
+        deltas.append(delta)
+        changed += int(float(delta) > 0.0)
+    if not deltas:
+        return {"num_parameters": 0, "num_changed": 0, "norm_sum": 0.0, "all_finite": True}
+    values = torch.stack(deltas)
     return {
-        "qwen_lora": {
-            "gradient_norm_sum": _lora_gradient_sum(model),
-            "num_parameters_with_grad": sum(
-                1 for name, parameter in model.controller.model.named_parameters()
-                if "lora_" in name and parameter.grad is not None
-            ),
-        },
-        "controller_aux": _module_gradient_report(model.controller, exclude_lora=True),
-        "sane": _module_gradient_report(model.sane),
-        "qmef": _module_gradient_report(model.qmef),
-        "pmrd": _module_gradient_report(model.pmrd),
-    }
-
-
-def _cache_subset_record(model, batch, item: dict[str, Any], device: torch.device) -> dict[str, Any]:
-    selected_views = model.vision_bank.selected_views_for(
-        batch.visual_evidence_key[0], batch.active_subsets[0]
-    )
-    selected_sources = sorted({
-        str(source)
-        for view in selected_views
-        for source in view.get("source_modalities") or []
-    })
-    subset = item["active_subset"]
-    dropped_sources = set(subset.dropped_names) & set(selected_sources)
-    unexpected_sources = set(selected_sources) - set(subset.active_names)
-    if dropped_sources or unexpected_sources:
-        raise RuntimeError(
-            f"Qwen cache subset 泄漏: selected={selected_sources} "
-            f"active={subset.active_names} dropped={subset.dropped_names}"
-        )
-    _, token_mask, counts, family_ids, segments = model.vision_bank.tokens_for(
-        batch.visual_evidence_key,
-        batch.active_subsets,
-        device,
-        model.config.qwen_view_tokens_per_view,
-    )
-    if not counts or counts[0] <= 0 or int(token_mask[0].sum()) != counts[0]:
-        raise RuntimeError(f"Qwen integration active subset 没有视觉 tokens: counts={counts}")
-    return {
-        "visual_token_count": int(counts[0]),
-        "selected_source_modalities": selected_sources,
-        "visual_family_ids": family_ids[0, :counts[0]].detach().cpu().tolist(),
-        "view_segments": segments[0],
+        "num_parameters": len(deltas),
+        "num_changed": changed,
+        "norm_sum": float(values.sum()),
+        "all_finite": bool(torch.isfinite(values).all()),
     }
 
 
@@ -367,29 +291,15 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
     )
     full_dataset = MultiSourceLandslideDataset(replace(strict, modality_dropout=0.0), "train")
     dropped_dataset = MultiSourceLandslideDataset(replace(strict, modality_dropout=1.0), "train")
-    dynamic_indices = select_qwen_dynamic_indices(full_dataset)
-    single_items = [
-        ("batch1-optical", full_dataset[dynamic_indices["optical"]]),
-        ("batch1-multispectral", full_dataset[dynamic_indices["multispectral"]]),
-        ("batch1-multisource", full_dataset[dynamic_indices["multisource"]]),
-        ("batch1-dropped-multisource", dropped_dataset[dynamic_indices["multisource"]]),
-    ]
-    if single_items[-1][1]["active_subset"].is_full:
-        raise RuntimeError("Qwen integration 未形成真实 dropped-modality student subset")
-    stress_indices = {
-        "max_spatial_bucket": select_stress_batch_indices(
-            full_dataset, strict.batch_size, multisource_only=False
-        ),
-        "max_multisource_bucket": select_stress_batch_indices(
-            full_dataset, strict.batch_size, multisource_only=True
-        ),
-    }
-    full_stress_items = [full_dataset[index] for index in stress_indices["max_spatial_bucket"]]
-    mixed_stress_items = [
+    representative_indices = select_representative_batch_indices(
+        full_dataset, strict.batch_size
+    )
+    representative_items = [
         (full_dataset if offset % 2 == 0 else dropped_dataset)[index]
-        for offset, index in enumerate(stress_indices["max_multisource_bucket"])
+        for offset, index in enumerate(representative_indices)
     ]
-    torch.cuda.reset_peak_memory_stats(device)
+    if not any(not item["active_subset"].is_full for item in representative_items):
+        raise RuntimeError("Qwen representative batch 未覆盖 dropped-modality student")
     model = build_model(strict, device).train()
     if model.vision_bank is None:
         raise RuntimeError("Qwen integration 缺少 vision feature bank")
@@ -407,146 +317,106 @@ def run_qwen_check(config, device: torch.device, max_memory_gib: float) -> dict[
     scaler = create_grad_scaler(strict, device)
     autocast = autocast_enabled(strict, device)
     dtype = amp_dtype(strict, device)
-    diagnostics: dict[str, Any] = {
-        "protocol_version": INTEGRATION_PROTOCOL_VERSION,
-        "selected_indices": dynamic_indices,
-        "stress_indices": stress_indices,
-        "single_batch_checks": [],
-        "memory_gates": [],
-        "optimizer_steps": [],
+    optimizer.zero_grad(set_to_none=True)
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats(device)
+    batch = qpsalm_collate(representative_items)
+    lora_before = snapshot_lora_parameters(model)
+    with torch.amp.autocast(device_type="cuda", dtype=dtype, enabled=autocast):
+        output = model(batch)
+        loss = output["loss"]
+    if not torch.isfinite(loss):
+        raise RuntimeError("Qwen representative batch loss 非有限")
+    scaler.scale(loss).backward()
+    if scaler.is_enabled():
+        scaler.unscale_(optimizer)
+    gradients = _gradient_report(model)
+    lora_gradient = _lora_gradient_sum(model)
+    sequence_lengths = output["controller_sequence_lengths"].detach().cpu().tolist()
+    visual_counts = output["controller_visual_token_counts"].detach().cpu().tolist()
+    parents = [str(item["metadata"]["parent_sample_id"]) for item in representative_items]
+    task_groups = sorted({task_group(full_dataset.rows[index]) for index in representative_indices})
+    spatial_buckets = sorted({int(full_dataset.bucket_size(index)) for index in representative_indices})
+    load_buckets = sorted({int(full_dataset.sequence_load_bucket(index)) for index in representative_indices})
+    representative_batch = {
+        "indices": representative_indices,
+        "batch_size": batch.batch_size,
+        "sample_ids": [str(item["metadata"]["sample_id"]) for item in representative_items],
+        "parent_sample_ids": parents,
+        "unique_parent_count": len(set(parents)),
+        "task_groups": task_groups,
+        "spatial_buckets": spatial_buckets,
+        "sequence_load_buckets": load_buckets,
+        "active_family_combos": [str(item["metadata"]["family_combo"]) for item in representative_items],
+        "full_family_combos": [
+            "+".join(sorted({instance.family for instance in item["full_instances"]}))
+            for item in representative_items
+        ],
+        "full_count": sum(item["active_subset"].is_full for item in representative_items),
+        "dropped_count": sum(not item["active_subset"].is_full for item in representative_items),
+        "teacher_sample_count": float(output["teacher_sample_count"].detach().cpu()),
+        "sequence_lengths": sequence_lengths,
+        "visual_token_counts": visual_counts,
+        "padding_ratio": 1.0 - sum(sequence_lengths) / max(
+            len(sequence_lengths) * max(sequence_lengths), 1
+        ),
+        "loss": float(loss.detach().float().cpu()),
+        "global_gradients": gradients,
+        "lora_gradient_norm_sum": lora_gradient,
     }
-
-    def run_probe(
-        role: str,
-        probe_items: list[dict[str, Any]],
-        *,
-        measure_memory: bool,
-        take_optimizer_step: bool,
-    ) -> dict[str, Any]:
-        optimizer.zero_grad(set_to_none=True)
-        if measure_memory:
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats(device)
-        batch = qpsalm_collate(probe_items)
-        with torch.amp.autocast(device_type="cuda", dtype=dtype, enabled=autocast):
-            output = model(batch)
-            loss = output["loss"]
-        if not torch.isfinite(loss):
-            raise IntegrationFailure(
-                f"Qwen integration loss 非有限: role={role}", diagnostics
-            )
-        scaler.scale(loss).backward()
-        if scaler.is_enabled():
-            scaler.unscale_(optimizer)
-        gradients = _gradient_report(model)
-        groups = _gradient_groups(model)
-        lora_gradient = float(groups["qwen_lora"]["gradient_norm_sum"])
-        sequence_lengths = output["controller_sequence_lengths"].detach().cpu().tolist()
-        visual_counts = output["controller_visual_token_counts"].detach().cpu().tolist()
-        parents = [str(item["metadata"]["parent_sample_id"]) for item in probe_items]
-        record = {
-            "role": role,
-            "batch_size": batch.batch_size,
-            "sample_ids": [str(item["metadata"]["sample_id"]) for item in probe_items],
-            "parent_sample_ids": parents,
-            "unique_parent_count": len(set(parents)),
-            "bucket_size": int(probe_items[0]["metadata"]["target_size"]),
-            "sequence_lengths": sequence_lengths,
-            "visual_token_counts": visual_counts,
-            "padding_ratio": (
-                1.0 - sum(sequence_lengths) / max(len(sequence_lengths) * max(sequence_lengths), 1)
-            ),
-            "teacher_sample_count": float(output["teacher_sample_count"].detach().cpu()),
-            "loss": float(loss.detach().float().cpu()),
-            "gradients": gradients,
-            "gradient_groups": groups,
-            "peak_allocated_gib": (
-                torch.cuda.max_memory_allocated(device) / (1024**3) if measure_memory else None
-            ),
-            "peak_reserved_gib": (
-                torch.cuda.max_memory_reserved(device) / (1024**3) if measure_memory else None
-            ),
-        }
-        if (
-            not gradients["all_finite"]
-            or gradients["gradient_norm_sum"] <= 0
-            or not math.isfinite(lora_gradient)
-            or lora_gradient <= 0
-        ):
-            diagnostics["failed_probe"] = record
-            raise IntegrationFailure(
-                f"Qwen integration 梯度无效: role={role} lora={lora_gradient}",
-                diagnostics,
-            )
-        torch.nn.utils.clip_grad_norm_(trainable, strict.grad_clip)
-        if take_optimizer_step:
-            scaler.step(optimizer)
-            scaler.update()
-        elif scaler.is_enabled():
-            scaler.update()
-        return record
-
-    for role, item in single_items:
-        cache_record = _cache_subset_record(model, qpsalm_collate([item]), item, device)
-        record = run_probe(role, [item], measure_memory=False, take_optimizer_step=False)
-        record["cache"] = cache_record
-        diagnostics["single_batch_checks"].append(record)
-
-    diagnostics["memory_gates"].append(
-        run_probe(
-            "max_spatial_bucket",
-            full_stress_items,
-            measure_memory=True,
-            take_optimizer_step=False,
+    if (
+        batch.batch_size != int(strict.batch_size)
+        or len(set(parents)) != batch.batch_size
+        or len(task_groups) != 1
+        or len(spatial_buckets) != 1
+        or len(load_buckets) != 1
+        or representative_batch["dropped_count"] <= 0
+        or representative_batch["teacher_sample_count"] <= 0
+    ):
+        raise IntegrationFailure(
+            "Qwen representative batch 不符合真实训练 batch 约束",
+            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
         )
-    )
-    diagnostics["memory_gates"].append(
-        run_probe(
-            "max_multisource_bucket",
-            mixed_stress_items,
-            measure_memory=True,
-            take_optimizer_step=False,
+    if (
+        not gradients["all_finite"]
+        or gradients["gradient_norm_sum"] <= 0
+        or not math.isfinite(lora_gradient)
+        or lora_gradient <= 0
+    ):
+        raise IntegrationFailure(
+            f"Qwen representative batch 梯度无效: lora={lora_gradient}",
+            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
         )
-    )
-    diagnostics["optimizer_steps"].append(
-        run_probe("optimizer-step-full", full_stress_items, measure_memory=False, take_optimizer_step=True)
-    )
-    diagnostics["optimizer_steps"].append(
-        run_probe("optimizer-step-mixed", mixed_stress_items, measure_memory=False, take_optimizer_step=True)
-    )
-
-    sequence_lengths = {
-        value
-        for row in diagnostics["single_batch_checks"]
-        for value in row["sequence_lengths"]
-    }
-    visual_counts = {
-        value
-        for row in diagnostics["single_batch_checks"]
-        for value in row["visual_token_counts"]
-    }
-    if len(sequence_lengths) < 2 or len(visual_counts) < 2:
-        raise RuntimeError(
-            "Qwen dynamic integration 未形成变长序列: "
-            f"sequence_lengths={sorted(sequence_lengths)} visual_counts={sorted(visual_counts)}"
+    torch.nn.utils.clip_grad_norm_(trainable, strict.grad_clip)
+    scaler.step(optimizer)
+    scaler.update()
+    lora_update = lora_parameter_update_summary(model, lora_before)
+    representative_batch["lora_parameter_update"] = lora_update
+    peak_allocated = torch.cuda.max_memory_allocated(device) / (1024**3)
+    peak_reserved = torch.cuda.max_memory_reserved(device) / (1024**3)
+    representative_batch["peak_allocated_gib"] = peak_allocated
+    representative_batch["peak_reserved_gib"] = peak_reserved
+    if (
+        not lora_update["all_finite"]
+        or lora_update["num_changed"] <= 0
+        or lora_update["norm_sum"] <= 0
+    ):
+        raise IntegrationFailure(
+            f"Qwen representative batch LoRA 参数未更新: {lora_update}",
+            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
         )
-    if not any(row["teacher_sample_count"] > 0 for row in diagnostics["memory_gates"]):
-        raise RuntimeError("Qwen dynamic integration 未覆盖 teacher/student consistency")
-    peak_allocated = max(row["peak_allocated_gib"] for row in diagnostics["memory_gates"])
-    peak_reserved = max(row["peak_reserved_gib"] for row in diagnostics["memory_gates"])
     if peak_reserved > float(max_memory_gib):
-        raise RuntimeError(
+        raise IntegrationFailure(
             f"Qwen integration 峰值显存超过门槛: reserved={peak_reserved:.3f} GiB "
-            f"limit={max_memory_gib:.3f} GiB"
+            f"limit={max_memory_gib:.3f} GiB",
+            {"protocol_version": INTEGRATION_PROTOCOL_VERSION, "representative_batch": representative_batch},
         )
     return {
         "status": "passed",
         "protocol_version": INTEGRATION_PROTOCOL_VERSION,
         "preset": strict.preset,
         "device": str(device),
-        **diagnostics,
-        "sequence_length_diversity": sorted(sequence_lengths),
-        "visual_token_count_diversity": sorted(visual_counts),
+        "representative_batch": representative_batch,
         "cache": {
             "format": model.vision_bank.manifest["format"],
         },

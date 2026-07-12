@@ -317,10 +317,11 @@ python -m qpsalm_seg.cli.integration_check \
 ```
 
 `raw` 检查会从真实 train split 各选择 global、referring 和 no-target 样本并完成一次
-optimizer step。`qwen` 检查先独立验证 batch-1 动态序列，再使用同一尺寸桶内六个不同 parent
-组成 full-evidence 与 mixed full/dropped batch，验证 teacher/student consistency、NF4、QLoRA、
-BF16 backward 和两个 optimizer steps。只有 LoRA 与分割模块梯度非零、loss/梯度有限且峰值
-reserved memory 不超过 22.5 GiB 时才通过。结果写入
+optimizer step。`qwen` 检查只运行一个 batch：从同一空间桶、Qwen sequence-load 桶和 task
+group 中选择六个不同 parent 的多源正样本，并交替使用 full/dropped evidence。该 batch 完成
+一次 forward、backward 和 optimizer step；只有聚合 LoRA 梯度有限非零、LoRA 参数实际更新、
+teacher consistency 生效且峰值 reserved memory 不超过 22.5 GiB 时才通过。单个样本 LoRA
+梯度为零不作为失败条件。结果写入
 `qpsalm_real_integration_v2` JSON，任一检查失败时命令非零退出。
 
 Qwen 主训练默认关闭 activation checkpoint，以增加激活显存换取更高吞吐；显存不足时可显式

@@ -87,7 +87,7 @@ if [[ "${PRESET}" == "qwen_psalm_full" && "${MEMORY_GATE}" == "1" ]]; then
   GATE_REPORT="outputs/qpsalm_v2/cache/integration_${BENCHMARK_SIZE}_${PRESET}_seed${SEED}_${CONFIG_HASH}.json"
   GATE_PASSED=0
   if [[ -f "${GATE_REPORT}" ]] && "${PYTHON_BIN}" -c \
-    'import json,sys; d=json.load(open(sys.argv[1])); q=d.get("checks",{}).get("qwen",{}); ok=d.get("acceptance",{}).get("passed") and q.get("protocol_version")=="qwen_batch_gradient_v3"; raise SystemExit(0 if ok else 1)' \
+    'import json,sys; d=json.load(open(sys.argv[1])); q=d.get("checks",{}).get("qwen",{}); ok=d.get("acceptance",{}).get("passed") and q.get("protocol_version")=="qwen_representative_batch_v4"; raise SystemExit(0 if ok else 1)' \
     "${GATE_REPORT}"; then
     GATE_PASSED=1
   fi
