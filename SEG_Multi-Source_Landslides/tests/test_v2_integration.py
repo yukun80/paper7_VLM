@@ -21,7 +21,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from qpsalm_seg.cli.cache_qwen_vision_features import main as cache_vision_main
-from qpsalm_seg.cli.integration_check import main as integration_check_main
+from qpsalm_seg.cli.integration_check import (
+    main as integration_check_main,
+    select_qwen_dynamic_indices,
+    select_stress_batch_indices,
+)
 from qpsalm_seg.config import QPSalmConfig, save_config
 from qpsalm_seg.data import MultiSourceLandslideDataset, qpsalm_collate
 from qpsalm_seg.engine.checkpoint import load_checkpoint
@@ -162,6 +166,61 @@ class BenchmarkV2IntegrationTest(unittest.TestCase):
             missing_modality_consistency_weight=0.0,
         )
 
+    def test_qwen_dynamic_selection_requires_three_evidence_layouts(self) -> None:
+        def row(*families: str) -> dict:
+            return {
+                "modalities": {
+                    f"modality_{index}": {"family": family, "available": True}
+                    for index, family in enumerate(families)
+                }
+            }
+
+        dataset = type("Rows", (), {"rows": [
+            row("optical"),
+            row("multispectral", "terrain"),
+            row("deformation", "multispectral", "terrain"),
+        ]})()
+        self.assertEqual(
+            select_qwen_dynamic_indices(dataset),
+            {"optical": 0, "multispectral": 1, "multisource": 2},
+        )
+        incomplete = type("Rows", (), {"rows": [row("optical"), row("multispectral")]})()
+        with self.assertRaisesRegex(RuntimeError, "缺少证据布局"):
+            select_qwen_dynamic_indices(incomplete)
+
+    def test_memory_gate_selects_largest_multisource_bucket(self) -> None:
+        def row(
+            sample_id: str, families: tuple[str, ...], bucket: int, *, empty: bool = False
+        ) -> dict:
+            return {
+                "sample_id": sample_id,
+                "bucket": bucket,
+                "task_family": "no_target_segmentation" if empty else "global_landslide_segmentation",
+                "mask": {"empty_mask": empty},
+                "modalities": {
+                    f"modality_{index}": {"family": family, "available": True}
+                    for index, family in enumerate(families)
+                },
+            }
+
+        rows = [
+            row("small", ("multispectral", "terrain", "sar"), 64),
+            row("large", ("multispectral", "terrain", "deformation"), 256),
+            row("optical", ("optical",), 384),
+            row("zzz-no-target", ("optical",), 384, empty=True),
+            row("zzz-multisource-no-target", ("multispectral", "terrain", "sar"), 256, empty=True),
+        ]
+        dataset = type("Rows", (), {
+            "rows": rows,
+            "bucket_size": lambda self, index: self.rows[index]["bucket"],
+        })()
+        self.assertEqual(
+            select_stress_batch_indices(dataset, 1, multisource_only=True), [1]
+        )
+        self.assertEqual(
+            select_stress_batch_indices(dataset, 1, multisource_only=False), [2]
+        )
+
     def test_strict_v2_train_reload_and_eval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = self._fixture(Path(directory))
@@ -169,6 +228,8 @@ class BenchmarkV2IntegrationTest(unittest.TestCase):
             run_dir = Path(result["output_dir"])
             self.assertTrue((run_dir / "checkpoint_last.pt").exists())
             self.assertTrue((run_dir / "validation_latest.json").exists())
+            self.assertTrue((run_dir / "train_history.jsonl").exists())
+            self.assertTrue((run_dir / "monitor_val_manifest.json").exists())
             dataset = MultiSourceLandslideDataset(config, "val")
             batch = qpsalm_collate([dataset[0]])
             self.assertEqual(batch.metadata[0]["valid_coverage"], 22 / 32)
@@ -268,7 +329,7 @@ class BenchmarkV2IntegrationTest(unittest.TestCase):
             ]):
                 integration_check_main()
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            self.assertEqual(report["format"], "qpsalm_real_integration_v1")
+            self.assertEqual(report["format"], "qpsalm_real_integration_v2")
             self.assertTrue(report["acceptance"]["passed"])
             self.assertEqual(set(report["checks"]["raw"]["selected_indices"]), {
                 "global", "referring", "no_target",

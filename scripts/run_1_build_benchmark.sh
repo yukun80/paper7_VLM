@@ -13,7 +13,8 @@
 # 写入行为：不会改写 datasets/，只写 benchmark/ 派生产物。
 # 所属流程：主数据流程第 1 阶段；完成后再运行 run_2_build_instruction_dataset.sh。
 # 特别说明：1-6 不读取 datasets/，只基于已物化的 benchmark/data/**/mask.npy 生成结构化指代目标；训练文本由 2-instruction 生成。
-# 环境变量覆盖：SMALL_LIMIT 默认 1000，可用 SMALL_LIMIT=100 临时降低；
+# 环境变量覆盖：SMALL_LIMIT 默认 1000，表示每个 dataset_name + split 的父样本上限；
+# 可用 SMALL_LIMIT=100 临时降低，但它不是整个 train/val/test split 的总上限；
 # DATASETS_ROOT、BENCHMARK_PREFIX、SEED、PYTHON_BIN、USE_EXTENDED_POOL、SEN12_MODAL_POLICY 也可覆盖；
 # 默认 PYTHON_BIN=python，建议先 conda activate qwen3vl。
 #

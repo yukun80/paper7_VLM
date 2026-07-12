@@ -333,6 +333,15 @@ def count_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for row in rows
         if row.get("task_family") in {"referring_landslide_segmentation", "no_target_segmentation"}
     )
+    parent_ids_by_split: dict[str, set[str]] = {}
+    families_by_split: dict[str, Counter[str]] = {}
+    for row in rows:
+        split = str(row.get("split", "unknown"))
+        parent_ids_by_split.setdefault(split, set()).add(
+            str(row.get("parent_sample_id") or row.get("sample_id"))
+        )
+        families_by_split.setdefault(split, Counter())[str(row.get("task_family", "unknown"))] += 1
+    parent_counts = {key: len(value) for key, value in sorted(parent_ids_by_split.items())}
     return {
         "num_samples": len(rows),
         "by_split": dict(sorted(by_split.items())),
@@ -340,6 +349,15 @@ def count_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "by_task_family": dict(sorted(by_family.items())),
         "by_modality_combo": dict(sorted(by_combo.items())),
         "referring_by_category": dict(sorted(referring_categories.items())),
+        "parents_by_split": parent_counts,
+        "instructions_per_parent_by_split": {
+            split: float(by_split[split]) / max(parent_counts.get(split, 0), 1)
+            for split in sorted(by_split)
+        },
+        "task_family_by_split": {
+            split: dict(sorted(values.items()))
+            for split, values in sorted(families_by_split.items())
+        },
     }
 
 

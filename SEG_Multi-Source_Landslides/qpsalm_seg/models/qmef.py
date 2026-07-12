@@ -190,7 +190,9 @@ class QwenGuidedEvidenceFusion(nn.Module):
                 for scale in stacks:
                     stacks[scale][bi, mi] = local_features[scale]
                     valids[scale][bi, mi] = local_valids[scale]
-                cov = pyramid.instance.valid_mask.to(device=device, dtype=dtype).mean().clamp(0, 1)
+                cov = pyramid.instance.valid_mask.to(
+                    device=device, dtype=dtype, non_blocking=True
+                ).mean().clamp(0, 1)
                 coverage[bi, mi] = cov
                 if enable_reliability:
                     reliability_input = torch.cat([pooled, pyramid.metadata_token, family_semantic, cov[None]])

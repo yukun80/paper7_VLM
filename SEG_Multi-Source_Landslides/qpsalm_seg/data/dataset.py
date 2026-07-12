@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import math
 import random
-from collections import Counter
+from collections import Counter, defaultdict, deque
 from typing import Any
 
 import torch
@@ -15,6 +16,7 @@ from torch.utils.data import Dataset
 
 from qpsalm_seg.config import QPSalmConfig
 from qpsalm_seg.indexing import iter_jsonl, should_skip_row
+from qpsalm_seg.matching import component_masks
 from qpsalm_seg.paths import resolve_project_path
 from qpsalm_seg.schema import ActiveModalitySubset, ModalityBatch, ModalityInstance
 
@@ -75,6 +77,86 @@ def choose_active_subset(
     )
 
 
+def _row_family_combo(row: dict[str, Any]) -> str:
+    families = {
+        str(item.get("family") or "unknown")
+        for item in (row.get("modalities") or {}).values()
+        if isinstance(item, dict) and item.get("available", True)
+    }
+    return "+".join(sorted(families)) or "unknown"
+
+
+def select_monitor_rows(
+    rows: list[dict[str, Any]], limit: int | None, seed: int
+) -> list[dict[str, Any]]:
+    """Build a deterministic, parent-aware validation monitor subset."""
+    if limit is None or limit <= 0 or len(rows) <= limit:
+        return list(rows)
+
+    by_parent: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        parent = str(row.get("parent_sample_id") or row.get("sample_id"))
+        by_parent[parent].append(row)
+
+    bundles: dict[tuple[str, str, tuple[str, ...], str], list[list[dict[str, Any]]]] = defaultdict(list)
+    for parent, parent_rows in sorted(by_parent.items()):
+        rng = random.Random(f"{seed}:{parent}")
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in parent_rows:
+            grouped[task_group(row)].append(row)
+        selected: list[dict[str, Any]] = []
+        for group in ("global", "referring", "no_target"):
+            candidates = sorted(grouped.get(group, []), key=lambda item: str(item.get("sample_id")))
+            if candidates:
+                selected.append(candidates[rng.randrange(len(candidates))])
+        referring = sorted(grouped.get("referring", []), key=lambda item: str(item.get("sample_id")))
+        if len(referring) > 1:
+            categories = {
+                str((item.get("referring_target") or {}).get("category")) for item in selected
+            }
+            extra = next(
+                (
+                    item for item in referring
+                    if str((item.get("referring_target") or {}).get("category")) not in categories
+                ),
+                None,
+            )
+            if extra is not None:
+                selected.append(extra)
+        first = selected[0]
+        family_set = tuple(sorted({task_group(item) for item in selected}))
+        polarity = "no_target_pair" if grouped.get("no_target") else "positive_only"
+        key = (
+            str(first.get("dataset_name") or "unknown"),
+            _row_family_combo(first),
+            family_set,
+            polarity,
+        )
+        bundles[key].append(selected)
+
+    queues: dict[tuple[str, str, tuple[str, ...], str], deque[list[dict[str, Any]]]] = {}
+    for index, (key, values) in enumerate(sorted(bundles.items())):
+        random.Random(seed + index).shuffle(values)
+        queues[key] = deque(values)
+
+    output: list[dict[str, Any]] = []
+    keys = list(queues)
+    cursor = 0
+    while keys and len(output) < limit:
+        key = keys[cursor % len(keys)]
+        bundle = queues[key].popleft()
+        remaining = limit - len(output)
+        output.extend(bundle[:remaining])
+        if not queues[key]:
+            keys.remove(key)
+            if not keys:
+                break
+            cursor %= len(keys)
+        else:
+            cursor += 1
+    return output
+
+
 class MultiSourceLandslideDataset(Dataset):
     """Strict v2 instruction dataset; legacy modality inference is intentionally unsupported."""
 
@@ -84,6 +166,7 @@ class MultiSourceLandslideDataset(Dataset):
         split: str,
         max_samples: int | None = None,
         shuffle_seed: int | None = None,
+        monitor_seed: int | None = None,
     ) -> None:
         self.config = config
         self.split = split
@@ -104,7 +187,10 @@ class MultiSourceLandslideDataset(Dataset):
                     f"schema={row.get('schema_version')!r}"
                 )
             rows.append(row)
-        if max_samples is not None and max_samples > 0 and len(rows) > max_samples:
+        self.full_row_count = len(rows)
+        if monitor_seed is not None:
+            rows = select_monitor_rows(rows, max_samples, monitor_seed)
+        elif max_samples is not None and max_samples > 0 and len(rows) > max_samples:
             grouped: dict[str, list[dict[str, Any]]] = {"global": [], "referring": [], "no_target": []}
             for row in rows:
                 grouped[task_group(row)].append(row)
@@ -170,6 +256,29 @@ class MultiSourceLandslideDataset(Dataset):
         longest = max(int(shape[-2]), int(shape[-1])) if shape and len(shape) >= 2 else self.target_size
         requested = min(longest, buckets[-1])
         return next((value for value in buckets if value >= requested), buckets[-1])
+
+    def sequence_load_bucket(self, index: int) -> int:
+        """Estimate Qwen sequence load without tokenizing or reading image arrays."""
+        row = self.rows[index]
+        instruction = str((row.get("instruction") or {}).get("text") or "")
+        view_count = 0
+        for item in (row.get("modalities") or {}).values():
+            if not isinstance(item, dict) or not item.get("available", True):
+                continue
+            family = str(item.get("family") or "unknown")
+            product = str(item.get("product_type") or "unknown")
+            if family == "multispectral" and product not in {"rgb", "true_color"}:
+                view_count += 2
+            else:
+                view_count += 1
+        estimated_tokens = (
+            max(1, len(instruction) // 4)
+            + view_count * (int(self.config.qwen_view_tokens_per_view) + 12)
+            + int(self.config.num_mask_tokens)
+            + 48
+        )
+        width = 32
+        return int(math.ceil(estimated_tokens / width) * width)
 
     def _load_instances(self, row: dict[str, Any], target_size: int) -> list[ModalityInstance]:
         aligned_gsd = effective_canvas_gsd(row, target_size)
@@ -320,6 +429,12 @@ class MultiSourceLandslideDataset(Dataset):
             "prompt_version": PROMPT_VERSION,
             "instruction_ablation": ablation,
         }
+        components = component_masks(
+            mask[0],
+            valid_mask[0],
+            float(self.config.min_component_area_fraction),
+            int(self.config.min_component_area_pixels),
+        )
         return {
             "instances": active_instances,
             "full_instances": full_instances,
@@ -334,6 +449,7 @@ class MultiSourceLandslideDataset(Dataset):
             "full_condition_prompt_text": full_condition,
             "full_evidence_reasoning_text": full_reasoning,
             "visual_evidence_key": cache_key,
+            "component_masks": components,
         }
 
 
@@ -355,4 +471,5 @@ def qpsalm_collate(batch: list[dict[str, Any]]) -> ModalityBatch:
         full_condition_prompt_text=[item["full_condition_prompt_text"] for item in batch],
         full_evidence_reasoning_text=[item["full_evidence_reasoning_text"] for item in batch],
         visual_evidence_key=[item["visual_evidence_key"] for item in batch],
+        component_masks=[item["component_masks"] for item in batch],
     )

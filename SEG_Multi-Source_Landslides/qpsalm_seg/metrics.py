@@ -10,6 +10,35 @@ from typing import Any
 import torch
 
 
+def batch_binary_metric_tensors(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    threshold: float = 0.5,
+    valid_mask: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    """GPU-friendly train metrics with the same empty-mask semantics as evaluation."""
+    pred = torch.sigmoid(logits) >= float(threshold)
+    target_bool = target >= 0.5
+    valid = torch.ones_like(target_bool) if valid_mask is None else valid_mask >= 0.5
+    if valid.shape[-2:] != target_bool.shape[-2:]:
+        valid = torch.nn.functional.interpolate(
+            valid.float(), size=target_bool.shape[-2:], mode="nearest"
+        ) >= 0.5
+    dims = tuple(range(1, pred.ndim))
+    tp = (pred & target_bool & valid).sum(dims).float()
+    fp = (pred & ~target_bool & valid).sum(dims).float()
+    fn = (~pred & target_bool & valid).sum(dims).float()
+    target_positive = (target_bool & valid).any(dim=dims)
+    pred_positive = (pred & valid).any(dim=dims)
+    empty_score = (~pred_positive).float()
+    dice = (2.0 * tp) / (2.0 * tp + fp + fn + 1.0e-6)
+    iou = tp / (tp + fp + fn + 1.0e-6)
+    return {
+        "dice": torch.where(target_positive, dice, empty_score).mean().detach(),
+        "iou": torch.where(target_positive, iou, empty_score).mean().detach(),
+    }
+
+
 def batch_binary_metrics(
     logits: torch.Tensor,
     target: torch.Tensor,

@@ -35,7 +35,12 @@ class MultiSourceQwenPSALMSeg(nn.Module):
         if needs_cache and not cache_path:
             raise ValueError(f"preset={config.preset} 需要 vision_feature_cache v3")
         self.vision_bank = (
-            QwenVisionFeatureBank(cache_path, dim, visual_ablation=config.visual_ablation)
+            QwenVisionFeatureBank(
+                cache_path,
+                dim,
+                ram_budget_gib=float(config.vision_cache_ram_budget_gib),
+                visual_ablation=config.visual_ablation,
+            )
             if needs_cache and cache_path else None
         )
         if self.vision_bank is not None:
@@ -121,6 +126,12 @@ class MultiSourceQwenPSALMSeg(nn.Module):
             masks, coarse_masks, relevance, queries, query_evidence,
             modality_weights, scale_weights, spatial_entropy,
         )
+        sequence_lengths = masks.new_tensor(semantic.sequence_lengths, dtype=torch.long)
+        visual_token_counts = masks.new_tensor(semantic.visual_token_counts, dtype=torch.long)
+        max_sequence_length = sequence_lengths.max().clamp_min(1)
+        padding_ratio = 1.0 - sequence_lengths.float().sum() / (
+            max(sequence_lengths.numel(), 1) * max_sequence_length.float()
+        )
         return SegmentationOutput(
             final_mask_logits=self.pmrd.compose_final_mask(masks, relevance),
             proposals=proposals,
@@ -137,6 +148,10 @@ class MultiSourceQwenPSALMSeg(nn.Module):
                 "query_scale_attention_peak": scale_weights.max(2).values.mean(1).detach(),
                 "query_sampling_reference": sampling_reference.detach(),
                 "query_sampling_grid": sampling_grid.detach(),
+                "controller_sequence_lengths": sequence_lengths,
+                "controller_visual_token_counts": visual_token_counts,
+                "controller_tokens_per_sample": sequence_lengths.float().mean(),
+                "controller_padding_ratio": padding_ratio,
                 **(
                     {"visual_evidence_delta_norm": semantic.visual_delta_norm.detach()}
                     if semantic.visual_delta_norm is not None
@@ -167,17 +182,39 @@ class MultiSourceQwenPSALMSeg(nn.Module):
         if not isinstance(batch, ModalityBatch):
             raise TypeError(f"expected ModalityBatch, got {type(batch).__name__}")
         consistency_weight = float(self.config.missing_modality_consistency_weight)
+        dropped_indices = [
+            index for index, subset in enumerate(batch.active_subsets) if not subset.is_full
+        ]
         teacher_logits = None
-        has_dropped = any(not subset.is_full for subset in batch.active_subsets)
-        if self.training and consistency_weight > 0 and has_dropped:
-            teacher_logits = self._teacher_mask_logits(batch)
+        if self.training and consistency_weight > 0 and dropped_indices:
+            teacher_logits = self._teacher_mask_logits(batch.select(dropped_indices))
         semantic = self.controller.encode_batch(batch, use_full=False)
         output = self._decode(batch, semantic, use_full=False)
-        valid = batch.valid_mask.to(device=output.final_mask_logits.device, dtype=output.final_mask_logits.dtype)
+        valid = batch.valid_mask.to(
+            device=output.final_mask_logits.device,
+            dtype=output.final_mask_logits.dtype,
+            non_blocking=True,
+        )
         consistency = (
-            self._consistency_loss(output.final_mask_logits, teacher_logits, valid)
+            self._consistency_loss(
+                output.final_mask_logits.index_select(
+                    0,
+                    torch.tensor(dropped_indices, device=output.final_mask_logits.device),
+                ),
+                teacher_logits,
+                valid.index_select(
+                    0,
+                    torch.tensor(dropped_indices, device=valid.device),
+                ),
+            )
             if teacher_logits is not None
             else output.final_mask_logits.sum() * 0.0
+        )
+        output.diagnostics["teacher_sample_count"] = output.final_mask_logits.new_tensor(
+            float(len(dropped_indices))
+        )
+        output.diagnostics["teacher_sample_fraction"] = output.final_mask_logits.new_tensor(
+            float(len(dropped_indices)) / max(batch.batch_size, 1)
         )
         output.update_losses(
             proposal_set_losses(

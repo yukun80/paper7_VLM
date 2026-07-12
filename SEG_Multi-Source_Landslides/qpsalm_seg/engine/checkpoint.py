@@ -21,9 +21,14 @@ ARCHITECTURE_FIELDS = (
     "preset", "controller", "decoder_dim", "num_heads", "num_decoder_layers",
     "num_mask_tokens", "use_pretrained_sane", "use_qmef",
     "use_query_spatial_attention", "use_mask_refinement", "deformable_points",
-    "query_chunk_size", "qwen_4bit", "qwen_lora_rank", "qwen_lora_alpha",
-    "qwen_lora_dropout", "qwen_lora_last_n_layers", "qwen_view_tokens_per_view",
-    "qwen_max_text_tokens", "qwen_view_pooling",
+    "qwen_4bit", "qwen_lora_rank", "qwen_lora_alpha",
+    "qwen_lora_dropout", "qwen_lora_last_n_layers",
+    "qwen_view_tokens_per_view",
+    "qwen_max_text_tokens", "qwen_view_pooling", "qwen_attn_implementation",
+)
+RUNTIME_FIELDS = (
+    "batch_size", "grad_accum_steps", "query_chunk_size",
+    "qwen_gradient_checkpointing", "amp_dtype",
 )
 
 
@@ -66,6 +71,7 @@ def save_checkpoint(
     config: QPSalmConfig,
     update_last: bool = True,
     include_optimizer: bool = True,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> None:
     trainable = {name for name, parameter in model.named_parameters() if parameter.requires_grad}
     excluded_prefixes = ("controller.model.",)
@@ -81,11 +87,14 @@ def save_checkpoint(
         "excluded_frozen_prefixes": list(excluded_prefixes),
         "trainable_parameter_names": sorted(trainable),
         "architecture_spec": architecture_spec(config),
+        "runtime_spec": {name: getattr(config, name) for name in RUNTIME_FIELDS},
         "evidence_protocol": evidence_protocol(model),
         "config": dict(config.__dict__),
     }
     if include_optimizer:
         payload["optimizer_state"] = optimizer.state_dict()
+        if scaler is not None and scaler.is_enabled():
+            payload["grad_scaler_state"] = scaler.state_dict()
     _atomic_save(payload, path)
     last = path.parent / "checkpoint_last.pt"
     if update_last and last != path:
@@ -114,6 +123,7 @@ def load_checkpoint(
     path: str | Path,
     model: MultiSourceQwenPSALMSeg,
     optimizer: torch.optim.Optimizer | None = None,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> int:
     checkpoint = torch.load(Path(path), map_location="cpu", weights_only=False)
     if checkpoint.get("format") != CHECKPOINT_FORMAT:
@@ -143,4 +153,6 @@ def load_checkpoint(
         )
     if optimizer is not None and "optimizer_state" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state"])
+    if scaler is not None and scaler.is_enabled() and "grad_scaler_state" in checkpoint:
+        scaler.load_state_dict(checkpoint["grad_scaler_state"])
     return int(checkpoint.get("step", 0))

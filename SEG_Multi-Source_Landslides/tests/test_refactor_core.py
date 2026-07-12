@@ -20,22 +20,35 @@ import tempfile
 import unittest
 import re
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import torch
 from torch.utils.data._utils.pin_memory import pin_memory as torch_pin_memory
 
-from qpsalm_seg.config import QPSalmConfig
-from qpsalm_seg.controllers import QwenMaskQueryController, local_model_revision
+from qpsalm_seg.config import QPSalmConfig, load_config
+from qpsalm_seg.controllers import (
+    QwenMaskQueryController,
+    configure_qwen_gradient_checkpointing,
+    local_model_revision,
+    pad_qwen_sequences,
+    qwen_gradient_checkpointing_kwargs,
+)
 from qpsalm_seg.cli.cache_qwen_vision_features import restore_qwen_patch_grid
 from qpsalm_seg.cli.ablation_report import build_ablation_report
 from qpsalm_seg.cli.compare_runs import compare_seed_series
+from qpsalm_seg.cli.integration_check import select_stress_batch_indices
+from qpsalm_seg.cli.summarize_run import train_history_summary
 from qpsalm_seg.data import build_prompt_triplet, modality_valid_mask, resize_pad_tensor, swap_padding_after_flip
 from qpsalm_seg.data.prompts import PROMPT_VERSION, transform_spatial_instruction
-from qpsalm_seg.data.dataset import MultiSourceLandslideDataset, effective_canvas_gsd, scaled_band_metadata
+from qpsalm_seg.data.dataset import (
+    MultiSourceLandslideDataset,
+    effective_canvas_gsd,
+    scaled_band_metadata,
+    select_monitor_rows,
+)
 from qpsalm_seg.data.samplers import TaskBalancedSizeBucketBatchSampler, task_group
 from qpsalm_seg.matching import assign_proposals
-from qpsalm_seg.metrics import batch_binary_metrics
+from qpsalm_seg.metrics import batch_binary_metric_tensors, batch_binary_metrics
 from qpsalm_seg.models import MultiSourceQwenPSALMSeg
 from qpsalm_seg.models.sane import SensorAwareNativeScaleEncoder
 from qpsalm_seg.models.pmrd import ProposalSetMaskRefinementDecoder
@@ -133,7 +146,94 @@ def synthetic_batch(instances: list[ModalityInstance], components: int = 2, size
     )
 
 
+def repeat_batch(batch: ModalityBatch, count: int) -> ModalityBatch:
+    def repeat(values):
+        return [values[0] for _ in range(count)]
+
+    return ModalityBatch(
+        instances=repeat(batch.instances),
+        full_instances=repeat(batch.full_instances),
+        active_subsets=repeat(batch.active_subsets),
+        mask=batch.mask.repeat(count, 1, 1, 1),
+        valid_mask=batch.valid_mask.repeat(count, 1, 1, 1),
+        metadata=[{**batch.metadata[0], "sample_id": f"synthetic-{index}", "parent_sample_id": f"parent-{index}"} for index in range(count)],
+        proposal_context_text=repeat(batch.proposal_context_text),
+        condition_prompt_text=repeat(batch.condition_prompt_text),
+        evidence_reasoning_text=repeat(batch.evidence_reasoning_text),
+        full_proposal_context_text=repeat(batch.full_proposal_context_text),
+        full_condition_prompt_text=repeat(batch.full_condition_prompt_text),
+        full_evidence_reasoning_text=repeat(batch.full_evidence_reasoning_text),
+        visual_evidence_key=[f"qmv3-parent:synthetic-{index}" for index in range(count)],
+        component_masks=None,
+    )
+
+
 class ValidMetricTest(unittest.TestCase):
+    def test_throughput_summary_weights_windows_and_preserves_steady_state(self) -> None:
+        summary = train_history_summary([
+            {
+                "step_start": 0, "step_end": 0, "loss": 3.0,
+                "samples_per_sec": 1.0, "qwen_tokens_per_sec": 100.0,
+                "peak_reserved_gib": 10.0,
+            },
+            {
+                "step_start": 1, "step_end": 9, "loss": 2.0,
+                "samples_per_sec": 5.0, "qwen_tokens_per_sec": 500.0,
+                "peak_reserved_gib": 20.0,
+            },
+        ])
+        performance = summary["performance"]
+        self.assertAlmostEqual(performance["weighted_mean"]["samples_per_sec"], 4.6)
+        self.assertEqual(performance["steady_state_last_window"]["samples_per_sec"], 5.0)
+        self.assertEqual(performance["peak_reserved_gib"], 20.0)
+
+    def test_main_yaml_owns_single_gpu_training_budget(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "configs"
+        small = apply_preset(load_config(root / "qpsalm_v2_small.yaml"), None)
+        full = apply_preset(load_config(root / "qpsalm_v2_full.yaml"), None)
+        for config in (small, full):
+            self.assertEqual(config.batch_size, 6)
+            self.assertEqual(config.grad_accum_steps, 1)
+            self.assertEqual(config.query_chunk_size, 16)
+            self.assertEqual(config.amp_dtype, "bf16")
+            self.assertEqual(config.qwen_gradient_checkpointing, "disabled")
+        self.assertEqual(small.batch_size * small.max_steps, 24000)
+        self.assertEqual(full.batch_size * full.max_steps, 80004)
+
+    def test_gpu_train_metrics_match_evaluation_semantics(self) -> None:
+        logits = torch.tensor([[[[-8.0, 8.0]]], [[[-8.0, -8.0]]]])
+        target = torch.tensor([[[[0.0, 1.0]]], [[[0.0, 0.0]]]])
+        valid = torch.ones_like(target)
+        expected = batch_binary_metrics(logits, target, valid_mask=valid)
+        observed = batch_binary_metric_tensors(logits, target, valid_mask=valid)
+        self.assertAlmostEqual(float(observed["dice"]), sum(row["dice"] for row in expected) / 2, places=6)
+        self.assertAlmostEqual(float(observed["iou"]), sum(row["iou"] for row in expected) / 2, places=6)
+
+    def test_monitor_selection_is_parent_aware_and_deterministic(self) -> None:
+        rows = []
+        for dataset in ("a", "b"):
+            for parent_index in range(8):
+                parent = f"{dataset}-{parent_index}"
+                for group, family in (
+                    ("global", "global_landslide_segmentation"),
+                    ("referring", "referring_landslide_segmentation"),
+                    ("no_target", "no_target_segmentation"),
+                ):
+                    rows.append({
+                        "sample_id": f"{parent}-{group}",
+                        "parent_sample_id": parent,
+                        "dataset_name": dataset,
+                        "task_family": family,
+                        "modalities": {"rgb": {"family": "optical", "available": True}},
+                        "referring_target": {"category": "position" if group == "referring" else "no_target"},
+                    })
+        first = select_monitor_rows(rows, 24, 42)
+        second = select_monitor_rows(rows, 24, 42)
+        self.assertEqual([row["sample_id"] for row in first], [row["sample_id"] for row in second])
+        self.assertEqual(len(first), 24)
+        self.assertEqual({row["dataset_name"] for row in first}, {"a", "b"})
+        self.assertEqual({task_group(row) for row in first}, {"global", "referring", "no_target"})
+
     @staticmethod
     def _ablation_bundle(instruction: str, visual: str, score: float) -> dict:
         records = {
@@ -214,6 +314,47 @@ class ValidMetricTest(unittest.TestCase):
             weight.write_bytes(b"other-weight-content")
             second = local_model_revision(root)
             self.assertNotEqual(first, second)
+
+    def test_qwen_checkpoint_protocol_is_explicit(self) -> None:
+        self.assertEqual(
+            qwen_gradient_checkpointing_kwargs("reentrant"),
+            {"use_reentrant": True, "preserve_rng_state": True},
+        )
+        with self.assertRaisesRegex(ValueError, "qwen_gradient_checkpointing"):
+            qwen_gradient_checkpointing_kwargs("non_reentrant")
+
+    def test_qwen_sequence_padding_preserves_variable_length_gradients(self) -> None:
+        sequences = [
+            torch.randn(length, 8, requires_grad=True)
+            for length in (3, 5, 7)
+        ]
+        inputs, attention, lengths = pad_qwen_sequences(sequences)
+        self.assertEqual(tuple(inputs.shape), (3, 7, 8))
+        self.assertEqual(lengths.tolist(), [3, 5, 7])
+        self.assertEqual(attention.sum(1).tolist(), [3, 5, 7])
+        (inputs * attention[..., None]).sum().backward()
+        self.assertTrue(all(value.grad is not None for value in sequences))
+        self.assertTrue(all(torch.isfinite(value.grad).all() for value in sequences))
+
+    def test_qwen_checkpoint_configuration_enables_exactly_once(self) -> None:
+        model = MagicMock()
+        resolved = configure_qwen_gradient_checkpointing(model, "reentrant")
+        model.gradient_checkpointing_enable.assert_called_once_with(
+            gradient_checkpointing_kwargs={
+                "use_reentrant": True,
+                "preserve_rng_state": True,
+            }
+        )
+        model.enable_input_require_grads.assert_called_once_with()
+        model.gradient_checkpointing_disable.assert_not_called()
+        self.assertEqual(resolved["use_reentrant"], True)
+
+    def test_qwen_checkpoint_configuration_can_be_disabled(self) -> None:
+        model = MagicMock()
+        self.assertIsNone(configure_qwen_gradient_checkpointing(model, "disabled"))
+        model.gradient_checkpointing_disable.assert_called_once_with()
+        model.gradient_checkpointing_enable.assert_not_called()
+        model.enable_input_require_grads.assert_not_called()
 
     def test_instruction_shuffle_never_silently_reuses_original_prompt(self) -> None:
         dataset = MultiSourceLandslideDataset.__new__(MultiSourceLandslideDataset)
@@ -456,6 +597,17 @@ class ThreeModuleModelTest(unittest.TestCase):
         qwen = apply_preset(QPSalmConfig(), "qwen_psalm_full")
         self.assertEqual(qwen.size_buckets, [64, 128, 256])
         self.assertEqual(qwen.max_native_size, 256)
+        self.assertEqual(qwen.qwen_gradient_checkpointing, "disabled")
+
+    def test_modality_batch_select_preserves_order_and_payload(self) -> None:
+        batch = repeat_batch(
+            synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32),
+            3,
+        )
+        selected = batch.select([2, 0])
+        self.assertEqual(selected.batch_size, 2)
+        self.assertEqual([row["parent_sample_id"] for row in selected.metadata], ["parent-2", "parent-0"])
+        self.assertEqual(selected.visual_evidence_key, ["qmv3-parent:synthetic-2", "qmv3-parent:synthetic-0"])
 
     def test_sane_baseline_uses_uniform_real_evidence_without_null_gate(self) -> None:
         baseline_config = replace(
@@ -514,6 +666,60 @@ class ThreeModuleModelTest(unittest.TestCase):
             task_group(dataset.rows[index]) for batch in batches for index in batch
         )
         self.assertEqual(counts, {"global": 40, "referring": 40, "no_target": 20})
+
+    def test_sampler_groups_qwen_load_and_avoids_parent_duplicates(self) -> None:
+        class Dataset:
+            rows = [
+                {
+                    "sample_id": f"sample-{index}",
+                    "parent_sample_id": f"parent-{index}",
+                    "task_family": "global_landslide_segmentation",
+                    "load": 128 if index < 3 else 256,
+                }
+                for index in range(6)
+            ]
+
+            def __len__(self):
+                return len(self.rows)
+
+            def bucket_size(self, _index):
+                return 64
+
+            def sequence_load_bucket(self, index):
+                return self.rows[index]["load"]
+
+        dataset = Dataset()
+        sampler = TaskBalancedSizeBucketBatchSampler(
+            dataset, 3, shuffle=False, seed=42, balance_tasks=False
+        )
+        for batch in sampler:
+            self.assertEqual(len({dataset.rows[index]["load"] for index in batch}), 1)
+            self.assertEqual(len({dataset.rows[index]["parent_sample_id"] for index in batch}), len(batch))
+
+    def test_integration_stress_batch_uses_distinct_positive_parents(self) -> None:
+        class Dataset:
+            rows = [
+                {
+                    "sample_id": f"sample-{index}",
+                    "parent_sample_id": f"parent-{index}",
+                    "task_family": "global_landslide_segmentation",
+                    "mask": {"empty_mask": False},
+                    "modalities": {
+                        "s2": {"available": True, "family": "multispectral"},
+                        "s1": {"available": True, "family": "sar"},
+                        "dem": {"available": True, "family": "terrain"},
+                    },
+                }
+                for index in range(8)
+            ]
+
+            def bucket_size(self, _index):
+                return 256
+
+        dataset = Dataset()
+        selected = select_stress_batch_indices(dataset, 6, multisource_only=True)
+        self.assertEqual(len(selected), 6)
+        self.assertEqual(len({dataset.rows[index]["parent_sample_id"] for index in selected}), 6)
 
     def test_active_subset_controls_prompt_and_null_reliability(self) -> None:
         optical = instance("optical_rgb", "optical", 3, 64)
@@ -950,6 +1156,8 @@ class ThreeModuleModelTest(unittest.TestCase):
         controller.view_tokens_per_view = 1
         controller.view_pooling = "tokens"
         controller.visual_ablation = "normal"
+        controller.gradient_checkpointing_mode = "disabled"
+        controller.gradient_checkpointing_kwargs = None
         controller.vision_bank = VisionBank()
         controller.vision_start_token_id = 30
         controller.vision_end_token_id = 31
@@ -1067,6 +1275,25 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertTrue(self.model.training)
         self.assertTrue(self.model.controller.training)
 
+    def test_missing_modality_teacher_only_decodes_dropped_samples(self) -> None:
+        optical = instance("optical_rgb", "optical", 3, 32)
+        terrain = instance("dem", "terrain", 1, 32)
+        batch = repeat_batch(synthetic_batch([optical, terrain], size=32), 2)
+        batch.instances[1] = [optical]
+        batch.active_subsets[1] = ActiveModalitySubset(
+            active_names=("optical_rgb",),
+            dropped_names=("dem",),
+            signature="synthetic-dropped",
+            is_full=False,
+        )
+        config = replace(self.config, missing_modality_consistency_weight=0.1)
+        model = MultiSourceQwenPSALMSeg(config, torch.device("cpu")).train()
+        with patch.object(model, "_teacher_mask_logits", wraps=model._teacher_mask_logits) as teacher:
+            output = model(batch)
+        self.assertEqual(teacher.call_count, 1)
+        self.assertEqual(teacher.call_args.args[0].batch_size, 1)
+        self.assertEqual(float(output["teacher_sample_count"]), 1.0)
+
     def test_v2_forward_backward_is_finite(self) -> None:
         model = MultiSourceQwenPSALMSeg(self.config, torch.device("cpu")).train()
         output = model(synthetic_batch([instance("optical_rgb", "optical", 3, 48)], size=48))
@@ -1118,6 +1345,32 @@ class ThreeModuleModelTest(unittest.TestCase):
             incompatible = MultiSourceQwenPSALMSeg(incompatible_config, torch.device("cpu")).eval()
             with self.assertRaisesRegex(RuntimeError, "architecture spec"):
                 load_checkpoint(path, incompatible)
+
+    def test_checkpoint_roundtrips_enabled_grad_scaler(self) -> None:
+        class FakeScaler:
+            def __init__(self, state=None):
+                self.state = state or {"scale": 1024.0}
+
+            def is_enabled(self):
+                return True
+
+            def state_dict(self):
+                return dict(self.state)
+
+            def load_state_dict(self, state):
+                self.state = dict(state)
+
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=1.0e-4)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "checkpoint_last.pt"
+            save_checkpoint(
+                path, self.model, optimizer, 4, self.config,
+                update_last=False, scaler=FakeScaler({"scale": 2048.0}),
+            )
+            restored = MultiSourceQwenPSALMSeg(self.config, torch.device("cpu")).eval()
+            restored_scaler = FakeScaler()
+            self.assertEqual(load_checkpoint(path, restored, scaler=restored_scaler), 4)
+            self.assertEqual(restored_scaler.state, {"scale": 2048.0})
 
 
 if __name__ == "__main__":

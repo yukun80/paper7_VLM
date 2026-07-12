@@ -144,8 +144,10 @@ class SensorAwareNativeScaleEncoder(nn.Module):
         )
 
     def _encode_instance(self, item: ModalityInstance, device) -> ModalityPyramid:
-        image = item.image.to(device=device, dtype=torch.float32)
-        valid_native = item.valid_mask.to(device=device, dtype=image.dtype)
+        image = item.image.to(device=device, dtype=torch.float32, non_blocking=True)
+        valid_native = item.valid_mask.to(
+            device=device, dtype=image.dtype, non_blocking=True
+        )
         image = image * valid_native
         metadata = self._metadata(item, device, image.dtype)
         band_tokens = torch.stack([

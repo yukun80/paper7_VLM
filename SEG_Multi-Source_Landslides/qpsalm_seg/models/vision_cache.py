@@ -71,7 +71,14 @@ def vision_input_protocol(config: Any) -> dict[str, Any]:
 class QwenVisionFeatureBank(nn.Module):
     """Load spatial maps and view tokens while enforcing the active subset."""
 
-    def __init__(self, cache_dir: str | Path, decoder_dim: int, max_open_shards: int = 2, visual_ablation: str = "normal") -> None:
+    def __init__(
+        self,
+        cache_dir: str | Path,
+        decoder_dim: int,
+        max_open_shards: int = 64,
+        visual_ablation: str = "normal",
+        ram_budget_gib: float = 8.0,
+    ) -> None:
         super().__init__()
         path = resolve_project_path(cache_dir) or Path(cache_dir)
         manifest_path = path / "manifest.json"
@@ -87,8 +94,13 @@ class QwenVisionFeatureBank(nn.Module):
         if missing_shards:
             raise FileNotFoundError(f"Qwen vision cache v3 缺少 shards: {missing_shards[:8]}")
         self.max_open_shards = max(1, int(max_open_shards))
+        self.ram_budget_bytes = max(1, int(float(ram_budget_gib) * (1024**3)))
         self.set_visual_ablation(visual_ablation)
-        self._loaded: OrderedDict[int, list[dict[str, Any]]] = OrderedDict()
+        self._loaded: OrderedDict[int, tuple[list[dict[str, Any]], int]] = OrderedDict()
+        self._loaded_bytes = 0
+        self._validated_records: set[tuple[int, int]] = set()
+        self.cache_hits = 0
+        self.cache_misses = 0
         self.spatial_channels = int(manifest.get("spatial_channels", 1024))
         self.token_dim = int(manifest.get("token_dim", 2048))
         del decoder_dim
@@ -222,17 +234,24 @@ class QwenVisionFeatureBank(nn.Module):
 
     def _load_shard(self, index: int) -> list[dict[str, Any]]:
         if index in self._loaded:
-            records = self._loaded.pop(index)
-            self._loaded[index] = records
+            records, shard_bytes = self._loaded.pop(index)
+            self._loaded[index] = (records, shard_bytes)
+            self.cache_hits += 1
             return records
         path = self.cache_dir / self.shards[index]
+        self.cache_misses += 1
         payload = torch.load(path, map_location="cpu", weights_only=False)
         if payload.get("format") != CACHE_FORMAT or not isinstance(payload.get("records"), list):
             raise ValueError(f"损坏的 Qwen vision cache shard: {path}")
         records = payload["records"]
-        self._loaded[index] = records
-        while len(self._loaded) > self.max_open_shards:
-            self._loaded.popitem(last=False)
+        shard_bytes = int(path.stat().st_size)
+        self._loaded[index] = (records, shard_bytes)
+        self._loaded_bytes += shard_bytes
+        while len(self._loaded) > 1 and (
+            len(self._loaded) > self.max_open_shards or self._loaded_bytes > self.ram_budget_bytes
+        ):
+            _old_index, (_old_records, old_bytes) = self._loaded.popitem(last=False)
+            self._loaded_bytes -= old_bytes
         return records
 
     def _shuffled_key(self, key: str) -> str:
@@ -265,7 +284,11 @@ class QwenVisionFeatureBank(nn.Module):
         location = self.lookup.get(key)
         if location is None:
             raise KeyError(f"Qwen vision cache v3 缺少 parent key: {key}")
-        record = self._load_shard(int(location["shard"]))[int(location["index"])]
+        shard_index, local_index = int(location["shard"]), int(location["index"])
+        record = self._load_shard(shard_index)[local_index]
+        record_location = (shard_index, local_index)
+        if record_location in self._validated_records:
+            return record
         available = sorted({
             str(name)
             for view in record.get("views") or []
@@ -320,6 +343,7 @@ class QwenVisionFeatureBank(nn.Module):
             shallow_size = int(self.manifest["spatial_sizes"][0])
             if not torch.is_tensor(valid) or tuple(valid.shape) != (1, shallow_size, shallow_size):
                 raise ValueError(f"Qwen vision cache v3 valid mask shape 错误: key={key}")
+        self._validated_records.add(record_location)
         return record
 
     def _views(self, record: dict[str, Any], *, apply_token_ablation: bool = False) -> list[dict[str, Any]]:
@@ -408,15 +432,16 @@ class QwenVisionFeatureBank(nn.Module):
             weighted = []
             weights = []
             for view in views:
-                feature = view["spatial_features"][layer].float()
+                feature = view["spatial_features"][layer]
                 feature = self._remove_render_padding(feature, view.get("render_transform") or {})
                 feature = self._apply_augment(feature, augment)
                 valid = view.get("valid_mask")
                 coverage = float(valid.float().mean().item()) if torch.is_tensor(valid) else 1.0
                 quality = 0.5 if view.get("quality_flags") else 1.0
+                feature = feature.to(device=device, non_blocking=True)
                 weighted.append(feature * max(coverage * quality, 1.0e-4))
                 weights.append(max(coverage * quality, 1.0e-4))
-            outputs.append((sum(weighted) / sum(weights)).to(device=device))
+            outputs.append(sum(weighted) / sum(weights))
         return outputs
 
     def tokens_for(
@@ -436,7 +461,7 @@ class QwenVisionFeatureBank(nn.Module):
             family_chunks = []
             segments = []
             for view in self.selected_views_for(str(key), subset, apply_token_ablation=True):
-                tokens = view["view_tokens"].float()
+                tokens = view["view_tokens"]
                 if tokens.ndim == 1:
                     tokens = tokens[None]
                 limit = max(1, int(max_tokens_per_view))
@@ -454,14 +479,17 @@ class QwenVisionFeatureBank(nn.Module):
             segment_sequences.append(segments)
             counts.append(int(sequence.shape[0]))
         max_length = max(max(counts, default=0), 1)
-        padded = torch.zeros((len(sequences), max_length, self.token_dim), device=device)
+        token_dtype = next((value.dtype for value in sequences if value.numel()), torch.float32)
+        padded = torch.zeros(
+            (len(sequences), max_length, self.token_dim), device=device, dtype=token_dtype
+        )
         mask = torch.zeros((len(sequences), max_length), dtype=torch.bool, device=device)
         family_ids = torch.zeros((len(sequences), max_length), dtype=torch.long, device=device)
         for index, (sequence, family_sequence) in enumerate(zip(sequences, family_sequences)):
             if not sequence.numel():
                 continue
             length = sequence.shape[0]
-            padded[index, :length] = sequence.to(device=device)
+            padded[index, :length] = sequence.to(device=device, non_blocking=True)
             mask[index, :length] = True
-            family_ids[index, :length] = family_sequence.to(device=device)
+            family_ids[index, :length] = family_sequence.to(device=device, non_blocking=True)
         return padded, mask, counts, family_ids, segment_sequences

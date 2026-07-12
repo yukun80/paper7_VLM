@@ -27,6 +27,7 @@ from .diagnostics import (
     metric_metadata_with_scale,
     paired_instruction_summary,
 )
+from .common import amp_dtype, autocast_enabled
 from .threshold import (
     canvas_original_metric_delta,
     compute_threshold_sweep_report,
@@ -59,8 +60,8 @@ def evaluate(
         "target_area_fraction_bins": Counter(), "ground_area_m2_bins": Counter(),
     }
     processed_batches = processed_samples = 0
-    autocast = device.type == "cuda"
-    dtype = torch.bfloat16 if autocast else torch.float32
+    autocast = autocast_enabled(model.config, device)
+    dtype = amp_dtype(model.config, device)
     for batch_index, batch in enumerate(loader):
         if max_batches is not None and batch_index >= max_batches:
             break

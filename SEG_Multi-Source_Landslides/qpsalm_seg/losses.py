@@ -36,6 +36,8 @@ def dice_loss_per_sample_with_logits(
     valid_mask: torch.Tensor | None = None,
     eps: float = 1.0e-6,
 ) -> torch.Tensor:
+    logits = logits.float()
+    target = target.float()
     probs = torch.sigmoid(logits)
     valid = _valid_like(valid_mask, probs)
     dims = tuple(range(1, probs.ndim))
@@ -50,6 +52,8 @@ def dice_scores_with_logits(
     valid_mask: torch.Tensor | None = None,
     eps: float = 1.0e-6,
 ) -> torch.Tensor:
+    logits = logits.float()
+    target = target.float()
     probs = torch.sigmoid(logits)
     if target.shape[1] == 1 and probs.shape[1] != 1:
         target = target.expand(-1, probs.shape[1], -1, -1)
@@ -65,6 +69,8 @@ def weighted_bce_per_sample_with_logits(
     valid_mask: torch.Tensor | None = None,
     pos_weight: float = 1.0,
 ) -> torch.Tensor:
+    logits = logits.float()
+    target = target.float()
     loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
     if pos_weight > 1.0:
         loss = loss * torch.where(target >= 0.5, loss.new_tensor(float(pos_weight)), loss.new_tensor(1.0))
@@ -78,6 +84,8 @@ def boundary_loss_per_sample_with_logits(
     kernel_size: int = 3,
 ) -> torch.Tensor:
     pad = kernel_size // 2
+    logits = logits.float()
+    target = target.float()
     probs = torch.sigmoid(logits)
     target = (target >= 0.5).to(probs.dtype)
     pred_boundary = (
@@ -138,6 +146,10 @@ def proposal_set_losses(
             valid[batch_index, 0],
             min_area_fraction=min_component_area_fraction,
             min_area_pixels=min_component_area_pixels,
+            precomputed_components=(
+                batch.component_masks[batch_index]
+                if batch.component_masks is not None else None
+            ),
         )
         assignments.append(assignment)
         if assignment.matched_queries.numel():

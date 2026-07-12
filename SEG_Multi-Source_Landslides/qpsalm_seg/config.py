@@ -21,6 +21,9 @@ TASK_FAMILIES = [
     "no_target_segmentation",
 ]
 
+QWEN_GRADIENT_CHECKPOINTING_MODES = ("reentrant", "disabled")
+AMP_DTYPES = ("bf16", "fp16", "fp32")
+
 
 @dataclass
 class QPSalmConfig:
@@ -44,9 +47,13 @@ class QPSalmConfig:
     qwen_lora_alpha: int = 16
     qwen_lora_dropout: float = 0.05
     qwen_lora_last_n_layers: int = 4
+    qwen_gradient_checkpointing: str = "disabled"
     qwen_max_text_tokens: int = 192
     qwen_view_tokens_per_view: int = 8
     qwen_view_pooling: str = "tokens"
+    qwen_attn_implementation: str = "sdpa"
+    amp_dtype: str = "bf16"
+    vision_cache_ram_budget_gib: float = 8.0
 
     target_size: int = 128
     size_buckets: list[int] = field(default_factory=list)
@@ -54,8 +61,12 @@ class QPSalmConfig:
     max_native_size: int = 256
     batch_size: int = 1
     num_workers: int = 4
+    prefetch_factor: int = 2
+    persistent_workers: bool = True
     max_train_samples: int | None = None
     max_val_samples: int | None = 256
+    monitor_val_samples: int | None = 256
+    full_val_at_end: bool = True
     train_hflip_prob: float = 0.5
     train_vflip_prob: float = 0.5
     task_sampling_ratios: dict[str, float] = field(
@@ -71,6 +82,7 @@ class QPSalmConfig:
     keep_recent_checkpoints: int = 1
     visualize_interval: int = 100
     log_interval: int = 20
+    progress_min_interval: float = 2.0
     max_val_batches: int | None = 0
     num_visualizations: int = 8
     seed: int = 42

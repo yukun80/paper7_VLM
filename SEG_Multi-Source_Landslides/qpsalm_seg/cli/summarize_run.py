@@ -42,6 +42,20 @@ def read_json(path: Path) -> Any | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]] | None:
+    if not path.exists():
+        return None
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
 def read_yaml(path: Path) -> Any | None:
     if not path.exists():
         return None
@@ -278,12 +292,47 @@ def train_history_summary(history: list[dict[str, Any]] | None) -> dict[str, Any
     if not history:
         return {"num_rows": 0}
     losses = [float(row["loss"]) for row in history if "loss" in row and math.isfinite(float(row["loss"]))]
+    performance_keys = (
+        "samples_per_sec", "qwen_tokens_per_sec", "steps_per_sec",
+        "peak_reserved_gib", "controller_padding_ratio",
+        "teacher_sample_fraction", "controller_tokens_per_sample",
+    )
+    weighted: dict[str, float] = {}
+    for key in performance_keys:
+        numerator = 0.0
+        denominator = 0
+        for row in history:
+            value = row.get(key)
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                continue
+            count = max(
+                1,
+                int(row.get("step_end", 0)) - int(row.get("step_start", 0)) + 1,
+            )
+            numerator += float(value) * count
+            denominator += count
+        if denominator:
+            weighted[key] = numerator / denominator
+    steady_state = {
+        key: history[-1].get(key)
+        for key in performance_keys
+        if isinstance(history[-1].get(key), (int, float))
+    }
+    peak_memory = max(
+        (float(row["peak_reserved_gib"]) for row in history if isinstance(row.get("peak_reserved_gib"), (int, float))),
+        default=None,
+    )
     return {
         "num_rows": len(history),
         "first": history[0],
         "last": history[-1],
         "min_loss": min(losses) if losses else None,
         "max_loss": max(losses) if losses else None,
+        "performance": {
+            "weighted_mean": weighted,
+            "steady_state_last_window": steady_state,
+            "peak_reserved_gib": peak_memory,
+        },
     }
 
 
@@ -295,6 +344,11 @@ def key_config(config: dict[str, Any] | None) -> dict[str, Any]:
         "qwen_model_path",
         "vision_feature_cache",
         "preset",
+        "amp_dtype",
+        "qwen_4bit",
+        "qwen_gradient_checkpointing",
+        "qwen_attn_implementation",
+        "query_chunk_size",
         "target_size",
         "size_buckets",
         "max_native_size",
@@ -303,6 +357,7 @@ def key_config(config: dict[str, Any] | None) -> dict[str, Any]:
         "max_steps",
         "num_epochs",
         "max_val_batches",
+        "monitor_val_samples",
         "decoder_dim",
         "num_mask_tokens",
         "modality_dropout",
@@ -348,7 +403,7 @@ def summarize_run(
     if output is None:
         raise FileNotFoundError(output_ref)
 
-    train_history = read_json(run_dir / "train_history.json")
+    train_history = read_jsonl(run_dir / "train_history.jsonl")
     validation = read_json(run_dir / "validation_latest.json")
     eval_report = read_json(eval_dir / "eval_report.json")
     manifest = read_json(run_dir / "run_manifest.json")
@@ -421,7 +476,7 @@ def summarize_run(
         "checkpoint": checkpoint,
         "checkpoint_best": checkpoint_best,
         "artifacts": {
-            "train_history": file_info(run_dir / "train_history.json"),
+            "train_history": file_info(run_dir / "train_history.jsonl"),
             "validation_latest": file_info(run_dir / "validation_latest.json"),
             "validation_best": file_info(run_dir / "validation_best.json"),
             "eval_report": file_info(eval_dir / "eval_report.json"),
@@ -472,6 +527,7 @@ def main() -> None:
         payload = {
             "run_summary": str(resolve_repo_path(args.output) if args.output else resolve_repo_path(args.run_dir) / "run_summary.json"),
             "preset": (summary.get("config") or {}).get("preset"),
+            "train_performance": (summary.get("train_history") or {}).get("performance"),
             "validation_overall": (summary.get("validation") or {}).get("overall"),
             "eval_overall": (summary.get("eval") or {}).get("overall"),
             "acceptance": summary.get("acceptance"),

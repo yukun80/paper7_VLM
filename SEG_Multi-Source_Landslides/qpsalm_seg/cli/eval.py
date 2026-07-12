@@ -21,7 +21,12 @@ import json
 from pathlib import Path
 import shutil
 
-from qpsalm_seg.config import apply_config_overrides, load_config
+from qpsalm_seg.config import (
+    AMP_DTYPES,
+    QWEN_GRADIENT_CHECKPOINTING_MODES,
+    apply_config_overrides,
+    load_config,
+)
 from qpsalm_seg.presets import PRESET_CHOICES, apply_preset
 from qpsalm_seg.runtime import torch_preflight
 
@@ -30,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate Multi-Source Qwen-PSALM-Seg.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--preset", choices=PRESET_CHOICES, default=None)
+    parser.add_argument("--amp-dtype", choices=AMP_DTYPES, default=None)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--benchmark-dir", default=None)
@@ -46,6 +52,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qwen-model-path", default=None)
     parser.add_argument("--vision-feature-cache", default=None)
     parser.add_argument("--qwen-view-pooling", choices=["tokens", "image-end", "attention"], default=None)
+    parser.add_argument(
+        "--qwen-gradient-checkpointing",
+        choices=QWEN_GRADIENT_CHECKPOINTING_MODES,
+        default=None,
+    )
     parser.add_argument("--instruction-ablation", choices=["normal", "shuffled", "fixed-generic", "no-semantic"], default=None)
     parser.add_argument(
         "--visual-ablation",
@@ -77,6 +88,7 @@ def main() -> None:
             "num_workers": args.num_workers,
             "max_val_samples": args.max_val_samples,
             "max_val_batches": args.max_val_batches,
+            "amp_dtype": args.amp_dtype,
             "val_index": args.val_index,
             "test_index": args.test_index,
             "output_dir": args.output_dir,
@@ -84,6 +96,7 @@ def main() -> None:
             "qwen_model_path": args.qwen_model_path,
             "vision_feature_cache": args.vision_feature_cache,
             "qwen_view_pooling": args.qwen_view_pooling,
+            "qwen_gradient_checkpointing": args.qwen_gradient_checkpointing,
             "instruction_ablation": args.instruction_ablation,
             "visual_ablation": args.visual_ablation,
             "allow_qwen_cpu": True if args.allow_qwen_cpu else None,
@@ -140,20 +153,21 @@ def main() -> None:
     )
     (out_dir / "eval_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if args.print_full_report:
-        payload = report
+        print(json.dumps(report, ensure_ascii=False))
     else:
+        overall = (report.get("metrics") or {}).get("overall") or {}
+        positive = (report.get("metrics") or {}).get("positive_only") or {}
         payload = {
             "eval_report": str(out_dir / "eval_report.json"),
             "checkpoint_step": step,
             "split": args.split,
-            "overall": (report.get("metrics") or {}).get("overall"),
-            "positive_only": (report.get("metrics") or {}).get("positive_only"),
-            "negative_only": (report.get("metrics") or {}).get("negative_only"),
-            "original_overall": (report.get("metrics_original_size") or {}).get("overall"),
-            "canvas_vs_original_delta": report.get("canvas_vs_original_delta"),
-            "coverage": report.get("coverage"),
+            "n": (report.get("coverage") or {}).get("num_samples"),
+            "iou": overall.get("iou"),
+            "dice": overall.get("dice"),
+            "positive_iou": positive.get("iou"),
+            "positive_dice": positive.get("dice"),
         }
-    print(json.dumps(payload, ensure_ascii=False))
+        print("[EVAL] " + json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":

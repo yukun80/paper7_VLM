@@ -46,7 +46,7 @@ def largest_remainder_quota(total: int, labels: list, weights: list[float]) -> d
 
 
 class TaskBalancedSizeBucketBatchSampler(Sampler[list[int]]):
-    """Draw 40/40/20 task groups while keeping one spatial bucket per batch."""
+    """Draw task-balanced batches with homogeneous spatial and Qwen sequence load."""
 
     def __init__(self, dataset, batch_size: int, *, shuffle: bool, seed: int, drop_last: bool = False, task_weights: dict[str, float] | None = None, balance_tasks: bool = True) -> None:
         self.dataset = dataset
@@ -59,13 +59,17 @@ class TaskBalancedSizeBucketBatchSampler(Sampler[list[int]]):
         self.epoch = 0
 
     def __iter__(self) -> Iterator[list[int]]:
-        grouped: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+        grouped: dict[tuple[int, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
         for index, row in enumerate(self.dataset.rows):
-            grouped[self.dataset.bucket_size(index)][task_group(row)].append(index)
+            load_bucket = (
+                self.dataset.sequence_load_bucket(index)
+                if hasattr(self.dataset, "sequence_load_bucket") else 0
+            )
+            grouped[(self.dataset.bucket_size(index), load_bucket)][task_group(row)].append(index)
         rng = random.Random(self.seed + self.epoch)
         batches: list[list[int]] = []
         if not self.balance_tasks:
-            for _bucket, groups in grouped.items():
+            for _bucket_key, groups in grouped.items():
                 values = [index for group_values in groups.values() for index in group_values]
                 if self.shuffle:
                     rng.shuffle(values)
@@ -107,14 +111,31 @@ class TaskBalancedSizeBucketBatchSampler(Sampler[list[int]]):
             for bucket, group in schedule:
                 values = grouped[bucket][group]
                 key = (bucket, group)
-                batch = []
-                for _item in range(self.batch_size):
+                batch: list[int] = []
+                parents: set[str] = set()
+                attempts = 0
+                while len(batch) < self.batch_size and attempts < max(1, len(values) * 2):
                     if cursors[key] >= len(values):
                         cursors[key] = 0
                         if self.shuffle:
                             rng.shuffle(values)
-                    batch.append(values[cursors[key]])
+                    candidate = values[cursors[key]]
                     cursors[key] += 1
+                    attempts += 1
+                    row = self.dataset.rows[candidate]
+                    parent = str(row.get("parent_sample_id") or row.get("sample_id"))
+                    if candidate in batch or parent in parents:
+                        continue
+                    batch.append(candidate)
+                    parents.add(parent)
+                if len(batch) < self.batch_size:
+                    for candidate in values:
+                        if candidate not in batch:
+                            batch.append(candidate)
+                        if len(batch) == self.batch_size:
+                            break
+                while len(batch) < self.batch_size:
+                    batch.append(values[len(batch) % len(values)])
                 batches.append(batch)
         if self.shuffle:
             rng.shuffle(batches)
@@ -127,9 +148,13 @@ class TaskBalancedSizeBucketBatchSampler(Sampler[list[int]]):
                 len(self.dataset) // self.batch_size
                 if self.drop_last else math.ceil(len(self.dataset) / self.batch_size)
             )
-        bucket_counts: dict[int, int] = defaultdict(int)
+        bucket_counts: dict[tuple[int, int], int] = defaultdict(int)
         for index in range(len(self.dataset)):
-            bucket_counts[self.dataset.bucket_size(index)] += 1
+            load_bucket = (
+                self.dataset.sequence_load_bucket(index)
+                if hasattr(self.dataset, "sequence_load_bucket") else 0
+            )
+            bucket_counts[(self.dataset.bucket_size(index), load_bucket)] += 1
         if self.drop_last:
             return sum(count // self.batch_size for count in bucket_counts.values())
         return sum(math.ceil(count / self.batch_size) for count in bucket_counts.values())

@@ -630,7 +630,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--datasets-root", type=project_path_arg, default=DEFAULT_DATASETS_ROOT, help="原始 datasets 根目录。")
     parser.add_argument("--out-dir", type=project_path_arg, default=None, help="当前模式 benchmark 输出目录，默认使用后缀式 multisource_landslide_v2_<mode>。")
     parser.add_argument("--mode", choices=["small", "full"], default="small", help="small 抽样模式或 full 完整模式。")
-    parser.add_argument("--small-limit", type=int, default=1000, help="small 模式下每个 dataset_name + split 的最大样本数，默认 1000。")
+    parser.add_argument(
+        "--small-limit",
+        type=int,
+        default=1000,
+        help="small 模式下每个 dataset_name + split 的父样本上限，默认 1000；不是整个 split 的总上限。",
+    )
     parser.add_argument("--seed", type=int, default=42, help="确定性抽样随机种子。")
     parser.add_argument("--use-extended-pool", action="store_true", help="full 模式是否纳入 multimodal-landslide-dataset/完整list。")
     parser.add_argument(
@@ -673,6 +678,17 @@ def main() -> None:
         "num_by_split": {split: sum(1 for row in source_samples if row.get("split") == split) for split in ["train", "val", "test", "unlabeled", "extended_pool"]},
     }
     write_json(out_dir / "reports" / "index_build_summary.json", summary)
+    if args.mode == "small":
+        print(
+            f"[BENCHMARK] mode=small parent_limit_per_dataset_split={args.small_limit}"
+        )
+    print(
+        "[BENCHMARK] parents "
+        + " ".join(
+            f"{split}={summary['num_by_split'][split]}"
+            for split in ("train", "val", "test")
+        )
+    )
     print(f"已生成源索引: {to_repo_rel(out_dir / 'indexes' / 'source_all.jsonl')}，样本数 {len(source_samples)}")
 
 

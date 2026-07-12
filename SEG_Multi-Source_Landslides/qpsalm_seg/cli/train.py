@@ -21,7 +21,12 @@ import json
 from pathlib import Path
 import shutil
 
-from qpsalm_seg.config import apply_config_overrides, load_config
+from qpsalm_seg.config import (
+    AMP_DTYPES,
+    QWEN_GRADIENT_CHECKPOINTING_MODES,
+    apply_config_overrides,
+    load_config,
+)
 from qpsalm_seg.presets import PRESET_CHOICES, apply_preset
 from qpsalm_seg.runtime import torch_preflight
 
@@ -39,14 +44,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-epochs", type=int, default=None)
     parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument("--max-val-samples", type=int, default=None)
+    parser.add_argument("--monitor-val-samples", type=int, default=None)
     parser.add_argument("--max-val-batches", type=int, default=None)
     parser.add_argument("--train-index", default=None)
     parser.add_argument("--val-index", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--controller", choices=["qwen_mask_query", "text_probe"], default=None)
     parser.add_argument("--qwen-model-path", default=None)
+    parser.add_argument(
+        "--qwen-4bit",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable NF4 Qwen base weights; use --no-qwen-4bit for frozen BF16 throughput tests.",
+    )
+    parser.add_argument("--qwen-attn-implementation", choices=["sdpa", "eager"], default=None)
     parser.add_argument("--vision-feature-cache", default=None)
     parser.add_argument("--qwen-view-pooling", choices=["tokens", "image-end", "attention"], default=None)
+    parser.add_argument("--amp-dtype", choices=AMP_DTYPES, default=None)
+    parser.add_argument(
+        "--qwen-gradient-checkpointing",
+        choices=QWEN_GRADIENT_CHECKPOINTING_MODES,
+        default=None,
+        help="Qwen activation checkpoint protocol; disabled is the throughput-oriented default.",
+    )
     parser.add_argument("--instruction-ablation", choices=["normal", "shuffled", "fixed-generic", "no-semantic"], default=None)
     parser.add_argument(
         "--visual-ablation",
@@ -92,14 +112,19 @@ def main() -> None:
             "num_epochs": args.num_epochs,
             "max_train_samples": args.max_train_samples,
             "max_val_samples": args.max_val_samples,
+            "monitor_val_samples": args.monitor_val_samples,
             "max_val_batches": args.max_val_batches,
             "train_index": args.train_index,
             "val_index": args.val_index,
             "output_dir": args.output_dir,
             "controller": args.controller,
             "qwen_model_path": args.qwen_model_path,
+            "qwen_4bit": args.qwen_4bit,
+            "qwen_attn_implementation": args.qwen_attn_implementation,
             "vision_feature_cache": args.vision_feature_cache,
             "qwen_view_pooling": args.qwen_view_pooling,
+            "amp_dtype": args.amp_dtype,
+            "qwen_gradient_checkpointing": args.qwen_gradient_checkpointing,
             "instruction_ablation": args.instruction_ablation,
             "visual_ablation": args.visual_ablation,
             "allow_qwen_cpu": True if args.allow_qwen_cpu else None,
@@ -137,10 +162,18 @@ def main() -> None:
         payload = result
     else:
         history = result.get("history") or []
+        last = history[-1] if history else {}
         payload = {
             "output_dir": result.get("output_dir"),
             "steps": result.get("steps"),
-            "last_train": history[-1] if history else None,
+            "last_train": {
+                key: last.get(key)
+                for key in (
+                    "step_end", "loss", "iou", "dice", "proposal_matched_mean_dice",
+                    "samples_per_sec", "peak_reserved_gib",
+                )
+                if key in last
+            } if last else None,
         }
     print(json.dumps(payload, ensure_ascii=False))
 

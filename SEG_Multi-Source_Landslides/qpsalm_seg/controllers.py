@@ -17,8 +17,9 @@ from typing import Any, Sequence
 
 import torch
 from torch import nn
+from torch.nn.utils.rnn import pad_sequence
 
-from .config import QPSalmConfig
+from .config import QPSalmConfig, QWEN_GRADIENT_CHECKPOINTING_MODES
 from .paths import resolve_repo_path
 from .schema import MODALITY_FAMILIES, MODALITY_FAMILY_IDS, ModalityBatch, SemanticEvidence
 
@@ -26,6 +27,47 @@ from .schema import MODALITY_FAMILIES, MODALITY_FAMILY_IDS, ModalityBatch, Seman
 EVIDENCE_FAMILIES = MODALITY_FAMILIES
 VISUAL_FAMILY_IDS = MODALITY_FAMILY_IDS
 CONTROLLER_SEQUENCE_PROTOCOL = "qwen_mask_query_interleaved_views_v2"
+
+
+def pad_qwen_sequences(
+    sequences: Sequence[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Differentiably pad variable-length Qwen embeddings and build attention masks."""
+    if not sequences:
+        raise ValueError("Qwen sequence batch cannot be empty")
+    device = sequences[0].device
+    lengths = torch.tensor([value.shape[0] for value in sequences], device=device)
+    inputs = pad_sequence(list(sequences), batch_first=True)
+    attention = (
+        torch.arange(inputs.shape[1], device=device)[None] < lengths[:, None]
+    ).to(torch.long)
+    return inputs, attention, lengths
+
+
+def qwen_gradient_checkpointing_kwargs(mode: str) -> dict[str, Any] | None:
+    """Resolve the only supported Qwen activation-checkpoint protocols."""
+    if mode == "reentrant":
+        return {"use_reentrant": True, "preserve_rng_state": True}
+    if mode == "disabled":
+        return None
+    raise ValueError(
+        f"未知 qwen_gradient_checkpointing={mode!r}; "
+        f"expected one of {QWEN_GRADIENT_CHECKPOINTING_MODES}"
+    )
+
+
+def configure_qwen_gradient_checkpointing(model: nn.Module, mode: str) -> dict[str, Any] | None:
+    """Apply one explicit checkpoint protocol after PEFT has injected LoRA."""
+    checkpoint_kwargs = qwen_gradient_checkpointing_kwargs(mode)
+    if checkpoint_kwargs is None:
+        model.gradient_checkpointing_disable()
+        return None
+    model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs=checkpoint_kwargs
+    )
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+    return checkpoint_kwargs
 
 
 def anchor_availability(batch: ModalityBatch, index: int, *, use_full: bool, device: torch.device) -> torch.Tensor:
@@ -171,6 +213,8 @@ class TextProbeMaskController(nn.Module):
             mask_query_states=hidden[:, mask_start:],
             evidence_anchors=hidden[:, anchor_start:mask_start],
             visual_token_count=0,
+            sequence_lengths=(int(hidden.shape[1]),) * b,
+            visual_token_counts=(0,) * b,
         )
 
 
@@ -187,6 +231,8 @@ class QwenMaskQueryController(nn.Module):
         except Exception as exc:  # pragma: no cover - optional production stack
             raise RuntimeError("qwen_mask_query 需要 transformers、peft 和 bitsandbytes") from exc
 
+        checkpoint_mode = str(config.qwen_gradient_checkpointing)
+        qwen_gradient_checkpointing_kwargs(checkpoint_mode)
         model_dir = validate_qwen_model_dir(config.qwen_model_path)
         if vision_bank is not None:
             cached_revision = str(vision_bank.manifest.get("model_revision") or "")
@@ -197,12 +243,23 @@ class QwenMaskQueryController(nn.Module):
                 )
         self.tokenizer = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=True)
         model_cls = select_qwen_model_class()
-        load_args: dict[str, Any] = {"trust_remote_code": True, "torch_dtype": torch.bfloat16}
+        compute_dtype = {
+            "bf16": torch.bfloat16,
+            "fp16": torch.float16,
+            "fp32": torch.float32,
+        }.get(str(config.amp_dtype))
+        if compute_dtype is None:
+            raise ValueError(f"未知 amp_dtype={config.amp_dtype!r}")
+        load_args: dict[str, Any] = {
+            "trust_remote_code": True,
+            "torch_dtype": compute_dtype,
+            "attn_implementation": str(config.qwen_attn_implementation),
+        }
         if config.qwen_4bit:
             load_args["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_compute_dtype=compute_dtype,
                 bnb_4bit_use_double_quant=True,
             )
             load_args["device_map"] = {"": device.index or 0}
@@ -218,7 +275,9 @@ class QwenMaskQueryController(nn.Module):
             if device.type == "cuda":
                 torch.cuda.empty_cache()
         if config.qwen_4bit:
-            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+            # Quantization preparation must not also configure checkpointing.
+            # The protocol is applied exactly once after LoRA injection below.
+            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
         for parameter in model.parameters():
             parameter.requires_grad_(False)
         target_regex = self._last_layer_projection_regex(model, int(config.qwen_lora_last_n_layers))
@@ -231,9 +290,15 @@ class QwenMaskQueryController(nn.Module):
             task_type="CAUSAL_LM",
         )
         self.model = get_peft_model(model, lora)
-        self.model.gradient_checkpointing_enable()
-        if hasattr(self.model, "enable_input_require_grads"):
-            self.model.enable_input_require_grads()
+        # FP16 autocast still needs FP32 adapter master weights/gradients.
+        # Otherwise GradScaler unscale can erase very small LoRA updates.
+        for name, parameter in self.model.named_parameters():
+            if "lora_" in name:
+                parameter.data = parameter.data.float()
+        self.gradient_checkpointing_mode = checkpoint_mode
+        self.gradient_checkpointing_kwargs = configure_qwen_gradient_checkpointing(
+            self.model, checkpoint_mode
+        )
         self.model.config.use_cache = False
         text_config = getattr(model.config, "text_config", None) or getattr(model.config, "llm_config", None)
         hidden = int(getattr(text_config, "hidden_size", getattr(model.config, "hidden_size", 2048)))
@@ -274,6 +339,13 @@ class QwenMaskQueryController(nn.Module):
         ]
         if unexpected:
             raise RuntimeError(f"Qwen base 参数意外可训练，QLoRA 隔离失败: {unexpected[:8]}")
+        non_fp32_lora = [
+            (name, str(parameter.dtype))
+            for name, parameter in self.model.named_parameters()
+            if parameter.requires_grad and "lora_" in name and parameter.dtype != torch.float32
+        ]
+        if non_fp32_lora:
+            raise RuntimeError(f"QLoRA adapter 必须保持 FP32 master weights: {non_fp32_lora[:8]}")
 
     def _language_model(self) -> nn.Module:
         base = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
@@ -309,17 +381,26 @@ class QwenMaskQueryController(nn.Module):
         names = [re.escape(name) for index, name in candidates if index in selected]
         return "(?:" + "|".join(names) + ")"
 
-    def _segment_ids(self, text: str, device: torch.device) -> torch.Tensor:
+    @lru_cache(maxsize=32768)
+    def _cached_segment_ids(self, text: str) -> tuple[int, ...]:
         encoded = self.tokenizer(
             text,
             add_special_tokens=False,
             truncation=True,
             max_length=self.max_text_tokens,
-            return_tensors="pt",
-        )["input_ids"][0].to(device)
-        if encoded.numel() == 0:
-            encoded = torch.tensor([self.tokenizer.eos_token_id], device=device)
-        return encoded
+        )["input_ids"]
+        if torch.is_tensor(encoded):
+            if encoded.ndim > 1:
+                encoded = encoded[0]
+            encoded = encoded.tolist()
+        if encoded and isinstance(encoded[0], list):
+            encoded = encoded[0]
+        if not encoded:
+            encoded = [self.tokenizer.eos_token_id]
+        return tuple(int(value) for value in encoded)
+
+    def _segment_ids(self, text: str, device: torch.device) -> torch.Tensor:
+        return torch.tensor(self._cached_segment_ids(text), dtype=torch.long, device=device)
 
     def _visual_tokens(self, batch: ModalityBatch, use_full: bool, device: torch.device):
         if self.vision_bank is None:
@@ -433,12 +514,11 @@ class QwenMaskQueryController(nn.Module):
             sequence = torch.cat([task_embed, condition_embed, reason_embed, active_visual, anchors, masks], 0)
             sequences.append(sequence)
             positions.append((task_pos, condition_pos, anchor_start, mask_start, pooled_visual_count))
-        length = max(value.shape[0] for value in sequences)
-        inputs = sequences[0].new_zeros((len(sequences), length, self.hidden_size))
-        attention = torch.zeros((len(sequences), length), dtype=torch.long, device=device)
-        for index, sequence in enumerate(sequences):
-            inputs[index, :sequence.shape[0]] = sequence
-            attention[index, :sequence.shape[0]] = 1
+        inputs, attention, _lengths = pad_qwen_sequences(sequences)
+        if self.training and not inputs.requires_grad:
+            raise RuntimeError(
+                "Qwen inputs_embeds 缺少梯度链路；请检查动态 padding、controller embeddings 和 LoRA 初始化"
+            )
         outputs = self._language_model()(
             inputs_embeds=inputs,
             attention_mask=attention,
@@ -457,6 +537,8 @@ class QwenMaskQueryController(nn.Module):
         condition_out = self.output_projection(torch.stack(condition_states).float())
         anchor_out = self.output_projection(torch.stack(anchors).float())
         mask_out = self.output_projection(torch.stack(masks).float())
+        if self.training and not mask_out.requires_grad:
+            raise RuntimeError("Qwen mask-query states 缺少梯度链路")
         token_out = torch.cat([task_out[:, None], condition_out[:, None], anchor_out], 1)
         return SemanticEvidence(
             tokens=token_out,
@@ -467,6 +549,8 @@ class QwenMaskQueryController(nn.Module):
             mask_query_states=mask_out,
             evidence_anchors=anchor_out,
             visual_token_count=sum(value[-1] for value in positions),
+            sequence_lengths=tuple(int(value.shape[0]) for value in sequences),
+            visual_token_counts=tuple(int(value[-1]) for value in positions),
         )
 
     def encode_batch(self, batch: ModalityBatch, *, use_full: bool = False) -> SemanticEvidence:
@@ -492,6 +576,8 @@ class QwenMaskQueryController(nn.Module):
             mask_query_states=semantic.mask_query_states,
             evidence_anchors=delta,
             visual_token_count=semantic.visual_token_count,
+            sequence_lengths=semantic.sequence_lengths,
+            visual_token_counts=semantic.visual_token_counts,
             visual_delta_norm=delta.float().norm(dim=-1).mean(dim=1),
         )
 

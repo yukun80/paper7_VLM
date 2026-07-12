@@ -20,6 +20,27 @@ from qpsalm_seg.data import MultiSourceLandslideDataset, SizeBucketBatchSampler,
 from qpsalm_seg.models import MultiSourceQwenPSALMSeg
 
 
+def amp_dtype(config: QPSalmConfig, device: torch.device) -> torch.dtype:
+    if device.type != "cuda" or config.amp_dtype == "fp32":
+        return torch.float32
+    if config.amp_dtype == "fp16":
+        return torch.float16
+    if config.amp_dtype == "bf16":
+        return torch.bfloat16
+    raise ValueError(f"未知 amp_dtype={config.amp_dtype!r}")
+
+
+def autocast_enabled(config: QPSalmConfig, device: torch.device) -> bool:
+    return device.type == "cuda" and config.amp_dtype != "fp32"
+
+
+def create_grad_scaler(config: QPSalmConfig, device: torch.device):
+    return torch.amp.GradScaler(
+        device.type,
+        enabled=device.type == "cuda" and config.amp_dtype == "fp16",
+    )
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -60,6 +81,11 @@ def _loader(dataset, config: QPSalmConfig, *, training: bool) -> DataLoader:
         "collate_fn": qpsalm_collate,
         "pin_memory": torch.cuda.is_available(),
     }
+    if config.num_workers > 0:
+        common.update({
+            "prefetch_factor": max(1, int(config.prefetch_factor)),
+            "persistent_workers": bool(config.persistent_workers),
+        })
     if config.use_size_buckets and config.size_buckets:
         sampler = SizeBucketBatchSampler(
             dataset,
@@ -80,7 +106,12 @@ def build_dataloaders(config: QPSalmConfig) -> tuple[DataLoader, DataLoader]:
     train_dataset = MultiSourceLandslideDataset(
         config, "train", max_samples=config.max_train_samples, shuffle_seed=config.seed
     )
-    val_dataset = MultiSourceLandslideDataset(config, "val", max_samples=config.max_val_samples)
+    val_dataset = MultiSourceLandslideDataset(
+        config,
+        "val",
+        max_samples=config.monitor_val_samples,
+        monitor_seed=config.seed + 1009,
+    )
     return _loader(train_dataset, config, training=True), _loader(val_dataset, config, training=False)
 
 

@@ -83,6 +83,7 @@ class ModalityBatch:
     full_condition_prompt_text: list[str]
     full_evidence_reasoning_text: list[str]
     visual_evidence_key: list[str]
+    component_masks: list[torch.Tensor] | None = None
 
     @property
     def batch_size(self) -> int:
@@ -91,6 +92,35 @@ class ModalityBatch:
     @property
     def reference_hw(self) -> tuple[int, int]:
         return int(self.mask.shape[-2]), int(self.mask.shape[-1])
+
+    def select(self, indices: list[int] | tuple[int, ...]) -> "ModalityBatch":
+        """Select samples without rebuilding or mutating their modality payloads."""
+        selected = [int(index) for index in indices]
+        if not selected:
+            raise ValueError("ModalityBatch.select requires at least one index")
+        if min(selected) < 0 or max(selected) >= self.batch_size:
+            raise IndexError(f"batch indices out of range: {selected} for batch_size={self.batch_size}")
+        tensor_indices = torch.tensor(selected, device=self.mask.device, dtype=torch.long)
+
+        def pick(values):
+            return [values[index] for index in selected]
+
+        return ModalityBatch(
+            instances=pick(self.instances),
+            full_instances=pick(self.full_instances),
+            active_subsets=pick(self.active_subsets),
+            mask=self.mask.index_select(0, tensor_indices),
+            valid_mask=self.valid_mask.index_select(0, tensor_indices),
+            metadata=pick(self.metadata),
+            proposal_context_text=pick(self.proposal_context_text),
+            condition_prompt_text=pick(self.condition_prompt_text),
+            evidence_reasoning_text=pick(self.evidence_reasoning_text),
+            full_proposal_context_text=pick(self.full_proposal_context_text),
+            full_condition_prompt_text=pick(self.full_condition_prompt_text),
+            full_evidence_reasoning_text=pick(self.full_evidence_reasoning_text),
+            visual_evidence_key=pick(self.visual_evidence_key),
+            component_masks=(pick(self.component_masks) if self.component_masks is not None else None),
+        )
 
     @property
     def availability(self) -> torch.Tensor:
@@ -141,6 +171,10 @@ class ModalityBatch:
             full_condition_prompt_text=self.full_condition_prompt_text,
             full_evidence_reasoning_text=self.full_evidence_reasoning_text,
             visual_evidence_key=self.visual_evidence_key,
+            component_masks=(
+                [value.pin_memory() for value in self.component_masks]
+                if self.component_masks is not None else None
+            ),
         )
 
     def __getitem__(self, key: str) -> Any:
@@ -164,12 +198,13 @@ class ModalityBatch:
                 "full_condition_prompt_text",
                 "full_evidence_reasoning_text",
                 "visual_evidence_key",
+                "component_masks",
                 "availability",
             )
         )
 
     def __len__(self) -> int:
-        return 14
+        return 15
 
 
 @dataclass
@@ -209,6 +244,8 @@ class SemanticEvidence:
     mask_query_states: torch.Tensor | None = None
     evidence_anchors: torch.Tensor | None = None
     visual_token_count: int = 0
+    sequence_lengths: tuple[int, ...] = ()
+    visual_token_counts: tuple[int, ...] = ()
     visual_delta_norm: torch.Tensor | None = None
 
 

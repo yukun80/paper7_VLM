@@ -65,7 +65,9 @@ def pairwise_component_cost(
     components: torch.Tensor,
     valid: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    valid = valid.to(logits.dtype)
+    logits = logits.float()
+    components = components.float()
+    valid = valid.float()
     probs = torch.sigmoid(logits) * valid
     components = components * valid
     intersection = torch.einsum("qhw,khw->qk", probs, components)
@@ -108,8 +110,13 @@ def assign_proposals(
     min_area_fraction: float = 5.0e-5,
     min_area_pixels: int = 4,
     match_threshold: float = 0.5,
+    precomputed_components: torch.Tensor | None = None,
 ) -> ProposalAssignment:
-    components = component_masks(target, valid, min_area_fraction, min_area_pixels)
+    components = (
+        precomputed_components.to(device=target.device, dtype=target.dtype)
+        if precomputed_components is not None
+        else component_masks(target, valid, min_area_fraction, min_area_pixels)
+    )
     num_queries = int(proposal_logits.shape[0])
     relevance_target = relevance_logits.new_zeros((num_queries,))
     empty = torch.empty((0,), dtype=torch.long, device=proposal_logits.device)

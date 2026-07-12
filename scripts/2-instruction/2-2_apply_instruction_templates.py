@@ -130,6 +130,9 @@ def main() -> None:
         "num_parent_instruction_samples": len(parent_rows),
         "num_referring_target_input_samples": len(referring_targets),
         "num_referring_instruction_samples": len(referring_rows),
+        "referring_amplification_per_parent": (
+            float(len(referring_rows)) / max(len(final_samples), 1)
+        ),
         "include_referring": not args.no_referring,
         "include_evidence_extra": not args.no_evidence_extra,
         "instruction_index": to_repo_rel(instruction_index_paths(args.benchmark_dir)["all"]),
@@ -143,6 +146,12 @@ def main() -> None:
     }
     write_json(args.benchmark_dir / "reports" / "instruction_statistics.json", stats)
     write_json(args.benchmark_dir / "reports" / "instruction_build_report.json", build_report)
+    for split in ("train", "val", "test"):
+        print(
+            f"[INSTRUCTION] {split} parents={stats['parents_by_split'].get(split, 0)} "
+            f"instructions={stats['by_split'].get(split, 0)} "
+            f"per_parent={stats['instructions_per_parent_by_split'].get(split, 0.0):.2f}"
+        )
     print(
         "instruction 索引生成完成: "
         f"parent={len(parent_rows)}, referring={len(referring_rows)}, total={len(instruction_rows)} -> "

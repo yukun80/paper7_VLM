@@ -52,7 +52,11 @@ def training_signal_values(outputs) -> dict[str, float]:
         safe = distribution.clamp_min(1.0e-8)
         values["modality_reliability_entropy"] = float((-(safe * safe.log()).sum(1)).mean())
         values["modality_reliability_peak"] = float(safe.max(1).values.mean())
-    for key in ("null_evidence_weight", "real_evidence_mass", "visual_evidence_delta_norm"):
+    for key in (
+        "null_evidence_weight", "real_evidence_mass", "visual_evidence_delta_norm",
+        "teacher_sample_count", "teacher_sample_fraction",
+        "controller_tokens_per_sample", "controller_padding_ratio",
+    ):
         if key in outputs:
             values[key] = scalar(outputs[key])
     if "modality_active" in outputs:
@@ -79,6 +83,58 @@ def training_signal_values(outputs) -> dict[str, float]:
     return values
 
 
+def training_scalar_tensors(outputs) -> dict[str, torch.Tensor]:
+    """Collect detached scalar diagnostics without synchronizing CUDA."""
+    values: dict[str, torch.Tensor] = {}
+    for key in (*LOSS_KEYS, *ASSIGNMENT_KEYS):
+        if key in outputs:
+            values[key] = outputs[key].detach().float().mean()
+    for source, target in (
+        ("proposal_target_positive_count", "proposal_target_positive_count"),
+        ("proposal_component_count", "proposal_component_count"),
+        ("proposal_matching_coverage_mode", "proposal_matching_coverage_fraction"),
+        ("proposal_verifier_pos_weight", "proposal_verifier_pos_weight"),
+    ):
+        if source in outputs:
+            values[target] = outputs[source].detach().float().mean()
+    if "modality_reliability_weights" in outputs:
+        distribution = outputs["modality_reliability_weights"].detach().float()
+        if "null_evidence_weight" in outputs:
+            distribution = torch.cat(
+                [distribution, outputs["null_evidence_weight"].detach().float()[:, None]], 1
+            )
+        safe = distribution.clamp_min(1.0e-8)
+        values["modality_reliability_entropy"] = (-(safe * safe.log()).sum(1)).mean()
+        values["modality_reliability_peak"] = safe.max(1).values.mean()
+    for key in (
+        "null_evidence_weight", "real_evidence_mass", "visual_evidence_delta_norm",
+        "teacher_sample_count", "teacher_sample_fraction",
+        "controller_tokens_per_sample", "controller_padding_ratio",
+    ):
+        if key in outputs:
+            values[key] = outputs[key].detach().float().mean()
+    if "modality_active" in outputs:
+        values["active_modality_count"] = outputs["modality_active"].detach().float().sum(1).mean()
+    for source, prefix in (
+        ("query_modality_attention", "query_modality_attention"),
+        ("query_scale_attention", "query_scale_attention"),
+    ):
+        if source in outputs:
+            attention = outputs[source].detach().float().clamp_min(1.0e-8)
+            values[f"{prefix}_entropy"] = (-(attention * attention.log()).sum(-1)).mean()
+            values[f"{prefix}_peak"] = attention.max(-1).values.mean()
+    if "proposal_relevance_logits" in outputs:
+        scores = outputs["proposal_relevance_logits"].detach().float()
+        values["proposal_relevance_mean"] = scores.mean()
+        values["proposal_relevance_max"] = scores.max()
+        values["top_query_mean"] = torch.argmax(scores, 1).float().mean()
+    if "proposal_relevance_gates" in outputs:
+        gates = outputs["proposal_relevance_gates"].detach().float()
+        values["proposal_relevance_gate_mean"] = gates.mean()
+        values["proposal_relevance_gate_max"] = gates.max()
+    return values
+
+
 def average_dicts(rows: list[dict[str, float]]) -> dict[str, float]:
     return {
         key: sum(row[key] for row in rows if key in row) / sum(key in row for row in rows)
@@ -96,6 +152,8 @@ TRAIN_LOG_KEYS = (
     "query_modality_attention_peak", "query_scale_attention_entropy", "query_scale_attention_peak",
     "active_modality_count", "null_evidence_weight", "real_evidence_mass",
     "visual_evidence_delta_norm",
+    "teacher_sample_count", "teacher_sample_fraction",
+    "controller_tokens_per_sample", "controller_padding_ratio",
 )
 
 
@@ -113,28 +171,15 @@ def summarize_train_window(rows: list[dict[str, Any]], elapsed: float) -> dict[s
 
 
 def format_train_window(start: int, end: int, count: int, values: dict[str, float]) -> str:
-    parts = [
-        f"steps={start}-{end}", f"n={count}", f"loss={values.get('loss', 0):.4f}",
-        f"iou={values.get('iou', 0):.4f}", f"dice={values.get('dice', 0):.4f}",
+    return " ".join([
+        "[TRAIN]", f"steps={start}-{end}", f"n={count}",
+        f"loss={values.get('loss', 0):.4f}", f"iou={values.get('iou', 0):.4f}",
+        f"dice={values.get('dice', 0):.4f}",
         f"matched_dice={values.get('proposal_matched_mean_dice', 0):.4f}",
-        f"lr={values.get('lr', 0):.2e}", f"sps={values.get('steps_per_sec', 0):.2f}",
-    ]
-    labels = {
-        "proposal_component_recall": "compR", "proposal_component_precision": "compP",
-        "proposal_unmatched_rejection": "reject", "proposal_relevance_ap": "relAP",
-        "proposal_union_dice": "unionD", "proposal_target_positive_count": "posQ",
-        "proposal_component_count": "components", "proposal_matching_coverage_fraction": "coverage",
-        "proposal_verifier_pos_weight": "posW",
-        "top_query_mean": "topQ", "modality_reliability_entropy": "relH",
-        "query_modality_attention_peak": "qAttnP", "active_modality_count": "activeM",
-        "query_scale_attention_peak": "qScaleP",
-        "null_evidence_weight": "null", "real_evidence_mass": "realM",
-        "visual_evidence_delta_norm": "visDelta",
-    }
-    for key, label in labels.items():
-        if key in values:
-            parts.append(f"{label}={values[key]:.3f}")
-    return "train " + " ".join(parts)
+        f"lr={values.get('lr', 0):.2e}",
+        f"sample_sps={values.get('samples_per_sec', 0):.2f}",
+        f"peak_gib={values.get('peak_reserved_gib', 0):.2f}",
+    ])
 
 
 def _named(values: torch.Tensor, names: list[str]) -> dict[str, float]:

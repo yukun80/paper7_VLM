@@ -11,6 +11,9 @@ q/k/v/o projection 上训练 LoRA；新增 mask/evidence 参数保留 FP32 maste
 训练时将每个物理 view description 与对应视觉 token 交错送入 language decoder，并使用 Qwen 原生
 vision-start/vision-end embedding 包围每个压缩 view。模型不生成 bbox，
 也不做灾前灾后变化检测。
+24GB 单卡性能路线默认关闭 Qwen activation checkpoint，用激活显存换取吞吐；显存不足时才
+显式选择 `reentrant`，运行时不会自动回退。训练 batch 按空间尺寸与 Qwen 序列负载分桶，
+consistency teacher 只计算实际 dropped-modality 样本。
 视觉 evidence 消融支持 `shuffled`、`text-only`、`image-text-delta` 和
 `remove:<family>`；它们不改变 SANE 的预训练空间特征，避免把 Qwen evidence 效果与
 dense backbone 变化混在一起。
@@ -25,7 +28,9 @@ argmax，`oracle_matched_proposal` 来自统一 component assignment，仅用于
 生成上限。原尺寸指标遇到损坏的 resize transform 会直接失败，不会静默退回 canvas 指标。
 
 raw 与 pretrained-SANE preset 使用 `64/128/256/384` 尺寸桶；24GB 单卡主路线
-`qwen_psalm_full` 使用 `64/128/256`、`batch_size=1` 和 `grad_accum_steps=4`。
+`qwen_psalm_full` 使用 `64/128/256` 尺寸桶。算法 preset 不绑定硬件参数；正式
+运行参数直接由 small/full YAML 定义，当前24GB配置为BF16、`batch_size=6`、
+`grad_accum_steps=1`、`query_chunk_size=16`和disabled Qwen checkpoint。
 
 主 preset：
 

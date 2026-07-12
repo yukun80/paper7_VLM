@@ -75,6 +75,7 @@ PRESETS: dict[str, dict[str, Any]] = {
     "qwen_psalm_full": {
         **_RAW_COMMON,
         "controller": "qwen_mask_query",
+        "qwen_gradient_checkpointing": "disabled",
         "num_mask_tokens": 16,
         "modality_dropout": 0.2,
         "use_pretrained_sane": True,
@@ -85,8 +86,6 @@ PRESETS: dict[str, dict[str, Any]] = {
         "coarse_proposal_loss_weight": 0.25,
         "semantic_verifier_loss_weight": 0.25,
         "missing_modality_consistency_weight": 0.1,
-        "batch_size": 1,
-        "grad_accum_steps": 4,
         "size_buckets": [64, 128, 256],
         "max_native_size": 256,
     },
