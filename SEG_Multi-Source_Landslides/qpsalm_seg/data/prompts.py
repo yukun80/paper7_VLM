@@ -128,13 +128,15 @@ def build_prompt_triplet(
     *,
     subset_signature: str,
     ablation: str = "normal",
+    instruction_override: str | None = None,
+    condition_override: str | None = None,
 ) -> tuple[str, str, str]:
     """Build task/condition/reasoning without dataset or preprocessing shortcuts."""
     del subset_signature
     if ablation not in {"normal", "shuffled", "fixed-generic", "no-semantic"}:
         raise ValueError(f"未知 instruction_ablation={ablation!r}")
-    task = instruction_text(row)
-    condition = condition_text(row)
+    task = str(instruction_override).strip() if instruction_override else instruction_text(row)
+    condition = str(condition_override).strip() if condition_override else condition_text(row)
     if ablation == "fixed-generic":
         task = "Segment all landslide regions."
         condition = "all landslide regions"

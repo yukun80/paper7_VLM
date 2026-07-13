@@ -59,3 +59,6 @@ configs/qpsalm_v2_smoke.yaml
 
 完整构建、训练、cache、val/test、消融和分析命令统一维护在仓库根目录
 [README.md](../README.md)。
+
+交互推理使用 `qpsalm-demo`，PPT 分层精选使用 `qpsalm-curate-gallery`。两者共享
+`InferenceSession`，只支持 benchmark val/test 样本，并复用 parent-level Qwen vision cache v3。

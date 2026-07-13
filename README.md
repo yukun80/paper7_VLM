@@ -221,6 +221,61 @@ python -m qpsalm_seg.cli.cache_qwen_vision_features \
 
 然后将 eval 命令改为 `--split test --vision-feature-cache outputs/qpsalm_v2/cache/full_qwen_psalm_full_test_vision_v3`。
 
+## 交互推理与 PPT 图库
+
+在浏览器中选择 benchmark 样本、活动模态并输入指令。模型和 Qwen cache 在进程内只加载一次：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.demo \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --checkpoint outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/checkpoint_best.pt \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --split val --device cuda --inbrowser
+```
+
+默认地址为 `http://127.0.0.1:7860`。原始 benchmark 指令对应正式 GT 指标；修改 instruction
+或 condition 后，页面会把 Dice/IoU 标记为参考指标。关闭模态会同时更新像素输入、Qwen view、
+prompt 和 QMEF availability，不会只改变界面文字。
+
+从已有完整 val 报告生成强、典型、失败、指令对、小目标和 Sen12 专题图库：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.curate_gallery \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --checkpoint outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/checkpoint_best.pt \
+  --eval-report outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/eval_val/eval_report.json \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --split val --device cuda \
+  --output-dir outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/ppt_gallery \
+  --overwrite-output
+```
+
+入口只重新推理入选样本，输出 `gallery_index.html`、presentation overview、独立 mask、
+`gallery_manifest.jsonl` 和 `gallery_summary.json`。PPT 图不导出 GT-only oracle proposal。
+
+只生成局部/指代分割的 PPT 图库：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.curate_gallery \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --checkpoint outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/checkpoint_best.pt \
+  --eval-report outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/eval_val/eval_report.json \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --split val --task-family referring_landslide_segmentation --device cuda \
+  --max-items 120 \
+  --output-dir outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/ppt_gallery_referring \
+  --overwrite-output
+```
+
+`--task-family` 在选样前过滤评估记录；可重复传入以组合多个任务族。该命令会从同一
+parent 的不同位置、尺度、形态和数量指令中优先保留对照 pair，并同时抽取强、典型和失败案例。
+
 ## 消融与真实性测试
 
 instruction 消融：
@@ -435,6 +490,8 @@ python -m qpsalm_seg.cli.compare_runs \
 | `qpsalm-diagnose-run` | `qpsalm_seg.cli.diagnose_run` |
 | `qpsalm-recommend-threshold` | `qpsalm_seg.cli.recommend_threshold` |
 | `qpsalm-export-tables` | `qpsalm_seg.cli.export_tables` |
+| `qpsalm-curate-gallery` | `qpsalm_seg.cli.curate_gallery` |
+| `qpsalm-demo` | `qpsalm_seg.cli.demo` |
 
 ## 静态检查与单元测试
 
@@ -449,6 +506,7 @@ python -B -m py_compile $(find scripts/1-benchmark scripts/2-instruction \
 PYTHONPATH=SEG_Multi-Source_Landslides python -B -m unittest \
   SEG_Multi-Source_Landslides/tests/test_benchmark_v2.py \
   SEG_Multi-Source_Landslides/tests/test_refactor_core.py \
+  SEG_Multi-Source_Landslides/tests/test_inference_gallery.py \
   SEG_Multi-Source_Landslides/tests/test_renderer.py \
   SEG_Multi-Source_Landslides/tests/test_v2_integration.py -v
 ```

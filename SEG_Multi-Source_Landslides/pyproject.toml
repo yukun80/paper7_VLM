@@ -16,6 +16,7 @@ dependencies = [
   "transformers",
   "peft",
   "bitsandbytes",
+  "gradio>=6.20,<7",
   "tqdm",
 ]
 
@@ -34,6 +35,8 @@ qpsalm-compare-runs = "qpsalm_seg.cli.compare_runs:main"
 qpsalm-diagnose-run = "qpsalm_seg.cli.diagnose_run:main"
 qpsalm-recommend-threshold = "qpsalm_seg.cli.recommend_threshold:main"
 qpsalm-export-tables = "qpsalm_seg.cli.export_tables:main"
+qpsalm-curate-gallery = "qpsalm_seg.cli.curate_gallery:main"
+qpsalm-demo = "qpsalm_seg.cli.demo:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -112,6 +112,37 @@ def _compose_grid(panels: list[Image.Image], header_lines: list[str], max_cols: 
     return canvas
 
 
+def render_reference_view(batch: dict[str, Any], sample_idx: int = 0) -> np.ndarray:
+    """公开的诊断参考图接口；不会进入模型 forward。"""
+    return _to_rgb(batch, sample_idx)
+
+
+def render_modality_view(item: ModalityInstance, target_size: int) -> np.ndarray:
+    """公开的单模态渲染接口。"""
+    return _render_modality(item, target_size)
+
+
+def overlay_binary_mask(
+    rgb: np.ndarray,
+    mask: np.ndarray,
+    color: tuple[int, int, int],
+    alpha: float = 0.42,
+) -> np.ndarray:
+    return _overlay_mask(rgb, mask, color, alpha)
+
+
+def label_image_panel(panel: np.ndarray, label: str) -> Image.Image:
+    return _label_panel(panel, label)
+
+
+def compose_image_grid(
+    panels: list[Image.Image],
+    header_lines: list[str],
+    max_cols: int = 4,
+) -> Image.Image:
+    return _compose_grid(panels, header_lines, max_cols)
+
+
 def _save_multimodal_overview(
     out_dir: Path,
     stem: str,
