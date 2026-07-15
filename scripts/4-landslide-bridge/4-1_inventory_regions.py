@@ -24,6 +24,7 @@ from landslide_bridge_common import (
     area_bin,
     atomic_save_npy,
     binary_mask,
+    bridge_parent_from_landslide_v2,
     bridge_dir,
     connected_components,
     ensure_writable,
@@ -345,11 +346,12 @@ def main() -> None:
     config = load_config(args.config)
     source_dir = source_benchmark_dir(args.mode, args.source_benchmark)
     output_dir = bridge_dir(args.mode, args.output_dir)
-    parents = read_jsonl(source_dir / "indexes/all.jsonl")
-    parents = [
-        row for row in parents
+    source_rows = read_jsonl(source_dir / "indexes/all.jsonl")
+    parent_source_rows = [
+        row for row in source_rows
         if row.get("source_level") == "patch" and row.get("supervision") == "mask"
     ]
+    parents = [bridge_parent_from_landslide_v2(row) for row in parent_source_rows]
     parents.sort(key=lambda row: str(row["parent_sample_id"]))
     if args.max_samples > 0:
         parents = parents[:args.max_samples]

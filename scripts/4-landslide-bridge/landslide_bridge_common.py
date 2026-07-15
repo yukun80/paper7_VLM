@@ -14,6 +14,7 @@ import math
 import os
 import re
 import tempfile
+from copy import deepcopy
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -25,7 +26,7 @@ import yaml
 
 
 SCHEMA_VERSION = "qpsalm_landslide_region_description_v1"
-BUILDER_VERSION = "landslide_bridge_m2_v3_pilot_quota_gate"
+BUILDER_VERSION = "landslide_bridge_m2_v4_parent_schema_adapter"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_ROOT = REPO_ROOT.parent
 DATASETS_ROOT = Path(os.environ.get("PAPER7_DATASETS_ROOT") or WORKSPACE_ROOT / "datasets").resolve(strict=False)
@@ -145,6 +146,55 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     if payload.get("version") != "landslide_bridge_v1":
         raise ValueError(f"Bridge config 版本不正确: {config_path}")
     return payload
+
+
+def bridge_parent_from_landslide_v2(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert one Landslide V2 parent row into the Bridge parent contract.
+
+    Landslide V2 parent indexes use ``sample_id`` as their primary key, while
+    referring rows use ``parent_sample_id``. Bridge records consistently expose
+    the latter name. Keeping this conversion at the boundary prevents derived
+    referring records from being mistaken for parent records.
+    """
+    if not isinstance(row, dict):
+        raise TypeError(f"Landslide V2 parent 必须是 object，实际为 {type(row).__name__}")
+    if row.get("schema_version") != "multisource_landslide_schema_v2":
+        raise ValueError(
+            "Bridge 仅接受 multisource_landslide_schema_v2 parent，"
+            f"实际为 {row.get('schema_version')!r}"
+        )
+    sample_id = str(row.get("sample_id") or "").strip()
+    if not sample_id:
+        raise ValueError("Landslide V2 parent 缺少非空 sample_id")
+    existing_parent_id = str(row.get("parent_sample_id") or "").strip()
+    if existing_parent_id and existing_parent_id != sample_id:
+        raise ValueError(
+            "Landslide V2 parent 的 sample_id 与 parent_sample_id 冲突: "
+            f"sample_id={sample_id!r} parent_sample_id={existing_parent_id!r}"
+        )
+    if row.get("source_level") != "patch" or row.get("supervision") != "mask":
+        raise ValueError(
+            f"Bridge parent 必须是 patch/mask 记录: {sample_id} "
+            f"source_level={row.get('source_level')!r} supervision={row.get('supervision')!r}"
+        )
+    required = {
+        "split": row.get("split"),
+        "dataset_name": row.get("dataset_name"),
+        "mask": row.get("mask"),
+        "modalities": row.get("modalities"),
+        "spatial": row.get("spatial"),
+    }
+    missing = [name for name, value in required.items() if value in (None, "", {})]
+    if missing:
+        raise ValueError(f"Landslide V2 parent {sample_id} 缺少 Bridge 必需字段: {missing}")
+    if not isinstance(row["mask"], dict) or not row["mask"].get("path"):
+        raise ValueError(f"Landslide V2 parent {sample_id} 缺少已物化 mask.path")
+    if not isinstance(row["modalities"], dict):
+        raise ValueError(f"Landslide V2 parent {sample_id} 的 modalities 必须是 object")
+
+    parent = deepcopy(row)
+    parent["parent_sample_id"] = sample_id
+    return parent
 
 
 def read_json(path: Path) -> Any:

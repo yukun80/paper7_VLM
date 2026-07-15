@@ -23,6 +23,7 @@ BRIDGE_SCRIPTS = REPO_ROOT / "scripts/4-landslide-bridge"
 sys.path.insert(0, str(BRIDGE_SCRIPTS))
 
 from landslide_bridge_common import (  # noqa: E402
+    bridge_parent_from_landslide_v2,
     cohen_kappa,
     connected_components,
     geometry_from_mask,
@@ -73,6 +74,43 @@ class LandslideBridgeProtocolTest(unittest.TestCase):
         )
         self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
         self.assertEqual(load_config()["version"], "landslide_bridge_v1")
+
+    @staticmethod
+    def _landslide_v2_parent() -> dict:
+        return {
+            "schema_version": "multisource_landslide_schema_v2",
+            "sample_id": "parent_001",
+            "source_level": "patch",
+            "supervision": "mask",
+            "split": "train",
+            "dataset_name": "synthetic",
+            "mask": {"path": "benchmark/example/mask.npy"},
+            "modalities": {
+                "optical_rgb": {
+                    "available": True,
+                    "path": "benchmark/example/optical.npy",
+                }
+            },
+            "spatial": {"original_size": [16, 16]},
+        }
+
+    def test_landslide_v2_parent_is_adapted_without_mutating_source(self) -> None:
+        source = self._landslide_v2_parent()
+        parent = bridge_parent_from_landslide_v2(source)
+        self.assertEqual(parent["parent_sample_id"], source["sample_id"])
+        self.assertNotIn("parent_sample_id", source)
+        parent["modalities"]["optical_rgb"]["available"] = False
+        self.assertTrue(source["modalities"]["optical_rgb"]["available"])
+
+    def test_landslide_v2_parent_rejects_conflicting_or_missing_identity(self) -> None:
+        conflict = self._landslide_v2_parent()
+        conflict["parent_sample_id"] = "different_parent"
+        with self.assertRaisesRegex(ValueError, "冲突"):
+            bridge_parent_from_landslide_v2(conflict)
+        missing = self._landslide_v2_parent()
+        missing.pop("sample_id")
+        with self.assertRaisesRegex(ValueError, "sample_id"):
+            bridge_parent_from_landslide_v2(missing)
 
     def test_eight_connected_components_and_area_filter(self) -> None:
         mask = np.zeros((8, 8), dtype=np.uint8)
