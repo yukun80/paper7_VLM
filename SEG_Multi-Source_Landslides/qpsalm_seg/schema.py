@@ -233,6 +233,32 @@ class MultiScaleFeatures:
 
 
 @dataclass
+class TaskNeutralVisualEvidence:
+    """Parent-level visual tokens selected only by the active modality subset."""
+
+    tokens: torch.Tensor
+    token_mask: torch.Tensor
+    family_ids: torch.Tensor
+    token_counts: tuple[int, ...]
+    view_segments: list[list[tuple[str, int]]]
+    cache_keys: tuple[str, ...]
+    cache_format: str
+
+
+@dataclass
+class MultisourceBackboneState:
+    """Task-neutral SANE state reusable by segmentation and region description."""
+
+    features: MultiScaleFeatures
+    valid_mask: torch.Tensor
+    active_subsets: tuple[ActiveModalitySubset, ...]
+    metadata: tuple[dict[str, Any], ...]
+    reference_hw: tuple[int, int]
+    use_full_evidence: bool
+    visual_evidence: TaskNeutralVisualEvidence | None = None
+
+
+@dataclass
 class SemanticEvidence:
     """Unified task, condition, reasoning and optional visual evidence tokens."""
 
@@ -275,6 +301,31 @@ class EvidenceFeatures:
     coverage_ratio: torch.Tensor
     modality_semantic_anchors: torch.Tensor
     modality_names: list[list[str]]
+
+
+@dataclass
+class SegmentationState:
+    """Segmentation-specific semantic and QMEF state over a backbone encoding."""
+
+    backbone: MultisourceBackboneState
+    semantic: SemanticEvidence
+    evidence: EvidenceFeatures
+
+
+@dataclass
+class RegionEvidenceState:
+    """Region-conditioned evidence state populated by MGRR without altering SANE."""
+
+    backbone: MultisourceBackboneState
+    region_masks: torch.Tensor
+    region_valid_mask: torch.Tensor
+    region_tokens: torch.Tensor | None = None
+    region_sequence_tokens: torch.Tensor | None = None
+    region_sequence_mask: torch.Tensor | None = None
+    context_tokens: torch.Tensor | None = None
+    geometry_tokens: torch.Tensor | None = None
+    modality_tokens: torch.Tensor | None = None
+    diagnostics: dict[str, torch.Tensor] = field(default_factory=dict)
 
 
 @dataclass

@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qpsalm_description_record_v2.schema.json",
+  "title": "QPSALM description benchmark record",
+  "type": "object",
+  "required": [
+    "schema_version", "sample_id", "parent_sample_id", "source_dataset",
+    "component_benchmark", "split", "task_family", "visual_ref",
+    "region_geometry", "target_status", "region_source", "instruction",
+    "answer_type", "answers", "structured_targets", "provenance", "quality_flags",
+    "canonical_parent_id", "merged_parent_ids", "source_datasets", "perceptual_cluster_id"
+  ],
+  "properties": {
+    "schema_version": {"const": "qpsalm_description_v2"},
+    "sample_id": {"type": "string", "minLength": 1},
+    "parent_sample_id": {"type": "string", "minLength": 1},
+    "canonical_parent_id": {"type": "string", "minLength": 1},
+    "merged_parent_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "source_datasets": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "perceptual_cluster_id": {"type": "string", "minLength": 1},
+    "region_pair_id": {"type": ["string", "null"]},
+    "source_dataset": {"type": "string", "minLength": 1},
+    "component_benchmark": {"enum": ["rs_global_caption_v1", "rs_region_alignment_v1"]},
+    "split": {"type": ["string", "null"], "enum": ["train", "dev", "test", null]},
+    "task_family": {"enum": ["global_caption", "region_referring_expression", "region_grounding"]},
+    "visual_ref": {
+      "type": "object",
+      "required": ["type", "path", "storage_mode", "width", "height", "sha256", "dhash64", "modality_instance"],
+      "properties": {
+        "type": {"const": "single_image"},
+        "path": {"type": "string", "minLength": 1},
+        "storage_mode": {"const": "materialized_copy"},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "dhash64": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "modality_instance": {"type": "object"}
+      }
+    },
+    "region_geometry": {
+      "type": "object",
+      "required": ["type", "mask_path", "bbox_xyxy_normalized", "bbox_xyxy_pixel_half_open", "coordinate_space"],
+      "properties": {
+        "type": {"enum": ["full_image", "box", "mask", "null"]},
+        "mask_path": {"type": ["string", "null"]},
+        "bbox_xyxy_normalized": {"type": ["array", "null"], "minItems": 4, "maxItems": 4},
+        "bbox_xyxy_pixel_half_open": {"type": ["array", "null"], "minItems": 4, "maxItems": 4},
+        "coordinate_space": {"const": "original_image"}
+      }
+    },
+    "target_status": {"enum": ["present", "absent", "uncertain"]},
+    "region_source": {"type": "string", "minLength": 1},
+    "instruction": {"type": "string", "minLength": 1},
+    "answer_type": {"type": "string", "minLength": 1},
+    "answers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "language", "annotation_origin", "quality", "caption_quality_weight", "source_provenance"],
+        "properties": {
+          "text": {"type": "string", "minLength": 1},
+          "language": {"const": "en"},
+          "annotation_origin": {"type": "string"},
+          "quality": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+          "caption_quality_weight": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+          "source_provenance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "source_dataset", "source_parent_sample_id", "source_sample_id",
+                "source_answer_index", "source_text_sha256", "annotation_origin"
+              ],
+              "properties": {
+                "source_dataset": {"type": "string", "minLength": 1},
+                "source_parent_sample_id": {"type": "string", "minLength": 1},
+                "source_sample_id": {"type": "string", "minLength": 1},
+                "source_answer_index": {"type": "integer", "minimum": 0},
+                "source_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "annotation_origin": {"type": "string", "minLength": 1},
+                "annotation_path": {"type": ["string", "null"]},
+                "original_record_id": {"type": ["string", "null"]}
+              }
+            }
+          }
+        }
+      }
+    },
+    "structured_targets": {"type": "object"},
+    "provenance": {
+      "type": "object",
+      "required": ["builder_version", "annotation_path", "source_image_path", "original_record_id", "license_status", "license_source", "annotation_origin", "sources"],
+      "properties": {
+        "source_image_path": {"type": "string", "pattern": "^datasets/"},
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["source_dataset", "source_parent_sample_id", "source_image_path"],
+            "properties": {
+              "source_dataset": {"type": "string", "minLength": 1},
+              "source_parent_sample_id": {"type": "string", "minLength": 1},
+              "source_image_path": {"type": "string", "pattern": "^datasets/"}
+            }
+          }
+        }
+      }
+    },
+    "quality_flags": {"type": "array", "items": {"type": "string"}}
+  }
+}

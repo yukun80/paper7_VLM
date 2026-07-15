@@ -1,0 +1,38 @@
+version: landslide_bridge_v1
+language: en
+source_schema: multisource_landslide_schema_v2
+output_schema: qpsalm_landslide_region_description_v1
+
+regions:
+  connectivity: 8
+  min_component_area_pixels: 4
+  min_component_area_fraction: 0.00005
+  max_review_present_regions_per_parent: 1
+  max_review_no_target_regions_per_parent: 1
+
+pilot:
+  parents: 300
+  split_parent_quotas:
+    train: 180
+    val: 60
+    test: 60
+  stratify_by: [dataset_name, modality_family_combo, present_area_bin, has_no_target]
+  seed: 42
+
+evidence:
+  minimum_region_coverage: 0.8
+  context_ring_fraction_of_equivalent_radius: 0.5
+  context_ring_min_pixels: 3
+  context_ring_max_pixels: 32
+  normalized_relative_tolerance: 0.15
+  physical_normalization_methods:
+    - preserve_physical_values
+    - identity_physical_values
+  unknown_units: [unknown, unitless, normalized, display_rgb, digital_number]
+
+review:
+  required_reviewers: 2
+  decisions: [accept, revise, reject]
+  arbitration_decisions: [accept, revise, reject]
+  expert_splits: [train, val, test]
+

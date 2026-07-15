@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager
+import copy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
@@ -295,6 +296,7 @@ class QwenMaskQueryController(nn.Module):
                 task_type="CAUSAL_LM",
             )
             self.model = get_peft_model(model, lora)
+            self.lora_config = copy.deepcopy(lora)
             # FP16 autocast still needs FP32 adapter master weights/gradients.
             # Otherwise GradScaler unscale can erase very small LoRA updates.
             for name, parameter in self.model.named_parameters():
@@ -302,6 +304,7 @@ class QwenMaskQueryController(nn.Module):
                     parameter.data = parameter.data.float()
         else:
             self.model = model
+            self.lora_config = None
         self.gradient_checkpointing_mode = checkpoint_mode
         self.gradient_checkpointing_kwargs = configure_qwen_gradient_checkpointing(
             self.model, checkpoint_mode
@@ -359,6 +362,51 @@ class QwenMaskQueryController(nn.Module):
             if config.qwen_lora_trainable
             else ()
         )
+
+    def ensure_named_adapter(self, adapter_name: str) -> None:
+        """Create one explicit PEFT adapter with the segmentation LoRA protocol."""
+        if not adapter_name or adapter_name == "default":
+            return
+        peft_config = getattr(self.model, "peft_config", None)
+        if not isinstance(peft_config, dict) or "default" not in peft_config:
+            raise RuntimeError("命名 description adapter 需要已启用的 Qwen PEFT default adapter")
+        if adapter_name not in peft_config:
+            self.model.add_adapter(adapter_name, copy.deepcopy(peft_config["default"]))
+            for name, parameter in self.model.named_parameters():
+                if f".{adapter_name}." in name and "lora_" in name:
+                    parameter.data = parameter.data.float()
+        if adapter_name not in self.model.peft_config:
+            raise RuntimeError(f"PEFT adapter 创建失败: {adapter_name}")
+
+    @contextmanager
+    def adapter_scope(self, adapter_name: str):
+        """Activate one adapter without letting PEFT rewrite optimizer ownership.
+
+        ``PeftModel.set_adapter`` also toggles ``requires_grad``.  A description
+        forward exits this context before ``loss.backward()``, so merely
+        restoring the previous adapter can silently freeze the description
+        leaves that already participate in the graph.  Preserve and restore
+        the optimizer-selected flags independently from adapter activation.
+        """
+        self.ensure_named_adapter(adapter_name)
+        active = tuple(getattr(self.model, "active_adapters", ("default",)))
+        previous = active[0] if active else "default"
+        trainability = {
+            name: bool(parameter.requires_grad)
+            for name, parameter in self.model.named_parameters()
+            if "lora_" in name
+        }
+        self.model.set_adapter(adapter_name)
+        try:
+            observed = tuple(getattr(self.model, "active_adapters", ()))
+            if observed != (adapter_name,):
+                raise RuntimeError(f"PEFT adapter 激活失败: expected={adapter_name} observed={observed}")
+            yield
+        finally:
+            self.model.set_adapter(previous)
+            for name, parameter in self.model.named_parameters():
+                if name in trainability:
+                    parameter.requires_grad_(trainability[name])
 
     @staticmethod
     def _initialize_view_projection(projection: nn.Linear) -> None:

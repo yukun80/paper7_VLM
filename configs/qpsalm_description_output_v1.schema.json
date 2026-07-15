@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qpsalm_description_output_v1.schema.json",
+  "title": "QPSALM grounded region description output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "target_status", "region", "evidence", "summary"],
+  "properties": {
+    "schema_version": {"const": "qpsalm_description_output_v1"},
+    "target_status": {"enum": ["present", "absent", "uncertain"]},
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "size_class", "shape", "elongation", "compactness", "fragmentation"],
+      "properties": {
+        "location": {"enum": ["upper_left", "upper_center", "upper_right", "center_left", "center", "center_right", "lower_left", "lower_center", "lower_right", "distributed", "unknown", "unavailable"]},
+        "size_class": {"enum": ["tiny", "small", "medium", "large", "extensive", "unknown", "unavailable"]},
+        "shape": {"enum": ["compact", "elongated", "branching", "fragmented", "irregular", "unknown", "unavailable"]},
+        "elongation": {"enum": ["low", "moderate", "high", "unknown", "unavailable"]},
+        "compactness": {"enum": ["compact", "moderate", "dispersed", "unknown", "unavailable"]},
+        "fragmentation": {"enum": ["single", "few_components", "many_components", "highly_fragmented", "unknown", "unavailable"]}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface_observation", "terrain_support", "sar_support", "deformation_support", "surrounding_context", "evidence_sufficiency"],
+      "properties": {
+        "surface_observation": {"type": "string"},
+        "terrain_support": {"enum": ["supports", "does_not_support", "insufficient_evidence", "unknown", "unavailable"]},
+        "sar_support": {"enum": ["supports", "does_not_support", "insufficient_evidence", "unknown", "unavailable"]},
+        "deformation_support": {"enum": ["supports", "does_not_support", "insufficient_evidence", "unknown", "unavailable"]},
+        "surrounding_context": {"type": "string"},
+        "evidence_sufficiency": {"enum": ["sufficient", "partial", "insufficient", "unavailable"]}
+      }
+    },
+    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "summary": {"type": "string"}
+  }
+}
+

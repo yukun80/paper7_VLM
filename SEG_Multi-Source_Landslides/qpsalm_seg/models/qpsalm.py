@@ -15,7 +15,15 @@ from qpsalm_seg.controllers import (
     validate_qwen_model_dir,
 )
 from qpsalm_seg.losses import proposal_set_losses
-from qpsalm_seg.schema import ModalityBatch, SegmentationOutput, SemanticEvidence
+from qpsalm_seg.schema import (
+    ActiveModalitySubset,
+    ModalityBatch,
+    MultisourceBackboneState,
+    SegmentationOutput,
+    SegmentationState,
+    SemanticEvidence,
+    TaskNeutralVisualEvidence,
+)
 
 from .pmrd import ProposalSetMaskRefinementDecoder
 from .qmef import QwenGuidedEvidenceFusion
@@ -84,15 +92,102 @@ class MultiSourceQwenPSALMSeg(nn.Module):
             query_chunk_size=int(config.query_chunk_size),
         )
 
-    def _decode(self, batch: ModalityBatch, semantic: SemanticEvidence, *, use_full: bool) -> SegmentationOutput:
+    @staticmethod
+    def _full_subsets(batch: ModalityBatch) -> list[ActiveModalitySubset]:
+        return [
+            ActiveModalitySubset(
+                active_names=tuple(item.name for item in instances),
+                dropped_names=(),
+                signature="teacher-full",
+                is_full=True,
+            )
+            for instances in batch.full_instances
+        ]
+
+    def _task_neutral_visual_evidence(
+        self, batch: ModalityBatch, *, use_full: bool,
+    ) -> TaskNeutralVisualEvidence | None:
+        if self.vision_bank is None:
+            return None
+        device = next(self.parameters()).device
+        subsets = self._full_subsets(batch) if use_full else batch.active_subsets
+        tokens, mask, counts, family_ids, segments = self.vision_bank.tokens_for(
+            batch.visual_evidence_key,
+            subsets,
+            device,
+            int(self.config.qwen_view_tokens_per_view),
+        )
+        return TaskNeutralVisualEvidence(
+            tokens=tokens,
+            token_mask=mask,
+            family_ids=family_ids,
+            token_counts=tuple(int(value) for value in counts),
+            view_segments=segments,
+            cache_keys=tuple(str(value) for value in batch.visual_evidence_key),
+            cache_format=str(self.vision_bank.manifest.get("format") or "unknown"),
+        )
+
+    def encode_multisource(
+        self,
+        batch: ModalityBatch,
+        *,
+        use_full: bool = False,
+        include_visual_tokens: bool = True,
+    ) -> MultisourceBackboneState:
+        """Encode task-neutral multisource evidence once for downstream tasks."""
+        if not isinstance(batch, ModalityBatch):
+            raise TypeError(f"expected ModalityBatch, got {type(batch).__name__}")
         pyramids = self.sane(batch, use_full=use_full)
+        device = next(self.parameters()).device
+        metadata_fields = {
+            "sample_id", "parent_sample_id", "dataset_name", "split", "original_size",
+            "resize_transform", "raw_modality_combo", "modality_family_combo",
+        }
+        task_neutral_metadata = tuple(
+            {key: value for key, value in row.items() if key in metadata_fields}
+            for row in batch.metadata
+        )
+        return MultisourceBackboneState(
+            features=pyramids,
+            valid_mask=batch.valid_mask.to(device=device, non_blocking=True),
+            active_subsets=tuple(self._full_subsets(batch) if use_full else batch.active_subsets),
+            metadata=task_neutral_metadata,
+            reference_hw=batch.reference_hw,
+            use_full_evidence=bool(use_full),
+            visual_evidence=(
+                self._task_neutral_visual_evidence(batch, use_full=use_full)
+                if include_visual_tokens else None
+            ),
+        )
+
+    def build_segmentation_state(
+        self,
+        batch: ModalityBatch,
+        *,
+        use_full: bool = False,
+        backbone: MultisourceBackboneState | None = None,
+    ) -> SegmentationState:
+        """Build segmentation-only semantic/QMEF state over a reusable backbone."""
+        semantic = self.controller.encode_batch(batch, use_full=use_full)
+        backbone_state = backbone or self.encode_multisource(
+            batch, use_full=use_full, include_visual_tokens=False
+        )
+        if backbone_state.use_full_evidence != bool(use_full):
+            raise ValueError("backbone evidence subset 与 segmentation state 不一致")
         evidence = self.qmef(
-            pyramids,
+            backbone_state.features,
             semantic,
             enable_semantic=bool(self.config.use_qmef),
             enable_reliability=bool(self.config.use_qmef),
         )
-        coarse_queries, coarse_masks = self.pmrd.propose(evidence, semantic, batch.reference_hw)
+        return SegmentationState(backbone=backbone_state, semantic=semantic, evidence=evidence)
+
+    def segment_from_state(self, state: SegmentationState) -> SegmentationOutput:
+        """Decode PMRD proposals without re-encoding SANE or Qwen evidence."""
+        semantic = state.semantic
+        evidence = state.evidence
+        reference_hw = state.backbone.reference_hw
+        coarse_queries, coarse_masks = self.pmrd.propose(evidence, semantic, reference_hw)
         if self.config.use_query_spatial_attention:
             (
                 query_evidence,
@@ -114,7 +209,7 @@ class MultiSourceQwenPSALMSeg(nn.Module):
             ))
         if self.config.use_mask_refinement:
             queries, masks = self.pmrd.refine(
-                coarse_queries, coarse_masks, query_evidence, modality_weights, evidence, batch.reference_hw
+                coarse_queries, coarse_masks, query_evidence, modality_weights, evidence, reference_hw
             )
         else:
             queries, masks = coarse_queries, coarse_masks
@@ -172,8 +267,8 @@ class MultiSourceQwenPSALMSeg(nn.Module):
             for module in modules:
                 module.training = False
             with torch.no_grad():
-                semantic = self.controller.encode_batch(batch, use_full=True)
-                return self._decode(batch, semantic, use_full=True).final_mask_logits.detach()
+                state = self.build_segmentation_state(batch, use_full=True)
+                return self.segment_from_state(state).final_mask_logits.detach()
         finally:
             for module, training in zip(modules, training_states):
                 module.training = training
@@ -188,8 +283,8 @@ class MultiSourceQwenPSALMSeg(nn.Module):
         # Build the trainable student graph before running the stateful Qwen
         # controller in no-grad teacher mode. This prevents teacher inference
         # state from changing the QLoRA path used by the student forward.
-        semantic = self.controller.encode_batch(batch, use_full=False)
-        output = self._decode(batch, semantic, use_full=False)
+        state = self.build_segmentation_state(batch, use_full=False)
+        output = self.segment_from_state(state)
         teacher_logits = None
         if self.training and consistency_weight > 0 and dropped_indices:
             teacher_logits = self._teacher_mask_logits(batch.select(dropped_indices))

@@ -387,6 +387,10 @@ class QwenVisionFeatureBank(nn.Module):
                 selected.append(view)
         return selected
 
+    def task_neutral_record(self, key: str) -> dict[str, Any]:
+        """Expose one validated parent record for a separate task-neutral cache."""
+        return self._record(str(key), apply_token_ablation=False)
+
     @staticmethod
     def _apply_augment(value: torch.Tensor, augment: dict[str, Any]) -> torch.Tensor:
         if bool(augment.get("hflip")):

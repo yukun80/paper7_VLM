@@ -17,6 +17,7 @@ from .io import (
 )
 from .prompts import PROMPT_VERSION, build_prompt_triplet
 from .samplers import SizeBucketBatchSampler, TaskBalancedSizeBucketBatchSampler
+from .single_image import build_single_image_modality_instance
 from .transforms import resize_pad_tensor, swap_padding_after_flip, valid_mask_from_transform
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "SizeBucketBatchSampler",
     "TaskBalancedSizeBucketBatchSampler",
     "build_prompt_triplet",
+    "build_single_image_modality_instance",
     "choose_active_subset",
     "load_npy_array",
     "modality_valid_mask",

@@ -1,0 +1,63 @@
+# Segmentation-grounded description Small protocol. Runtime overrides belong in the CLI.
+segmentation_config: SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml
+segmentation_preset: qwen_psalm_full
+segmentation_checkpoint: outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/checkpoint_best.pt
+segmentation_vision_cache: outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3
+description_vision_cache: outputs/qpsalm_description/cache/small_vision_v1
+description_benchmark: benchmark/qpsalm_description_v2_small
+bridge_benchmark: benchmark/landslide_region_description_v1_small
+
+stage: bridge_auto
+region_protocol: vision_only
+region_encoder: mgrr
+seed: 42
+batch_size: 1
+grad_accum_steps: 4
+num_workers: 0
+max_steps: 1000
+warmup_steps: 50
+learning_rate: 0.0001
+desc_adapter_lr_scale: 0.2
+weight_decay: 0.01
+max_grad_norm: 1.0
+amp_dtype: bf16
+log_interval: 50
+val_interval: 250
+save_interval: 500
+max_train_samples: 0
+max_val_samples: 256
+max_generate_samples: 32
+max_new_tokens: 256
+evaluation_mode: gt_mask
+segmentation_mask_threshold: 0.5
+counterfactual_samples: 16
+counterfactual_modes:
+  - full_mask
+  - zero_mask
+  - shuffled_mask
+  - region_swap
+  - modality_removal
+  - cross_parent_modality_swap
+checkpoint_metric: auto
+rsicap_mmrs_fraction: 0.30
+bridge_expert_task_pattern:
+  - bridge
+  - bridge
+  - bridge
+  - dior
+  - global_caption
+predicted_mask_fraction: 0.25
+output_dir: outputs/qpsalm_description/small_bridge_auto
+joint_global_stages:
+  - mmrs_caption
+  - rsicap_caption
+joint_region_stage: bridge_expert
+joint_task_pattern:
+  - segmentation
+  - global_caption
+  - segmentation
+  - region_description
+joint_segmentation_batch_size: 1
+joint_description_batch_size: 1
+joint_train_shared_segmentation_dense: false
+segmentation_retention_max_drop: 0.01

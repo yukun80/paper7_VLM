@@ -17,6 +17,7 @@ dependencies = [
   "peft",
   "bitsandbytes",
   "gradio>=6.20,<7",
+  "jsonschema>=4.20",
   "tqdm",
 ]
 
@@ -25,6 +26,7 @@ qpsalm-inspect-data = "qpsalm_seg.cli.inspect_data:main"
 qpsalm-cache-index = "qpsalm_seg.cli.cache_index:main"
 qpsalm-check-env = "qpsalm_seg.cli.check_env:main"
 qpsalm-cache-qwen-vision-features = "qpsalm_seg.cli.cache_qwen_vision_features:main"
+qpsalm-cache-description-vision-features = "qpsalm_seg.cli.cache_description_vision_features:main"
 qpsalm-integration-check = "qpsalm_seg.cli.integration_check:main"
 qpsalm-ablation-report = "qpsalm_seg.cli.ablation_report:main"
 qpsalm-eval-ablation-suite = "qpsalm_seg.cli.eval_ablation_suite:main"
@@ -37,6 +39,17 @@ qpsalm-recommend-threshold = "qpsalm_seg.cli.recommend_threshold:main"
 qpsalm-export-tables = "qpsalm_seg.cli.export_tables:main"
 qpsalm-curate-gallery = "qpsalm_seg.cli.curate_gallery:main"
 qpsalm-demo = "qpsalm_seg.cli.demo:main"
+qpsalm-train-description = "qpsalm_seg.cli.train_description:main"
+qpsalm-eval-description = "qpsalm_seg.cli.eval_description:main"
+qpsalm-export-predicted-regions = "qpsalm_seg.cli.export_predicted_regions:main"
+qpsalm-build-oof-folds = "qpsalm_seg.cli.build_oof_folds:main"
+qpsalm-merge-oof-predictions = "qpsalm_seg.cli.merge_oof_predictions:main"
+qpsalm-train-segdesc-joint = "qpsalm_seg.cli.train_segdesc_joint:main"
+qpsalm-eval-segdesc-retention = "qpsalm_seg.cli.eval_segdesc_retention:main"
+qpsalm-compare-description-runs = "qpsalm_seg.cli.compare_description_runs:main"
+qpsalm-eval-description-zero-shot = "qpsalm_seg.cli.eval_description_zero_shot:main"
+qpsalm-demo-description = "qpsalm_seg.cli.demo_description:main"
+qpsalm-score-expert-factuality = "qpsalm_seg.cli.score_expert_factuality:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

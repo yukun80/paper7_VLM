@@ -62,3 +62,37 @@ configs/qpsalm_v2_smoke.yaml
 
 交互推理使用 `qpsalm-demo`，PPT 分层精选使用 `qpsalm-curate-gallery`。两者共享
 `InferenceSession`，只支持 benchmark val/test 样本，并复用 parent-level Qwen vision cache v3。
+
+## Segmentation-Grounded Description 扩展
+
+描述主线在保留原分割 `forward(ModalityBatch)` 的同时增加：
+
+```text
+MultisourceBackboneState
+    -> RegionPrompt
+    -> MGRR multi-granularity token sequence
+    -> Qwen desc_adapter
+    -> raw JSON + summary
+```
+
+- `MultisourceBackboneState` 是任务无关的 SANE/视觉 cache 状态；分割和描述可复用一次编码。
+- `SegmentationState` 保存 QMEF、PMRD proposal 和 relevance，只服务分割任务。
+- `RegionEvidenceState` 保存 exact-mask、context ring、component replay、geometry、逐模态证据及
+  变长 `region_sequence_tokens`，不把 segmentation-conditioned fused feature 当作通用 caption 表征。
+- `qpsalm_description_vision_cache_v1` 独立于 segmentation Vision Cache v3，按 parent 缓存，
+  禁止包含 instruction、region mask、答案或 segmentation state。
+- Qwen 基座共享，`default` adapter 用于分割，`desc_adapter` 用于描述；每个 batch 只激活一个。
+- `crop_only`、`full_image_box`、`masked_pooling`、`roi_replay_only`、
+  `mgrr_no_context` 和 `mgrr` 使用同一 trainer/evaluator，便于受控消融。
+- 描述 checkpoint 协议为 `qpsalm_segdesc_v1`。跨 D-stage 使用 `--initialize-from`，同 stage
+  中断续训才使用 `--resume`。
+
+M6 支持 GT-mask、fixed-prediction 和 end-to-end 三套评价，以及 full/zero/shuffled mask、
+region swap、modality removal 和 cross-parent modality swap。D4 的 train predicted masks 必须
+来自 parent-level OOF segmentation checkpoint；代码会核验 fold train/holdout index hash 和
+checkpoint 内记录的训练索引。M7 使用独立 segmentation/global-caption/region-description
+DataLoader 交替训练，并在完整 val 上执行 positive Dice retention gate。
+
+当前代码提供 M0-M7 工程路径，但 M2 专家审核、Small 三 seed MGRR 门槛和 M7 retention
+仍必须由人工运行后才能宣称科学验收。完整的手动命令、顺序和准入条件统一维护在仓库根目录
+[README.md](../README.md)，研究协议见 [docs/benchmark_GAR.md](../docs/benchmark_GAR.md)。

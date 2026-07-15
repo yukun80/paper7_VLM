@@ -52,6 +52,12 @@ from qpsalm_seg.data.dataset import (
     select_monitor_rows,
 )
 from qpsalm_seg.data.samplers import TaskBalancedSizeBucketBatchSampler, task_group
+from qpsalm_seg.description import (
+    MultiGranularityRegionReplay,
+    SingleVectorRegionPooling,
+    rasterize_region_geometry,
+)
+from qpsalm_seg.description.counterfactuals import counterfactual_backbone
 from qpsalm_seg.matching import assign_proposals
 from qpsalm_seg.metrics import batch_binary_metric_tensors, batch_binary_metrics
 from qpsalm_seg.models import MultiSourceQwenPSALMSeg
@@ -596,6 +602,114 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertEqual(tuple(first.final_mask_logits.shape), (1, 1, 64, 64))
         self.assertTrue(torch.isfinite(first["loss"]))
         self.assertTrue(torch.allclose(first.final_mask_logits, second.final_mask_logits, atol=2.0e-5, rtol=2.0e-5))
+
+    def test_explicit_backbone_and_segmentation_state_match_forward(self) -> None:
+        batch = synthetic_batch([
+            instance("optical_rgb", "optical", 3, 64),
+            instance("dem", "terrain", 1, 32),
+        ])
+        with torch.no_grad():
+            backbone = self.model.encode_multisource(
+                batch, use_full=False, include_visual_tokens=False
+            )
+            state = self.model.build_segmentation_state(
+                batch, use_full=False, backbone=backbone
+            )
+            explicit = self.model.segment_from_state(state)
+            regular = self.model(batch)
+        self.assertTrue(torch.allclose(
+            explicit.final_mask_logits, regular.final_mask_logits, atol=1.0e-6, rtol=1.0e-6
+        ))
+        self.assertEqual(backbone.reference_hw, batch.reference_hw)
+        self.assertIsNone(backbone.visual_evidence)
+
+    def test_backbone_metadata_does_not_capture_task_text(self) -> None:
+        batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32)
+        batch.metadata[0]["instruction"] = "private task text"
+        batch.metadata[0]["condition"] = "private condition"
+        backbone = self.model.encode_multisource(
+            batch, include_visual_tokens=False
+        )
+        self.assertNotIn("instruction", backbone.metadata[0])
+        self.assertNotIn("condition", backbone.metadata[0])
+
+    def test_mgrr_region_tokens_backpropagate_to_sane_features(self) -> None:
+        batch = synthetic_batch([
+            instance("optical_rgb", "optical", 3, 32),
+            instance("dem", "terrain", 1, 32),
+        ], size=32)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        region = torch.zeros((1, 1, 32, 32))
+        region[:, :, 4:12, 5:13] = 1
+        region[:, :, 20:25, 21:27] = 1
+        mgrr = MultiGranularityRegionReplay(32, max_components=8)
+        state = mgrr(backbone, region, protocol="assisted")
+        self.assertEqual(tuple(state.region_tokens.shape), (1, 1, 32))
+        self.assertIsNotNone(state.region_sequence_tokens)
+        self.assertIsNotNone(state.region_sequence_mask)
+        self.assertGreater(int(state.region_sequence_mask.sum()), 6)
+        self.assertGreaterEqual(float(state.diagnostics["component_count"][0, 0]), 2.0)
+        state.region_sequence_tokens[state.region_sequence_mask].sum().backward()
+        self.assertTrue(any(
+            parameter.grad is not None and torch.isfinite(parameter.grad).all()
+            for parameter in self.model.sane.parameters()
+        ))
+
+    def test_mgrr_null_region_uses_null_evidence(self) -> None:
+        batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        mgrr = MultiGranularityRegionReplay(32)
+        state = mgrr(backbone, torch.zeros((1, 1, 32, 32)), protocol="vision_only")
+        self.assertAlmostEqual(float(state.diagnostics["null_reliability"][0, 0]), 1.0, places=5)
+        self.assertEqual(float(state.geometry_tokens.abs().sum()), 0.0)
+
+    def test_region_encoder_ablation_modes_share_output_contract(self) -> None:
+        batch = synthetic_batch([
+            instance("optical_rgb", "optical", 3, 32),
+            instance("dem", "terrain", 1, 32),
+        ], size=32)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        region = torch.zeros((1, 1, 32, 32))
+        region[:, :, 5:20, 7:22] = 1
+        encoders = [
+            SingleVectorRegionPooling(32, "crop_only"),
+            SingleVectorRegionPooling(32, "masked_pooling"),
+            SingleVectorRegionPooling(32, "full_image_box"),
+            MultiGranularityRegionReplay(32, ablation="roi_replay_only"),
+            MultiGranularityRegionReplay(32, ablation="no_context"),
+            MultiGranularityRegionReplay(32, ablation="full"),
+        ]
+        for encoder in encoders:
+            state = encoder(backbone, region)
+            self.assertEqual(tuple(state.region_tokens.shape), (1, 1, 32))
+            self.assertEqual(tuple(state.region_sequence_mask.shape[:2]), (1, 1))
+            self.assertTrue(bool(torch.isfinite(state.region_sequence_tokens).all()))
+
+    def test_single_modality_removal_removes_dense_and_visual_evidence(self) -> None:
+        batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        removed = counterfactual_backbone(backbone, "modality_removal")
+        self.assertEqual(removed.features.samples[0], [])
+        self.assertEqual(removed.active_subsets[0].active_names, ())
+        mgrr = MultiGranularityRegionReplay(32)
+        region = torch.ones((1, 1, 32, 32))
+        state = mgrr(removed, region)
+        self.assertAlmostEqual(float(state.diagnostics["null_reliability"][0, 0]), 1.0)
+
+    def test_region_geometry_unifies_full_box_mask_and_null(self) -> None:
+        valid = torch.ones((1, 10, 20))
+        full = rasterize_region_geometry({"type": "full_image"}, valid)
+        box = rasterize_region_geometry({
+            "type": "box", "bbox_xyxy_pixel_half_open": [2, 3, 8, 7]
+        }, valid)
+        explicit = torch.zeros((1, 5, 10))
+        explicit[:, 1:3, 2:5] = 1
+        mask = rasterize_region_geometry({"type": "mask"}, valid, explicit_mask=explicit)
+        null = rasterize_region_geometry({"type": "null"}, valid)
+        self.assertEqual(int(full.sum()), 200)
+        self.assertEqual(int(box.sum()), 24)
+        self.assertGreater(int(mask.sum()), 0)
+        self.assertEqual(int(null.sum()), 0)
 
     def test_torch_pin_memory_preserves_typed_modality_batch(self) -> None:
         batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32)

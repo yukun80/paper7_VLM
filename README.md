@@ -80,6 +80,458 @@ python scripts/2-instruction/2-2_apply_instruction_templates.py --benchmark-dir 
 python scripts/2-instruction/2-3_validate_instruction_index.py --benchmark-dir benchmark/multisource_landslide_v2_small
 ```
 
+## 构建 Description Benchmark M0/M1
+
+`docs/benchmark_GAR.md` 的下一阶段先构建遥感全图描述与区域对齐 benchmark。
+脚本只从原始数据中选择所需 parent，并将对应图片原样复制到 benchmark；不会修改
+现有 Landslide Benchmark V2。默认读取：
+
+```text
+../datasets/MMRS-1M
+../datasets/RSGPT/dataset/RSICap
+../datasets/RSGPT/dataset/RSIEval
+```
+
+同时兼容旧的 `external/RSGPT/dataset` 布局；可用 `PAPER7_RSGPT_DATA_ROOT` 覆盖。
+构建并验证 small：
+
+```bash
+PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+bash scripts/run_3_build_description_benchmark.sh small
+```
+
+如需重建已有派生产物：
+
+```bash
+RUN_CONTROL=--overwrite \
+PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+bash scripts/run_3_build_description_benchmark.sh small
+```
+
+默认 small 保留全部 RSICap/RSIEval，分层选择 12,000 个 MMRS Caption canonical parent 和
+5,000 个 DIOR-RSVG parent。dHash 只用于召回候选；统一 RGB 64x64 后 MAE 不超过 3.0 的
+同图重编码会在 split 前合并为一个 canonical parent，并合并多来源 caption。输出位于：
+
+```text
+../benchmark/qpsalm_description_v2_small/
+├── data/
+├── indexes/
+├── manifests/
+└── reports/
+```
+
+其中 `3-4_deduplicate_and_split.py` 只冻结 selected source records，
+`3-5_materialize_description_images.py` 才复制图片并发布最终索引；验证与汇总依次为
+`3-6_validate_description_benchmark.py` 和 `3-7_summarize_description_benchmark.py`。
+可用 `DESCRIPTION_COPY_WORKERS=8` 调整本地复制并行度；研究复现时应保持默认
+`DESCRIPTION_PERCEPTUAL_MAE_THRESHOLD=3.0`，修改门槛必须形成新的 split protocol。
+canonical 合并后的每条 caption answer 都保留 source answer index、原文 hash 和来源记录；
+`verified_perceptual_duplicates.jsonl` 同时记录 canonical 选择与每个成员的 split action。
+
+在 `/tmp` 手动执行小规模闭环而不覆盖正式 benchmark：
+
+```bash
+PAPER7_BENCHMARK_ROOT=/tmp \
+MAX_SAMPLES=8 \
+RUN_CONTROL=--overwrite \
+DESCRIPTION_COPY_WORKERS=4 \
+PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+bash scripts/run_3_build_description_benchmark.sh small
+```
+
+最终 `all/train/dev/test` 索引只引用 `data/` 中的图片；`*_source.jsonl` 和
+provenance 保留 `datasets/...` 路径用于审计。质量门为
+`reports/validation_report.json` 中 `errors == []`，并要求
+`verified_perceptual_duplicate_cross_split_groups == 0`。训练应读取
+`indexes/train_eligible.jsonl`，完整 `train.jsonl` 仍保留零权重审计答案。DIOR 只提供
+box-to-phrase 和 phrase-to-candidate-region 对齐监督，不作为详细区域 caption 真值。
+物化图片仅用于本地研究；未经各源数据许可审核不得公开重新分发。
+本阶段通过后再进入 Landslide Bridge、MGRR 和描述 Adapter 训练。
+
+## Landslide Bridge Pilot
+
+M2 从 `multisource_landslide_v2_<mode>` 构建区域清单、三级多源证据、规则候选文本和
+双人专家审核包。`pseudo_instance_component` 仅表示 8 邻域伪实例组件，不等同人工实例。
+准备阶段不会生成专家标签：
+
+```bash
+BRIDGE_STAGE=prepare \
+BRIDGE_PILOT_PARENTS=300 \
+RUN_CONTROL=--overwrite \
+PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+bash scripts/run_4_build_landslide_bridge.sh small
+```
+
+审核者分别填写 `review_package/reviewer_1_template.*` 和
+`review_package/reviewer_2_template.*` 的副本。`decision` 只允许 `accept/revise/reject`；
+双人分歧必须提供仲裁文件。Pilot 分析后，还需人工复制并填写
+`manifests/evaluation_gate_manifest.template.json`，将状态显式冻结，再执行合并：
+
+```bash
+BRIDGE_STAGE=merge \
+REVIEWER_1=/path/to/reviewer_1_completed.jsonl \
+REVIEWER_2=/path/to/reviewer_2_completed.jsonl \
+ARBITRATION_FILE=/path/to/arbitration_completed.jsonl \
+EVALUATION_GATE=/path/to/evaluation_gate_frozen.json \
+RUN_CONTROL=--overwrite \
+PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+bash scripts/run_4_build_landslide_bridge.sh small
+```
+
+prepare 验收状态为 `awaiting_expert_review` 且 `errors == []`；只有仲裁清零、三个 split
+均有审核通过记录且 gate 已冻结时，状态才会变为 `expert_pilot_frozen`。Bridge 只引用
+Landslide V2 已物化模态，不读取原始 `datasets/`，也不重复复制多源数组。
+
+M2 prepare 有效后，可构建独立的 task-neutral Description Vision Cache v1。它按 parent
+缓存，不包含 instruction、region geometry 或 segmentation state；现有 segmentation
+Vision Cache v3 只读复用，不会被覆盖：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.cache_description_vision_features \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --description-benchmark benchmark/qpsalm_description_v2_small \
+  --bridge-benchmark benchmark/landslide_region_description_v1_small \
+  --segmentation-vision-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --output-dir outputs/qpsalm_description/cache/small_vision_v1 \
+  --device cuda --backend qwen --overwrite
+```
+
+## Segmentation-Grounded Description M3-M7
+
+以下命令均从仓库根目录手动运行。`--resume` 只用于同一 stage 中断续训，会恢复优化器和
+scheduler；`--initialize-from` 用于进入下一个 stage，只加载模型权重并重置该 stage 的优化状态。
+当消融实验显式改变 `region_encoder` 时，初始化器只重新初始化该 encoder，并严格迁移其余
+共享参数；迁移报告会记录跳过的 region keys。其他架构差异仍会直接失败。
+不得用 `--resume` 跨越 D0-D4。M2 专家数据未冻结前，只能运行 M3、D-1 和 D3a 工程验证，
+不能把 D3b、D4、M7 的输出作为正式科学结果。
+
+先发布只含 component 引用、hash 和精确 JSONL 行号的统一索引。它不复制 M1/M2 图片或 mask：
+
+```bash
+RUN_CONTROL=--overwrite \
+PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+bash scripts/run_5_build_segdesc_dataset.sh small
+```
+
+### D-1 基线与过拟合
+
+原生 Qwen3-VL 全图描述 zero-shot 基线：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.eval_description_zero_shot \
+  --model models_zoo/Qwen3-VL-2B-Instruct \
+  --benchmark benchmark/qpsalm_description_v2_small \
+  --split dev --device cuda --max-samples 64 \
+  --output-dir outputs/qpsalm_description/d_minus_1_zero_shot_dev \
+  --overwrite-output
+```
+
+32-64 条 Bridge 样本过拟合，用于检查 `desc_adapter`、MGRR、causal labels 和 checkpoint：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage overfit --region-encoder mgrr --device cuda \
+  --max-steps 100 --max-train-samples 64 --max-val-samples 64 \
+  --val-interval 25 --save-interval 50 \
+  --output-dir outputs/qpsalm_description/d_minus_1_overfit \
+  --overwrite-output
+```
+
+### D0-D3 课程训练
+
+D0 使用 MMRS Caption 做遥感场景预适配：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage mmrs_caption --device cuda \
+  --output-dir outputs/qpsalm_description/d0_mmrs_seed42 --overwrite-output
+```
+
+D1 使用 RSICap 校准详细描述，并按配置回放 30% MMRS：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage rsicap_caption --device cuda \
+  --initialize-from outputs/qpsalm_description/d0_mmrs_seed42/checkpoint_best.pt \
+  --output-dir outputs/qpsalm_description/d1_rsicap_seed42 --overwrite-output
+```
+
+D2 只做 DIOR 同图候选区域对齐；batch 必须至少为 2：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage dior_alignment --batch-size 4 --device cuda \
+  --initialize-from outputs/qpsalm_description/d1_rsicap_seed42/checkpoint_best.pt \
+  --output-dir outputs/qpsalm_description/d2_dior_seed42 --overwrite-output
+```
+
+D3a 使用全部合法 train mask 和规则化结构事实。该 stage 没有人工 val，因此后续初始化使用
+`checkpoint_last.pt`，不能按自动 candidate 指标选择“科学 best”：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage bridge_auto --region-protocol vision_only --region-encoder mgrr --device cuda \
+  --initialize-from outputs/qpsalm_description/d2_dior_seed42/checkpoint_best.pt \
+  --output-dir outputs/qpsalm_description/d3a_bridge_auto_seed42 --overwrite-output
+```
+
+只有 M2 双人审核、仲裁和 gate 冻结后才能运行 D3b。D3b 使用独立 Bridge、DIOR 和 global-caption
+DataLoader，默认按 3:1:1 交替：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage bridge_expert --region-protocol vision_only --region-encoder mgrr --device cuda \
+  --initialize-from outputs/qpsalm_description/d3a_bridge_auto_seed42/checkpoint_last.pt \
+  --output-dir outputs/qpsalm_description/d3b_bridge_expert_seed42 --overwrite-output
+```
+
+将 `--region-encoder` 分别设为 `crop_only`、`full_image_box`、`masked_pooling`、
+`roi_replay_only`、`mgrr_no_context`、`mgrr`，并从相同 D2 checkpoint 初始化，才能形成受控的
+M4 消融。Assisted 和 Vision-only 也必须分开训练、分开报告。
+
+### GT、固定预测与端到端评价
+
+GT-mask oracle：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.eval_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage bridge_expert \
+  --checkpoint outputs/qpsalm_description/d3b_bridge_expert_seed42/checkpoint_best.pt \
+  --split val --evaluation-mode gt_mask --region-encoder mgrr --device cuda \
+  --output-dir outputs/qpsalm_description/d3b_bridge_expert_seed42/eval_gt_val \
+  --overwrite-output
+```
+
+固定 val prediction 先由同一冻结分割 checkpoint 离线导出：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.export_predicted_regions \
+  --segmentation-config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --checkpoint outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/checkpoint_best.pt \
+  --source-index benchmark/landslide_region_description_v1_small/indexes/expert_val.jsonl \
+  --split val \
+  --vision-feature-cache outputs/qpsalm_v2/cache/small_qwen_psalm_full_qwen_vision_v3 \
+  --output-dir outputs/qpsalm_description/predicted_val --device cuda --overwrite-output
+```
+
+固定预测评价必须同时使用 `stage=predicted_mask` 和 `evaluation_mode=fixed_prediction`：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.eval_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage predicted_mask \
+  --checkpoint outputs/qpsalm_description/d4_predicted_seed42/checkpoint_best.pt \
+  --split val --evaluation-mode fixed_prediction \
+  --predicted-index outputs/qpsalm_description/predicted_val/predicted_val.jsonl \
+  --device cuda --output-dir outputs/qpsalm_description/d4_predicted_seed42/eval_fixed_val \
+  --overwrite-output
+```
+
+端到端使用 `--stage bridge_expert --evaluation-mode end_to_end`。评估器按 Bridge region 身份
+严格选择 segmentation instruction：`gt_global_mask` 使用全图指令，`gt_referring_mask`、
+no-target 以及带 referring alias 的伪 component 使用对应的 referring/no-target 指令。
+没有语言可识别 alias 的纯 `pseudo_instance_component` 不会回退为全图 mask，而是从端到端集合
+排除并记录在 `end_to_end_coverage.excluded_by_reason`。逐条映射写入
+`end_to_end_target_audit.jsonl`；默认以 `segmentation_mask_threshold=0.5` 二值化分割输出。
+三种评价必须生成独立目录，不能混合统计。原始生成保存在
+`raw_generations.jsonl`，主指标只读取未修复 JSON；deterministic repair 仅作错误分析。
+
+### D4 Out-of-Fold predicted-mask curriculum
+
+先建立 parent-level 三折索引：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.build_oof_folds \
+  --segmentation-index benchmark/multisource_landslide_v2_small/indexes/instruction_train.jsonl \
+  --bridge-index benchmark/landslide_region_description_v1_small/indexes/expert_train.jsonl \
+  --num-folds 3 --seed 42 \
+  --output-dir outputs/qpsalm_description/oof_folds_small --overwrite-output
+```
+
+对 fold 0、1、2 分别构建与其 train/holdout 指纹绑定的 segmentation Vision Cache v3，随后从头
+训练一个排除该 fold 的 segmentation checkpoint。以 fold 0 为例：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.cache_qwen_vision_features \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --train-index outputs/qpsalm_description/oof_folds_small/fold_0_train.jsonl \
+  --val-index outputs/qpsalm_description/oof_folds_small/fold_0_holdout.jsonl \
+  --output-dir outputs/qpsalm_description/oof_folds_small/cache_fold_0 \
+  --device cuda --backend qwen --overwrite
+
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full --device cuda \
+  --train-index outputs/qpsalm_description/oof_folds_small/fold_0_train.jsonl \
+  --val-index outputs/qpsalm_description/oof_folds_small/fold_0_holdout.jsonl \
+  --vision-feature-cache outputs/qpsalm_description/oof_folds_small/cache_fold_0 \
+  --output-dir outputs/qpsalm_description/oof_folds_small/seg_fold_0 \
+  --overwrite-output --skip-torch-preflight
+```
+
+用 fold-specific checkpoint 只预测对应 holdout。导出器会同时核验 checkpoint 中的
+`config.train_index`、fold train hash 和 prediction holdout hash：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.export_predicted_regions \
+  --segmentation-config SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml \
+  --preset qwen_psalm_full \
+  --checkpoint outputs/qpsalm_description/oof_folds_small/seg_fold_0/checkpoint_best.pt \
+  --source-index benchmark/landslide_region_description_v1_small/indexes/expert_train.jsonl \
+  --split train --checkpoint-fold 0 \
+  --fold-manifest outputs/qpsalm_description/oof_folds_small/fold_manifest.json \
+  --train-index outputs/qpsalm_description/oof_folds_small/fold_0_train.jsonl \
+  --val-index outputs/qpsalm_description/oof_folds_small/fold_0_holdout.jsonl \
+  --prediction-index outputs/qpsalm_description/oof_folds_small/fold_0_holdout.jsonl \
+  --vision-feature-cache outputs/qpsalm_description/oof_folds_small/cache_fold_0 \
+  --output-dir outputs/qpsalm_description/predicted_fold_0 --device cuda \
+  --overwrite-output
+```
+
+三个 fold 全部导出后合并；缺失、重复、in-fold 或错误 checkpoint 会直接失败：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.merge_oof_predictions \
+  --fold-manifest outputs/qpsalm_description/oof_folds_small/fold_manifest.json \
+  --input outputs/qpsalm_description/predicted_fold_0/predicted_train_0.jsonl \
+  --input outputs/qpsalm_description/predicted_fold_1/predicted_train_1.jsonl \
+  --input outputs/qpsalm_description/predicted_fold_2/predicted_train_2.jsonl \
+  --output outputs/qpsalm_description/predicted_train_oof.jsonl
+```
+
+D4 从通过 D3b 的权重开始，默认混入 25% OOF predicted masks，其余仍为 expert GT regions：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage predicted_mask \
+  --predicted-index outputs/qpsalm_description/predicted_train_oof.jsonl \
+  --initialize-from outputs/qpsalm_description/d3b_bridge_expert_seed42/checkpoint_best.pt \
+  --device cuda --output-dir outputs/qpsalm_description/d4_predicted_seed42 \
+  --overwrite-output
+```
+
+### 专家事实性与三 seed MGRR 门槛
+
+先冻结模型生成，再为同一批 parent 生成两份独立审核文件：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.score_expert_factuality \
+  --eval-dir outputs/qpsalm_description/d3b_bridge_expert_seed42/eval_gt_val \
+  --write-template \
+  --output outputs/qpsalm_description/d3b_bridge_expert_seed42/eval_gt_val/expert_review_template.jsonl
+```
+
+两名审核者填写后汇总 parent-level ERFS：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.score_expert_factuality \
+  --eval-dir outputs/qpsalm_description/d3b_bridge_expert_seed42/eval_gt_val \
+  --review /path/to/reviewer_1.jsonl --review /path/to/reviewer_2.jsonl \
+  --output outputs/qpsalm_description/d3b_bridge_expert_seed42/eval_gt_val/expert_factuality_report.json
+```
+
+`qpsalm-compare-description-runs` 需要三个 seed 各自成对的 generation、DIOR retrieval 和
+expert factuality 报告；正式准入同时要求 ERFS 的 paired bootstrap CI 下界大于 0、R@1 提升，
+且专家 unsupported claim rate 不越过预注册非劣界限。
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.compare_description_runs \
+  --baseline outputs/crop_s42/eval --candidate outputs/mgrr_s42/eval --seed 42 \
+  --baseline outputs/crop_s123/eval --candidate outputs/mgrr_s123/eval --seed 123 \
+  --baseline outputs/crop_s3407/eval --candidate outputs/mgrr_s3407/eval --seed 3407 \
+  --baseline-retrieval outputs/crop_s42/dior_eval \
+  --candidate-retrieval outputs/mgrr_s42/dior_eval \
+  --baseline-retrieval outputs/crop_s123/dior_eval \
+  --candidate-retrieval outputs/mgrr_s123/dior_eval \
+  --baseline-retrieval outputs/crop_s3407/dior_eval \
+  --candidate-retrieval outputs/mgrr_s3407/dior_eval \
+  --baseline-expert outputs/crop_s42/expert_factuality_report.json \
+  --candidate-expert outputs/mgrr_s42/expert_factuality_report.json \
+  --baseline-expert outputs/crop_s123/expert_factuality_report.json \
+  --candidate-expert outputs/mgrr_s123/expert_factuality_report.json \
+  --baseline-expert outputs/crop_s3407/expert_factuality_report.json \
+  --candidate-expert outputs/mgrr_s3407/expert_factuality_report.json \
+  --output outputs/qpsalm_description/mgrr_seed_gate.json
+```
+
+### M7 联合训练与分割保持
+
+M7 新运行必须用 `--initialize-from` 加载通过 M6 的 checkpoint，不能随机初始化描述头：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.train_segdesc_joint \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --initialize-from outputs/qpsalm_description/d4_predicted_seed42/checkpoint_best.pt \
+  --region-stage predicted_mask \
+  --predicted-index outputs/qpsalm_description/predicted_train_oof.jsonl \
+  --device cuda --output-dir outputs/qpsalm_description/m7_joint_seed42 \
+  --overwrite-output
+```
+
+主路线默认令 `joint_train_shared_segmentation_dense=false`：SANE/QMEF/PMRD 与 controller
+dense projection 保持冻结，segmentation batch 只更新 `default` adapter，description batch
+只更新 `desc_adapter`、MGRR 和描述投影。`--train-shared-segmentation-dense` 仅用于已经通过
+主路线 retention 后的独立消融，不能与默认结果混报。
+
+`grad_accum_steps` 表示一个 optimizer step 内、对当前选中任务连续累积的 microbatch 数；
+任务不会在同一次梯度累积中切换。默认 task pattern 为
+`segmentation, global_caption, segmentation, region_description`，即 50/25/25。
+
+训练结束必须在与分割基线相同的完整 val 上执行 retention，而不是只看 monitor subset：
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.eval_segdesc_retention \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --checkpoint outputs/qpsalm_description/m7_joint_seed42/checkpoint_best.pt \
+  --baseline-eval-report outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt/eval_val/eval_report.json \
+  --device cuda --output-dir outputs/qpsalm_description/m7_joint_seed42/retention_full_val \
+  --overwrite-output
+```
+
+交互质检使用 `qpsalm-demo-description`，默认监听 `127.0.0.1:7861`。所有 M3-M7
+工程入口完成并不等于 Full 准入；只有专家 Pilot、三 seed 和 retention 门槛均通过后才能构建 Full。
+
+```bash
+PYTHONPATH=SEG_Multi-Source_Landslides \
+python -m qpsalm_seg.cli.demo_description \
+  --config SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml \
+  --stage bridge_expert \
+  --checkpoint outputs/qpsalm_description/d3b_bridge_expert_seed42/checkpoint_best.pt \
+  --split val --device cuda
+```
+
 ## 模型 Preset
 
 主 preset 由 `qpsalm_seg/presets.py` 定义：
@@ -115,7 +567,7 @@ small：
 BENCHMARK_SIZE=small \
 PRESET=qwen_psalm_full \
 SEED=42 \
-RUN_NAME=small_qwen_b6_bf16_nockpt \
+RUN_NAME=small_qwen_b4_bf16_nockpt \
 RUN_CONTROL=--overwrite \
 CACHE_CONTROL=reuse \
 bash SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh
@@ -127,7 +579,7 @@ full：
 BENCHMARK_SIZE=full \
 PRESET=qwen_psalm_full \
 SEED=42 \
-RUN_NAME=full_qwen_b6_bf16_nockpt \
+RUN_NAME=full_qwen_b4_bf16_nockpt \
 RUN_CONTROL=--overwrite \
 CACHE_CONTROL=reuse \
 bash SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh
@@ -437,9 +889,9 @@ PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.train \
 
 ```bash
 PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.summarize_run \
-  --run-dir outputs/qpsalm_v2/throughput_b6_nf4 --no-export-tables
+  --run-dir outputs/qpsalm_v2/throughput_b4_nf4 --no-export-tables
 PYTHONPATH=SEG_Multi-Source_Landslides python -m qpsalm_seg.cli.summarize_run \
-  --run-dir outputs/qpsalm_v2/throughput_b8_nf4 --no-export-tables
+  --run-dir outputs/qpsalm_v2/throughput_b4_frozen_bf16 --no-export-tables
 ```
 
 终端 `train_performance.steady_state_last_window` 用于比较稳定吞吐，
@@ -480,6 +932,7 @@ python -m qpsalm_seg.cli.compare_runs \
 | `qpsalm-cache-index` | `qpsalm_seg.cli.cache_index` |
 | `qpsalm-check-env` | `qpsalm_seg.cli.check_env` |
 | `qpsalm-cache-qwen-vision-features` | `qpsalm_seg.cli.cache_qwen_vision_features` |
+| `qpsalm-cache-description-vision-features` | `qpsalm_seg.cli.cache_description_vision_features` |
 | `qpsalm-integration-check` | `qpsalm_seg.cli.integration_check` |
 | `qpsalm-ablation-report` | `qpsalm_seg.cli.ablation_report` |
 | `qpsalm-eval-ablation-suite` | `qpsalm_seg.cli.eval_ablation_suite` |
@@ -492,15 +945,30 @@ python -m qpsalm_seg.cli.compare_runs \
 | `qpsalm-export-tables` | `qpsalm_seg.cli.export_tables` |
 | `qpsalm-curate-gallery` | `qpsalm_seg.cli.curate_gallery` |
 | `qpsalm-demo` | `qpsalm_seg.cli.demo` |
+| `qpsalm-train-description` | `qpsalm_seg.cli.train_description` |
+| `qpsalm-eval-description` | `qpsalm_seg.cli.eval_description` |
+| `qpsalm-build-oof-folds` | `qpsalm_seg.cli.build_oof_folds` |
+| `qpsalm-export-predicted-regions` | `qpsalm_seg.cli.export_predicted_regions` |
+| `qpsalm-merge-oof-predictions` | `qpsalm_seg.cli.merge_oof_predictions` |
+| `qpsalm-train-segdesc-joint` | `qpsalm_seg.cli.train_segdesc_joint` |
+| `qpsalm-eval-segdesc-retention` | `qpsalm_seg.cli.eval_segdesc_retention` |
+| `qpsalm-compare-description-runs` | `qpsalm_seg.cli.compare_description_runs` |
+| `qpsalm-eval-description-zero-shot` | `qpsalm_seg.cli.eval_description_zero_shot` |
+| `qpsalm-demo-description` | `qpsalm_seg.cli.demo_description` |
+| `qpsalm-score-expert-factuality` | `qpsalm_seg.cli.score_expert_factuality` |
 
 ## 静态检查与单元测试
 
 ```bash
 bash -n scripts/run_1_build_benchmark.sh scripts/run_2_build_instruction_dataset.sh \
+  scripts/run_3_build_description_benchmark.sh \
+  scripts/run_4_build_landslide_bridge.sh \
+  scripts/run_5_build_segdesc_dataset.sh \
   SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh \
   SEG_Multi-Source_Landslides/scripts/run_qpsalm_smoke.sh
 
 python -B -m py_compile $(find scripts/1-benchmark scripts/2-instruction \
+  scripts/3-description scripts/4-landslide-bridge scripts/5-segdesc \
   SEG_Multi-Source_Landslides/qpsalm_seg -name '*.py' -type f)
 
 PYTHONPATH=SEG_Multi-Source_Landslides python -B -m unittest \
@@ -508,7 +976,11 @@ PYTHONPATH=SEG_Multi-Source_Landslides python -B -m unittest \
   SEG_Multi-Source_Landslides/tests/test_refactor_core.py \
   SEG_Multi-Source_Landslides/tests/test_inference_gallery.py \
   SEG_Multi-Source_Landslides/tests/test_renderer.py \
-  SEG_Multi-Source_Landslides/tests/test_v2_integration.py -v
+  SEG_Multi-Source_Landslides/tests/test_v2_integration.py \
+  SEG_Multi-Source_Landslides/tests/test_description_benchmark.py \
+  SEG_Multi-Source_Landslides/tests/test_landslide_bridge.py \
+  SEG_Multi-Source_Landslides/tests/test_segdesc_protocol.py -v
 ```
 
-算法设计与阶段门见 [docs/opt_refactor_algo.md](docs/opt_refactor_algo.md)。
+分割算法设计见 [docs/opt_refactor_algo.md](docs/opt_refactor_algo.md)，描述 benchmark、MGRR、
+双 Adapter、训练课程和科学门槛见 [docs/benchmark_GAR.md](docs/benchmark_GAR.md)。
