@@ -29,7 +29,7 @@ from qpsalm_seg.config import QPSalmConfig, save_config
 from qpsalm_seg.data import MultiSourceLandslideDataset, qpsalm_collate
 from qpsalm_seg.engine.checkpoint import load_checkpoint
 from qpsalm_seg.engine.common import build_model
-from qpsalm_seg.engine.evaluator import evaluate
+from qpsalm_seg.engine.evaluator import evaluate, evaluation_population_identity
 from qpsalm_seg.engine.trainer import train
 from qpsalm_seg.models.vision_cache import QwenVisionFeatureBank
 
@@ -77,6 +77,31 @@ def mask_entry(path: Path, array: np.ndarray) -> dict:
 
 
 class BenchmarkV2IntegrationTest(unittest.TestCase):
+    def test_evaluation_population_identity_is_order_independent_and_strict(self) -> None:
+        rows = [
+            {
+                "sample_id": "sample-b", "parent_sample_id": "parent-b",
+                "dataset_name": "synthetic", "task_family": "global",
+                "instruction": "Segment all landslides.", "active_subset": "optical",
+            },
+            {
+                "sample_id": "sample-a", "parent_sample_id": "parent-a",
+                "dataset_name": "synthetic", "task_family": "referring",
+                "instruction": "Segment the left landslide.", "active_subset": "optical+terrain",
+                "target_mask_path": "benchmark/masks/left.npy",
+            },
+        ]
+        first = evaluation_population_identity(rows)
+        second = evaluation_population_identity(list(reversed(rows)))
+        self.assertEqual(first["sha256"], second["sha256"])
+        self.assertTrue(first["complete"])
+        self.assertTrue(first["unique"])
+        changed = [dict(row) for row in rows]
+        changed[1]["target_mask_path"] = "benchmark/masks/right.npy"
+        self.assertNotEqual(first["sha256"], evaluation_population_identity(changed)["sha256"])
+        duplicate = evaluation_population_identity([rows[0], rows[0]])
+        self.assertFalse(duplicate["unique"])
+
     def _fixture(self, root: Path) -> QPSalmConfig:
         h, w = 24, 32
         data_dir = root / "data"
@@ -214,6 +239,11 @@ class BenchmarkV2IntegrationTest(unittest.TestCase):
             self.assertEqual(load_checkpoint(run_dir / "checkpoint_last.pt", model), 2)
             report = evaluate(model, loader, torch.device("cpu"), threshold=0.5)
             self.assertEqual(int(report["coverage"]["num_samples"]), 4)
+            population = report["coverage"]["sample_population"]
+            self.assertEqual(population["num_records"], 4)
+            self.assertTrue(population["complete"])
+            self.assertTrue(population["unique"])
+            self.assertEqual(len(population["sha256"]), 64)
             self.assertEqual(int(report["instruction_sensitivity"]["num_no_target"]), 1)
             self.assertEqual(int(report["instruction_sensitivity"]["num_paired_parents"]), 1)
             self.assertEqual(float(report["instruction_sensitivity"]["mean_paired_target_iou_16"]), 0.0)

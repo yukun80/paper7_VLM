@@ -51,7 +51,7 @@ class DescriptionVisionFeatureBank:
             "format", "protocol", "builder_version", "model_revision", "processor_revision",
             "layers", "spatial_sizes", "view_tokens_per_view", "spatial_channels", "token_dim",
             "backend", "input_fingerprints", "num_samples", "components", "lookup", "shards",
-            "shard_size",
+            "shard_size", "renderer_version", "render_size",
         }
         missing = sorted(required - set(manifest))
         if missing:
@@ -64,6 +64,8 @@ class DescriptionVisionFeatureBank:
             raise ValueError("description cache layers 必须为 [5,11,17,23]")
         if int(manifest["num_samples"]) != len(manifest["lookup"]):
             raise ValueError("description cache lookup/sample 数量不一致")
+        if not str(manifest.get("renderer_version") or "").strip() or int(manifest["render_size"]) <= 0:
+            raise ValueError("description cache renderer metadata 非法")
         if set(manifest["components"]) - {"single_image", "multisource_parent"}:
             raise ValueError(f"description cache component 非法: {manifest['components']}")
         for key, location in manifest["lookup"].items():

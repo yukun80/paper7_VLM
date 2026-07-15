@@ -61,25 +61,42 @@ def description_parameter_groups(
     for parameter in model.parameters():
         parameter.requires_grad_(False)
     selected: dict[str, list[torch.nn.Parameter]] = {
-        "desc_adapter": [], "region_modules_decay": [], "region_modules_no_decay": [],
+        "desc_adapter": [], "description_modules_decay": [], "description_modules_no_decay": [],
     }
-    region_prefixes = (
-        "description_backbone.", "mgrr.", "region_to_hidden.",
-        "description_view_to_hidden.", "alignment_text_projection.",
-    )
-    direct_names = {"region_type", "instruction_type", "visual_type", "alignment_temperature"}
+    global_caption_stage = config.stage in {"mmrs_caption", "rsicap_caption"}
+    alignment_stage = config.stage == "dior_alignment"
+    if global_caption_stage:
+        # D0/D1 adapt scene-language semantics from task-neutral cache tokens.
+        # Random MGRR spatial modules must not enter this curriculum stage.
+        trainable_prefixes = ("description_view_to_hidden.",)
+        direct_names = {"instruction_type", "visual_type"}
+    elif alignment_stage:
+        trainable_prefixes = (
+            "description_backbone.", "mgrr.", "alignment_text_projection.",
+        )
+        direct_names = {"instruction_type", "alignment_temperature"}
+    else:
+        trainable_prefixes = (
+            "description_backbone.", "mgrr.", "region_to_hidden.",
+            "description_view_to_hidden.", "alignment_text_projection.",
+        )
+        direct_names = {
+            "region_type", "instruction_type", "visual_type", "alignment_temperature",
+        }
     for name, parameter in model.named_parameters():
         if f".{DESCRIPTION_ADAPTER_NAME}." in name and "lora_" in name:
             selected["desc_adapter"].append(parameter)
-        elif name in direct_names or name.startswith(region_prefixes):
+        elif name in direct_names or name.startswith(trainable_prefixes):
             no_decay = (
                 name.endswith(".bias") or "norm" in name.casefold() or name in direct_names
             )
-            selected["region_modules_no_decay" if no_decay else "region_modules_decay"].append(parameter)
+            selected[
+                "description_modules_no_decay" if no_decay else "description_modules_decay"
+            ].append(parameter)
     if not selected["desc_adapter"]:
         raise RuntimeError("optimizer 未找到 desc_adapter LoRA 参数")
-    if not selected["region_modules_decay"] and not selected["region_modules_no_decay"]:
-        raise RuntimeError("optimizer 未找到 MGRR/description projection 参数")
+    if not selected["description_modules_decay"] and not selected["description_modules_no_decay"]:
+        raise RuntimeError(f"optimizer 未找到 stage={config.stage} 对应的 description 参数")
     for values in selected.values():
         for parameter in values:
             parameter.requires_grad_(True)
@@ -91,18 +108,65 @@ def description_parameter_groups(
             "weight_decay": 0.0,
         },
         {
-            "name": "region_modules_decay",
-            "params": selected["region_modules_decay"],
+            "name": "description_modules_decay",
+            "params": selected["description_modules_decay"],
             "lr": config.learning_rate,
             "weight_decay": config.weight_decay,
         },
         {
-            "name": "region_modules_no_decay",
-            "params": selected["region_modules_no_decay"],
+            "name": "description_modules_no_decay",
+            "params": selected["description_modules_no_decay"],
             "lr": config.learning_rate,
             "weight_decay": 0.0,
         },
     ]
+
+
+def description_trainable_parameter_manifest(
+    model: SegmentationGroundedDescriptionModel,
+    parameter_groups: list[dict[str, Any]],
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    names_by_id = {id(parameter): name for name, parameter in model.named_parameters()}
+    groups = []
+    observed: set[int] = set()
+    for group in parameter_groups:
+        parameters = list(group["params"])
+        names = []
+        numel = 0
+        for parameter in parameters:
+            parameter_id = id(parameter)
+            name = names_by_id.get(parameter_id)
+            if name is None:
+                raise RuntimeError("optimizer parameter 不属于 description model")
+            if parameter_id in observed:
+                raise RuntimeError(f"optimizer parameter 重复分组: {name}")
+            observed.add(parameter_id)
+            names.append(name)
+            numel += int(parameter.numel())
+        groups.append({
+            "name": str(group.get("name")),
+            "learning_rate": float(group["lr"]),
+            "weight_decay": float(group["weight_decay"]),
+            "num_parameters": len(parameters),
+            "numel": numel,
+            "parameter_names": sorted(names),
+        })
+    expected = {
+        id(parameter)
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    }
+    if observed != expected:
+        raise RuntimeError("optimizer parameter groups 与 requires_grad 集合不一致")
+    return {
+        "protocol": "qpsalm_description_trainable_parameters_v1",
+        "stage": str(stage),
+        "groups": groups,
+        "total_parameters": sum(group["num_parameters"] for group in groups),
+        "total_numel": sum(group["numel"] for group in groups),
+    }
 
 
 def build_description_optimizer(

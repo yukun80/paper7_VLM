@@ -14,11 +14,17 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
-from qpsalm_seg.schema import MultisourceBackboneState, RegionEvidenceState
+from qpsalm_seg.schema import (
+    ModalityPyramid,
+    MultisourceBackboneState,
+    RegionEvidenceState,
+)
 
 
 RegionProtocol = Literal["assisted", "vision_only"]
 MGRRAblation = Literal["full", "no_context", "roi_replay_only"]
+MGRR_PROTOCOL = "qpsalm_mgrr_v2_multiscale_grid_replay"
+MGRR_ROI_GRID_SIZES = ((7, 7), (7, 7), (4, 4), (2, 2))
 
 
 def rasterize_region_geometry(
@@ -82,7 +88,7 @@ def _component_masks(
     *,
     max_components: int,
     coverage_target: float,
-) -> tuple[list[torch.Tensor], torch.Tensor | None, float]:
+) -> tuple[list[torch.Tensor], torch.Tensor | None, float, int]:
     binary = mask.detach().float().cpu().numpy() > 0.5
     labels, count = ndimage.label(binary, structure=np.ones((3, 3), dtype=np.uint8))
     components: list[tuple[int, np.ndarray]] = []
@@ -104,16 +110,29 @@ def _component_masks(
         torch.from_numpy(residual).to(device=mask.device, dtype=mask.dtype)
         if residual.any() else None
     )
-    return selected, residual_tensor, float(selected_area / total) if components else 0.0
+    return (
+        selected,
+        residual_tensor,
+        float(selected_area / total) if components else 0.0,
+        len(components),
+    )
 
 
-def _bbox_pool(feature: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def _bbox_pool(
+    feature: torch.Tensor,
+    mask: torch.Tensor,
+    valid_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
     coordinates = torch.nonzero(mask[0] > 0.5, as_tuple=False)
     if coordinates.numel() == 0:
         return feature.new_zeros(feature.shape[0])
     y1, x1 = coordinates.min(0).values
     y2, x2 = coordinates.max(0).values + 1
-    return feature[:, int(y1):int(y2), int(x1):int(x2)].mean((-2, -1))
+    crop = feature[:, int(y1):int(y2), int(x1):int(x2)]
+    if valid_mask is None:
+        return crop.mean((-2, -1))
+    valid = valid_mask[:, int(y1):int(y2), int(x1):int(x2)].to(crop.dtype)
+    return (crop * valid).sum((-2, -1)) / valid.sum((-2, -1)).clamp_min(1.0)
 
 
 def _geometry_values(mask: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
@@ -163,13 +182,15 @@ class MultiGranularityRegionReplay(nn.Module):
         if ablation not in {"full", "no_context", "roi_replay_only"}:
             raise ValueError(f"未知 MGRR ablation={ablation!r}")
         self.ablation = ablation
-        self.exact_project = nn.Sequential(nn.Linear(dim * 2, dim), nn.GELU(), nn.LayerNorm(dim))
-        self.component_project = nn.Sequential(nn.Linear(dim * 2, dim), nn.GELU(), nn.LayerNorm(dim))
+        self.exact_project = nn.Sequential(nn.Linear(dim * 3, dim), nn.GELU(), nn.LayerNorm(dim))
+        self.component_project = nn.Sequential(nn.Linear(dim * 3, dim), nn.GELU(), nn.LayerNorm(dim))
         self.context_project = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.LayerNorm(dim))
         self.global_project = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.LayerNorm(dim))
         self.geometry_project = nn.Sequential(nn.Linear(10, dim), nn.GELU(), nn.LayerNorm(dim))
         self.modality_project = nn.Sequential(nn.Linear(dim * 4, dim), nn.GELU(), nn.LayerNorm(dim))
         self.region_query = nn.Parameter(torch.randn(dim) * 0.02)
+        self.roi_queries = nn.Parameter(torch.randn(2, dim) * 0.02)
+        self.roi_scale_embedding = nn.Parameter(torch.randn(4, dim) * 0.02)
         self.null_region = nn.Parameter(torch.randn(dim) * 0.02)
         self.null_evidence = nn.Parameter(torch.randn(dim) * 0.02)
         self.reliability = nn.Sequential(nn.Linear(dim * 2 + 1, dim), nn.GELU(), nn.Linear(dim, 1))
@@ -182,36 +203,117 @@ class MultiGranularityRegionReplay(nn.Module):
             kwargs["align_corners"] = False
         return F.interpolate(value[None], **kwargs)[0]
 
+    @staticmethod
+    def _roi_grid_tokens(
+        feature: torch.Tensor,
+        valid_mask: torch.Tensor,
+        reference_mask: torch.Tensor,
+        grid_size: tuple[int, int],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample an RoI grid using reference-canvas coordinates."""
+        coordinates = torch.nonzero(reference_mask[0] > 0.5, as_tuple=False)
+        count = int(grid_size[0] * grid_size[1])
+        if coordinates.numel() == 0:
+            return (
+                feature.new_zeros((count, feature.shape[0])),
+                torch.zeros(count, dtype=torch.bool, device=feature.device),
+            )
+        reference_h, reference_w = reference_mask.shape[-2:]
+        minimum = coordinates.min(0).values.to(feature.dtype)
+        maximum = (coordinates.max(0).values + 1).to(feature.dtype)
+        ys = (
+            torch.arange(grid_size[0], device=feature.device, dtype=feature.dtype) + 0.5
+        ) / grid_size[0]
+        xs = (
+            torch.arange(grid_size[1], device=feature.device, dtype=feature.dtype) + 0.5
+        ) / grid_size[1]
+        ys = minimum[0] + ys * (maximum[0] - minimum[0])
+        xs = minimum[1] + xs * (maximum[1] - minimum[1])
+        # Pixel-centre normalization for grid_sample(..., align_corners=False).
+        normalized_y = 2.0 * ys / max(reference_h, 1) - 1.0
+        normalized_x = 2.0 * xs / max(reference_w, 1) - 1.0
+        grid_y, grid_x = torch.meshgrid(normalized_y, normalized_x, indexing="ij")
+        grid = torch.stack([grid_x, grid_y], -1)[None]
+        sampled = F.grid_sample(
+            feature.float()[None], grid.float(), mode="bilinear", padding_mode="zeros",
+            align_corners=False,
+        )[0].flatten(1).T.to(feature.dtype)
+        sampled_valid = F.grid_sample(
+            valid_mask.float()[None], grid.float(), mode="nearest",
+            padding_mode="zeros", align_corners=False,
+        )[0, 0].flatten() > 0.5
+        return sampled, sampled_valid
+
+    def _multi_scale_roi_replay(
+        self,
+        pyramid: ModalityPyramid,
+        reference_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        scale_values = tuple(zip(
+            (pyramid.detail, pyramid.high, pyramid.mid, pyramid.low),
+            (pyramid.detail_valid, pyramid.high_valid, pyramid.mid_valid, pyramid.low_valid),
+            MGRR_ROI_GRID_SIZES,
+        ))
+        token_rows = []
+        valid_rows = []
+        for scale_index, (feature, valid, grid_size) in enumerate(scale_values):
+            tokens, token_valid = self._roi_grid_tokens(
+                feature, valid, reference_mask, grid_size
+            )
+            tokens = tokens + self.roi_scale_embedding[scale_index].to(tokens.dtype)
+            token_rows.append(tokens)
+            valid_rows.append(token_valid)
+        tokens = torch.cat(token_rows, 0)
+        token_valid = torch.cat(valid_rows, 0)
+        if not bool(token_valid.any()):
+            return tokens.new_zeros(self.dim)
+        queries = self.roi_queries.to(tokens.dtype)
+        logits = queries @ tokens.T / math.sqrt(self.dim)
+        logits = logits.masked_fill(~token_valid[None], -1.0e4)
+        replay_queries = torch.softmax(logits.float(), -1).to(tokens.dtype) @ tokens
+        return replay_queries.mean(0)
+
     def _component_replay(
         self,
-        feature: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, int, float, list[torch.Tensor]]:
-        components, residual, coverage = _component_masks(
-            mask[0], max_components=self.max_components, coverage_target=self.component_coverage
-        )
+        pyramid: ModalityPyramid,
+        components: list[torch.Tensor],
+        residual: torch.Tensor | None,
+        aligned_feature: torch.Tensor,
+        valid_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         tokens = []
         weights = []
         for component in components:
             value = component[None]
-            exact = _masked_pool(feature, value)
-            roi = _bbox_pool(feature, value)
-            tokens.append(self.component_project(torch.cat([exact, roi], -1)))
+            effective = value * valid_mask
+            exact = _masked_pool(aligned_feature, effective)
+            roi = self._multi_scale_roi_replay(pyramid, value)
+            component_ring = _context_ring(value, valid_mask)
+            local_context = _masked_pool(aligned_feature, component_ring * valid_mask)
+            contrast = exact - local_context
+            if self.ablation in {"no_context", "roi_replay_only"}:
+                contrast = torch.zeros_like(contrast)
+            if self.ablation == "roi_replay_only":
+                exact = torch.zeros_like(exact)
+            tokens.append(self.component_project(torch.cat([exact, roi, contrast], -1)))
             weights.append(float(value.sum().item()))
-        if residual is not None:
+        if residual is not None and self.ablation != "roi_replay_only":
             value = residual[None]
-            exact = _masked_pool(feature, value)
-            roi = _bbox_pool(feature, value)
-            tokens.append(self.component_project(torch.cat([exact, roi], -1)))
+            exact = _masked_pool(aligned_feature, value * valid_mask)
+            # Residual components can be far apart. Their union bbox is not a
+            # valid RoI, so residual evidence is exact-mask pooled only.
+            tokens.append(self.component_project(torch.cat([
+                exact,
+                exact.new_zeros(exact.shape),
+                exact.new_zeros(exact.shape),
+            ], -1)))
             weights.append(float(value.sum().item()))
         if not tokens:
-            return feature.new_zeros(self.dim), 0, 0.0, []
-        weight = feature.new_tensor(weights)
+            return aligned_feature.new_zeros(self.dim), []
+        weight = aligned_feature.new_tensor(weights)
         weight = weight / weight.sum().clamp_min(1.0)
         return (
             (torch.stack(tokens) * weight[:, None]).sum(0),
-            len(components),
-            coverage,
             tokens,
         )
 
@@ -250,7 +352,9 @@ class MultiGranularityRegionReplay(nn.Module):
         reliability_rows: list[torch.Tensor] = []
         sequence_rows: list[list[torch.Tensor]] = []
         component_counts = masks.new_zeros((batch_size, region_count))
+        selected_component_counts = masks.new_zeros((batch_size, region_count))
         component_coverage = masks.new_zeros((batch_size, region_count))
+        residual_area_ratio = masks.new_zeros((batch_size, region_count))
         max_modalities = max((len(sample) for sample in backbone.features.samples), default=1)
         for batch_index, pyramids in enumerate(backbone.features.samples):
             sample_regions = []
@@ -262,6 +366,17 @@ class MultiGranularityRegionReplay(nn.Module):
             for region_index in range(region_count):
                 region = ((masks[batch_index, region_index:region_index + 1] > 0.5) & (valid[batch_index] > 0.5)).float()
                 is_present = bool(region.any())
+                components, residual, replay_coverage, total_component_count = _component_masks(
+                    region[0],
+                    max_components=self.max_components,
+                    coverage_target=self.component_coverage,
+                )
+                component_counts[batch_index, region_index] = total_component_count
+                selected_component_counts[batch_index, region_index] = len(components)
+                component_coverage[batch_index, region_index] = replay_coverage
+                residual_area_ratio[batch_index, region_index] = max(
+                    0.0, 1.0 - replay_coverage
+                )
                 ring = _context_ring(region, valid[batch_index]) if is_present else valid[batch_index]
                 geometry = self.geometry_project(_geometry_values(region, valid[batch_index]))
                 if protocol == "vision_only":
@@ -273,8 +388,6 @@ class MultiGranularityRegionReplay(nn.Module):
                 context_tokens = []
                 component_token_rows: list[list[torch.Tensor]] = []
                 coverages = []
-                replay_count = 0
-                replay_coverage = 0.0
                 for pyramid in pyramids:
                     detail = self._align(pyramid.detail, (height, width))
                     detail_valid = self._align(pyramid.detail_valid.float(), (height, width), "nearest")
@@ -284,10 +397,16 @@ class MultiGranularityRegionReplay(nn.Module):
                     effective_ring = ring * detail_valid
                     exact_detail = _masked_pool(detail, effective_region)
                     exact_high = _masked_pool(high, region * high_valid)
-                    exact = self.exact_project(torch.cat([exact_detail, exact_high], -1))
-                    context = self.context_project(_masked_pool(detail, effective_ring))
-                    replay, count, coverage, component_tokens = self._component_replay(
-                        detail, effective_region
+                    context_raw = _masked_pool(detail, effective_ring)
+                    contrast = exact_detail - context_raw
+                    if self.ablation in {"no_context", "roi_replay_only"}:
+                        contrast = torch.zeros_like(contrast)
+                    exact = self.exact_project(torch.cat([
+                        exact_detail, exact_high, contrast,
+                    ], -1))
+                    context = self.context_project(context_raw)
+                    replay, component_tokens = self._component_replay(
+                        pyramid, components, residual, detail, detail_valid
                     )
                     global_token = self.global_project(_masked_pool(
                         self._align(pyramid.low, (height, width)),
@@ -311,10 +430,6 @@ class MultiGranularityRegionReplay(nn.Module):
                     context_tokens.append(context)
                     component_token_rows.append(component_tokens)
                     coverages.append(coverage_ratio)
-                    replay_count = max(replay_count, count)
-                    replay_coverage = max(replay_coverage, coverage)
-                component_counts[batch_index, region_index] = replay_count
-                component_coverage[batch_index, region_index] = replay_coverage
                 if modality_tokens:
                     tokens = torch.stack(modality_tokens)
                     coverage_tensor = torch.stack(coverages).to(tokens.dtype)
@@ -436,7 +551,13 @@ class MultiGranularityRegionReplay(nn.Module):
                 "modality_reliability": reliability,
                 "null_reliability": reliability[..., -1],
                 "component_count": component_counts,
+                "selected_component_count": selected_component_counts,
                 "component_coverage": component_coverage,
+                "residual_area_ratio": residual_area_ratio,
+                "roi_grid_sample_count": masks.new_tensor(float(sum(
+                    height * width for height, width in MGRR_ROI_GRID_SIZES
+                ))),
+                "roi_query_count": masks.new_tensor(float(self.roi_queries.shape[0])),
                 "region_sequence_length": sequence_mask.sum(-1),
                 "protocol_assisted": masks.new_tensor(float(protocol == "assisted")),
                 "ablation_full": masks.new_tensor(float(self.ablation == "full")),

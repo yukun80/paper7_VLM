@@ -92,7 +92,11 @@ class SegDescConfig:
             raise ValueError("end_to_end evaluation 只支持 bridge_expert stage")
         if not 0.0 < float(self.segmentation_mask_threshold) < 1.0:
             raise ValueError("segmentation_mask_threshold 必须位于 (0,1)")
-        for name in ("batch_size", "grad_accum_steps", "max_steps", "log_interval"):
+        for name in (
+            "batch_size", "grad_accum_steps", "max_steps", "log_interval",
+            "val_interval", "save_interval", "joint_segmentation_batch_size",
+            "joint_description_batch_size",
+        ):
             if int(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} 必须为正整数")
         if self.stage == "predicted_mask" and not self.predicted_index:
@@ -113,9 +117,17 @@ class SegDescConfig:
             raise ValueError(f"joint_global_stages 非法: {global_stages}")
         if self.joint_region_stage not in {"bridge_auto", "bridge_expert", "predicted_mask"}:
             raise ValueError(f"joint_region_stage 非法: {self.joint_region_stage}")
+        if self.joint_region_stage == "predicted_mask" and not self.predicted_index:
+            raise ValueError("joint_region_stage=predicted_mask 必须设置 predicted_index")
         tasks = self.resolved_joint_task_pattern()
         if not tasks or set(tasks) - {"segmentation", "global_caption", "region_description"}:
             raise ValueError(f"joint_task_pattern 非法: {tasks}")
+        required_joint_tasks = {"segmentation", "global_caption", "region_description"}
+        if set(tasks) != required_joint_tasks:
+            raise ValueError(
+                "M7 joint_task_pattern 必须覆盖 segmentation、global_caption 和 "
+                f"region_description，当前={tasks}"
+            )
 
 
 def load_segdesc_config(path_ref: str | Path, overrides: dict[str, Any] | None = None) -> SegDescConfig:

@@ -13,7 +13,7 @@ from typing import Any
 from qpsalm_seg.paths import resolve_project_path, to_project_ref
 
 
-OOF_FOLD_FORMAT = "qpsalm_segmentation_oof_folds_v1"
+OOF_FOLD_FORMAT = "qpsalm_segmentation_oof_folds_v2"
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -72,6 +72,20 @@ def build_oof_fold_indexes(
     output = resolve_project_path(output_dir) or Path(output_dir)
     segmentation_rows = _read_jsonl(segmentation_path)
     bridge_rows = _read_jsonl(bridge_path)
+    if not segmentation_rows:
+        raise ValueError("segmentation OOF source index 不能为空")
+    non_train = [
+        str(row.get("sample_id") or "unknown")
+        for row in segmentation_rows if str(row.get("split")) != "train"
+    ]
+    if non_train:
+        raise ValueError(
+            "OOF fold source 只能包含 split=train 的 segmentation rows: "
+            f"count={len(non_train)} examples={non_train[:8]}"
+        )
+    sample_ids = [str(row.get("sample_id") or "") for row in segmentation_rows]
+    if any(not value for value in sample_ids) or len(sample_ids) != len(set(sample_ids)):
+        raise ValueError("OOF segmentation source sample_id 缺失或重复")
 
     parent_metadata: dict[str, tuple[str, str]] = {}
     for row in bridge_rows:
@@ -130,6 +144,14 @@ def build_oof_fold_indexes(
             row for row in segmentation_rows
             if str(row.get("parent_sample_id") or row.get("sample_id")) in holdout_parents
         ]
+        train_parents = {
+            str(row.get("parent_sample_id") or row.get("sample_id")) for row in train_rows
+        }
+        observed_holdout_parents = {
+            str(row.get("parent_sample_id") or row.get("sample_id")) for row in holdout_rows
+        }
+        if train_parents & holdout_parents or observed_holdout_parents != holdout_parents:
+            raise RuntimeError(f"fold={fold} parent isolation 构建失败")
         train_path = output / f"fold_{fold}_train.jsonl"
         holdout_path = output / f"fold_{fold}_holdout.jsonl"
         _atomic_jsonl(train_path, train_rows)
@@ -137,6 +159,7 @@ def build_oof_fold_indexes(
         folds[fold] = {
             "held_out_fold": fold,
             "num_holdout_parents": len(holdout_parents),
+            "num_train_parents": len(train_parents),
             "num_train_records": len(train_rows),
             "num_holdout_records": len(holdout_rows),
             "train_index": to_project_ref(train_path),

@@ -28,6 +28,7 @@ from landslide_bridge_common import (
     read_json,
     read_jsonl,
     resolve_project_path,
+    sha256_file,
     validate_bridge_structured_target,
     write_json,
 )
@@ -166,7 +167,8 @@ def validate_record(record: dict[str, Any], errors: list[str], mask_refs: set[st
 
 def _validate_cross_stage(
     inventory: list[dict[str, Any]], facts: list[dict[str, Any]], candidates: list[dict[str, Any]],
-    auto_train: list[dict[str, Any]], selection: list[dict[str, Any]], package: list[dict[str, Any]],
+    auto_train: list[dict[str, Any]], pilot: list[dict[str, Any]],
+    selection: list[dict[str, Any]], package: list[dict[str, Any]],
     errors: list[str],
 ) -> None:
     def ids(rows: list[dict[str, Any]]) -> list[str]:
@@ -190,6 +192,10 @@ def _validate_cross_stage(
             errors.append(f"Bridge parent 跨 split: {parent_id} -> {sorted(splits)}")
 
     review_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    pilot_ids = [str(row.get("parent_sample_id") or "") for row in pilot]
+    if any(not value for value in pilot_ids) or len(pilot_ids) != len(set(pilot_ids)):
+        errors.append("pilot parent ID 缺失或重复")
+    pilot_id_set = set(pilot_ids)
     selected_record_ids = {row["bridge_record_id"] for row in selection}
     candidate_by_id = {row["bridge_record_id"]: row for row in candidates}
     for row in selection:
@@ -197,11 +203,20 @@ def _validate_cross_stage(
         if candidate is None:
             errors.append(f"review selection 引用未知 record: {row['bridge_record_id']}")
             continue
+        if str(candidate["parent_sample_id"]) not in pilot_id_set:
+            errors.append(
+                f"review selection 引用了 Pilot 外 parent: {candidate['parent_sample_id']}"
+            )
         status = str(candidate["target_status"])
         review_counts[str(candidate["parent_sample_id"])][status] += 1
     for parent_id, counts in review_counts.items():
         if counts["present"] > 1 or counts["absent"] > 1:
             errors.append(f"review parent 超过一正一负限制: {parent_id} -> {dict(counts)}")
+    if set(review_counts) != pilot_id_set:
+        errors.append(
+            "每个 Pilot parent 必须至少有一个 review item: "
+            f"pilot={len(pilot_id_set)} reviewed={len(review_counts)}"
+        )
     if package and {row["bridge_record_id"] for row in package} != selected_record_ids:
         errors.append("review package manifest 与 review selection 不一致")
     if any(row.get("candidate_is_expert_truth") is not False for row in package):
@@ -240,10 +255,28 @@ def _validate_expert(output_dir: Path, errors: list[str]) -> dict[str, Any]:
     pending = read_jsonl(required[1])
     review_report = read_json(required[2])
     gate = read_json(required[3])
+    if gate.get("protocol") != "landslide_bridge_evaluation_gate_v2":
+        errors.append("evaluation gate protocol 不是 landslide_bridge_evaluation_gate_v2")
     if pending:
         errors.append(f"仍有 {len(pending)} 条待仲裁记录")
     if gate.get("frozen") is not True or gate.get("status") != "frozen_after_pilot":
         errors.append("evaluation gate 尚未由用户冻结")
+    binding_paths = {
+        "pilot_parent_manifest_sha256": output_dir / "manifests/pilot_parent_manifest.jsonl",
+        "review_selection_sha256": output_dir / "manifests/review_selection.jsonl",
+        "candidate_index_sha256": output_dir / "indexes/candidate_all.jsonl",
+    }
+    missing_binding_paths = [str(path) for path in binding_paths.values() if not path.is_file()]
+    expected_bindings = (
+        {name: sha256_file(path) for name, path in binding_paths.items()}
+        if not missing_binding_paths else {}
+    )
+    if missing_binding_paths:
+        errors.append(f"evaluation gate 绑定文件缺失: {missing_binding_paths}")
+    if gate.get("builder_version") != BUILDER_VERSION:
+        errors.append("evaluation gate builder_version 与当前 Bridge 不一致")
+    if gate.get("bindings") != expected_bindings:
+        errors.append("evaluation gate 与当前 Pilot/candidate hash 不一致")
     thresholds = gate.get("thresholds") or {}
     for key in ("no_target_rejection", "unsupported_claim_rate", "expert_fact_score"):
         value = thresholds.get(key)
@@ -286,13 +319,14 @@ def main() -> None:
     output_dir = bridge_dir(args.mode, args.output_dir)
     errors: list[str] = []
     warnings: list[str] = []
-    _validate_schema_config(args.config, errors)
+    config = _validate_schema_config(args.config, errors)
 
     required_paths = {
         "inventory": output_dir / "indexes/region_inventory.jsonl",
         "facts": output_dir / "indexes/region_facts_all.jsonl",
         "candidates": output_dir / "indexes/candidate_all.jsonl",
         "auto_train": output_dir / "indexes/auto_train.jsonl",
+        "pilot": output_dir / "manifests/pilot_parent_manifest.jsonl",
         "selection": output_dir / "manifests/review_selection.jsonl",
         "package": output_dir / "manifests/review_package_manifest.jsonl",
     }
@@ -311,8 +345,58 @@ def main() -> None:
         validate_record(record, errors, referenced_masks)
     _validate_cross_stage(
         rows["inventory"], rows["facts"], rows["candidates"], rows["auto_train"],
-        rows["selection"], rows["package"], errors,
+        rows["pilot"], rows["selection"], rows["package"], errors,
     )
+    inventory_report_path = output_dir / "reports/region_inventory_report.json"
+    inventory_report = (
+        read_json(inventory_report_path) if inventory_report_path.is_file() else {}
+    )
+    if not inventory_report:
+        errors.append("缺少 region_inventory_report.json")
+    else:
+        pilot_count = len(rows["pilot"])
+        requested = int(inventory_report.get("pilot_requested_parents") or 0)
+        observed_by_split = Counter(str(row.get("split")) for row in rows["pilot"])
+        requested_quotas = {
+            str(key): int(value)
+            for key, value in (
+                inventory_report.get("pilot_requested_split_quotas") or {}
+            ).items()
+        }
+        counts_match = (
+            pilot_count == requested
+            and all(observed_by_split[split] == quota for split, quota in requested_quotas.items())
+        )
+        smoke_limit = int(inventory_report.get("source_parent_limit") or 0)
+        protocol_complete = bool(inventory_report.get("pilot_protocol_complete"))
+        if smoke_limit <= 0 and (not protocol_complete or not counts_match):
+            errors.append(
+                "正式 Pilot 未达到请求总数或 split 配额: "
+                f"requested={requested} observed={pilot_count} "
+                f"quotas={requested_quotas} observed_split={dict(observed_by_split)}"
+            )
+        elif smoke_limit > 0 and not protocol_complete:
+            warnings.append(
+                "source_parent_limit > 0：当前仅为 Bridge smoke Pilot，不可冻结科学评价 gate"
+            )
+        if args.require_expert_complete:
+            configured_total = int(config.get("pilot", {}).get("parents") or 0)
+            configured_quotas = {
+                str(key): int(value)
+                for key, value in (
+                    config.get("pilot", {}).get("split_parent_quotas") or {}
+                ).items()
+            }
+            if (
+                not protocol_complete
+                or requested != configured_total
+                or requested_quotas != configured_quotas
+            ):
+                errors.append(
+                    "专家 Pilot 只能在配置冻结的完整 parent/split 配额上完成: "
+                    f"expected={configured_total}/{configured_quotas} "
+                    f"observed={requested}/{requested_quotas}"
+                )
     if args.max_samples <= 0:
         _validate_files(output_dir, referenced_masks, errors)
     else:
@@ -321,9 +405,13 @@ def main() -> None:
     expert_status = {"expert_records": 0, "pending_arbitration": None, "gate_frozen": False}
     if args.require_expert_complete:
         expert_status = _validate_expert(output_dir, errors)
+    pilot_complete = bool(
+        inventory_report.get("pilot_protocol_complete") if inventory_report else False
+    )
     status = (
         "expert_pilot_frozen" if args.require_expert_complete and not errors else
-        "awaiting_expert_review" if not args.require_expert_complete and not errors else
+        "awaiting_expert_review" if not args.require_expert_complete and not errors and pilot_complete else
+        "smoke_only" if not args.require_expert_complete and not errors else
         "invalid"
     )
     report = {
@@ -333,6 +421,8 @@ def main() -> None:
         "require_expert_complete": args.require_expert_complete,
         "records": len(rows["candidates"]),
         "parents": len({row["parent_sample_id"] for row in rows["candidates"]}),
+        "pilot_parents": len(rows["pilot"]),
+        "pilot_protocol_complete": pilot_complete,
         "review_items": len(rows["selection"]),
         "records_by_region_source": dict(sorted(Counter(
             row["region_source"] for row in rows["candidates"]

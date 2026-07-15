@@ -15,6 +15,7 @@ import torch
 from torch.utils.data import Dataset
 
 from qpsalm_seg.paths import resolve_project_path
+from qpsalm_seg.schema import MODALITY_FAMILY_IDS
 
 from .backbone import transform_region_mask_to_cache
 from .vision_cache import DescriptionVisionFeatureBank
@@ -24,6 +25,66 @@ DescriptionStage = Literal[
     "overfit", "mmrs_caption", "rsicap_caption", "dior_alignment",
     "bridge_auto", "bridge_expert", "predicted_mask",
 ]
+
+
+def description_row_sample_id(row: dict[str, Any]) -> str:
+    """Return the stable task identity used by evaluation metadata."""
+    value = row.get("sample_id") or row.get("bridge_record_id")
+    if not value:
+        raise ValueError("description row 缺少 sample_id/bridge_record_id")
+    return str(value)
+
+
+def same_parent_region_swap_candidates(
+    rows: list[dict[str, Any]],
+    sample_id: str,
+    *,
+    catalog: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return deterministic real-region candidates from the same parent.
+
+    The alternate catalog may contain unreviewed Bridge region geometry, but
+    its text target is never consumed.  Null/no-target rows are not regions and
+    therefore cannot be used as a region-swap shortcut.
+    """
+    by_id = {description_row_sample_id(row): row for row in rows}
+    current = by_id.get(str(sample_id))
+    if current is None:
+        return []
+    parent = str(current.get("parent_sample_id") or "")
+    current_region_id = str(current.get("region_id") or "")
+    current_mask = (current.get("region_mask") or {}).get("path")
+    candidates = []
+    for row in catalog if catalog is not None else rows:
+        candidate_id = description_row_sample_id(row)
+        if candidate_id == str(sample_id):
+            continue
+        if str(row.get("parent_sample_id") or "") != parent:
+            continue
+        geometry = row.get("region_geometry") or {}
+        has_box = geometry.get("type") == "box"
+        has_mask = bool((row.get("region_mask") or {}).get("path"))
+        if not (has_box or has_mask):
+            continue
+        if str(row.get("target_status") or "present") != "present":
+            continue
+        candidate_region_id = str(row.get("region_id") or "")
+        candidate_mask = (row.get("region_mask") or {}).get("path")
+        if (
+            candidate_region_id
+            and candidate_region_id == current_region_id
+            and candidate_mask == current_mask
+        ):
+            continue
+        candidates.append(row)
+    return sorted(
+        candidates,
+        key=lambda row: (
+            str(row.get("region_source") or "") == str(current.get("region_source") or ""),
+            str(row.get("region_id") or ""),
+            description_row_sample_id(row),
+        ),
+    )
 
 
 def end_to_end_region_support(row: dict[str, Any]) -> tuple[bool, str]:
@@ -122,6 +183,13 @@ def _structured_text(record: dict[str, Any], *, expert: bool) -> str:
 
 def bridge_region_metadata(row: dict[str, Any]) -> dict[str, Any]:
     """Build target identity metadata without loading cache features or masks."""
+    review_responses = ((row.get("review") or {}).get("reviewer_responses") or [])
+    panel_paths = sorted({
+        str(value.get("panel_path"))
+        for value in review_responses
+        if isinstance(value, dict) and value.get("panel_path")
+    })
+    preview_paths = (row.get("visual_ref") or {}).get("preview_paths") or {}
     return {
         "sample_id": str(row["bridge_record_id"]),
         "parent_sample_id": str(row["parent_sample_id"]),
@@ -135,6 +203,10 @@ def bridge_region_metadata(row: dict[str, Any]) -> dict[str, Any]:
             dict(value) for value in (row.get("source_region_aliases") or [])
             if isinstance(value, dict)
         ],
+        "region_mask_path": (row.get("region_mask") or {}).get("path"),
+        "expert_review_panel_path": panel_paths[0] if panel_paths else None,
+        "visual_preview_path": preview_paths.get("visual"),
+        "multimodal_preview_path": preview_paths.get("modalities"),
     }
 
 
@@ -251,12 +323,124 @@ class DescriptionTaskDataset(Dataset):
                 row.get("sample_id") or row.get("bridge_record_id") or ""
             ))
         self.rows = rows
+        self._rows_by_sample_id: dict[str, dict[str, Any]] = {}
+        for row in self.rows:
+            sample_id = description_row_sample_id(row)
+            if sample_id in self._rows_by_sample_id:
+                raise ValueError(f"description dataset sample_id 重复: {sample_id}")
+            self._rows_by_sample_id[sample_id] = row
+        self._region_swap_catalog = self.rows
+        if stage in {"bridge_auto", "bridge_expert", "predicted_mask", "overfit"}:
+            candidate_path = bridge_dir / "indexes/candidate_all.jsonl"
+            if candidate_path.is_file():
+                self._region_swap_catalog = [
+                    row for row in _read_jsonl(candidate_path)
+                    if str(row.get("split") or "") == self.split
+                ]
+        self._request_family_cache: dict[tuple[str, str], set[str]] = {}
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
 
     def __len__(self) -> int:
         return len(self.rows)
+
+    def same_parent_region_swap(
+        self,
+        sample_id: str,
+        reference_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, Any]] | None:
+        """Load and identify another real region from the same image."""
+        candidates = same_parent_region_swap_candidates(
+            self.rows,
+            sample_id,
+            catalog=self._region_swap_catalog,
+        )
+        current = reference_mask.detach().cpu()
+        for row in candidates:
+            item = (
+                self._description_item(row)
+                if self.stage in {"mmrs_caption", "rsicap_caption", "dior_alignment"}
+                else self._bridge_item(row)
+            )
+            alternate = item["region_mask"].detach().cpu()
+            if alternate.shape != current.shape:
+                continue
+            if not torch.equal(alternate, current):
+                return alternate, {
+                    "protocol": "qpsalm_same_parent_region_swap_v1",
+                    "parent_sample_id": str(row["parent_sample_id"]),
+                    "alternate_sample_id": description_row_sample_id(row),
+                    "alternate_region_id": str(row.get("region_id") or "unknown"),
+                    "alternate_region_source": str(
+                        row.get("region_source") or "region_geometry"
+                    ),
+                    "alternate_mask_path": (row.get("region_mask") or {}).get("path"),
+                }
+        return None
+
+    def same_parent_region_swap_mask(
+        self,
+        sample_id: str,
+        reference_mask: torch.Tensor,
+    ) -> torch.Tensor | None:
+        """Compatibility convenience returning only the resolved mask."""
+        resolved = self.same_parent_region_swap(sample_id, reference_mask)
+        return resolved[0] if resolved is not None else None
+
+    def _request_for_row(self, row: dict[str, Any]) -> tuple[str, str]:
+        component = (
+            "single_image"
+            if self.stage in {"mmrs_caption", "rsicap_caption", "dior_alignment"}
+            else "multisource_parent"
+        )
+        return component, str(row["parent_sample_id"])
+
+    def _request_families(self, request: tuple[str, str]) -> set[str]:
+        cached = self._request_family_cache.get(request)
+        if cached is not None:
+            return cached
+        record = self.vision_bank.record(*request)
+        families = set()
+        for view in record["views"]:
+            source = [str(value) for value in view.get("source_families") or []]
+            family = (
+                source[0]
+                if source and len(set(source)) == 1 and source[0] in MODALITY_FAMILY_IDS
+                else "unknown"
+            )
+            families.add(family)
+        self._request_family_cache[request] = families
+        return families
+
+    def cross_parent_modality_swap_request(
+        self,
+        sample_id: str,
+    ) -> tuple[tuple[str, str], dict[str, Any]] | None:
+        """Select a deterministic donor parent sharing at least one view family."""
+        current = self._rows_by_sample_id.get(str(sample_id))
+        if current is None:
+            return None
+        current_parent = str(current["parent_sample_id"])
+        current_request = self._request_for_row(current)
+        current_families = self._request_families(current_request)
+        seen_parents = {current_parent}
+        for row in sorted(self.rows, key=description_row_sample_id):
+            donor_parent = str(row.get("parent_sample_id") or "")
+            if not donor_parent or donor_parent in seen_parents:
+                continue
+            seen_parents.add(donor_parent)
+            donor_request = self._request_for_row(row)
+            common = sorted(current_families & self._request_families(donor_request))
+            if not common:
+                continue
+            return donor_request, {
+                "protocol": "qpsalm_cross_parent_modality_donor_v1",
+                "target_parent_sample_id": current_parent,
+                "donor_parent_sample_id": donor_parent,
+                "common_modality_families": common,
+            }
+        return None
 
     def _description_item(self, row: dict[str, Any]) -> dict[str, Any]:
         answers = [
@@ -352,7 +536,8 @@ def collate_description(items: list[dict[str, Any]]) -> dict[str, Any]:
             for key in (
                 "sample_id", "parent_sample_id", "task_family", "target_status",
                 "source_dataset", "region_pair_id", "region_id", "region_source",
-                "source_region_aliases",
+                "source_region_aliases", "region_mask_path", "expert_review_panel_path",
+                "visual_preview_path", "multimodal_preview_path",
             )
             if key in item
         } for item in items],

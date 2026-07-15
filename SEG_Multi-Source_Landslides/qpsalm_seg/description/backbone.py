@@ -121,6 +121,8 @@ class DescriptionCacheBackboneEncoder(nn.Module):
     def forward(
         self,
         requests: Sequence[tuple[str, str]],
+        *,
+        include_spatial: bool = True,
     ) -> MultisourceBackboneState:
         if not requests:
             raise ValueError("DescriptionCacheBackboneEncoder requests 不能为空")
@@ -135,9 +137,10 @@ class DescriptionCacheBackboneEncoder(nn.Module):
         sample_valid = []
         for component, parent_id in requests:
             record = self.bank.record(component, parent_id)
-            pyramids = [self._pyramid(view, device) for view in record["views"]]
+            views = list(record["views"])
+            pyramids = [self._pyramid(view, device) for view in views] if include_spatial else []
             samples.append(pyramids)
-            names = tuple(pyramid.instance.name for pyramid in pyramids)
+            names = tuple(str(view["name"]) for view in views)
             subsets.append(ActiveModalitySubset(
                 active_names=names,
                 dropped_names=(),
@@ -149,9 +152,10 @@ class DescriptionCacheBackboneEncoder(nn.Module):
                 "parent_sample_id": parent_id,
                 "source_ref": record["source_ref"],
                 "cache_key": record["lookup_key"],
-                "render_transforms": [dict(view.get("render_transform") or {}) for view in record["views"]],
+                "render_transforms": [dict(view.get("render_transform") or {}) for view in views],
+                "spatial_features_loaded": bool(include_spatial),
             })
-            tokens = [view["view_tokens"].to(device=device) for view in record["views"]]
+            tokens = [view["view_tokens"].to(device=device) for view in views]
             token_sequence = torch.cat(tokens, 0)
             token_sequences.append(token_sequence)
             family_sequences.append(torch.cat([
@@ -161,17 +165,19 @@ class DescriptionCacheBackboneEncoder(nn.Module):
                     dtype=torch.long,
                     device=device,
                 )
-                for token, view in zip(tokens, record["views"])
+                for token, view in zip(tokens, views)
             ]))
             segments.append([
                 (str(view.get("description") or ""), int(token.shape[0]))
-                for token, view in zip(tokens, record["views"])
+                for token, view in zip(tokens, views)
             ])
             union_valid = torch.stack([
                 F.interpolate(
-                    pyramid.detail_valid[None], size=(render_size, render_size), mode="nearest"
+                    view["valid_mask"].to(device=device, dtype=torch.float32)[None],
+                    size=(render_size, render_size),
+                    mode="nearest",
                 )[0]
-                for pyramid in pyramids
+                for view in views
             ]).amax(0)
             sample_valid.append(union_valid)
 

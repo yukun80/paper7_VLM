@@ -29,6 +29,7 @@ from landslide_bridge_common import (
     read_json,
     read_jsonl,
     resolve_project_path,
+    sha256_file,
     to_project_ref,
     validate_bridge_structured_target,
     write_json,
@@ -157,12 +158,15 @@ def _resolved_target(
     return result
 
 
-def _load_frozen_gate(path_ref: str | None) -> dict[str, Any] | None:
+def _load_frozen_gate(
+    path_ref: str | None,
+    output_dir: Path,
+) -> dict[str, Any] | None:
     if not path_ref:
         return None
     path = resolve_project_path(path_ref)
     gate = read_json(path)
-    if gate.get("protocol") != "landslide_bridge_evaluation_gate_v1":
+    if gate.get("protocol") != "landslide_bridge_evaluation_gate_v2":
         raise ValueError(f"evaluation gate protocol 不正确: {path}")
     if gate.get("frozen") is not True or gate.get("status") != "frozen_after_pilot":
         raise ValueError("evaluation gate 必须由用户显式设为 frozen_after_pilot 且 frozen=true")
@@ -174,6 +178,27 @@ def _load_frozen_gate(path_ref: str | None) -> dict[str, Any] | None:
         value = thresholds[key]
         if not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0:
             raise ValueError(f"evaluation gate 阈值必须位于 [0,1]: {key}={value!r}")
+    if gate.get("builder_version") != BUILDER_VERSION:
+        raise ValueError(
+            "evaluation gate builder_version 与当前 Bridge 不一致；"
+            "必须从本轮 review package 模板冻结"
+        )
+    expected_bindings = {
+        "pilot_parent_manifest_sha256": sha256_file(
+            output_dir / "manifests/pilot_parent_manifest.jsonl"
+        ),
+        "review_selection_sha256": sha256_file(
+            output_dir / "manifests/review_selection.jsonl"
+        ),
+        "candidate_index_sha256": sha256_file(
+            output_dir / "indexes/candidate_all.jsonl"
+        ),
+    }
+    if gate.get("bindings") != expected_bindings:
+        raise ValueError(
+            "evaluation gate 与当前 Pilot/candidate 不匹配；"
+            f"expected={expected_bindings} observed={gate.get('bindings')}"
+        )
     result = copy.deepcopy(gate)
     result["source_file"] = to_project_ref(path)
     return result
@@ -202,7 +227,7 @@ def main() -> None:
     unexpected_arbitration = set(arbitration) - selected_ids
     if unexpected_arbitration:
         raise ValueError(f"arbitration 包含未知 review item: {sorted(unexpected_arbitration)[:3]}")
-    frozen_gate = _load_frozen_gate(args.evaluation_gate)
+    frozen_gate = _load_frozen_gate(args.evaluation_gate, output_dir)
 
     expert: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []

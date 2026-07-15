@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qpsalm-seg"
 version = "0.2.0"
-description = "Multi-Source Qwen-PSALM-Seg research prototype for landslide instruction segmentation."
+description = "Multi-source Qwen-PSALM research prototype for landslide segmentation and grounded description."
 requires-python = ">=3.11"
 dependencies = [
   "numpy",

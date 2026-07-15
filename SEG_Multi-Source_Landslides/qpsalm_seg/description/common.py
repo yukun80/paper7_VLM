@@ -6,18 +6,66 @@ from __future__ import annotations
 
 import json
 import random
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 
 from qpsalm_seg.paths import resolve_project_path
 
 from .config import SegDescConfig
 from .data import DescriptionTaskDataset, collate_description
 from .vision_cache import DescriptionVisionFeatureBank
+
+
+class ParentGroupedRegionBatchSampler(Sampler[list[int]]):
+    """Keep same-image DIOR regions adjacent so they become hard negatives."""
+
+    def __init__(
+        self,
+        dataset: DescriptionTaskDataset,
+        batch_size: int,
+        *,
+        seed: int,
+        drop_last: bool,
+    ) -> None:
+        self.dataset = dataset
+        self.batch_size = int(batch_size)
+        self.seed = int(seed)
+        self.drop_last = bool(drop_last)
+        if self.batch_size < 2:
+            raise ValueError("DIOR parent-grouped sampler 要求 batch_size >= 2")
+
+    def __iter__(self):
+        grouped: dict[str, list[int]] = defaultdict(list)
+        for index, row in enumerate(self.dataset.rows):
+            grouped[str(row["parent_sample_id"])].append(index)
+        generator = random.Random(self.seed + 104729 * int(self.dataset.epoch))
+        parents = sorted(grouped)
+        generator.shuffle(parents)
+        ordered = []
+        for parent in parents:
+            indices = list(grouped[parent])
+            generator.shuffle(indices)
+            ordered.extend(indices)
+        for start in range(0, len(ordered), self.batch_size):
+            batch = ordered[start:start + self.batch_size]
+            parents_in_batch = [
+                str(self.dataset.rows[index]["parent_sample_id"])
+                for index in batch
+            ]
+            has_same_parent_candidates = len(set(parents_in_batch)) < len(parents_in_batch)
+            if (
+                has_same_parent_candidates
+                and (len(batch) == self.batch_size or not self.drop_last)
+            ):
+                yield batch
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self.__iter__())
 
 
 def set_description_seed(seed: int) -> None:
@@ -89,14 +137,34 @@ def build_description_loader(
     training: bool,
     batch_size: int | None = None,
 ) -> DataLoader:
+    effective_batch_size = int(batch_size or config.batch_size)
+    if training and config.stage == "dior_alignment":
+        sampler = ParentGroupedRegionBatchSampler(
+            dataset,
+            effective_batch_size,
+            seed=config.seed,
+            drop_last=True,
+        )
+        if len(sampler) == 0:
+            raise ValueError(
+                "DIOR training 没有包含同一 parent 多个候选区域的完整 batch；"
+                "请降低 batch size 或检查 region-pair index"
+            )
+        return DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            num_workers=int(config.num_workers),
+            pin_memory=torch.cuda.is_available(),
+            collate_fn=collate_description,
+        )
     return DataLoader(
         dataset,
-        batch_size=int(batch_size or config.batch_size),
+        batch_size=effective_batch_size,
         shuffle=bool(training),
         num_workers=int(config.num_workers),
         pin_memory=torch.cuda.is_available(),
         collate_fn=collate_description,
-        drop_last=bool(training and config.stage == "dior_alignment"),
+        drop_last=False,
     )
 
 

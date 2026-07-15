@@ -73,7 +73,7 @@ class SingleVectorRegionPooling(nn.Module):
                     )[0]
                     effective = mask * modality_valid
                     if self.mode == "crop_only":
-                        pooled = _bbox_pool(feature, effective)
+                        pooled = _bbox_pool(feature, effective, modality_valid)
                     elif self.mode == "masked_pooling":
                         pooled = _masked_pool(feature, effective)
                     else:

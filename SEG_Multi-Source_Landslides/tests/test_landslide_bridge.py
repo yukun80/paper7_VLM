@@ -28,6 +28,7 @@ from landslide_bridge_common import (  # noqa: E402
     geometry_from_mask,
     krippendorff_alpha_nominal,
     load_config,
+    sha256_file,
     validate_bridge_structured_target,
 )
 
@@ -166,7 +167,7 @@ class LandslideBridgeProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gate.json"
             path.write_text(json.dumps({
-                "protocol": "landslide_bridge_evaluation_gate_v1",
+                "protocol": "landslide_bridge_evaluation_gate_v2",
                 "status": "frozen_after_pilot",
                 "frozen": True,
                 "thresholds": {
@@ -176,7 +177,43 @@ class LandslideBridgeProtocolTest(unittest.TestCase):
                 },
             }), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, r"\[0,1\]"):
-                MERGE._load_frozen_gate(str(path))
+                MERGE._load_frozen_gate(str(path), Path(directory))
+
+    def test_frozen_gate_is_bound_to_current_pilot_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binding_paths = {
+                "pilot_parent_manifest_sha256": root / "manifests/pilot_parent_manifest.jsonl",
+                "review_selection_sha256": root / "manifests/review_selection.jsonl",
+                "candidate_index_sha256": root / "indexes/candidate_all.jsonl",
+            }
+            for path in binding_paths.values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}\n", encoding="utf-8")
+            gate = root / "gate.json"
+            gate.write_text(json.dumps({
+                "protocol": "landslide_bridge_evaluation_gate_v2",
+                "builder_version": MERGE.BUILDER_VERSION,
+                "status": "frozen_after_pilot",
+                "frozen": True,
+                "bindings": {
+                    name: sha256_file(path) for name, path in binding_paths.items()
+                },
+                "thresholds": {
+                    "no_target_rejection": 0.9,
+                    "unsupported_claim_rate": 0.1,
+                    "expert_fact_score": 0.7,
+                },
+            }), encoding="utf-8")
+            loaded = MERGE._load_frozen_gate(str(gate), root)
+            self.assertEqual(loaded["bindings"], {
+                name: sha256_file(path) for name, path in binding_paths.items()
+            })
+            binding_paths["review_selection_sha256"].write_text(
+                '{"changed":true}\n', encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "当前 Pilot/candidate 不匹配"):
+                MERGE._load_frozen_gate(str(gate), root)
 
     def test_agreement_statistics(self) -> None:
         self.assertEqual(cohen_kappa(["accept", "reject"], ["accept", "reject"]), 1.0)

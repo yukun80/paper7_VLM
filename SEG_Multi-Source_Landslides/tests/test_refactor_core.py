@@ -57,6 +57,7 @@ from qpsalm_seg.description import (
     SingleVectorRegionPooling,
     rasterize_region_geometry,
 )
+import qpsalm_seg.description.mgrr as mgrr_module
 from qpsalm_seg.description.counterfactuals import counterfactual_backbone
 from qpsalm_seg.matching import assign_proposals
 from qpsalm_seg.metrics import batch_binary_metric_tensors, batch_binary_metrics
@@ -75,7 +76,13 @@ from qpsalm_seg.models.vision_cache import (
 )
 from qpsalm_seg.presets import apply_preset
 from qpsalm_seg.rendering import RENDERER_VERSION
-from qpsalm_seg.schema import ActiveModalitySubset, ModalityBatch, ModalityInstance
+from qpsalm_seg.schema import (
+    ActiveModalitySubset,
+    ModalityBatch,
+    ModalityInstance,
+    MultiScaleFeatures,
+    MultisourceBackboneState,
+)
 from qpsalm_seg.engine.checkpoint import (
     load_checkpoint,
     save_checkpoint,
@@ -649,11 +656,53 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertIsNotNone(state.region_sequence_mask)
         self.assertGreater(int(state.region_sequence_mask.sum()), 6)
         self.assertGreaterEqual(float(state.diagnostics["component_count"][0, 0]), 2.0)
+        self.assertEqual(float(state.diagnostics["roi_grid_sample_count"]), 118.0)
+        self.assertEqual(float(state.diagnostics["roi_query_count"]), 2.0)
         state.region_sequence_tokens[state.region_sequence_mask].sum().backward()
         self.assertTrue(any(
             parameter.grad is not None and torch.isfinite(parameter.grad).all()
             for parameter in self.model.sane.parameters()
         ))
+
+    def test_mgrr_roi_grid_uses_reference_canvas_coordinates(self) -> None:
+        feature = torch.ones((2, 4, 4), dtype=torch.float32)
+        valid = torch.ones((1, 4, 4), dtype=torch.float32)
+        reference_mask = torch.ones((1, 8, 8), dtype=torch.float32)
+        tokens, token_valid = MultiGranularityRegionReplay._roi_grid_tokens(
+            feature, valid, reference_mask, (2, 3)
+        )
+        self.assertEqual(tuple(tokens.shape), (6, 2))
+        self.assertTrue(bool(token_valid.all()))
+        self.assertTrue(torch.allclose(tokens, torch.ones_like(tokens)))
+
+    def test_mgrr_reports_component_truncation_without_residual_union_roi(self) -> None:
+        batch = synthetic_batch([instance("optical_rgb", "optical", 3, 64)], size=64)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        region = torch.zeros((1, 1, 64, 64))
+        for offset in range(6):
+            y = 2 + offset * 9
+            region[:, :, y:y + 3, 4 + offset * 8:7 + offset * 8] = 1
+        mgrr = MultiGranularityRegionReplay(
+            32, max_components=2, component_coverage=0.99
+        )
+        state = mgrr(backbone, region, protocol="vision_only")
+        self.assertEqual(float(state.diagnostics["component_count"][0, 0]), 6.0)
+        self.assertEqual(float(state.diagnostics["selected_component_count"][0, 0]), 2.0)
+        self.assertGreater(float(state.diagnostics["residual_area_ratio"][0, 0]), 0.0)
+        self.assertLess(float(state.diagnostics["component_coverage"][0, 0]), 1.0)
+
+    def test_mgrr_component_inventory_is_shared_across_modalities(self) -> None:
+        batch = synthetic_batch([
+            instance("optical_rgb", "optical", 3, 32),
+            instance("dem", "terrain", 1, 32),
+        ], size=32)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        region = torch.zeros((1, 1, 32, 32))
+        region[:, :, 3:10, 4:12] = 1
+        original = mgrr_module._component_masks
+        with patch.object(mgrr_module, "_component_masks", wraps=original) as mocked:
+            MultiGranularityRegionReplay(32)(backbone, region)
+        self.assertEqual(mocked.call_count, 1)
 
     def test_mgrr_null_region_uses_null_evidence(self) -> None:
         batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32)
@@ -695,6 +744,44 @@ class ThreeModuleModelTest(unittest.TestCase):
         region = torch.ones((1, 1, 32, 32))
         state = mgrr(removed, region)
         self.assertAlmostEqual(float(state.diagnostics["null_reliability"][0, 0]), 1.0)
+
+    def test_cross_parent_modality_swap_never_uses_same_parent_task_view(self) -> None:
+        first = synthetic_batch([instance("optical_a", "optical", 3, 32)], size=32)
+        second = synthetic_batch([instance("optical_b", "optical", 3, 32)], size=32)
+        third = synthetic_batch([instance("optical_c", "optical", 3, 32)], size=32)
+        states = [
+            self.model.encode_multisource(batch, include_visual_tokens=False)
+            for batch in (first, second, third)
+        ]
+        backbone = MultisourceBackboneState(
+            features=MultiScaleFeatures(
+                samples=[state.features.samples[0] for state in states],
+                reference_hw=states[0].reference_hw,
+            ),
+            valid_mask=torch.cat([state.valid_mask for state in states]),
+            active_subsets=tuple(state.active_subsets[0] for state in states),
+            metadata=(
+                {"parent_sample_id": "same"},
+                {"parent_sample_id": "same"},
+                {"parent_sample_id": "different"},
+            ),
+            reference_hw=states[0].reference_hw,
+            use_full_evidence=True,
+            visual_evidence=None,
+        )
+        swapped = counterfactual_backbone(backbone, "cross_parent_modality_swap")
+        self.assertEqual(
+            swapped.metadata[0]["counterfactual_modality_swap"]["donor_parent_sample_id"],
+            "different",
+        )
+        self.assertEqual(
+            swapped.metadata[1]["counterfactual_modality_swap"]["donor_parent_sample_id"],
+            "different",
+        )
+        self.assertEqual(
+            swapped.metadata[2]["counterfactual_modality_swap"]["donor_parent_sample_id"],
+            "same",
+        )
 
     def test_region_geometry_unifies_full_box_mask_and_null(self) -> None:
         valid = torch.ones((1, 10, 20))

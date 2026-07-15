@@ -70,6 +70,42 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _multisource_content_hash(items: dict[str, dict[str, Any]]) -> str:
+    """Hash rendered-input content and metadata, never only logical paths."""
+    payload = []
+    for name, item in sorted(items.items()):
+        if not item.get("available", True) or not item.get("path"):
+            continue
+        value_path = resolve_project_path(item["path"])
+        if value_path is None or not value_path.is_file():
+            raise FileNotFoundError(f"多源模态不存在: {name} -> {item.get('path')}")
+        valid_spec = item.get("valid_mask") or {}
+        valid_path = resolve_project_path(valid_spec.get("path")) if valid_spec.get("path") else None
+        if valid_path is None or not valid_path.is_file():
+            raise FileNotFoundError(f"多源 valid mask 不存在: {name} -> {valid_spec.get('path')}")
+        payload.append({
+            "name": str(name),
+            "value_sha256": _sha256_file(value_path),
+            "valid_sha256": _sha256_file(valid_path),
+            "family": item.get("family"),
+            "sensor": item.get("sensor"),
+            "product_type": item.get("product_type"),
+            "band_names": item.get("band_names") or [],
+            "band_metadata": item.get("band_metadata") or [],
+            "native_gsd_m": item.get("native_gsd_m"),
+            "units": item.get("units"),
+            "signed": bool(item.get("signed")),
+            "orbit": item.get("orbit"),
+            "quality": item.get("quality"),
+            "normalization": item.get("normalization") or {},
+        })
+    if not payload:
+        raise ValueError("多源 parent 没有可哈希的活动模态")
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows = []
     with path.open("r", encoding="utf-8") as handle:
@@ -137,8 +173,9 @@ def _bridge_records(
                 "source_cache": qmv3_key,
             }
             continue
+        modality_metadata = row.get("modality_metadata", {})
         instances = []
-        for name, item in sorted(row.get("modality_metadata", {}).items()):
+        for name, item in sorted(modality_metadata.items()):
             if item.get("available", True) and item.get("path"):
                 aligned = positive_float(item.get("native_gsd_m"))
                 instances.append(build_modality_instance(str(name), item, aligned))
@@ -149,9 +186,7 @@ def _bridge_records(
             "component": "multisource_parent",
             "parent_sample_id": parent_id,
             "source_ref": str(row["source_parent_index"]),
-            "source_content_hash": hashlib.sha256("|".join(
-                str(item.metadata["path"]) for item in instances
-            ).encode()).hexdigest(),
+            "source_content_hash": _multisource_content_hash(modality_metadata),
             "views": render_sensor_views(instances, render_size, strict=True),
             "modality_families": {item.name: item.family for item in instances},
             "source_cache": None,
@@ -303,6 +338,10 @@ def main() -> None:
             raise ValueError("segmentation cache spatial sizes 与 description cache 不一致")
         if int(segmentation_bank.manifest.get("view_tokens_per_view") or 0) != int(args.view_tokens):
             raise ValueError("segmentation cache view token 数与 description cache 不一致")
+        if int(segmentation_bank.manifest.get("render_size") or 0) != int(args.render_size):
+            raise ValueError("segmentation cache render size 与 description cache 不一致")
+        if segmentation_bank.manifest.get("renderer_version") != RENDERER_VERSION:
+            raise ValueError("segmentation cache renderer version 与当前 renderer 不一致")
         if segmentation_bank.manifest.get("model_revision") != encoder.revision:
             raise ValueError("segmentation cache model revision 与 description encoder 不一致")
         if segmentation_bank.manifest.get("processor_revision") != encoder.processor_revision:

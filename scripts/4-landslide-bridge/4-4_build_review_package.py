@@ -31,6 +31,7 @@ from landslide_bridge_common import (
     preview_image,
     read_jsonl,
     resolve_project_path,
+    sha256_file,
     to_project_ref,
     write_json,
     write_jsonl,
@@ -193,10 +194,22 @@ def main() -> None:
             templates[reviewer_id].append(review_template(item, record, reviewer_id, panel_ref))
 
     gate_template = {
-        "protocol": "landslide_bridge_evaluation_gate_v1",
+        "protocol": "landslide_bridge_evaluation_gate_v2",
+        "builder_version": BUILDER_VERSION,
         "status": "pending_pilot_review",
         "frozen": False,
         "pilot_parent_manifest": to_project_ref(output_dir / "manifests/pilot_parent_manifest.jsonl"),
+        "bindings": {
+            "pilot_parent_manifest_sha256": sha256_file(
+                output_dir / "manifests/pilot_parent_manifest.jsonl"
+            ),
+            "review_selection_sha256": sha256_file(
+                output_dir / "manifests/review_selection.jsonl"
+            ),
+            "candidate_index_sha256": sha256_file(
+                output_dir / "indexes/candidate_all.jsonl"
+            ),
+        },
         "thresholds": {
             "no_target_rejection": None,
             "unsupported_claim_rate": None,

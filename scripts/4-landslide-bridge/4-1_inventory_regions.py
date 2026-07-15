@@ -381,6 +381,15 @@ def main() -> None:
     pilot_parents, review_selection = build_review_selection(
         inventory, parent_by_id, args.pilot_parents, config, args.seed
     )
+    pilot_quotas = _split_quotas(args.pilot_parents, config)
+    pilot_split_counts = Counter(row["split"] for row in pilot_parents)
+    pilot_ids = [str(row["parent_sample_id"]) for row in pilot_parents]
+    pilot_protocol_complete = bool(
+        args.max_samples <= 0
+        and len(pilot_parents) == args.pilot_parents
+        and len(pilot_ids) == len(set(pilot_ids))
+        and all(pilot_split_counts[split] == quota for split, quota in pilot_quotas.items())
+    )
     selected_review_ids = {row["bridge_record_id"] for row in review_selection}
     for record in inventory:
         if record["bridge_record_id"] in selected_review_ids:
@@ -394,15 +403,20 @@ def main() -> None:
         "inventory_records": len(inventory),
         "inventory_by_source": dict(sorted(Counter(row["region_source"] for row in inventory).items())),
         "inventory_by_split": dict(sorted(Counter(row["split"] for row in inventory).items())),
+        "source_parent_limit": int(args.max_samples),
+        "pilot_requested_parents": int(args.pilot_parents),
+        "pilot_requested_split_quotas": pilot_quotas,
         "pilot_parents": len(pilot_parents),
-        "pilot_parent_by_split": dict(sorted(Counter(row["split"] for row in pilot_parents).items())),
+        "pilot_parent_by_split": dict(sorted(pilot_split_counts.items())),
+        "pilot_protocol_complete": pilot_protocol_complete,
         "review_items": len(review_selection),
         "stale_region_masks_removed": stale_masks_removed,
         "errors": [],
     }
     print(
         f"[BRIDGE:INVENTORY] parents={len(parents)} regions={len(inventory)} "
-        f"pilot_parents={len(pilot_parents)} review_items={len(review_selection)}"
+        f"pilot_parents={len(pilot_parents)}/{args.pilot_parents} "
+        f"pilot_complete={pilot_protocol_complete} review_items={len(review_selection)}"
     )
     if not args.dry_run:
         write_jsonl(inventory_path, inventory)

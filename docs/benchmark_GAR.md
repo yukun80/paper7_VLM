@@ -15,8 +15,8 @@
 | M3 | task-neutral backbone state、独立 Description Vision Cache v1 已实现 | 手工运行 cache 构建、state 等价与 cache 隔离测试 |
 | M4 | 六种 region encoder 消融、MGRR 多粒度 token sequence 与反事实接口已实现 | Small 三 seed 消融、ERFS、retrieval 和 UFCR 门槛 |
 | M5 | `desc_adapter`、causal generation、raw parser/repair、显式 checkpoint 迁移已实现 | 过拟合、迁移/reload 和 24GB smoke |
-| M6 | D-1、D0-D4、GT/fixed/end-to-end、严格 OOF、专家事实性评分和对比入口已实现 | 按课程顺序训练，完成专家评价和三 seed 统计 |
-| M7 | 独立 DataLoader 交替训练与 segmentation retention gate 已实现 | 从通过 M6 的 checkpoint 初始化并运行 full-val retention |
+| M6 | D-1、D0-D4、GT/fixed/end-to-end、OOF v2、盲审事实性评分和反事实 paired CI 已实现 | 按课程顺序训练，完成专家评价和三 seed 统计 |
+| M7 | 同任务梯度累积的独立 DataLoader 交替训练与严格 full-val retention gate 已实现 | 从通过 M6 的 checkpoint 初始化并运行 full-val retention |
 
 因此，当前仓库可称为 **M0-M7 engineering-complete candidate**，不能在人工审核、Small
 实验和固定统计门槛完成前称为 scientifically validated，也不能直接进入 Full。
@@ -201,19 +201,21 @@ expert_test
 
 ### 3.5 `multisource_landslide_segdesc_v1`
 
-统一索引引用现有 segmentation 和三个描述 benchmark，不重复复制图像。任务族固定为：
+统一索引引用现有 segmentation、Description V2 和 Landslide Bridge，不重复复制图像或 mask。
+统一训练调度使用以下顶层 `task_group`：
 
 ```text
 segmentation
 global_caption
-region_referring_expression
-region_grounding
-landslide_region_structured_description
-landslide_region_caption
-no_target_response
+region_alignment
+region_description_auto
+region_description_expert
 ```
 
-首版不包含 `landslide_region_vqa`；只有获得独立、可验证的 VQA 标注后才新增。
+component 内部仍保留更细的 `task_family`，例如 `region_referring_expression`、
+`region_grounding`、`landslide_region_structured_description`、`landslide_region_caption` 和
+`no_target_response`。首版不包含 `landslide_region_vqa`；只有获得独立、可验证的 VQA 标注后
+才新增。
 
 ### 3.6 存储策略
 
@@ -645,9 +647,12 @@ scripts/run_5_build_segdesc_dataset.sh
 ```
 
 统一索引只保存 component benchmark 引用和任务采样元数据，不再次复制源样本。每条引用同时
-绑定 component index 的 SHA-256、精确 JSONL 行号和 record ID；验证器要求三者一致。Bridge
-处于 `awaiting_expert_review` 时允许发布自动描述任务，但 `expert_supervision=false`，不得从
-规则 candidate 推断专家监督。dry-run 只执行 5-1 统计，不调用依赖已发布索引的验证和汇总。
+绑定 component index 的 SHA-256、精确 JSONL 行号和 record ID；component manifest 还绑定三个
+输入 benchmark 的 validation report hash。Bridge 处于 `awaiting_expert_review` 时只允许发布
+`region_description_auto`，即使目录中残留旧 `expert_all.jsonl` 或 evaluation gate，也必须忽略
+并在报告中明确记录。只有 Bridge validation 为 `expert_pilot_frozen`，且当前 Bridge 的
+`evaluation_gate_manifest.json` 通过路径、hash 和协议校验后，才允许发布
+`region_description_expert`。dry-run 只执行 5-1 统计，不调用依赖已发布索引的验证和汇总。
 
 ### 6.4 统一脚本约束
 
@@ -785,7 +790,9 @@ structured facts
     -> accepted/revised/rejected annotation
 ```
 
-Bridge pilot 默认 300 个 parent，按数据源、模态组合、region source、面积和 target status 分层。
+Bridge pilot 默认 300 个 parent，按数据源、模态组合、region source、面积和 target status
+分层，并精确满足 train/val/test = 180/60/60。任一 split 候选不足均为正式验证错误；
+`--max-samples` 生成的缩小版本只属于 smoke，不允许冻结 evaluation gate。
 
 专家 val/test：
 
@@ -974,6 +981,15 @@ MGRR 不直接复用 segmentation query 的融合结果，而是用 region query
 区域依次包含 region summary、global context、exact mask、replay、context、geometry、逐模态 token
 和主要 component replay slots；absent 区域使用 global/null-region/geometry/null-evidence。batch
 内仅在 token 维 padding，并保存 `region_sequence_mask`，不得用预分配切片写入破坏梯度链。
+当前 MGRR replay 协议为 `qpsalm_mgrr_v2_multiscale_grid_replay`：在已应用 renderer
+resize/pad transform 的 reference canvas 上确定 bbox，再对 detail/high/mid/low 原生特征执行
+`7×7/7×7/4×4/2×2` 的 `grid_sample`，加入尺度 embedding 后由两个可学习 region query
+压缩。residual components 仅做 exact-mask 聚合，禁止使用跨多个残余斑块的 union bbox。
+每个主要 component token 显式组合 inside、multiscale RoI replay 与
+`inside - component_context_ring`；`mgrr_no_context` 同时关闭整区和组件 contrast，
+`roi_replay_only` 只保留空间 replay，确保消融名称对应真实信息路径。
+8 邻域组件只在每个 region 解析一次，所有模态共享同一组 component slots；禁止在逐模态循环
+中重复连通域分析，以免产生重复 CPU 同步或模态间 slot 漂移。
 
 ### 9.7 必须比较的 baseline
 
@@ -1153,11 +1169,19 @@ load_segmentation_backbone_checkpoint(...)
 
 ```text
 desc_adapter
-description projection
-region/global special embeddings
+task-neutral visual projection
+instruction/visual special embeddings
 ```
 
-冻结 SANE、QMEF、PMRD 和 segmentation adapter。
+冻结 SANE、QMEF、PMRD、segmentation adapter、MGRR、region projector 和 region special
+embedding。D0/D1 的 causal sequence 只使用 instruction token 与 parent-level task-neutral visual
+tokens，不注入随机初始化的 exact-mask、component RoI 或 context-ring token。区域空间能力从 D2
+开始训练，避免全图 caption 预适配被尚未校准的 region replay 污染。缓存读取也采用
+`include_spatial=false` 快速路径，只加载 view tokens 和 valid mask，不搬运或投影四尺度 spatial
+features。每次运行必须输出 `trainable_parameter_manifest.json`，逐组记录参数名、数量、学习率和
+weight decay。对应 causal sequence 协议为 `qpsalm_description_causal_v4_stage_separated`；
+旧的 v3 描述 checkpoint 不允许继续初始化 D0-D4，但分割 checkpoint、segmentation Vision
+Cache v3 和 Description Vision Cache v1 无需重建。
 
 每个 parent 每个 epoch 采样一条参考 caption，受 source 和 caption quality 权重控制，避免 NWPU 数量支配训练。
 
@@ -1183,6 +1207,18 @@ text -> same-image candidate-region retrieval
 ```
 
 不将此阶段称为详细 region caption，不建立自由坐标 bbox 回归 head，不更新滑坡 PMRD 主损失。反向任务只在同一图像的标注 region candidates 中检索正确区域；自由坐标 grounding 延后到存在独立研究必要性时再评估。
+
+D2 首次启用 description spatial backbone、MGRR、alignment text projection、phrase 使用的
+instruction embedding 和 alignment temperature；不训练此路径未使用的 causal region projector、
+region special embedding 或 visual special embedding。D3/D4 再联合启用完整描述模块。各 stage
+的 optimizer 参数集合必须写入运行产物，跨 stage 使用 `initialize-from` 重建 optimizer，禁止沿用
+上一阶段 optimizer state。
+
+D2 训练 DataLoader 必须使用 parent-grouped batch sampler：先按 `parent_sample_id` 聚合并在组内
+打乱区域，再将连续候选装入 batch，使同图不同 phrase/region 成为真实 hard negatives。相同 parent
+且规范化 phrase 相同的重复标注使用 multi-positive target，不得互相作为假负样本。普通全局随机
+shuffle 不能用于 D2 主实验。没有任何同图候选对的 batch 不进入 D2 optimizer step；单区域 parent
+仍保留在完整 dev/test 对齐评价中，并单独统计其覆盖，不能将跨图 negatives 伪称为同图检索监督。
 
 ### D3a：自动结构化 GT-mask 预训练
 
@@ -1283,6 +1319,21 @@ dense projection，只交替更新 `default` adapter、`desc_adapter`、MGRR 与
 且不得与默认结果混报。每个 loader 的步数、parent 覆盖、采样比例和 optimizer group LR
 必须写入 run manifest。
 
+当前联合运行协议为 `qpsalm_segdesc_joint_v3_task_isolated`，梯度门禁必须分别验证
+segmentation、global-caption 和 region-description 三条路径。global-caption 要求
+`desc_adapter + description projection` 有效且 MGRR 为零梯度；region-description 额外要求
+MGRR 有效；segmentation 只允许 default adapter（以及显式消融启用的 dense heads）更新。任一
+inactive adapter 或非目标模块出现非零梯度都必须中止训练。`joint_manifest.json` 记录 optimizer
+逐参数清单、各 loader 每 epoch batch 数和 parent population hash；`joint_coverage_latest.json`
+持续记录每个任务的 optimizer steps、样本数和 parent 覆盖。
+
+新 M7 run 只在联合优化开始前建立一次固定 monitor baseline，并同时冻结精确
+sample-population identity、阈值和 positive Dice。resume 必须从同一 run 目录读取该 baseline，
+并校验 checkpoint 中的 baseline identity、progress step、三类 parent population hash 和已覆盖
+parent 子集；禁止在加载已联合训练的 checkpoint 后重新计算 baseline。周期 monitor 只有在样本
+身份和阈值完全一致时才可参与 best-checkpoint 选择，并始终标记为 `monitor_only`。CLI 禁止
+`--resume` 与 `--overwrite-output` 同时使用。
+
 ---
 
 ## 十二、评价协议
@@ -1314,6 +1365,8 @@ MGRR 进入主模型要求：至少 2/3 seeds 同时提高 ERFS 和 R@1，且 UF
 - Assisted、Vision-only、GT-mask、fixed predicted-mask 和 end-to-end 使用独立结果表。
 
 在 M2 Pilot 完成后、正式比较模型前，冻结 `evaluation_gate_manifest.json`，记录 ERFS rubric、claim 切分规则、retrieval scorer、UFCR 非劣界限、target-status 阈值和 bootstrap seed。不得根据 Full 结果回改门槛。
+冻结文件必须绑定本轮 Pilot parent manifest、review selection 与 candidate index 的 SHA-256；
+其他 run 的 gate 即使阈值字段相同也不得复用。
 
 ### 12.1 整图描述
 
@@ -1327,7 +1380,8 @@ MGRR 进入主模型要求：至少 2/3 seeds 同时提高 ERFS 和 R@1，且 UF
 - BERTScore；
 - 人工事实性、详细度和可读性。
 
-RSIEval 只有 100 张图，指标必须报告 bootstrap 95% 置信区间。RSIEval VQA 仅评价能力保持，不选择描述 checkpoint。
+RSIEval 只有 100 张图，caption 指标必须报告 bootstrap 95% 置信区间。首版不消费本地
+RSIEval VQA；943/936 数量差异只保留为数据审计 warning，不进入训练或 checkpoint 选择。
 
 ### 12.2 DIOR 区域对齐
 
@@ -1377,6 +1431,19 @@ cross-parent region swap
 modality removal
 cross-parent modality swap
 ```
+
+`same-image region swap` 必须从同一 `parent_sample_id` 的 Bridge/DIOR 区域目录加载另一个
+真实 mask 或 box，并复用相同 cache transform。禁止使用 batch 内跨 parent 的 mask、水平翻转
+或其他几何变换伪造同图区域。若同一 parent 没有第二个不同的有效区域，该样本记为不可用，
+不能计入反事实覆盖率；正式 gate 因覆盖不足失败，而不是用人工扰动补足样本数。
+`cross-parent modality swap` 同样必须显式核验 donor 与 target 的 `parent_sample_id` 不同，
+并在逐样本报告中记录 donor parent 和被替换的模态族；同一 parent 的不同 instruction/view
+不能被误当作 cross-parent 对照。donor 由数据集 parent 目录显式解析并单独编码，不依赖当前
+DataLoader batch 中恰好出现另一个 parent，因此 `batch_size=1` 也必须能够执行该对照。
+正式 paired gate 只接受 `qpsalm_description_evaluation_v3` 报告；旧报告没有上述 donor/region
+身份约束，不能用于 MGRR 科学准入。
+评估报告必须分别记录 `skipped_unavailable` 与 `skipped_no_effect`：前者表示数据中没有合法
+配对，后者表示已构造对照但输入未发生变化；两者都不能计入正式覆盖率。
 
 核心指标：
 
@@ -1453,7 +1520,7 @@ delta_positive_dice = joint_positive_dice - seg_only_positive_dice
 
 ### M2：Landslide Bridge Pilot
 
-- 300 parent 分层抽样；
+- 300 parent 分层抽样并硬校验 180/60/60 split 配额；
 - 三级证据协议；
 - `BRIDGE_STAGE=prepare` 生成规则候选与双人 review package，但不生成专家真值；
 - `BRIDGE_STAGE=merge` 只接收显式完成的双人审核、必要仲裁和人工冻结 gate；
@@ -1512,12 +1579,30 @@ segmentation state；若复用 segmentation cache v3，其 backend、模型/proc
 - counterfactual suite；
 - Gradio 中按 proposal/region 展示描述。
 
+独立正式评价必须设置 `max_val_samples=0` 与 `max_generate_samples=0`（CLI 默认如此）；训练
+周期 monitor 才允许有限样本。反事实只统计输入确实发生变化的样本，并报告同一样本目标得分
+差与事实 claim 数差的 paired bootstrap CI。专家事实性模板必须包含冻结 generation、盲审
+可视面板和不可改写的 claim inventory。正式反事实门槛还要求每种模式达到预设有效样本数，
+不能由少量未发生 no-op 的样本替代完整覆盖。
+
 ### M7：联合训练
 
 - segmentation/description 交替 batch；
 - 双 adapter；
 - segmentation retention；
 - Small 三种子门槛。
+
+一个 optimizer step 内的 gradient accumulation 只能来自同一任务；默认任务序列为
+`segmentation, global_caption, segmentation, region_description`。最终 retention 只有在完整
+val 样本数、样本身份 SHA-256 与原分割 baseline 一致，身份记录完整且无重复、阈值一致且
+checkpoint 明确来自 joint stage 时才可通过；有限样本只产生 preliminary 结果。样本身份由
+sample/parent ID、任务模板、instruction、target mask 引用和 active subset 的规范化记录计算，
+并包含 target size、resize/pad transform、prompt version 与 instruction ablation，避免仅凭
+相同样本数或同名 sample 误判为同一评估总体。
+
+训练中使用的固定 monitor subset 只负责选择 checkpoint。其 baseline 在新 run 开始时冻结，
+续训不得重建；正式 retention 仍必须通过独立 full-val CLI，并与原分割 checkpoint 的 full-val
+报告比较。
 
 只有 M0–M7 的 Small 验收全部通过，才构建 Full 并运行正式训练。
 
@@ -1601,7 +1686,7 @@ RSICap
     -> 人工详细描述风格
 
 RSIEval
-    -> 独立整图 caption / VQA 保持测试
+    -> 独立整图 caption 保持测试（首版不使用本地 VQA）
 
 DIOR-RSVG
     -> box、短语和区域 token 对齐

@@ -20,7 +20,8 @@ from typing import Any
 from segdesc_common import (
     BUILDER_VERSION,
     INDEX_SCHEMA,
-    benchmark_root,
+    TASK_WEIGHTS,
+    bridge_publication_policy,
     ensure_output,
     project_ref,
     read_json,
@@ -30,15 +31,6 @@ from segdesc_common import (
     write_json,
     write_jsonl,
 )
-
-
-TASK_WEIGHTS = {
-    "segmentation": 1.0,
-    "global_caption": 1.0,
-    "region_alignment": 1.0,
-    "region_description_auto": 0.5,
-    "region_description_expert": 1.0,
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,16 +47,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _validated(root: Path, *, allow_awaiting_review: bool = False) -> dict[str, Any]:
+def _validated(root: Path) -> dict[str, Any]:
     path = root / "reports/validation_report.json"
     if not path.is_file():
         raise FileNotFoundError(f"缺少 validation report: {path}")
     report = read_json(path)
     if report.get("errors"):
         raise ValueError(f"component validation errors 非空: {path}")
-    if not allow_awaiting_review and report.get("status") not in {None, "expert_pilot_frozen", "complete"}:
-        raise ValueError(f"Bridge 尚未冻结，不能发布 expert component: status={report.get('status')}")
     return report
+
+
+def _validation_binding(root: Path, report: dict[str, Any]) -> dict[str, Any]:
+    path = root / "reports/validation_report.json"
+    return {
+        "path": project_ref(path),
+        "sha256": sha256_file(path),
+        "status": report.get("status"),
+        "errors": len(report.get("errors") or []),
+    }
 
 
 def _record_id(row: dict[str, Any]) -> str:
@@ -115,14 +115,14 @@ def _append(rows: list[dict[str, Any]], index: Path, component: str, task_group_
 
 def main() -> None:
     args = parse_args()
-    root = benchmark_root()
     segmentation = resolve_path(args.segmentation_benchmark or f"benchmark/multisource_landslide_v2_{args.mode}")
     description = resolve_path(args.description_benchmark or f"benchmark/qpsalm_description_v2_{args.mode}")
     bridge = resolve_path(args.bridge_benchmark or f"benchmark/landslide_region_description_v1_{args.mode}")
     output = resolve_path(args.output_dir or f"benchmark/multisource_landslide_segdesc_v1_{args.mode}")
-    _validated(description)
-    _validated(segmentation)
-    bridge_report = _validated(bridge, allow_awaiting_review=True)
+    description_report = _validated(description)
+    segmentation_report = _validated(segmentation)
+    bridge_report = _validated(bridge)
+    bridge_status = str(bridge_report.get("status") or "")
     ensure_output(output, args.overwrite, args.dry_run)
 
     rows: list[dict[str, Any]] = []
@@ -144,7 +144,14 @@ def main() -> None:
     auto_index = bridge / "indexes/auto_train.jsonl"
     _append(rows, auto_index, "landslide_bridge_v1", lambda _row: "region_description_auto")
     expert_index = bridge / "indexes/expert_all.jsonl"
-    if expert_index.is_file():
+    gate_path = bridge / "manifests/evaluation_gate_manifest.json"
+    publication = bridge_publication_policy(
+        bridge_status,
+        expert_index_present=expert_index.is_file(),
+        gate_present=gate_path.is_file(),
+    )
+    expert_published = publication["expert_index_published"]
+    if expert_published:
         _append(rows, expert_index, "landslide_bridge_v1", lambda _row: "region_description_expert")
 
     if args.max_samples > 0:
@@ -168,7 +175,20 @@ def main() -> None:
         "schema_version": INDEX_SCHEMA,
         "mode": args.mode,
         "components": components,
-        "bridge_status": bridge_report.get("status"),
+        "component_validation_reports": {
+            "segmentation": _validation_binding(segmentation, segmentation_report),
+            "description": _validation_binding(description, description_report),
+            "bridge": _validation_binding(bridge, bridge_report),
+        },
+        "bridge_status": bridge_status,
+        "bridge_gate": (
+            {"path": project_ref(gate_path), "sha256": sha256_file(gate_path)}
+            if publication["bridge_gate_published"] else None
+        ),
+        "expert_index_present": expert_index.is_file(),
+        "expert_index_published": expert_published,
+        "stale_expert_index_ignored": publication["stale_expert_index_ignored"],
+        "stale_bridge_gate_ignored": publication["stale_bridge_gate_ignored"],
         "num_records": len(rows),
         "by_split": dict(sorted(Counter(row["split"] for row in rows).items())),
         "by_task_group": dict(sorted(Counter(row["task_group"] for row in rows).items())),
@@ -190,4 +210,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

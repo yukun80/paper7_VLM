@@ -13,8 +13,66 @@ from typing import Any, Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "qpsalm_segdesc_index_builder_v1"
+BUILDER_VERSION = "qpsalm_segdesc_index_builder_v2_expert_gate_bound"
 INDEX_SCHEMA = "qpsalm_segdesc_index_v1"
+VALIDATION_PROTOCOL = "qpsalm_segdesc_index_validation_v2"
+STATISTICS_PROTOCOL = "qpsalm_segdesc_index_statistics_v2"
+BRIDGE_AWAITING_STATUS = "awaiting_expert_review"
+BRIDGE_FROZEN_STATUS = "expert_pilot_frozen"
+TASK_WEIGHTS = {
+    "segmentation": 1.0,
+    "global_caption": 1.0,
+    "region_alignment": 1.0,
+    "region_description_auto": 0.5,
+    "region_description_expert": 1.0,
+}
+TASK_COMPONENTS = {
+    "segmentation": "landslide_segmentation_v2",
+    "global_caption": "description_v2",
+    "region_alignment": "description_v2",
+    "region_description_auto": "landslide_bridge_v1",
+    "region_description_expert": "landslide_bridge_v1",
+}
+TASK_INDEX_NAMES = {
+    "segmentation": {
+        "instruction_train.jsonl", "instruction_val.jsonl", "instruction_test.jsonl",
+    },
+    "global_caption": {"train_eligible.jsonl", "dev.jsonl", "test.jsonl"},
+    "region_alignment": {"train_eligible.jsonl", "dev.jsonl", "test.jsonl"},
+    "region_description_auto": {"auto_train.jsonl"},
+    "region_description_expert": {"expert_all.jsonl"},
+}
+
+
+def bridge_publication_policy(
+    bridge_status: str,
+    *,
+    expert_index_present: bool,
+    gate_present: bool,
+) -> dict[str, bool]:
+    """Resolve expert publication without inferring supervision from stale files."""
+    if bridge_status == BRIDGE_FROZEN_STATUS:
+        if not expert_index_present:
+            raise ValueError("Bridge 已冻结但缺少 indexes/expert_all.jsonl")
+        if not gate_present:
+            raise ValueError("Bridge 已冻结但缺少 evaluation_gate_manifest.json")
+        return {
+            "expert_index_published": True,
+            "bridge_gate_published": True,
+            "stale_expert_index_ignored": False,
+            "stale_bridge_gate_ignored": False,
+        }
+    if bridge_status == BRIDGE_AWAITING_STATUS:
+        return {
+            "expert_index_published": False,
+            "bridge_gate_published": False,
+            "stale_expert_index_ignored": bool(expert_index_present),
+            "stale_bridge_gate_ignored": bool(gate_present),
+        }
+    raise ValueError(
+        "统一索引只接受正式 Bridge prepare 或 frozen expert Pilot，"
+        f"当前 status={bridge_status!r}"
+    )
 
 
 def benchmark_root() -> Path:
@@ -103,4 +161,3 @@ def ensure_output(output_dir: Path, overwrite: bool, dry_run: bool) -> None:
         raise FileExistsError(f"输出目录非空；请显式使用 --overwrite: {output_dir}")
     if not dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
-

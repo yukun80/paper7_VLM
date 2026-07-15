@@ -115,7 +115,9 @@ class DescriptionDemoSession:
     @torch.no_grad()
     def infer(self, sample_id: str, instruction: str, mask_mode: str):
         item = self.dataset[self.by_id[sample_id]]
-        backbone = self.model.encode_description_requests([item["request"]])
+        backbone = self.model.encode_description_requests(
+            [item["request"]], include_spatial=bool(item["structured_output"])
+        )
         mask = item["region_mask"][None].to(self.device)
         if mask_mode == "full":
             mask = torch.ones_like(mask)

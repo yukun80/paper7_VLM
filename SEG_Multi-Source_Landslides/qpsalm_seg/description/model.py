@@ -25,8 +25,57 @@ from .mgrr import MultiGranularityRegionReplay, RegionProtocol
 from .region_baselines import SingleVectorRegionPooling
 
 
-DESCRIPTION_SEQUENCE_PROTOCOL = "qpsalm_description_causal_v2_multigranularity_tokens"
+DESCRIPTION_SEQUENCE_PROTOCOL = "qpsalm_description_causal_v4_stage_separated"
 DESCRIPTION_ADAPTER_NAME = "desc_adapter"
+
+
+def alignment_positive_mask(
+    phrases: Sequence[str],
+    parent_ids: Sequence[str] | None,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Build same-parent, same-phrase positives without creating false negatives."""
+    labels = [" ".join(str(value).casefold().split()) for value in phrases]
+    parents = (
+        [str(value) for value in parent_ids]
+        if parent_ids is not None else [f"pair:{index}" for index in range(len(labels))]
+    )
+    if len(parents) != len(labels):
+        raise ValueError("DIOR parent_ids/phrases 数量不一致")
+    positive = torch.tensor(
+        [
+            [parents[row] == parents[column] and labels[row] == labels[column]
+             for column in range(len(labels))]
+            for row in range(len(labels))
+        ],
+        dtype=torch.bool,
+        device=device,
+    )
+    positive.fill_diagonal_(True)
+    return positive
+
+
+def multi_positive_alignment_loss(
+    logits: torch.Tensor,
+    positive_mask: torch.Tensor,
+) -> torch.Tensor:
+    if logits.ndim != 2 or logits.shape[0] != logits.shape[1]:
+        raise ValueError("DIOR alignment logits 必须为方阵")
+    if positive_mask.shape != logits.shape or not bool(positive_mask.any(1).all()):
+        raise ValueError("DIOR alignment positive mask 非法")
+
+    def direction(values: torch.Tensor, positives: torch.Tensor) -> torch.Tensor:
+        log_prob = values - torch.logsumexp(values, dim=1, keepdim=True)
+        positive_log_mass = torch.logsumexp(
+            log_prob.masked_fill(~positives, float("-inf")), dim=1
+        )
+        return -positive_log_mass.mean()
+
+    return 0.5 * (
+        direction(logits, positive_mask)
+        + direction(logits.T, positive_mask.T)
+    )
 
 
 @dataclass
@@ -119,12 +168,46 @@ class SegmentationGroundedDescriptionModel(nn.Module):
             region_valid_mask=region_valid_mask,
         )
 
+    def _description_region_state(
+        self,
+        backbone: MultisourceBackboneState,
+        region_masks: torch.Tensor,
+        *,
+        region_valid_mask: torch.Tensor | None,
+        protocol: RegionProtocol,
+        structured_outputs: Sequence[bool],
+    ) -> RegionEvidenceState:
+        if any(bool(value) for value in structured_outputs):
+            return self.build_region_state(
+                backbone,
+                region_masks,
+                region_valid_mask=region_valid_mask,
+                protocol=protocol,
+            )
+        # Global-caption D0/D1 must not execute random region replay. Keep a
+        # typed neutral state for diagnostics and the no-cache fallback path.
+        dim = int(self.segmentation.config.decoder_dim)
+        batch_size = int(region_masks.shape[0])
+        valid = backbone.valid_mask if region_valid_mask is None else region_valid_mask
+        return RegionEvidenceState(
+            backbone=backbone,
+            region_masks=region_masks,
+            region_valid_mask=valid,
+            region_tokens=region_masks.new_zeros((batch_size, 1, dim)),
+            diagnostics={
+                "global_caption_region_replay_skipped": region_masks.new_ones(batch_size),
+            },
+        )
+
     def encode_description_requests(
-        self, requests: Sequence[tuple[str, str]],
+        self,
+        requests: Sequence[tuple[str, str]],
+        *,
+        include_spatial: bool = True,
     ) -> MultisourceBackboneState:
         if self.description_backbone is None:
             raise RuntimeError("模型未配置 DescriptionCacheBackboneEncoder")
-        return self.description_backbone(requests)
+        return self.description_backbone(requests, include_spatial=include_spatial)
 
     def _token_ids(self, text: str, *, append_eos: bool) -> torch.Tensor:
         tokenizer = self.controller.tokenizer
@@ -204,9 +287,13 @@ class SegmentationGroundedDescriptionModel(nn.Module):
             visual = self._visual_tokens_for_sample(region_state.backbone, index)
             if visual is not None:
                 chunks.append(visual.to(instruction_embedding.dtype))
-            selected_region_tokens = region_tokens[index, 0][region_mask[index, 0]]
-            region = self.region_to_hidden(selected_region_tokens.float()) + self.region_type
-            chunks.append(region.to(instruction_embedding.dtype))
+            # D0/D1 global-caption adaptation consumes task-neutral visual
+            # evidence. Region replay is introduced only for structured region
+            # tasks; the fallback keeps non-cached development inputs usable.
+            if bool(structured_outputs[index]) or visual is None:
+                selected_region_tokens = region_tokens[index, 0][region_mask[index, 0]]
+                region = self.region_to_hidden(selected_region_tokens.float()) + self.region_type
+                chunks.append(region.to(instruction_embedding.dtype))
             prefix = torch.cat(chunks, 0)
             if targets is not None:
                 target_ids = self._token_ids(targets[index], append_eos=True)
@@ -242,12 +329,16 @@ class SegmentationGroundedDescriptionModel(nn.Module):
         protocol: RegionProtocol = "vision_only",
         structured_output: bool | Sequence[bool] = True,
     ) -> DescriptionForwardOutput:
-        region_state = self.build_region_state(
-            backbone, region_masks, region_valid_mask=region_valid_mask, protocol=protocol
-        )
         structured_outputs = (
             [bool(structured_output)] * len(instructions)
             if isinstance(structured_output, bool) else list(structured_output)
+        )
+        region_state = self._description_region_state(
+            backbone,
+            region_masks,
+            region_valid_mask=region_valid_mask,
+            protocol=protocol,
+            structured_outputs=structured_outputs,
         )
         inputs, attention, labels, lengths = self._build_sequences(
             region_state, instructions, target_texts, structured_outputs
@@ -285,19 +376,20 @@ class SegmentationGroundedDescriptionModel(nn.Module):
         region_masks: torch.Tensor,
         phrases: Sequence[str],
         *,
+        parent_ids: Sequence[str] | None = None,
         region_valid_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Symmetric region-text contrastive loss for DIOR annotated candidate regions."""
         region, text = self.region_alignment_embeddings(
             backbone, region_masks, phrases, region_valid_mask=region_valid_mask
         )
         temperature = self.alignment_temperature.float().clamp(0.01, 1.0)
         logits = region @ text.T / temperature
-        targets = torch.arange(logits.shape[0], device=logits.device)
-        loss = 0.5 * (
-            F.cross_entropy(logits, targets) + F.cross_entropy(logits.T, targets)
+        positive_mask = alignment_positive_mask(
+            phrases, parent_ids, device=logits.device
         )
-        return loss, logits
+        loss = multi_positive_alignment_loss(logits, positive_mask)
+        return loss, logits, positive_mask
 
     def region_alignment_embeddings(
         self,
@@ -384,7 +476,13 @@ class SegmentationGroundedDescriptionModel(nn.Module):
     ) -> str:
         if region_masks.shape[0] != 1:
             raise ValueError("Description v1 autoregressive generation currently requires batch_size=1")
-        region_state = self.build_region_state(backbone, region_masks, protocol=protocol)
+        region_state = self._description_region_state(
+            backbone,
+            region_masks,
+            region_valid_mask=None,
+            protocol=protocol,
+            structured_outputs=[bool(structured_output)],
+        )
         inputs, attention, _labels, _lengths = self._build_sequences(
             region_state, [instruction], None, [bool(structured_output)]
         )
@@ -392,20 +490,44 @@ class SegmentationGroundedDescriptionModel(nn.Module):
         embedding = self.controller.model.get_input_embeddings()
         eos = self.controller.tokenizer.eos_token_id
         with self.controller.adapter_scope(DESCRIPTION_ADAPTER_NAME):
-            for _ in range(int(max_new_tokens)):
-                output = self.controller.model(
-                    inputs_embeds=inputs,
-                    attention_mask=attention,
-                    return_dict=True,
-                    use_cache=False,
-                )
+            output = self.controller.model(
+                inputs_embeds=inputs,
+                attention_mask=attention,
+                return_dict=True,
+                use_cache=True,
+                logits_to_keep=1,
+            )
+            past_key_values = getattr(output, "past_key_values", None)
+            for generation_step in range(int(max_new_tokens)):
                 token = int(output.logits[0, -1].float().argmax().item())
                 if eos is not None and token == int(eos):
                     break
                 generated.append(token)
+                if generation_step + 1 >= int(max_new_tokens):
+                    break
                 token_tensor = torch.tensor([[token]], device=inputs.device)
                 inputs = torch.cat([inputs, embedding(token_tensor)], 1)
                 attention = torch.cat([
                     attention, torch.ones((1, 1), dtype=torch.bool, device=attention.device)
                 ], 1)
+                if past_key_values is not None:
+                    output = self.controller.model(
+                        input_ids=token_tensor,
+                        attention_mask=attention,
+                        past_key_values=past_key_values,
+                        return_dict=True,
+                        use_cache=True,
+                        logits_to_keep=1,
+                    )
+                    past_key_values = getattr(output, "past_key_values", None)
+                else:
+                    # Explicit compatibility fallback for a decoder backend
+                    # that ignores use_cache=True.
+                    output = self.controller.model(
+                        inputs_embeds=inputs,
+                        attention_mask=attention,
+                        return_dict=True,
+                        use_cache=False,
+                        logits_to_keep=1,
+                    )
         return self.controller.tokenizer.decode(generated, skip_special_tokens=True)

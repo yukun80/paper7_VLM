@@ -39,7 +39,10 @@ from qpsalm_seg.description.vision_cache import (  # noqa: E402
     DescriptionVisionFeatureBank,
     description_cache_key,
 )
-from qpsalm_seg.description.output_protocol import parse_description_output  # noqa: E402
+from qpsalm_seg.description.output_protocol import (  # noqa: E402
+    _builtin_schema_issues,
+    parse_description_output,
+)
 
 
 def load_script(name: str, filename: str):
@@ -56,6 +59,28 @@ MATERIALIZE = load_script("qpsalm_description_materialize", "3-5_materialize_des
 
 
 class DescriptionBenchmarkProtocolTest(unittest.TestCase):
+    def test_builtin_schema_fallback_enforces_current_keyword_subset(self) -> None:
+        schema = {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": False,
+            "properties": {
+                "name": {"const": "region"},
+                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            },
+        }
+        self.assertEqual(
+            _builtin_schema_issues({"name": "region", "confidence": 0.5}, schema),
+            [],
+        )
+        issues = _builtin_schema_issues(
+            {"name": "wrong", "confidence": 2.0, "unexpected": True}, schema
+        )
+        self.assertEqual(
+            {issue.path for issue in issues},
+            {("name",), ("confidence",), ("unexpected",)},
+        )
+
     def test_schema_and_ontology_are_parseable(self) -> None:
         for name in ("qpsalm_description_record_v2.schema.json", "qpsalm_description_output_v1.schema.json"):
             payload = json.loads((REPO_ROOT / "configs" / name).read_text(encoding="utf-8"))
@@ -93,6 +118,8 @@ class DescriptionBenchmarkProtocolTest(unittest.TestCase):
                 "format": DESCRIPTION_CACHE_FORMAT,
                 "protocol": DESCRIPTION_CACHE_PROTOCOL,
                 "builder_version": "synthetic",
+                "renderer_version": "synthetic_renderer",
+                "render_size": 16,
                 "model_revision": "hash-smoke",
                 "processor_revision": "hash-smoke",
                 "layers": [5, 11, 17, 23],

@@ -65,15 +65,17 @@ def counterfactual_region_masks(region_masks: torch.Tensor, mode: str) -> torch.
     if mode == "zero_mask":
         return torch.zeros_like(region_masks)
     if mode == "shuffled_mask":
-        # Keep area constant while breaking local region-to-feature alignment.
+        # A reverse-and-roll map is a true permutation for every canvas size.
+        # The previous modular map could collide when its multiplier and the
+        # number of pixels were not coprime.
         flat = region_masks.flatten(-2)
-        index = torch.arange(flat.shape[-1], device=flat.device)
-        permutation = (index * 104729 + 15485863) % max(flat.shape[-1], 1)
-        return flat.index_select(-1, permutation).view_as(region_masks)
+        shift = max(flat.shape[-1] // 3, 1)
+        return torch.roll(flat.flip(-1), shifts=shift, dims=-1).view_as(region_masks)
     if mode == "region_swap":
-        if region_masks.shape[0] > 1:
-            return region_masks.roll(1, 0)
-        return torch.flip(region_masks, dims=(-1,))
+        raise ValueError(
+            "region_swap 必须由 DescriptionTaskDataset 解析同一 parent 的真实区域；"
+            "禁止跨 parent 滚动或几何翻转伪造区域"
+        )
     raise ValueError(f"未知 region counterfactual={mode!r}")
 
 
@@ -130,35 +132,57 @@ def _cross_parent_modality_swap(state: MultisourceBackboneState) -> MultisourceB
         raise ValueError("cross-parent modality swap 至少需要两个 parent")
     samples = [list(values) for values in state.features.samples]
     swapped_families: list[str | None] = [None] * len(samples)
+    donor_indices: list[int | None] = [None] * len(samples)
+    parent_ids = [str(row.get("parent_sample_id") or "") for row in state.metadata]
     for index in range(len(samples)):
-        other = (index + 1) % len(samples)
-        common = sorted({value.instance.family for value in samples[index]} & {
-            value.instance.family for value in samples[other]
-        })
-        if not common:
+        if not parent_ids[index]:
+            continue
+        other = None
+        common: list[str] = []
+        for offset in range(1, len(samples)):
+            candidate = (index + offset) % len(samples)
+            if not parent_ids[candidate] or parent_ids[candidate] == parent_ids[index]:
+                continue
+            candidate_common = sorted(
+                {value.instance.family for value in samples[index]}
+                & {value.instance.family for value in samples[candidate]}
+            )
+            if candidate_common:
+                other = candidate
+                common = candidate_common
+                break
+        if other is None:
             continue
         family = common[0]
         swapped_families[index] = family
+        donor_indices[index] = other
         left = next(i for i, value in enumerate(samples[index]) if value.instance.family == family)
         right = next(i for i, value in enumerate(samples[other]) if value.instance.family == family)
         samples[index][left] = state.features.samples[other][right]
     subsets = []
     for index, (sample, subset) in enumerate(zip(samples, state.active_subsets)):
         active_names = tuple(value.instance.name for value in sample)
+        family = swapped_families[index]
         subsets.append(ActiveModalitySubset(
             active_names=active_names,
             dropped_names=subset.dropped_names,
-            signature=f"description-cross-parent:{index}:" + "+".join(active_names),
-            is_full=False,
+            signature=(
+                f"description-cross-parent:{parent_ids[donor_indices[index]]}:{family}:"
+                + "+".join(active_names)
+                if family is not None and donor_indices[index] is not None
+                else "description-cross-parent:none"
+            ),
+            is_full=family is None and subset.is_full,
         ))
     visual = state.visual_evidence
     if visual is not None:
         tokens = visual.tokens.clone()
+        token_mask = visual.token_mask.clone()
         for index in range(tokens.shape[0]):
-            other = (index + 1) % tokens.shape[0]
+            other = donor_indices[index]
             family = swapped_families[index]
             family_id = MODALITY_FAMILY_IDS.get(str(family)) if family is not None else None
-            if family_id is not None:
+            if family_id is not None and other is not None:
                 target_indices = torch.nonzero(
                     visual.token_mask[index]
                     & (visual.family_ids[index] == family_id),
@@ -174,11 +198,31 @@ def _cross_parent_modality_swap(state: MultisourceBackboneState) -> MultisourceB
                     tokens[index, target_indices[:count]] = visual.tokens[
                         other, source_indices[:count]
                     ]
-        visual = replace(visual, tokens=tokens)
+                # Never leave target-parent evidence in surplus slots.  If the
+                # source view has fewer tokens, those slots become padding.
+                if target_indices.numel() > count:
+                    token_mask[index, target_indices[count:]] = False
+        visual = replace(
+            visual,
+            tokens=tokens,
+            token_mask=token_mask,
+            token_counts=tuple(int(value.sum().item()) for value in token_mask),
+        )
     return replace(
         state,
         features=MultiScaleFeatures(samples=samples, reference_hw=state.reference_hw),
         active_subsets=tuple(subsets),
+        metadata=tuple({
+            **row,
+            "counterfactual_modality_swap": (
+                {
+                    "protocol": "qpsalm_cross_parent_modality_swap_v1",
+                    "donor_parent_sample_id": parent_ids[donor_indices[index]],
+                    "modality_family": swapped_families[index],
+                }
+                if donor_indices[index] is not None else None
+            ),
+        } for index, row in enumerate(state.metadata)),
         visual_evidence=visual,
     )
 

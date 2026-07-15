@@ -25,7 +25,7 @@ import yaml
 
 
 SCHEMA_VERSION = "qpsalm_landslide_region_description_v1"
-BUILDER_VERSION = "landslide_bridge_m2_v2_expert_schema"
+BUILDER_VERSION = "landslide_bridge_m2_v3_pilot_quota_gate"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_ROOT = REPO_ROOT.parent
 DATASETS_ROOT = Path(os.environ.get("PAPER7_DATASETS_ROOT") or WORKSPACE_ROOT / "datasets").resolve(strict=False)
@@ -125,7 +125,10 @@ def to_project_ref(path: str | Path) -> str:
             return (Path(logical) / source.relative_to(root)).as_posix()
         except ValueError:
             pass
-    return source.relative_to(REPO_ROOT).as_posix()
+    try:
+        return source.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return source.as_posix()
 
 
 def source_benchmark_dir(mode: str, value: str | Path | None = None) -> Path:

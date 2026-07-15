@@ -181,6 +181,7 @@ class DescriptionMetricAccumulator:
         per_label = {}
         recalls = []
         f1s = []
+        active_labels = []
         for label in labels:
             tp = self.status_confusion[(label, label)]
             fn = sum(self.status_confusion[(label, value)] for value in (*labels, "invalid") if value != label)
@@ -189,8 +190,10 @@ class DescriptionMetricAccumulator:
             precision = tp / max(tp + fp, 1)
             f1 = 2 * precision * recall / max(precision + recall, 1.0e-12)
             per_label[label] = {"precision": precision, "recall": recall, "f1": f1, "support": tp + fn}
-            recalls.append(recall)
-            f1s.append(f1)
+            if tp + fn > 0:
+                active_labels.append(label)
+                recalls.append(recall)
+                f1s.append(f1)
         absent_total = sum(self.status_confusion[("absent", value)] for value in (*labels, "invalid"))
         absent_false_description = sum(
             count for (expected, predicted), count in self.status_confusion.items()
@@ -199,8 +202,9 @@ class DescriptionMetricAccumulator:
         present_total = sum(self.status_confusion[("present", value)] for value in (*labels, "invalid"))
         present_false_rejection = self.status_confusion[("present", "absent")]
         return {
-            "macro_f1": sum(f1s) / len(f1s),
-            "balanced_accuracy": sum(recalls) / len(recalls),
+            "macro_f1": sum(f1s) / max(len(f1s), 1),
+            "balanced_accuracy": sum(recalls) / max(len(recalls), 1),
+            "active_labels": active_labels,
             "per_label": per_label,
             "false_description_rate": absent_false_description / max(absent_total, 1),
             "positive_false_rejection_rate": present_false_rejection / max(present_total, 1),

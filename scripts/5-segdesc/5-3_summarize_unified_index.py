@@ -14,7 +14,16 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 
-from segdesc_common import read_json, read_jsonl, resolve_path, write_json
+from segdesc_common import (
+    BUILDER_VERSION,
+    INDEX_SCHEMA,
+    STATISTICS_PROTOCOL,
+    VALIDATION_PROTOCOL,
+    read_json,
+    read_jsonl,
+    resolve_path,
+    write_json,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +43,13 @@ def main() -> None:
     validation = read_json(output / "reports/validation_report.json")
     if validation.get("errors"):
         raise ValueError("统一索引 validation errors 非空，拒绝汇总为可用 benchmark")
+    if validation.get("protocol") != VALIDATION_PROTOCOL:
+        raise ValueError("统一索引 validation protocol 过期，请重新执行 5-2")
+    manifest = read_json(output / "manifests/component_manifest.json")
+    if manifest.get("builder_version") != BUILDER_VERSION:
+        raise ValueError("统一索引 builder version 过期，请重新执行 5-1")
+    if manifest.get("schema_version") != INDEX_SCHEMA or manifest.get("mode") != args.mode:
+        raise ValueError("统一索引 schema/mode 与汇总命令不一致")
     rows = read_jsonl(output / "indexes/all.jsonl")
     if args.max_samples > 0:
         rows = rows[:args.max_samples]
@@ -41,7 +57,9 @@ def main() -> None:
     for row in rows:
         weighted[str(row["task_group"])] += float(row["sample_weight"])
     report = {
-        "protocol": "qpsalm_segdesc_index_statistics_v1",
+        "protocol": STATISTICS_PROTOCOL,
+        "builder_version": BUILDER_VERSION,
+        "schema_version": INDEX_SCHEMA,
         "mode": args.mode,
         "num_records": len(rows),
         "num_parents": len({(row["component"], row["parent_sample_id"]) for row in rows}),
@@ -50,7 +68,14 @@ def main() -> None:
         "by_component": dict(sorted(Counter(row["component"] for row in rows).items())),
         "weighted_task_mass": dict(sorted(weighted.items())),
         "expert_records": sum(int(row["expert_supervision"]) for row in rows),
-        "storage_mode": "component_references_only",
+        "bridge_status": manifest.get("bridge_status"),
+        "expert_index_present": bool(manifest.get("expert_index_present")),
+        "expert_index_published": bool(manifest.get("expert_index_published")),
+        "stale_expert_index_ignored": bool(manifest.get("stale_expert_index_ignored")),
+        "stale_bridge_gate_ignored": bool(manifest.get("stale_bridge_gate_ignored")),
+        "bridge_gate": manifest.get("bridge_gate"),
+        "component_validation_reports": manifest.get("component_validation_reports"),
+        "storage_mode": manifest.get("storage_mode"),
     }
     print(f"[SEGDESC:SUMMARY] records={len(rows)} parents={report['num_parents']} tasks={len(weighted)}")
     if args.dry_run:
@@ -61,6 +86,8 @@ def main() -> None:
         f"- Records: {report['num_records']}",
         f"- Scoped parents: {report['num_parents']}",
         f"- Expert records: {report['expert_records']}",
+        f"- Bridge status: {report['bridge_status']}",
+        f"- Expert index published: {report['expert_index_published']}",
         "- Storage: component references only",
         "\n## Task groups",
     ]
@@ -70,4 +97,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

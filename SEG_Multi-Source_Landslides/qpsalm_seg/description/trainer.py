@@ -37,7 +37,11 @@ from .common import (
 from .config import SegDescConfig
 from .evaluator import description_selection_score, evaluate_description
 from .model import DESCRIPTION_ADAPTER_NAME
-from .runtime import build_description_optimizer, build_segdesc_model
+from .runtime import (
+    build_description_optimizer,
+    build_segdesc_model,
+    description_trainable_parameter_manifest,
+)
 
 
 def _desc_adapter_parameters(model) -> list[torch.nn.Parameter]:
@@ -60,15 +64,24 @@ def _gradient_summary(parameters: list[torch.nn.Parameter]) -> dict[str, Any]:
 
 
 def _train_loss(model, batch: dict[str, Any], config: SegDescConfig) -> tuple[torch.Tensor, dict[str, float]]:
-    backbone = model.encode_description_requests(batch["requests"])
+    backbone = model.encode_description_requests(
+        batch["requests"],
+        include_spatial=config.stage not in {"mmrs_caption", "rsicap_caption"},
+    )
     if config.stage == "dior_alignment":
-        loss, logits = model.region_alignment_loss(
-            backbone, batch["region_masks"], batch["target_texts"]
+        loss, logits, positive_mask = model.region_alignment_loss(
+            backbone,
+            batch["region_masks"],
+            batch["target_texts"],
+            parent_ids=[str(row["parent_sample_id"]) for row in batch["metadata"]],
         )
-        targets = torch.arange(logits.shape[0], device=logits.device)
         accuracy = 0.5 * (
-            (logits.argmax(1) == targets).float().mean()
-            + (logits.argmax(0) == targets).float().mean()
+            positive_mask[
+                torch.arange(logits.shape[0], device=logits.device), logits.argmax(1)
+            ].float().mean()
+            + positive_mask[
+                logits.argmax(0), torch.arange(logits.shape[0], device=logits.device)
+            ].float().mean()
         )
         return loss, {"in_batch_retrieval_r1": float(accuracy.detach().cpu())}
     output = model.describe_from_state(
@@ -171,6 +184,10 @@ def train_description(
             val_loader = build_description_loader(val_dataset, config, training=False)
 
     optimizer, scheduler = build_description_optimizer(model, config)
+    trainable_manifest = description_trainable_parameter_manifest(
+        model, optimizer.param_groups, stage=config.stage
+    )
+    write_json(output_dir / "trainable_parameter_manifest.json", trainable_manifest)
     scaler = description_scaler(config, device)
     start_step = 0
     resume_metadata: dict[str, Any] = {}
@@ -194,7 +211,10 @@ def train_description(
             name: {
                 "stage": value["config"].stage,
                 "samples": len(value["dataset"]),
-                "batch_size": value["loader"].batch_size,
+                "batch_size": (
+                    value["loader"].batch_size
+                    or getattr(value["loader"].batch_sampler, "batch_size", None)
+                ),
             }
             for name, value in train_streams.items()
         },
@@ -222,22 +242,21 @@ def train_description(
     autocast = device.type == "cuda" and config.amp_dtype != "fp32"
     iterators = {name: iter(value["loader"]) for name, value in train_streams.items()}
     epochs = {name: 0 for name in train_streams}
-    micro_step = start_step * max(1, int(config.grad_accum_steps))
     progress = tqdm(total=config.max_steps, initial=start_step, desc="qpsalm-description")
     window_loss = window_samples = 0.0
     window_steps = 0
+    window_auxiliary: dict[str, list[float]] = {}
     window_started = time.perf_counter()
     first_gradient_checked = start_step > 0
     step = start_step
     model.train()
     while step < config.max_steps:
+        stream_name = stream_pattern[step % len(stream_pattern)]
+        stream = train_streams[stream_name]
         optimizer.zero_grad(set_to_none=True)
         step_loss = 0.0
         step_samples = 0
-        auxiliary: dict[str, list[float]] = {}
         for _ in range(max(1, int(config.grad_accum_steps))):
-            stream_name = stream_pattern[micro_step % len(stream_pattern)]
-            stream = train_streams[stream_name]
             try:
                 cpu_batch = next(iterators[stream_name])
             except StopIteration:
@@ -245,7 +264,6 @@ def train_description(
                 stream["dataset"].set_epoch(epochs[stream_name])
                 iterators[stream_name] = iter(stream["loader"])
                 cpu_batch = next(iterators[stream_name])
-            micro_step += 1
             batch = move_description_batch(cpu_batch, device)
             with torch.amp.autocast(
                 device_type=device.type, dtype=amp_dtype, enabled=autocast
@@ -257,18 +275,38 @@ def train_description(
             step_loss += float(loss.detach().cpu())
             step_samples += len(batch["metadata"])
             for name, value in diagnostics.items():
-                auxiliary.setdefault(name, []).append(float(value))
+                window_auxiliary.setdefault(name, []).append(float(value))
         if scaler.is_enabled():
             scaler.unscale_(optimizer)
         gradients = _gradient_summary(desc_parameters)
         if not first_gradient_checked:
-            if not gradients["all_finite"] or gradients["num_nonzero"] <= 0:
+            group_gradients = {
+                str(group.get("name")): _gradient_summary(list(group["params"]))
+                for group in optimizer.param_groups
+            }
+            description_nonzero = sum(
+                int(value["num_nonzero"])
+                for name, value in group_gradients.items()
+                if name.startswith("description_modules_")
+            )
+            all_finite = all(value["all_finite"] for value in group_gradients.values())
+            if (
+                not all_finite
+                or gradients["num_nonzero"] <= 0
+                or description_nonzero <= 0
+            ):
                 raise RuntimeError(
-                    "desc_adapter 首个 optimizer step 梯度无效；"
-                    f"summary={gradients}。请先运行 description integration smoke。"
+                    "description 首个 optimizer step 梯度无效；"
+                    f"desc={gradients} groups={group_gradients}。"
+                    "请先运行 description integration smoke。"
                 )
             first_gradient_checked = True
-            write_json(output_dir / "desc_adapter_gradient_gate.json", gradients)
+            write_json(output_dir / "description_gradient_gate.json", {
+                "desc_adapter": gradients,
+                "optimizer_groups": group_gradients,
+                "description_module_nonzero_parameters": description_nonzero,
+                "passed": True,
+            })
         torch.nn.utils.clip_grad_norm_(
             [value for group in optimizer.param_groups for value in group["params"]],
             config.max_grad_norm,
@@ -292,7 +330,11 @@ def train_description(
                 "samples_per_second": window_samples / max(elapsed, 1.0e-9),
                 "learning_rates": {str(group.get("name")): float(group["lr"]) for group in optimizer.param_groups},
                 "peak_reserved_gib": torch.cuda.max_memory_reserved(device) / 1024**3 if device.type == "cuda" else 0.0,
-                **{name: sum(values) / len(values) for name, values in auxiliary.items()},
+                "last_stream": stream_name,
+                **{
+                    name: sum(values) / len(values)
+                    for name, values in window_auxiliary.items()
+                },
             }
             append_jsonl(history_path, row)
             tqdm.write(
@@ -301,6 +343,7 @@ def train_description(
             )
             window_loss = window_samples = 0.0
             window_steps = 0
+            window_auxiliary = {}
             window_started = time.perf_counter()
 
         validation_due = val_loader is not None and (

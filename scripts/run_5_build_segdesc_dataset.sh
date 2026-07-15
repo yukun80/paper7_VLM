@@ -3,7 +3,7 @@
 # 推荐命令：RUN_CONTROL=--overwrite PYTHON_BIN=python bash scripts/run_5_build_segdesc_dataset.sh small
 # 输入：已验证的 Landslide V2、Description V2 和 Landslide Bridge；不会复制其图像或 mask。
 # 输出：../benchmark/multisource_landslide_segdesc_v1_<mode>。
-# 注意：Bridge 未完成专家审核时仍可发布 auto component，但不会伪造 expert supervision。
+# 注意：Bridge 未冻结时只发布 auto component；残留 expert index/gate 会被记录并忽略。
 
 set -euo pipefail
 

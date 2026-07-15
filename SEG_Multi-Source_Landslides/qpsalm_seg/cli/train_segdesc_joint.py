@@ -6,6 +6,7 @@
 推荐命令：PYTHONPATH=SEG_Multi-Source_Landslides python -m
 qpsalm_seg.cli.train_segdesc_joint --config
 SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml --device cuda
+--initialize-from outputs/qpsalm_description/M6/checkpoint_best.pt
 --output-dir outputs/qpsalm_description/joint_seed42 --overwrite-output
 主要输入：冻结的 M1/M2 benchmark、description cache、原分割 checkpoint。
 主要输出：qpsalm_segdesc_v1 best/last、三任务历史和 monitor retention 报告。
@@ -57,6 +58,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.resume and args.overwrite_output:
+        raise SystemExit("--resume 不能与 --overwrite-output 同时使用")
+    if args.resume and args.initialize_from:
+        raise SystemExit("--resume 不能与 --initialize-from 同时使用")
+    if not args.resume and not args.initialize_from:
+        raise SystemExit("新 M7 run 必须提供 --initialize-from；续训请使用 --resume")
     config = load_segdesc_config(args.config, {
         "max_steps": args.max_steps,
         "max_train_samples": args.max_train_samples,
@@ -73,6 +80,14 @@ def main() -> None:
         "output_dir": args.output_dir,
     })
     output = resolve_project_path(config.output_dir) or Path(config.output_dir)
+    if args.overwrite_output and args.initialize_from:
+        source = resolve_project_path(args.initialize_from) or Path(args.initialize_from)
+        try:
+            source.resolve(strict=False).relative_to(output.resolve(strict=False))
+        except ValueError:
+            pass
+        else:
+            raise SystemExit("--initialize-from 位于待覆盖 output-dir 内，拒绝删除源 checkpoint")
     if args.overwrite_output and output.exists():
         shutil.rmtree(output)
     from qpsalm_seg.description.joint_trainer import train_joint_segdesc

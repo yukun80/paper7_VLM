@@ -8,6 +8,8 @@ qpsalm_seg.cli.eval_description --config
 SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml --stage bridge_expert
 --checkpoint outputs/qpsalm_description/RUN/checkpoint_best.pt --split val
 --evaluation-mode gt_mask --device cuda --output-dir outputs/qpsalm_description/RUN/eval_gt
+默认行为：独立评估默认覆盖完整 split 并对全部样本生成；smoke 必须显式传入
+--max-val-samples 和 --max-generate-samples 的正整数上限。
 主要输出：eval_report.json、raw_generations.jsonl 和 counterfactual_generations.jsonl。
 写入行为：只写 --output-dir，不修复或覆盖原始模型输出。
 所属流程：M6 描述评价；主结构指标只使用未修复 raw JSON。
@@ -49,8 +51,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
-    parser.add_argument("--max-val-samples", type=int, default=None)
-    parser.add_argument("--max-generate-samples", type=int, default=None)
+    parser.add_argument(
+        "--max-val-samples", type=int, default=0,
+        help="评估样本上限；0 表示完整 split（独立评估默认）",
+    )
+    parser.add_argument(
+        "--max-generate-samples", type=int, default=0,
+        help="生成样本上限；0 表示对全部评估样本生成（独立评估默认）",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=None)
     parser.add_argument("--counterfactual-samples", type=int, default=None)
     parser.add_argument("--no-counterfactuals", action="store_true")
@@ -121,6 +129,7 @@ def main() -> None:
         "split": args.split,
         "mode": config.evaluation_mode,
         "num_samples": report["num_samples"],
+        "generation_coverage": report["generation_coverage"],
         "generation_metrics": report["generation_metrics"],
         "same_image_retrieval": report["same_image_retrieval"],
     }, ensure_ascii=False))

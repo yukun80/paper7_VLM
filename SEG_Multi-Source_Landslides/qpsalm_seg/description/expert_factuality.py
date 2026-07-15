@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -12,6 +13,7 @@ from typing import Any, Iterable
 from qpsalm_seg.paths import resolve_project_path
 
 from .metrics import bootstrap_mean_ci
+from .output_protocol import parse_description_output
 
 
 ALLOWED_SUPPORT = {"supported": 1.0, "partially_supported": 0.5, "unsupported": 0.0}
@@ -19,6 +21,52 @@ EXPERT_FAMILIES = (
     "target_status", "region_geometry", "surface", "terrain",
     "sar", "deformation", "surrounding_context", "summary",
 )
+CLAIM_FIELDS = (
+    "target_status",
+    "region.location", "region.size_class", "region.shape", "region.elongation",
+    "region.compactness", "region.fragmentation",
+    "evidence.surface_observation", "evidence.terrain_support", "evidence.sar_support",
+    "evidence.deformation_support", "evidence.surrounding_context",
+    "evidence.evidence_sufficiency", "summary",
+)
+NON_CLAIM_VALUES = {
+    "", "unknown", "unavailable", "insufficient", "insufficient_evidence",
+    "no reliable description is available.",
+}
+
+
+def _nested(value: dict[str, Any], path: str) -> Any:
+    current: Any = value
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _expected_claims(generation: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = str(generation.get("raw_generation") or "")
+    parsed = parse_description_output(raw).parsed
+    if not isinstance(parsed, dict):
+        return [{
+            "claim_id": "unparsed_generation",
+            "source_field": "raw_generation",
+            "text": raw,
+            "support": None,
+        }]
+    claims = []
+    for field in CLAIM_FIELDS:
+        value = _nested(parsed, field)
+        text = str(value or "").strip()
+        if text.casefold() in NON_CLAIM_VALUES:
+            continue
+        claims.append({
+            "claim_id": field,
+            "source_field": field,
+            "text": text,
+            "support": None,
+        })
+    return claims
 
 
 def _cohen_kappa(left: list[str], right: list[str]) -> float | None:
@@ -64,22 +112,71 @@ def _jsonl(path_ref: str | Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def build_expert_review_template(eval_dir: str | Path) -> list[dict[str, Any]]:
     root = resolve_project_path(eval_dir) or Path(eval_dir)
+    report_path = root / "eval_report.json"
+    generation_path = root / "raw_generations.jsonl"
+    if not report_path.is_file():
+        raise FileNotFoundError(f"ERFS 缺少 eval_report.json: {root}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not bool((report.get("generation_coverage") or {}).get("complete")):
+        raise ValueError(
+            "ERFS 只能审核完整 frozen generation；请用 --max-generate-samples 0 重跑评估"
+        )
     rows = [
-        row for row in _jsonl(root / "raw_generations.jsonl")
+        row for row in _jsonl(generation_path)
         if (row.get("raw_metrics") or {}).get("raw_schema_valid") is not None
     ]
     if not rows:
         raise ValueError("ERFS template 只支持 structured region-description generations")
-    return [{
+    templates = [{
         "sample_id": str(row["sample_id"]),
         "parent_sample_id": str(row["parent_sample_id"]),
         "reviewer_id": "",
+        "review_protocol": "blind_region_factuality_v2",
+        "instruction": str(row.get("instruction") or ""),
+        "model_generation": str(row.get("raw_generation") or ""),
+        "evaluation_mode": str(row.get("evaluation_mode") or report.get("evaluation_mode") or "unknown"),
+        "region_source": str(row.get("region_source") or "unknown"),
+        "region_id": str(row.get("region_id") or "unknown"),
+        "expert_review_panel_path": row.get("expert_review_panel_path"),
+        "region_mask_path": row.get("region_mask_path"),
+        "visual_preview_path": row.get("visual_preview_path"),
+        "multimodal_preview_path": row.get("multimodal_preview_path"),
+        "reference_target_hidden": True,
+        "frozen_generation_sha256": _sha256(generation_path),
         "family_scores": {family: None for family in EXPERT_FAMILIES},
-        "claims": [],
+        "claims": _expected_claims(row),
         "notes": "",
     } for row in rows]
+    visual_fields = (
+        "expert_review_panel_path", "multimodal_preview_path", "visual_preview_path"
+    )
+    missing_visuals = []
+    for value in templates:
+        existing = False
+        for field in visual_fields:
+            path_ref = value.get(field)
+            if not path_ref:
+                continue
+            path = resolve_project_path(str(path_ref)) or Path(str(path_ref))
+            existing |= path.is_file()
+        if not existing:
+            missing_visuals.append(value["sample_id"])
+    if missing_visuals:
+        raise ValueError(
+            "ERFS 审核模板缺少可视证据路径: "
+            f"count={len(missing_visuals)} examples={missing_visuals[:8]}"
+        )
+    return templates
 
 
 def aggregate_expert_factuality(
@@ -90,14 +187,19 @@ def aggregate_expert_factuality(
     minimum_reviewers: int = 2,
 ) -> dict[str, Any]:
     root = resolve_project_path(eval_dir) or Path(eval_dir)
+    generation_path = root / "raw_generations.jsonl"
+    generation_hash = _sha256(generation_path)
     generation = {
         str(row["sample_id"]): row
-        for row in _jsonl(root / "raw_generations.jsonl")
+        for row in _jsonl(generation_path)
     }
     reviews: dict[str, list[dict[str, Any]]] = defaultdict(list)
     reviewer_ids: set[str] = set()
     seen: set[tuple[str, str]] = set()
+    review_hashes: dict[str, str] = {}
     for review_file in review_files:
+        review_path = resolve_project_path(review_file) or Path(review_file)
+        review_hashes[str(review_path.resolve(strict=False))] = _sha256(review_path)
         for row in _jsonl(review_file):
             sample = str(row.get("sample_id") or "")
             reviewer = str(row.get("reviewer_id") or "").strip()
@@ -105,6 +207,14 @@ def aggregate_expert_factuality(
                 raise ValueError(f"expert review 引用了 eval 中不存在的 sample={sample}")
             if not reviewer:
                 raise ValueError(f"expert review 缺少 reviewer_id: sample={sample}")
+            if row.get("review_protocol") != "blind_region_factuality_v2":
+                raise ValueError(f"expert review protocol 不一致: sample={sample}")
+            if str(row.get("frozen_generation_sha256") or "") != generation_hash:
+                raise ValueError(f"expert review 绑定了不同 frozen generation: sample={sample}")
+            if str(row.get("model_generation") or "") != str(
+                generation[sample].get("raw_generation") or ""
+            ):
+                raise ValueError(f"expert review 改写了冻结模型输出: sample={sample}")
             key = (sample, reviewer)
             if key in seen:
                 raise ValueError(f"同一 reviewer 重复审核 sample: {key}")
@@ -128,8 +238,31 @@ def aggregate_expert_factuality(
             claims = row.get("claims") or []
             if not isinstance(claims, list):
                 raise ValueError(f"claims 必须为 list: sample={sample}")
+            expected_claims = _expected_claims(generation[sample])
+            expected_ids = {str(value["claim_id"]) for value in expected_claims}
+            expected_by_id = {
+                str(value["claim_id"]): value for value in expected_claims
+            }
+            observed_ids = [str((value or {}).get("claim_id") or "") for value in claims]
+            if len(observed_ids) != len(set(observed_ids)) or set(observed_ids) != expected_ids:
+                raise ValueError(
+                    f"claims 必须完整覆盖冻结输出: sample={sample} "
+                    f"missing={sorted(expected_ids - set(observed_ids))} "
+                    f"unexpected={sorted(set(observed_ids) - expected_ids)}"
+                )
             unsupported = factual = 0
             for claim in claims:
+                claim_id = str((claim or {}).get("claim_id") or "")
+                expected_claim = expected_by_id[claim_id]
+                if (
+                    str((claim or {}).get("source_field") or "")
+                    != str(expected_claim["source_field"])
+                    or str((claim or {}).get("text") or "")
+                    != str(expected_claim["text"])
+                ):
+                    raise ValueError(
+                        f"expert review 改写了冻结 claim: sample={sample} claim={claim_id}"
+                    )
                 status = str((claim or {}).get("support") or "")
                 if status not in ALLOWED_SUPPORT:
                     raise ValueError(f"claim support 非法: sample={sample} value={status!r}")
@@ -213,6 +346,9 @@ def aggregate_expert_factuality(
     return {
         "protocol": "qpsalm_expert_region_factuality_v1",
         "eval_dir": str(root),
+        "raw_generations_sha256": generation_hash,
+        "eval_report_sha256": _sha256(root / "eval_report.json"),
+        "review_file_sha256": dict(sorted(review_hashes.items())),
         "num_samples": len(per_sample),
         "num_parents": len(per_parent),
         "reviewer_ids": sorted(reviewer_ids),

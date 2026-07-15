@@ -21,11 +21,26 @@ from .model import (
     DESCRIPTION_SEQUENCE_PROTOCOL,
     SegmentationGroundedDescriptionModel,
 )
+from .mgrr import MGRR_PROTOCOL, MGRR_ROI_GRID_SIZES
 
 
 SEGDESC_CHECKPOINT_FORMAT = "qpsalm_segdesc_v1"
 SEGMENTATION_STATE_PREFIXES = ("controller.", "sane.", "qmef.", "pmrd.")
 FROZEN_QWEN_PREFIX = "segmentation.controller.model."
+SEGMENTATION_ARCHITECTURE_FIELDS = (
+    "preset", "controller", "qwen_model_path", "qwen_4bit",
+    "qwen_lora_rank", "qwen_lora_alpha", "qwen_lora_dropout",
+    "qwen_lora_last_n_layers", "qwen_lora_trainable",
+    "qwen_max_text_tokens", "qwen_view_tokens_per_view", "qwen_view_pooling",
+    "qwen_attn_implementation", "decoder_dim", "num_mask_tokens",
+    "num_decoder_layers", "num_heads", "deformable_points",
+    "use_pretrained_sane", "use_qmef", "use_query_spatial_attention",
+    "use_mask_refinement",
+)
+REGION_ARCHITECTURE_FIELDS = (
+    "region_encoder", "mgrr_protocol", "mgrr_max_components",
+    "mgrr_component_coverage", "mgrr_roi_grid_sizes", "mgrr_roi_query_count",
+)
 
 
 def _sha256_file(path: Path) -> str:
@@ -95,10 +110,42 @@ def _adapter_names(model: SegmentationGroundedDescriptionModel) -> tuple[str, ..
 def _description_architecture_spec(
     model: SegmentationGroundedDescriptionModel,
 ) -> dict[str, Any]:
+    manifest = getattr(getattr(model, "description_backbone", None), "bank", None)
+    manifest = dict(getattr(manifest, "manifest", {}) or {})
     return {
         "region_encoder": model.region_encoder_name,
+        "mgrr_protocol": (
+            MGRR_PROTOCOL if isinstance(model.mgrr, torch.nn.Module)
+            and hasattr(model.mgrr, "roi_queries") else None
+        ),
+        "mgrr_max_components": getattr(model.mgrr, "max_components", None),
+        "mgrr_component_coverage": getattr(model.mgrr, "component_coverage", None),
+        "mgrr_roi_grid_sizes": (
+            [list(value) for value in MGRR_ROI_GRID_SIZES]
+            if hasattr(model.mgrr, "roi_queries") else None
+        ),
+        "mgrr_roi_query_count": (
+            int(model.mgrr.roi_queries.shape[0])
+            if hasattr(model.mgrr, "roi_queries") else None
+        ),
         "decoder_dim": int(model.segmentation.config.decoder_dim),
         "description_sequence_protocol": DESCRIPTION_SEQUENCE_PROTOCOL,
+        "description_cache_protocol": manifest.get("format"),
+        "description_cache_renderer_version": manifest.get("renderer_version"),
+        "description_cache_model_revision": manifest.get("model_revision"),
+        "description_cache_processor_revision": manifest.get("processor_revision"),
+        "description_cache_spatial_channels": manifest.get("spatial_channels"),
+        "description_cache_layers": manifest.get("layers"),
+    }
+
+
+def _segmentation_architecture_spec(
+    model: SegmentationGroundedDescriptionModel,
+) -> dict[str, Any]:
+    config = model.segmentation.config
+    return {
+        name: getattr(config, name, None)
+        for name in SEGMENTATION_ARCHITECTURE_FIELDS
     }
 
 
@@ -124,7 +171,7 @@ def save_segdesc_checkpoint(
         "description_sequence_protocol": DESCRIPTION_SEQUENCE_PROTOCOL,
         "description_architecture_spec": _description_architecture_spec(model),
         "segmentation_migration": dict(segmentation_migration),
-        "segmentation_architecture_spec": dict(model.segmentation.config.__dict__),
+        "segmentation_architecture_spec": _segmentation_architecture_spec(model),
         "metadata": dict(metadata or {}),
     }
     if optimizer is not None:
@@ -155,6 +202,10 @@ def load_segdesc_checkpoint(
     if payload.get("description_architecture_spec") != _description_architecture_spec(model):
         raise RuntimeError(
             "segdesc description architecture 不一致；resume 必须保持 region encoder 完全相同"
+        )
+    if payload.get("segmentation_architecture_spec") != _segmentation_architecture_spec(model):
+        raise RuntimeError(
+            "segdesc segmentation architecture 不一致；Qwen/SANE/QMEF/PMRD 参数语义不可迁移"
         )
     if tuple(sorted(payload.get("adapter_names") or [])) != _adapter_names(model):
         raise RuntimeError("segdesc adapter names 不一致")
@@ -203,10 +254,18 @@ def initialize_segdesc_checkpoint(
         raise RuntimeError("segdesc description sequence protocol 不一致")
     if tuple(sorted(payload.get("adapter_names") or [])) != _adapter_names(model):
         raise RuntimeError("segdesc adapter names 不一致")
+    if payload.get("segmentation_architecture_spec") != _segmentation_architecture_spec(model):
+        raise RuntimeError("segdesc initialize segmentation architecture 不一致")
     source_spec = dict(payload.get("description_architecture_spec") or {})
     target_spec = _description_architecture_spec(model)
-    non_region_source = {key: value for key, value in source_spec.items() if key != "region_encoder"}
-    non_region_target = {key: value for key, value in target_spec.items() if key != "region_encoder"}
+    non_region_source = {
+        key: value for key, value in source_spec.items()
+        if key not in REGION_ARCHITECTURE_FIELDS
+    }
+    non_region_target = {
+        key: value for key, value in target_spec.items()
+        if key not in REGION_ARCHITECTURE_FIELDS
+    }
     if non_region_source != non_region_target:
         raise RuntimeError(
             "segdesc initialize architecture 不一致: "
@@ -215,6 +274,18 @@ def initialize_segdesc_checkpoint(
     source_state = payload.get("model_state") or {}
     target_state = _required_state(model)
     region_changed = source_spec.get("region_encoder") != target_spec["region_encoder"]
+    if not region_changed:
+        source_region_spec = {
+            key: source_spec.get(key) for key in REGION_ARCHITECTURE_FIELDS
+        }
+        target_region_spec = {
+            key: target_spec.get(key) for key in REGION_ARCHITECTURE_FIELDS
+        }
+        if source_region_spec != target_region_spec:
+            raise RuntimeError(
+                "segdesc initialize MGRR protocol 不一致；同 region encoder 不允许静默迁移: "
+                f"source={source_region_spec} target={target_region_spec}"
+            )
     loaded = {}
     skipped_source = []
     for key, value in source_state.items():

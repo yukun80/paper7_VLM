@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,60 @@ from .threshold import (
 )
 
 
+SAMPLE_IDENTITY_PROTOCOL = "qpsalm_segmentation_eval_population_v1"
+SAMPLE_IDENTITY_FIELDS = (
+    "sample_id",
+    "parent_sample_id",
+    "dataset_name",
+    "template_id",
+    "task_family",
+    "instruction",
+    "referring_category",
+    "target_mask_path",
+    "active_subset",
+    "original_size",
+    "mask_original_size",
+    "target_size",
+    "resize_transform",
+    "prompt_version",
+    "instruction_ablation",
+)
+
+
+def evaluation_population_identity(metadata: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build an order-independent identity for the exact evaluated sample population."""
+    canonical_rows: list[str] = []
+    sample_ids: list[str] = []
+    incomplete_indices: list[int] = []
+    for index, row in enumerate(metadata):
+        sample_id = str(row.get("sample_id") or "").strip()
+        parent_id = str(row.get("parent_sample_id") or "").strip()
+        if not sample_id or not parent_id:
+            incomplete_indices.append(index)
+        sample_ids.append(sample_id)
+        payload = {field: row.get(field) for field in SAMPLE_IDENTITY_FIELDS}
+        canonical_rows.append(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
+    duplicate_ids = sorted(
+        sample_id
+        for sample_id, count in Counter(sample_ids).items()
+        if sample_id and count > 1
+    )
+    digest = hashlib.sha256("\n".join(sorted(canonical_rows)).encode("utf-8")).hexdigest()
+    return {
+        "protocol": SAMPLE_IDENTITY_PROTOCOL,
+        "fields": list(SAMPLE_IDENTITY_FIELDS),
+        "sha256": digest,
+        "num_records": len(canonical_rows),
+        "num_unique_sample_ids": len({value for value in sample_ids if value}),
+        "complete": not incomplete_indices,
+        "unique": not duplicate_ids and len(sample_ids) == len(set(sample_ids)),
+        "incomplete_record_indices": incomplete_indices,
+        "duplicate_sample_ids": duplicate_ids,
+    }
+
+
 @torch.no_grad()
 def evaluate(
     model: MultiSourceQwenPSALMSeg,
@@ -54,6 +110,7 @@ def evaluate(
     sweep = {value: MetricAccumulator() for value in normalize_thresholds(threshold_sweep)}
     losses, loss_components = [], []
     reliability_records, query_records, proposal_records, saved = [], [], [], []
+    evaluated_metadata: list[dict[str, Any]] = []
     coverage = {
         "family_combos": Counter(), "raw_combos": Counter(), "sensor_combos": Counter(),
         "product_combos": Counter(), "target_area_px_bins": Counter(),
@@ -76,6 +133,7 @@ def evaluate(
         target = batch.mask.detach().cpu()
         valid = batch.valid_mask.detach().cpu()
         metadata = metric_metadata_with_scale(batch.metadata, target, valid)
+        evaluated_metadata.extend(dict(row) for row in metadata)
         for row in metadata:
             for field, source in (
                 ("family_combos", "family_combo"), ("raw_combos", "raw_combo"),
@@ -124,6 +182,7 @@ def evaluate(
         "threshold": float(threshold),
         "coverage": {
             "num_batches": processed_batches, "num_samples": processed_samples,
+            "sample_population": evaluation_population_identity(evaluated_metadata),
             **{key: dict(sorted(value.items())) for key, value in coverage.items()},
             "max_batches": max_batches,
         },

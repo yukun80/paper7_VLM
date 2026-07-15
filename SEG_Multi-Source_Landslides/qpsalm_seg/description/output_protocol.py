@@ -10,7 +10,10 @@ import json
 import re
 from typing import Any
 
-from jsonschema import Draft202012Validator
+try:
+    from jsonschema import Draft202012Validator
+except ModuleNotFoundError:  # 固定输出协议提供等价内置校验，避免包导入阶段失败。
+    Draft202012Validator = None  # type: ignore[assignment,misc]
 
 from qpsalm_seg.paths import REPO_ROOT
 
@@ -28,9 +31,85 @@ class ParsedDescription:
     repair_actions: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _SchemaIssue:
+    path: tuple[str, ...]
+    message: str
+
+
 def _schema() -> dict[str, Any]:
     path = REPO_ROOT / "configs/qpsalm_description_output_v1.schema.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _matches_type(value: Any, expected: str) -> bool:
+    if expected == "object":
+        return isinstance(value, dict)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "null":
+        return value is None
+    raise ValueError(f"unsupported built-in JSON schema type: {expected}")
+
+
+def _builtin_schema_issues(
+    value: Any,
+    schema: dict[str, Any],
+    path: tuple[str, ...] = (),
+) -> list[_SchemaIssue]:
+    """Validate the keyword subset used by qpsalm_description_output_v1."""
+    issues: list[_SchemaIssue] = []
+    expected_type = schema.get("type")
+    if isinstance(expected_type, str) and not _matches_type(value, expected_type):
+        return [_SchemaIssue(path, f"expected {expected_type}, got {type(value).__name__}")]
+    if "const" in schema and value != schema["const"]:
+        issues.append(_SchemaIssue(path, f"value must equal {schema['const']!r}"))
+    if "enum" in schema and value not in schema["enum"]:
+        issues.append(_SchemaIssue(path, f"value is not one of {schema['enum']!r}"))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            issues.append(_SchemaIssue(path, f"value is below minimum {schema['minimum']}"))
+        if "maximum" in schema and value > schema["maximum"]:
+            issues.append(_SchemaIssue(path, f"value is above maximum {schema['maximum']}"))
+    if isinstance(value, dict):
+        properties = dict(schema.get("properties") or {})
+        for field in schema.get("required") or []:
+            if field not in value:
+                issues.append(_SchemaIssue((*path, str(field)), "required property is missing"))
+        if schema.get("additionalProperties") is False:
+            for field in sorted(set(value) - set(properties)):
+                issues.append(_SchemaIssue((*path, str(field)), "additional property is not allowed"))
+        for field, field_schema in properties.items():
+            if field in value:
+                issues.extend(
+                    _builtin_schema_issues(value[field], field_schema, (*path, str(field)))
+                )
+    return issues
+
+
+def _validation_errors(value: dict[str, Any]) -> list[str]:
+    schema = _schema()
+    if Draft202012Validator is not None:
+        validator = Draft202012Validator(schema)
+        return [
+            f"schema:{'.'.join(str(item) for item in error.absolute_path)}:{error.message}"
+            for error in sorted(
+                validator.iter_errors(value),
+                key=lambda error: [str(item) for item in error.absolute_path],
+            )
+        ]
+    return [
+        f"schema:{'.'.join(issue.path)}:{issue.message}"
+        for issue in sorted(_builtin_schema_issues(value, schema), key=lambda issue: issue.path)
+    ]
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -130,11 +209,7 @@ def parse_description_output(raw_text: str) -> ParsedDescription:
         parsed = None
         errors.append(f"json_parse:{type(exc).__name__}:{exc}")
     if parsed is not None:
-        validator = Draft202012Validator(_schema())
-        errors.extend(
-            f"schema:{'.'.join(str(value) for value in error.absolute_path)}:{error.message}"
-            for error in sorted(validator.iter_errors(parsed), key=lambda error: list(error.absolute_path))
-        )
+        errors.extend(_validation_errors(parsed))
     repaired, actions = deterministic_repair(parsed)
     return ParsedDescription(
         raw_text=raw_text,

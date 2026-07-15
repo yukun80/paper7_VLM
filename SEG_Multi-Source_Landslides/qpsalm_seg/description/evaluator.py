@@ -12,13 +12,15 @@ import time
 from typing import Any, Iterable
 
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import numpy as np
 
 from qpsalm_seg.data import MultiSourceLandslideDataset, qpsalm_collate
 from qpsalm_seg.paths import resolve_project_path
+from qpsalm_seg.visualize import restore_mask_to_original
 
 from .common import description_amp_dtype, move_description_batch, write_json
+from .backbone import transform_region_mask_to_cache
 from .config import SegDescConfig
 from .counterfactuals import (
     COUNTERFACTUAL_MODES,
@@ -32,9 +34,14 @@ from .metrics import (
     bootstrap_mean_ci,
     finite_mean,
     structured_disagreement,
+    unsupported_claim_counts,
 )
 from .data import bridge_region_metadata
-from .model import SegmentationGroundedDescriptionModel
+from .model import (
+    SegmentationGroundedDescriptionModel,
+    alignment_positive_mask,
+    multi_positive_alignment_loss,
+)
 from .output_protocol import parse_description_output
 
 
@@ -181,7 +188,7 @@ class EndToEndMaskProvider:
         self.resolver = EndToEndTargetResolver(self.dataset.rows)
         self.model = model
         self.threshold = float(threshold)
-        self.cache: dict[str, torch.Tensor] = {}
+        self.cache: dict[str, tuple[torch.Tensor, dict[str, Any]]] = {}
         self.mapping_counts: Counter[str] = Counter()
 
     def require_targets(self, metadata_rows: Iterable[dict[str, Any]]) -> None:
@@ -203,20 +210,51 @@ class EndToEndMaskProvider:
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         audit = self.resolver.resolve(metadata)
         cache_key = str(audit["segmentation_sample_id"])
-        probability = self.cache.get(cache_key)
-        if probability is None:
-            batch = qpsalm_collate([self.dataset[int(audit["dataset_index"])]])
+        cached = self.cache.get(cache_key)
+        if cached is None:
+            item = self.dataset[int(audit["dataset_index"])]
+            batch = qpsalm_collate([item])
             with self.model.controller.adapter_scope("default"):
                 output = self.model.segmentation(batch)
-            probability = torch.sigmoid(output.final_mask_logits.float()).detach().cpu()
-            self.cache[cache_key] = probability
+            canvas = (
+                torch.sigmoid(output.final_mask_logits[0, 0].float()).detach().cpu().numpy()
+                >= self.threshold
+            ).astype(np.uint8)
+            segmentation_transform = dict(item["metadata"].get("resize_transform") or {})
+            restored = restore_mask_to_original(canvas, segmentation_transform)
+            if restored is None:
+                raise ValueError(
+                    "end-to-end mask 无法按 segmentation resize transform 恢复: "
+                    f"sample={cache_key}"
+                )
+            original_mask = torch.from_numpy(restored.astype(np.float32))[None]
+            cached = (original_mask, segmentation_transform)
+            self.cache[cache_key] = cached
+        original_mask, segmentation_transform = cached
         self.mapping_counts[str(audit["mapping_kind"])] += 1
         device = next(self.model.parameters()).device
-        resized_probability = F.interpolate(
-            probability.to(device=device), size=output_hw, mode="bilinear", align_corners=False
+        parent = str(audit["parent_sample_id"])
+        cache_record = self.model.description_backbone.bank.record(
+            "multisource_parent", parent
         )
-        audit = {**audit, "mask_threshold": self.threshold}
-        return (resized_probability >= self.threshold).to(resized_probability.dtype), audit
+        description_transform = dict(cache_record["views"][0]["render_transform"])
+        description_mask = transform_region_mask_to_cache(
+            original_mask, description_transform
+        ).to(device=device)
+        if tuple(description_mask.shape[-2:]) != tuple(output_hw):
+            raise ValueError(
+                "end-to-end description mask canvas 不一致: "
+                f"parent={parent} observed={tuple(description_mask.shape[-2:])} "
+                f"expected={tuple(output_hw)}"
+            )
+        audit = {
+            **audit,
+            "mask_threshold": self.threshold,
+            "segmentation_resize_transform": segmentation_transform,
+            "description_render_transform": description_transform,
+            "original_mask_shape": list(original_mask.shape[-2:]),
+        }
+        return description_mask.unsqueeze(0), audit
 
     def summary(self, dataset: Any) -> dict[str, Any]:
         return {
@@ -239,6 +277,7 @@ def _same_image_retrieval(
     region_embeddings: list[torch.Tensor],
     text_embeddings: list[torch.Tensor],
     parent_ids: list[str],
+    phrase_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     if not region_embeddings:
         return {"num_queries": 0, "num_multi_candidate_queries": 0, "region_to_text_r1": None, "text_to_region_r1": None}
@@ -246,19 +285,26 @@ def _same_image_retrieval(
     text = torch.cat(text_embeddings).float()
     if region.shape != text.shape or region.shape[0] != len(parent_ids):
         raise ValueError("DIOR retrieval embedding/metadata 数量不一致")
+    labels = (
+        [" ".join(str(value).casefold().split()) for value in phrase_labels]
+        if phrase_labels is not None else [f"pair:{index}" for index in range(len(parent_ids))]
+    )
+    if len(labels) != len(parent_ids):
+        raise ValueError("DIOR retrieval phrase label 数量不一致")
     r2t = t2r = eligible = 0
+    ambiguous = 0
     per_parent: dict[str, list[float]] = {}
     for index, parent in enumerate(parent_ids):
         candidates = [value for value, current in enumerate(parent_ids) if current == parent]
         if len(candidates) < 2:
             continue
         candidate_tensor = torch.tensor(candidates, device=region.device)
-        t2r_correct = int(
-            candidates[int((text[index] @ region[candidate_tensor].T).argmax())] == index
-        )
-        r2t_correct = int(
-            candidates[int((region[index] @ text[candidate_tensor].T).argmax())] == index
-        )
+        selected_region = candidates[int((text[index] @ region[candidate_tensor].T).argmax())]
+        selected_text = candidates[int((region[index] @ text[candidate_tensor].T).argmax())]
+        positives = {value for value in candidates if labels[value] == labels[index]}
+        ambiguous += int(len(positives) > 1)
+        t2r_correct = int(selected_region in positives)
+        r2t_correct = int(selected_text in positives)
         t2r += t2r_correct
         r2t += r2t_correct
         eligible += 1
@@ -266,6 +312,7 @@ def _same_image_retrieval(
     return {
         "num_queries": len(parent_ids),
         "num_multi_candidate_queries": eligible,
+        "num_ambiguous_phrase_queries": ambiguous,
         "region_to_text_r1": r2t / eligible if eligible else None,
         "text_to_region_r1": t2r / eligible if eligible else None,
         "mean_r1": (r2t + t2r) / (2 * eligible) if eligible else None,
@@ -313,12 +360,30 @@ def evaluate_description(
     counterfactual_rows: list[dict[str, Any]] = []
     end_to_end_rows: list[dict[str, Any]] = []
     counterfactual_values: dict[str, list[float]] = {name: [] for name in _counterfactual_modes(config)}
+    counterfactual_score_deltas: dict[str, list[float]] = {
+        name: [] for name in _counterfactual_modes(config)
+    }
+    counterfactual_claim_deltas: dict[str, list[float]] = {
+        name: [] for name in _counterfactual_modes(config)
+    }
     region_embeddings: list[torch.Tensor] = []
     text_embeddings: list[torch.Tensor] = []
     retrieval_parents: list[str] = []
+    retrieval_phrases: list[str] = []
     generated = 0
-    generate_limit = int(config.max_generate_samples if max_generate_samples is None else max_generate_samples)
+    requested_generate = int(
+        config.max_generate_samples if max_generate_samples is None else max_generate_samples
+    )
+    generate_limit = len(loader.dataset) if requested_generate <= 0 else min(
+        requested_generate, len(loader.dataset)
+    )
     counterfactual_counts = {name: 0 for name in _counterfactual_modes(config)}
+    counterfactual_skipped_no_effect = {
+        name: 0 for name in _counterfactual_modes(config)
+    }
+    counterfactual_skipped_unavailable = {
+        name: 0 for name in _counterfactual_modes(config)
+    }
     e2e = (
         EndToEndMaskProvider(model, split, config.segmentation_mask_threshold)
         if config.evaluation_mode == "end_to_end" else None
@@ -332,7 +397,10 @@ def evaluate_description(
 
     for batch_index, cpu_batch in enumerate(loader):
         batch = move_description_batch(cpu_batch, device)
-        backbone = model.encode_description_requests(batch["requests"])
+        backbone = model.encode_description_requests(
+            batch["requests"],
+            include_spatial=config.stage not in {"mmrs_caption", "rsicap_caption"},
+        )
         region_masks = batch["region_masks"]
         batch_e2e_audits: list[dict[str, Any] | None] = [None] * len(batch["metadata"])
         if e2e is not None:
@@ -352,13 +420,16 @@ def evaluate_description(
                 )
                 temperature = model.alignment_temperature.float().clamp(0.01, 1.0)
                 logits = regions @ texts.T / temperature
-                targets = torch.arange(logits.shape[0], device=logits.device)
-                loss = 0.5 * (
-                    F.cross_entropy(logits, targets) + F.cross_entropy(logits.T, targets)
+                positive_mask = alignment_positive_mask(
+                    batch["target_texts"],
+                    [str(row["parent_sample_id"]) for row in batch["metadata"]],
+                    device=logits.device,
                 )
+                loss = multi_positive_alignment_loss(logits, positive_mask)
                 region_embeddings.append(regions.detach().cpu())
                 text_embeddings.append(texts.detach().cpu())
                 retrieval_parents.extend(str(row["parent_sample_id"]) for row in batch["metadata"])
+                retrieval_phrases.extend(str(value) for value in batch["target_texts"])
             else:
                 output = model.describe_from_state(
                     backbone,
@@ -419,21 +490,96 @@ def evaluate_description(
         for mode in _counterfactual_modes(config):
             if counterfactual_counts[mode] >= int(config.counterfactual_samples):
                 continue
-            if mode == "cross_parent_modality_swap" and backbone.valid_mask.shape[0] < 2:
-                continue
+            counterfactual_inputs: list[dict[str, Any] | None] = [
+                None for _ in batch["metadata"]
+            ]
+            counterfactual_unavailable = [False for _ in batch["metadata"]]
             try:
-                if mode in {"full_mask", "zero_mask", "shuffled_mask", "region_swap"}:
+                if mode == "region_swap":
+                    cf_backbone = backbone
+                    cf_masks = region_masks.clone()
+                    resolver = getattr(loader.dataset, "same_parent_region_swap", None)
+                    if resolver is None:
+                        continue
+                    for sample_index, metadata in enumerate(batch["metadata"]):
+                        resolved = resolver(
+                            str(metadata["sample_id"]),
+                            region_masks[sample_index],
+                        )
+                        if resolved is not None:
+                            alternate, counterfactual_inputs[sample_index] = resolved
+                            cf_masks[sample_index] = alternate.to(
+                                device=region_masks.device,
+                                dtype=region_masks.dtype,
+                            )
+                        else:
+                            counterfactual_unavailable[sample_index] = True
+                elif mode in {"full_mask", "zero_mask", "shuffled_mask"}:
                     cf_backbone = backbone
                     cf_masks = counterfactual_region_masks(region_masks, mode)
-                else:
+                elif mode == "modality_removal":
                     cf_backbone = counterfactual_backbone(backbone, mode)
+                    cf_masks = region_masks
+                else:
+                    # Cross-parent donors are resolved per sample below. This
+                    # remains valid when formal evaluation uses batch_size=1.
+                    cf_backbone = backbone
                     cf_masks = region_masks
             except ValueError:
                 continue
             for sample_index, baseline in enumerate(baseline_texts):
                 if counterfactual_counts[mode] >= int(config.counterfactual_samples):
                     break
-                one_state = select_backbone_state(cf_backbone, [sample_index])
+                one_state = None
+                if mode == "cross_parent_modality_swap":
+                    donor_resolver = getattr(
+                        loader.dataset, "cross_parent_modality_swap_request", None
+                    )
+                    resolved_donor = (
+                        donor_resolver(str(batch["metadata"][sample_index]["sample_id"]))
+                        if donor_resolver is not None else None
+                    )
+                    if resolved_donor is None:
+                        effective = False
+                        counterfactual_unavailable[sample_index] = True
+                    else:
+                        donor_request, donor_audit = resolved_donor
+                        pair_backbone = model.encode_description_requests([
+                            batch["requests"][sample_index], donor_request,
+                        ])
+                        swapped_pair = counterfactual_backbone(
+                            pair_backbone, "cross_parent_modality_swap"
+                        )
+                        one_state = select_backbone_state(swapped_pair, [0])
+                        swap_audit = swapped_pair.metadata[0].get(
+                            "counterfactual_modality_swap"
+                        )
+                        counterfactual_inputs[sample_index] = {
+                            **donor_audit,
+                            "applied_swap": swap_audit,
+                        }
+                        effective = swap_audit is not None
+                elif mode in {"full_mask", "zero_mask", "shuffled_mask", "region_swap"}:
+                    effective = not torch.equal(
+                        cf_masks[sample_index], region_masks[sample_index]
+                    )
+                elif mode == "modality_removal":
+                    effective = (
+                        cf_backbone.active_subsets[sample_index].active_names
+                        != backbone.active_subsets[sample_index].active_names
+                    )
+                else:
+                    effective = not cf_backbone.active_subsets[
+                        sample_index
+                    ].signature.endswith(":none")
+                if not effective:
+                    if counterfactual_unavailable[sample_index]:
+                        counterfactual_skipped_unavailable[mode] += 1
+                    else:
+                        counterfactual_skipped_no_effect[mode] += 1
+                    continue
+                if one_state is None:
+                    one_state = select_backbone_state(cf_backbone, [sample_index])
                 structured = bool(batch["structured_outputs"][sample_index])
                 changed = model.generate_from_state(
                     one_state,
@@ -444,30 +590,67 @@ def evaluate_description(
                     structured_output=structured,
                 )
                 if structured:
+                    baseline_parsed = parse_description_output(baseline).parsed
+                    changed_parsed = parse_description_output(changed).parsed
+                    target_parsed = parse_description_output(
+                        batch["target_texts"][sample_index]
+                    ).parsed
                     sensitivity = structured_disagreement(
-                        parse_description_output(baseline).parsed,
-                        parse_description_output(changed).parsed,
+                        baseline_parsed,
+                        changed_parsed,
                     )
+                    baseline_score = 1.0 - structured_disagreement(
+                        baseline_parsed, target_parsed
+                    )
+                    changed_score = 1.0 - structured_disagreement(
+                        changed_parsed, target_parsed
+                    )
+                    baseline_claims = unsupported_claim_counts(
+                        baseline_parsed, target_parsed
+                    )[1]
+                    changed_claims = unsupported_claim_counts(
+                        changed_parsed, target_parsed
+                    )[1]
                 else:
                     sensitivity = 1.0 - caption_token_f1(changed, [baseline])
+                    references = batch["reference_texts"][sample_index]
+                    baseline_score = caption_token_f1(baseline, references)
+                    changed_score = caption_token_f1(changed, references)
+                    baseline_claims = changed_claims = 0
+                score_delta = changed_score - baseline_score
+                claim_delta = float(changed_claims - baseline_claims)
                 counterfactual_values[mode].append(sensitivity)
+                counterfactual_score_deltas[mode].append(score_delta)
+                counterfactual_claim_deltas[mode].append(claim_delta)
                 counterfactual_rows.append({
                     **batch["metadata"][sample_index],
                     "mode": mode,
+                    "counterfactual_input": counterfactual_inputs[sample_index],
                     "baseline_generation": baseline,
                     "counterfactual_generation": changed,
                     "sensitivity": sensitivity,
+                    "baseline_target_score": baseline_score,
+                    "counterfactual_target_score": changed_score,
+                    "target_score_delta": score_delta,
+                    "factual_claim_count_delta": claim_delta,
                 })
                 counterfactual_counts[mode] += 1
 
     report = {
-        "protocol": "qpsalm_description_evaluation_v1",
+        "protocol": "qpsalm_description_evaluation_v3",
         "stage": config.stage,
         "split": split,
         "evaluation_mode": config.evaluation_mode,
         "region_protocol": config.region_protocol,
         "num_samples": len(loader.dataset),
         "num_generated": generated,
+        "generation_coverage": {
+            "requested": requested_generate,
+            "eligible_samples": len(loader.dataset),
+            "generated_samples": generated,
+            "fraction": generated / max(len(loader.dataset), 1),
+            "complete": generated == len(loader.dataset),
+        },
         "mean_teacher_forced_loss": finite_mean(losses),
         "generation_metrics": metric.compute(),
         "primary_score_bootstrap_ci": bootstrap_mean_ci(
@@ -480,10 +663,36 @@ def evaluate_description(
             seed=config.seed + 7919,
         ),
         "same_image_retrieval": _same_image_retrieval(
-            region_embeddings, text_embeddings, retrieval_parents
+            region_embeddings, text_embeddings, retrieval_parents, retrieval_phrases
         ),
         "counterfactual_sensitivity": {
-            name: {"n": len(values), "mean_disagreement": finite_mean(values)}
+            name: {
+                "requested": int(config.counterfactual_samples),
+                "n": len(values),
+                "coverage_complete": (
+                    int(config.counterfactual_samples) > 0
+                    and len(values) >= int(config.counterfactual_samples)
+                ),
+                "mean_disagreement": finite_mean(values),
+                "mean_target_score_delta": finite_mean(
+                    counterfactual_score_deltas[name]
+                ),
+                "paired_target_score_delta_ci": bootstrap_mean_ci(
+                    counterfactual_score_deltas[name],
+                    seed=config.seed + 104729 * (1 + list(counterfactual_values).index(name)),
+                    samples=5000,
+                ),
+                "mean_factual_claim_count_delta": finite_mean(
+                    counterfactual_claim_deltas[name]
+                ),
+                "paired_factual_claim_count_delta_ci": bootstrap_mean_ci(
+                    counterfactual_claim_deltas[name],
+                    seed=config.seed + 130363 * (1 + list(counterfactual_values).index(name)),
+                    samples=5000,
+                ),
+                "skipped_no_effect": counterfactual_skipped_no_effect[name],
+                "skipped_unavailable": counterfactual_skipped_unavailable[name],
+            }
             for name, values in counterfactual_values.items()
         },
         "end_to_end_coverage": e2e.summary(loader.dataset) if e2e is not None else None,

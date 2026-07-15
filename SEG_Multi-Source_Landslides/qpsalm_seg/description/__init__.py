@@ -32,7 +32,12 @@ from .config import (
     SegDescConfig,
     load_segdesc_config,
 )
-from .runtime import build_description_optimizer, build_segdesc_model, description_parameter_groups
+from .runtime import (
+    build_description_optimizer,
+    build_segdesc_model,
+    description_parameter_groups,
+    description_trainable_parameter_manifest,
+)
 from .metrics import DescriptionMetricAccumulator, retrieval_metrics
 from .counterfactuals import COUNTERFACTUAL_MODES
 from .expert_factuality import aggregate_expert_factuality, build_expert_review_template
@@ -69,6 +74,7 @@ __all__ = [
     "build_description_optimizer",
     "build_segdesc_model",
     "description_parameter_groups",
+    "description_trainable_parameter_manifest",
     "DescriptionMetricAccumulator",
     "retrieval_metrics",
     "COUNTERFACTUAL_MODES",

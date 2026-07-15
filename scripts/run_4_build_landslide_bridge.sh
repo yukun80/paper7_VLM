@@ -48,7 +48,7 @@ run_prepare() {
     "${common[@]}" "${control[@]}"
   "${PYTHON_BIN}" scripts/4-landslide-bridge/4-6_validate_landslide_bridge.py \
     "${common[@]}" "${control[@]}"
-  echo "[BRIDGE] prepare_complete=${BRIDGE_OUTPUT_DIR} status=awaiting_expert_review"
+  echo "[BRIDGE] prepare_complete=${BRIDGE_OUTPUT_DIR} status_report=${BRIDGE_OUTPUT_DIR}/reports/validation_report.json"
 }
 
 run_merge() {
