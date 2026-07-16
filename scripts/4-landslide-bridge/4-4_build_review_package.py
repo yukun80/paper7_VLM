@@ -28,6 +28,7 @@ from landslide_bridge_common import (
     binary_mask,
     bridge_dir,
     ensure_writable,
+    evaluation_gate_scientific_template,
     preview_image,
     read_jsonl,
     resolve_project_path,
@@ -213,8 +214,16 @@ def main() -> None:
         "thresholds": {
             "no_target_rejection": None,
             "unsupported_claim_rate": None,
+            "unavailable_unsupported_claim_rate": None,
+            "unsupported_claim_rate_noninferiority": None,
             "expert_fact_score": None,
+            "target_status_macro_f1": None,
+            "present_recall": None,
+            "absent_recall": None,
+            "false_description_rate": None,
+            "false_rejection_rate": None,
         },
+        "scientific_protocol": evaluation_gate_scientific_template(),
         "note": "Thresholds must be filled and frozen only after completed expert review and Pilot analysis.",
     }
     report = {

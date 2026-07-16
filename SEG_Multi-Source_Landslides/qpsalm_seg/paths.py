@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -92,3 +93,37 @@ def to_project_ref(path_ref: str | Path | None) -> str | None:
         return path.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def validate_output_replacement_safety(
+    output_ref: str | Path,
+    protected_inputs: Mapping[str, str | Path | None],
+) -> dict[str, str]:
+    """Reject output/input overlap that could mutate replay-bound source evidence."""
+    output = resolve_project_path(output_ref) or Path(output_ref)
+    output = output.resolve(strict=False)
+    resolved_inputs: dict[str, str] = {}
+    for label, reference in protected_inputs.items():
+        if reference is None or str(reference) == "":
+            continue
+        source = resolve_project_path(reference) or Path(reference)
+        source = source.resolve(strict=False)
+        resolved_inputs[str(label)] = str(source)
+        source_inside_output = False
+        output_inside_source = False
+        try:
+            source.relative_to(output)
+            source_inside_output = True
+        except ValueError:
+            pass
+        try:
+            output.relative_to(source)
+            output_inside_source = True
+        except ValueError:
+            pass
+        if source_inside_output or output_inside_source:
+            raise ValueError(
+                f"{label} 与待替换 output 路径重叠，拒绝删除或覆盖输入: "
+                f"input={source} output={output}"
+            )
+    return resolved_inputs

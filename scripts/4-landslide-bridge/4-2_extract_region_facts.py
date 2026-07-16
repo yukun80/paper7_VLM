@@ -198,6 +198,30 @@ def modality_evidence(
 
 def structured_targets(record: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
     geometry = record["region_geometry"]
+    if record["target_status"] == "absent":
+        # no-target 只监督拒答语义，不能从整幅场景或邻域补写区域证据。
+        return {
+            "target_status": "absent",
+            "region": {
+                key: "unavailable"
+                for key in (
+                    "location", "size_class", "shape", "elongation",
+                    "compactness", "fragmentation",
+                )
+            },
+            "evidence": {
+                "surface_observation": "unavailable",
+                "terrain_support": "unavailable",
+                "sar_support": "unavailable",
+                "deformation_support": "unavailable",
+                "surrounding_context": "unavailable",
+                "evidence_sufficiency": "unavailable",
+            },
+            "field_provenance": {
+                "region": "no_target_null_geometry",
+                "evidence": "no_target_no_region_evidence",
+            },
+        }
     by_family: dict[str, list[dict[str, Any]]] = {}
     for item in evidence.values():
         by_family.setdefault(str(item["family"]), []).append(item)

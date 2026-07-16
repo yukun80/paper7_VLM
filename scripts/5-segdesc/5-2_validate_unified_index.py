@@ -18,9 +18,14 @@ from pathlib import Path
 
 from segdesc_common import (
     BRIDGE_AWAITING_STATUS, BRIDGE_FROZEN_STATUS,
-    BUILDER_VERSION, INDEX_SCHEMA, TASK_COMPONENTS, TASK_INDEX_NAMES, TASK_WEIGHTS,
-    VALIDATION_PROTOCOL, bridge_publication_policy,
+    BUILDER_VERSION, INDEX_SCHEMA, SEGMENTATION_INSTRUCTION_REPORT,
+    TASK_COMPONENTS, TASK_INDEX_NAMES, TASK_WEIGHTS,
+    VALIDATION_PROTOCOL, bridge_expert_artifact_errors, bridge_publication_policy,
+    component_contract_errors,
+    component_validation_contract,
     project_ref, read_json, read_jsonl, resolve_path, sha256_file, write_json,
+    segmentation_instruction_contract_errors,
+    segmentation_instruction_validation_contract,
 )
 
 
@@ -88,12 +93,68 @@ def _validate_publication_manifest(
             errors.append(f"component validation report hash 不一致: {name}")
             continue
         report = read_json(path)
+        expected_contract = component_validation_contract(
+            name, mode=expected_mode, root=component_root,
+        ) if component_root is not None else None
+        if binding.get("contract") != expected_contract:
+            errors.append(f"component validation contract binding 不一致: {name}")
+        if component_root is not None:
+            contract_errors = component_contract_errors(
+                name, report, mode=expected_mode, root=component_root,
+            )
+            errors.extend(
+                f"component validation contract 过期: {name}:{value}"
+                for value in contract_errors
+            )
         if report.get("errors"):
             errors.append(f"component validation report errors 非空: {name}")
         if int(binding.get("errors", -1)) != len(report.get("errors") or []):
             errors.append(f"component validation report errors count 不一致: {name}")
         if binding.get("status") != report.get("status"):
             errors.append(f"component validation report status 不一致: {name}")
+
+    segmentation_root = component_roots.get("landslide_segmentation_v2")
+    segmentation_binding = dict(bindings.get("segmentation") or {})
+    instruction_binding = dict(
+        segmentation_binding.get("instruction_validation") or {}
+    )
+    if segmentation_root is not None:
+        expected_instruction_path = segmentation_root / SEGMENTATION_INSTRUCTION_REPORT
+        instruction_path = resolve_path(str(instruction_binding.get("path") or ""))
+        if instruction_path.resolve(strict=False) != expected_instruction_path.resolve(
+            strict=False
+        ):
+            errors.append("segmentation instruction validation report 路径越出绑定 benchmark")
+        if not instruction_path.is_file():
+            errors.append(
+                f"segmentation instruction validation report 缺失: {instruction_path}"
+            )
+        elif sha256_file(instruction_path) != instruction_binding.get("sha256"):
+            errors.append("segmentation instruction validation report hash 不一致")
+        else:
+            instruction_report = read_json(instruction_path)
+            expected_instruction_contract = segmentation_instruction_validation_contract(
+                segmentation_root
+            )
+            if instruction_binding.get("contract") != expected_instruction_contract:
+                errors.append(
+                    "segmentation instruction validation contract binding 不一致"
+                )
+            instruction_contract_errors = segmentation_instruction_contract_errors(
+                instruction_report, root=segmentation_root,
+            )
+            errors.extend(
+                f"segmentation instruction validation contract 过期:{value}"
+                for value in instruction_contract_errors
+            )
+            if instruction_report.get("errors"):
+                errors.append("segmentation instruction validation report errors 非空")
+            if int(instruction_binding.get("errors", -1)) != len(
+                instruction_report.get("errors") or []
+            ):
+                errors.append(
+                    "segmentation instruction validation report errors count 不一致"
+                )
 
     bridge_status = str(manifest.get("bridge_status") or "")
     if (bindings.get("bridge") or {}).get("status") != bridge_status:
@@ -127,6 +188,17 @@ def _validate_publication_manifest(
         if expected_publication and bool(manifest.get(field)) != expected_publication[field]:
             errors.append(f"Bridge publication policy 字段不一致: {field}")
     if bridge_status == BRIDGE_FROZEN_STATUS:
+        if bridge_root is not None:
+            bridge_binding = bindings.get("bridge") or {}
+            bridge_report_path = resolve_path(str(bridge_binding.get("path") or ""))
+            if bridge_report_path.is_file():
+                current_bridge_report = read_json(bridge_report_path)
+                errors.extend(
+                    f"frozen Bridge expert artifact contract:{value}"
+                    for value in bridge_expert_artifact_errors(
+                        bridge_root, current_bridge_report,
+                    )
+                )
         if not expert_published:
             errors.append("frozen Bridge 未发布 expert component")
         if not manifest.get("expert_index_present"):
@@ -368,6 +440,9 @@ def main() -> None:
         "expert_index_published": bool(manifest.get("expert_index_published")),
         "bridge_gate": manifest.get("bridge_gate"),
         "component_validation_reports": manifest.get("component_validation_reports"),
+        "component_contracts_verified": not any(
+            "validation contract" in value for value in errors
+        ),
         "errors": errors,
         "warnings": warnings,
         "status": "valid" if not errors else "invalid",

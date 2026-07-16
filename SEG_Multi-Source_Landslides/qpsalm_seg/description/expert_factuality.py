@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from qpsalm_seg.paths import resolve_project_path
 
 from .metrics import bootstrap_mean_ci
+from .json_protocol import strict_json_loads
 from .output_protocol import parse_description_output
 
 
@@ -20,6 +21,9 @@ ALLOWED_SUPPORT = {"supported": 1.0, "partially_supported": 0.5, "unsupported": 
 EXPERT_FAMILIES = (
     "target_status", "region_geometry", "surface", "terrain",
     "sar", "deformation", "surrounding_context", "summary",
+)
+EXPERT_FACTUALITY_PROTOCOL = (
+    "qpsalm_expert_region_factuality_v2_source_revalidated"
 )
 CLAIM_FIELDS = (
     "target_status",
@@ -109,7 +113,11 @@ def _krippendorff_alpha_nominal(units: list[list[str]]) -> float | None:
 
 def _jsonl(path_ref: str | Path) -> list[dict[str, Any]]:
     path = resolve_project_path(path_ref) or Path(path_ref)
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        strict_json_loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def _sha256(path: Path) -> str:
@@ -126,15 +134,34 @@ def build_expert_review_template(eval_dir: str | Path) -> list[dict[str, Any]]:
     generation_path = root / "raw_generations.jsonl"
     if not report_path.is_file():
         raise FileNotFoundError(f"ERFS 缺少 eval_report.json: {root}")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = strict_json_loads(report_path.read_text(encoding="utf-8"))
+    from .evaluator import (
+        DESCRIPTION_EVALUATION_PROTOCOL,
+        revalidate_evaluation_publication,
+    )
+
+    if report.get("protocol") != DESCRIPTION_EVALUATION_PROTOCOL:
+        raise ValueError("ERFS 只能审核当前 formal evaluation protocol")
+    limit = report.get("evaluation_limit_audit") or {}
+    if (
+        limit.get("protocol") != "qpsalm_description_evaluation_limit_v1"
+        or int(limit.get("requested_max_samples", -1)) != 0
+        or limit.get("full_population_requested") is not True
+        or int(limit.get("dataset_rows_evaluated", -1))
+        != int(report.get("num_samples", -1))
+    ):
+        raise ValueError("ERFS 只能审核 --max-val-samples 0 的完整 population")
     if not bool((report.get("generation_coverage") or {}).get("complete")):
         raise ValueError(
             "ERFS 只能审核完整 frozen generation；请用 --max-generate-samples 0 重跑评估"
         )
+    revalidate_evaluation_publication(root, report)
     rows = [
         row for row in _jsonl(generation_path)
         if (row.get("raw_metrics") or {}).get("raw_schema_valid") is not None
     ]
+    if len(rows) != int(report.get("num_samples", -1)):
+        raise ValueError("ERFS raw generations 与 formal population 行数不一致")
     if not rows:
         raise ValueError("ERFS template 只支持 structured region-description generations")
     templates = [{
@@ -288,6 +315,7 @@ def aggregate_expert_factuality(
     exact_agreements = []
     family_units: dict[str, list[list[str]]] = defaultdict(list)
     unsupported = claims = 0
+    unavailable_unsupported = unavailable_claims = unavailable_samples = 0
     for sample, values in sorted(reviews.items()):
         score = sum(value["sample_score"] for value in values) / len(values)
         parent = str(generation[sample]["parent_sample_id"])
@@ -295,6 +323,11 @@ def aggregate_expert_factuality(
             "parent_sample_id": parent,
             "reviewers": [value["reviewer_id"] for value in values],
             "expert_region_factuality_score": score,
+            "unsupported_claims": sum(value["unsupported_claims"] for value in values),
+            "factual_claims": sum(value["factual_claims"] for value in values),
+            "has_unavailable_modality": bool(
+                generation[sample].get("has_unavailable_modality")
+            ),
         }
         parent_values[parent].append(score)
         first = values[0]["family_scores"]
@@ -314,6 +347,12 @@ def aggregate_expert_factuality(
             ])
         unsupported += sum(value["unsupported_claims"] for value in values)
         claims += sum(value["factual_claims"] for value in values)
+        if bool(generation[sample].get("has_unavailable_modality")):
+            unavailable_samples += 1
+            unavailable_unsupported += sum(
+                value["unsupported_claims"] for value in values
+            )
+            unavailable_claims += sum(value["factual_claims"] for value in values)
     per_parent = {
         parent: sum(values) / len(values)
         for parent, values in sorted(parent_values.items())
@@ -344,7 +383,7 @@ def aggregate_expert_factuality(
             "krippendorff_alpha_nominal": _krippendorff_alpha_nominal(units),
         }
     return {
-        "protocol": "qpsalm_expert_region_factuality_v1",
+        "protocol": EXPERT_FACTUALITY_PROTOCOL,
         "eval_dir": str(root),
         "raw_generations_sha256": generation_hash,
         "eval_report_sha256": _sha256(root / "eval_report.json"),
@@ -353,6 +392,7 @@ def aggregate_expert_factuality(
         "num_parents": len(per_parent),
         "reviewer_ids": sorted(reviewer_ids),
         "minimum_reviewers": int(minimum_reviewers),
+        "aggregation_seed": int(seed),
         "expert_region_factuality_score": sum(per_parent.values()) / max(len(per_parent), 1),
         "parent_bootstrap_ci": bootstrap_mean_ci(per_parent.values(), seed=seed, samples=10000),
         "field_exact_agreement": sum(exact_agreements) / max(len(exact_agreements), 1),
@@ -360,6 +400,53 @@ def aggregate_expert_factuality(
         "expert_unsupported_claim_rate": unsupported / max(claims, 1),
         "expert_unsupported_claims": unsupported,
         "expert_factual_claims": claims,
+        "unavailable_modality_num_samples": unavailable_samples,
+        "unavailable_modality_unsupported_claim_rate": (
+            unavailable_unsupported / unavailable_claims
+            if unavailable_claims else None
+        ),
+        "unavailable_modality_unsupported_claims": unavailable_unsupported,
+        "unavailable_modality_factual_claims": unavailable_claims,
         "per_parent_scores": per_parent,
         "per_sample_scores": per_sample,
     }
+
+
+def revalidate_expert_factuality_report(
+    report_path: str | Path,
+    *,
+    evaluation_dir: str | Path,
+) -> dict[str, Any]:
+    """Rebuild ERFS from the exact two-rater source files bound by the report."""
+    path = resolve_project_path(report_path) or Path(report_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"ERFS report 不存在: {report_path}")
+    report = strict_json_loads(path.read_text(encoding="utf-8"))
+    if report.get("protocol") != EXPERT_FACTUALITY_PROTOCOL:
+        raise ValueError("ERFS report 不是当前 source-revalidated v2 protocol")
+    review_hashes = report.get("review_file_sha256")
+    if not isinstance(review_hashes, dict) or len(review_hashes) < 2:
+        raise ValueError("ERFS report 缺少至少两份 reviewer source binding")
+    review_paths: list[Path] = []
+    for path_ref, expected_hash in sorted(review_hashes.items()):
+        review_path = resolve_project_path(path_ref) or Path(path_ref)
+        if (
+            not review_path.is_file()
+            or len(str(expected_hash or "")) != 64
+            or _sha256(review_path) != str(expected_hash)
+        ):
+            raise ValueError(f"ERFS reviewer source 已漂移: {path_ref}")
+        review_paths.append(review_path)
+    minimum_reviewers = int(report.get("minimum_reviewers", -1))
+    seed = int(report.get("aggregation_seed", -1))
+    if minimum_reviewers < 2 or seed < 0:
+        raise ValueError("ERFS report minimum_reviewers/aggregation_seed 非法")
+    rebuilt = aggregate_expert_factuality(
+        evaluation_dir,
+        review_paths,
+        seed=seed,
+        minimum_reviewers=minimum_reviewers,
+    )
+    if rebuilt != report:
+        raise ValueError("ERFS report 与 reviewer source 重新聚合结果不一致")
+    return rebuilt

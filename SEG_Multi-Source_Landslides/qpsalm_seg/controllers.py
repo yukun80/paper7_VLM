@@ -397,6 +397,12 @@ class QwenMaskQueryController(nn.Module):
             if "lora_" in name
         }
         self.model.set_adapter(adapter_name)
+        # PEFT activates an adapter by toggling its leaves trainable. Reapply
+        # the optimizer-owned flags before forward so D2 can consume the
+        # D0/D1 desc_adapter representation without updating that adapter.
+        for name, parameter in self.model.named_parameters():
+            if name in trainability:
+                parameter.requires_grad_(trainability[name])
         try:
             observed = tuple(getattr(self.model, "active_adapters", ()))
             if observed != (adapter_name,):

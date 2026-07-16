@@ -23,6 +23,19 @@ from qpsalm_seg.schema import (
 from .vision_cache import DescriptionVisionFeatureBank, description_cache_key
 
 
+def _render_transform_spec(transform: dict, *, label: str) -> tuple[int, ...]:
+    values = tuple(int(transform.get(key) or 0) for key in (
+        "source_h", "source_w", "resized_h", "resized_w",
+        "pad_top", "pad_left", "size",
+    ))
+    source_h, source_w, resized_h, resized_w, top, left, size = values
+    if min(source_h, source_w, resized_h, resized_w, size) <= 0:
+        raise ValueError(f"{label} render transform 缺少正尺寸: {transform}")
+    if min(top, left) < 0 or top + resized_h > size or left + resized_w > size:
+        raise ValueError(f"{label} render transform padding 非法: {transform}")
+    return values
+
+
 def transform_region_mask_to_cache(mask: torch.Tensor, transform: dict) -> torch.Tensor:
     """Apply the exact renderer resize/pad transform to one source-space region mask."""
     value = mask.float()
@@ -30,26 +43,118 @@ def transform_region_mask_to_cache(mask: torch.Tensor, transform: dict) -> torch
         value = value[None]
     if value.ndim != 3 or value.shape[0] != 1:
         raise ValueError(f"region mask 必须为 [1,H,W]，当前 {tuple(value.shape)}")
-    source_h = int(transform.get("source_h") or 0)
-    source_w = int(transform.get("source_w") or 0)
-    resized_h = int(transform.get("resized_h") or 0)
-    resized_w = int(transform.get("resized_w") or 0)
-    size = int(transform.get("size") or 0)
-    top = int(transform.get("pad_top") or 0)
-    left = int(transform.get("pad_left") or 0)
+    source_h, source_w, resized_h, resized_w, top, left, size = (
+        _render_transform_spec(transform, label="target")
+    )
     if (source_h, source_w) != tuple(value.shape[-2:]):
         raise ValueError(
             f"region source shape 与 cache render transform 不一致: "
             f"mask={tuple(value.shape[-2:])} transform={(source_h, source_w)}"
         )
-    if min(resized_h, resized_w, size) <= 0:
-        raise ValueError(f"cache render transform 非法: {transform}")
     resized = F.interpolate(value[None], size=(resized_h, resized_w), mode="nearest")[0]
     right = size - resized_w - left
     bottom = size - resized_h - top
     if min(top, left, right, bottom) < 0:
         raise ValueError(f"cache render padding 非法: {transform}")
     return F.pad(resized, (left, right, top, bottom))
+
+
+def restore_region_mask_from_cache(
+    mask: torch.Tensor, transform: dict
+) -> torch.Tensor:
+    """Undo the exact renderer padding/resize for faithful source-image overlays."""
+    value = mask.float()
+    if value.ndim == 2:
+        value = value[None]
+    if value.ndim != 3 or value.shape[0] != 1:
+        raise ValueError(f"cache region mask 必须为 [1,H,W]，当前 {tuple(value.shape)}")
+    source_h, source_w, resized_h, resized_w, top, left, size = (
+        _render_transform_spec(transform, label="source restore")
+    )
+    if tuple(value.shape[-2:]) != (size, size):
+        raise ValueError(
+            "cache region canvas 与 render transform 不一致: "
+            f"mask={tuple(value.shape[-2:])} expected={(size, size)}"
+        )
+    crop = value[:, top:top + resized_h, left:left + resized_w]
+    if tuple(crop.shape[-2:]) != (resized_h, resized_w):
+        raise ValueError(f"cache region restore crop 非法: {transform}")
+    return F.interpolate(
+        crop[None], size=(source_h, source_w), mode="nearest"
+    )[0]
+
+
+def retarget_region_mask_between_cache_views(
+    mask: torch.Tensor,
+    source_transform: dict,
+    target_transform: dict,
+) -> torch.Tensor:
+    """Move one binary region from the reference cache view to another view canvas."""
+    value = mask.float()
+    if value.ndim == 2:
+        value = value[None]
+    source = _render_transform_spec(source_transform, label="source")
+    target = _render_transform_spec(target_transform, label="target")
+    source_h, source_w, resized_h, resized_w, top, left, size = source
+    if target[-1] != size:
+        raise ValueError(
+            "Description cache views 必须共享 render canvas size: "
+            f"source={size} target={target[-1]}"
+        )
+    if tuple(value.shape) != (1, size, size):
+        raise ValueError(
+            "reference cache region shape 与 source transform 不一致: "
+            f"mask={tuple(value.shape)} expected={(1, size, size)}"
+        )
+    # 先去掉 reference view 的 renderer padding，再恢复到它的源栅格。
+    source_crop = value[:, top:top + resized_h, left:left + resized_w]
+    source_raster = F.interpolate(
+        source_crop[None], size=(source_h, source_w), mode="nearest"
+    )[0]
+    target_h, target_w = target[:2]
+    if (target_h, target_w) != (source_h, source_w):
+        # 不同原生分辨率共享同一物理 footprint，只在规范化源坐标中重采样。
+        source_raster = F.interpolate(
+            source_raster[None], size=(target_h, target_w), mode="nearest"
+        )[0]
+    return (
+        transform_region_mask_to_cache(source_raster, target_transform) > 0.5
+    ).to(value.dtype)
+
+
+def region_mask_for_modality_view(
+    backbone: MultisourceBackboneState,
+    batch_index: int,
+    pyramid: ModalityPyramid,
+    reference_mask: torch.Tensor,
+) -> tuple[torch.Tensor, bool]:
+    """Resolve a reference-cache mask for one native-size modality/view."""
+    sample_metadata = backbone.metadata[batch_index]
+    render_transforms = sample_metadata.get("render_transforms")
+    target_transform = pyramid.instance.metadata.get("render_transform")
+    if not render_transforms and not target_transform:
+        return reference_mask, False
+    if (
+        not isinstance(render_transforms, (list, tuple))
+        or not render_transforms
+        or not isinstance(render_transforms[0], dict)
+        or not isinstance(target_transform, dict)
+        or not target_transform
+    ):
+        raise ValueError(
+            "Description cache backbone 缺少 reference/view render transform"
+        )
+    source_transform = render_transforms[0]
+    source_spec = _render_transform_spec(source_transform, label="reference")
+    target_spec = _render_transform_spec(target_transform, label="view")
+    if source_spec == target_spec:
+        return (reference_mask > 0.5).to(reference_mask.dtype), False
+    return (
+        retarget_region_mask_between_cache_views(
+            reference_mask, source_transform, target_transform
+        ),
+        True,
+    )
 
 
 class DescriptionCacheBackboneEncoder(nn.Module):

@@ -20,6 +20,8 @@ from qpsalm_seg.schema import (
     RegionEvidenceState,
 )
 
+from .backbone import region_mask_for_modality_view
+
 
 RegionProtocol = Literal["assisted", "vision_only"]
 MGRRAblation = Literal["full", "no_context", "roi_replay_only"]
@@ -154,6 +156,15 @@ def _geometry_values(mask: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
         center[1] / max(width - 1, 1), center[0] / max(height - 1, 1),
         bbox_area, torch.log1p(aspect), mask.new_tensor(1.0),
     ])
+
+
+def _box_coordinate_values(mask: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+    """Keep only geometry that Vision-only explicitly receives as box input."""
+    values = _geometry_values(mask, valid)
+    result = torch.zeros_like(values)
+    result[1:5] = values[1:5]
+    result[9] = values[9]
+    return result
 
 
 def _context_ring(mask: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
@@ -350,6 +361,8 @@ class MultiGranularityRegionReplay(nn.Module):
         geometry_rows = []
         modality_rows: list[list[torch.Tensor]] = []
         reliability_rows: list[torch.Tensor] = []
+        coverage_rows: list[torch.Tensor] = []
+        transform_rows: list[torch.Tensor] = []
         sequence_rows: list[list[torch.Tensor]] = []
         component_counts = masks.new_zeros((batch_size, region_count))
         selected_component_counts = masks.new_zeros((batch_size, region_count))
@@ -362,6 +375,8 @@ class MultiGranularityRegionReplay(nn.Module):
             sample_geometries = []
             sample_modalities = []
             sample_reliability = []
+            sample_coverages = []
+            sample_transforms = []
             sample_sequences = []
             for region_index in range(region_count):
                 region = ((masks[batch_index, region_index:region_index + 1] > 0.5) & (valid[batch_index] > 0.5)).float()
@@ -377,10 +392,14 @@ class MultiGranularityRegionReplay(nn.Module):
                 residual_area_ratio[batch_index, region_index] = max(
                     0.0, 1.0 - replay_coverage
                 )
-                ring = _context_ring(region, valid[batch_index]) if is_present else valid[batch_index]
-                geometry = self.geometry_project(_geometry_values(region, valid[batch_index]))
-                if protocol == "vision_only":
-                    geometry = torch.zeros_like(geometry)
+                geometry_input = _geometry_values(region, valid[batch_index])
+                # Vision-only 从 mask/box 与视觉 replay 自行恢复形态语义，不能注入
+                # area/location/aspect 等可直接映射到答案的确定性字段。
+                geometry = (
+                    self.geometry_project(geometry_input)
+                    if protocol == "assisted" and is_present
+                    else region.new_zeros(self.dim)
+                )
                 modality_tokens = []
                 global_tokens = []
                 exact_tokens = []
@@ -388,15 +407,35 @@ class MultiGranularityRegionReplay(nn.Module):
                 context_tokens = []
                 component_token_rows: list[list[torch.Tensor]] = []
                 coverages = []
+                transform_flags = []
                 for pyramid in pyramids:
+                    modality_region, transform_applied = region_mask_for_modality_view(
+                        backbone, batch_index, pyramid, region
+                    )
+                    modality_components = [
+                        region_mask_for_modality_view(
+                            backbone, batch_index, pyramid, component[None]
+                        )[0][0]
+                        for component in components
+                    ]
+                    modality_residual = (
+                        region_mask_for_modality_view(
+                            backbone, batch_index, pyramid, residual[None]
+                        )[0][0]
+                        if residual is not None else None
+                    )
                     detail = self._align(pyramid.detail, (height, width))
                     detail_valid = self._align(pyramid.detail_valid.float(), (height, width), "nearest")
                     high = self._align(pyramid.high, (height, width))
                     high_valid = self._align(pyramid.high_valid.float(), (height, width), "nearest")
-                    effective_region = region * detail_valid
-                    effective_ring = ring * detail_valid
+                    modality_ring = (
+                        _context_ring(modality_region, detail_valid)
+                        if is_present else detail_valid
+                    )
+                    effective_region = modality_region * detail_valid
+                    effective_ring = modality_ring * detail_valid
                     exact_detail = _masked_pool(detail, effective_region)
-                    exact_high = _masked_pool(high, region * high_valid)
+                    exact_high = _masked_pool(high, modality_region * high_valid)
                     context_raw = _masked_pool(detail, effective_ring)
                     contrast = exact_detail - context_raw
                     if self.ablation in {"no_context", "roi_replay_only"}:
@@ -406,14 +445,16 @@ class MultiGranularityRegionReplay(nn.Module):
                     ], -1))
                     context = self.context_project(context_raw)
                     replay, component_tokens = self._component_replay(
-                        pyramid, components, residual, detail, detail_valid
+                        pyramid, modality_components, modality_residual, detail, detail_valid
                     )
                     global_token = self.global_project(_masked_pool(
                         self._align(pyramid.low, (height, width)),
                         self._align(pyramid.low_valid.float(), (height, width), "nearest")
                         * valid[batch_index],
                     ))
-                    coverage_ratio = effective_region.sum() / region.sum().clamp_min(1.0)
+                    coverage_ratio = (
+                        effective_region.sum() / modality_region.sum().clamp_min(1.0)
+                    )
                     if self.ablation == "no_context":
                         context = torch.zeros_like(context)
                     elif self.ablation == "roi_replay_only":
@@ -430,15 +471,20 @@ class MultiGranularityRegionReplay(nn.Module):
                     context_tokens.append(context)
                     component_token_rows.append(component_tokens)
                     coverages.append(coverage_ratio)
+                    transform_flags.append(float(transform_applied))
                 if modality_tokens:
                     tokens = torch.stack(modality_tokens)
                     coverage_tensor = torch.stack(coverages).to(tokens.dtype)
+                    coverage_active = coverage_tensor > 0
                     query = self.region_query + geometry
                     logits = self.reliability(torch.cat([
                         tokens,
                         query[None].expand_as(tokens),
                         coverage_tensor[:, None],
                     ], -1)).squeeze(-1)
+                    # GAR 9.5：目标区域没有任何有效像素的模态不得靠投影 bias
+                    # 获得 reliability，也不得把伪局部证据送入语言序列。
+                    logits = logits.masked_fill(~coverage_active, -1.0e4)
                     null_logit = self.reliability(torch.cat([
                         self.null_evidence,
                         query,
@@ -447,6 +493,7 @@ class MultiGranularityRegionReplay(nn.Module):
                     if not is_present:
                         logits = logits.new_full(logits.shape, -1.0e4)
                         null_logit = null_logit * 0.0
+                        coverage_active = torch.zeros_like(coverage_active)
                     weights = torch.softmax(torch.cat([logits, null_logit[None]]).float(), 0).to(tokens.dtype)
                     fused = (tokens * weights[:-1, None]).sum(0) + self.null_evidence * weights[-1]
                     real_weights = weights[:-1]
@@ -456,7 +503,23 @@ class MultiGranularityRegionReplay(nn.Module):
                     context_token = (torch.stack(context_tokens) * real_weights[:, None]).sum(0)
                     if not is_present:
                         global_token = torch.stack(global_tokens).mean(0)
-                    padded = F.pad(tokens, (0, 0, 0, max_modalities - tokens.shape[0]))
+                    sequence_modality_tokens = torch.where(
+                        coverage_active[:, None],
+                        tokens,
+                        self.null_evidence.to(tokens.dtype)[None],
+                    )
+                    padded = F.pad(
+                        sequence_modality_tokens,
+                        (0, 0, 0, max_modalities - tokens.shape[0]),
+                    )
+                    padded_coverage = F.pad(
+                        coverage_tensor,
+                        (0, max_modalities - coverage_tensor.shape[0]),
+                    )
+                    padded_transforms = F.pad(
+                        coverage_tensor.new_tensor(transform_flags),
+                        (0, max_modalities - len(transform_flags)),
+                    )
                     padded_weights = torch.cat([
                         weights[:-1],
                         weights.new_zeros(max_modalities - tokens.shape[0]),
@@ -469,6 +532,8 @@ class MultiGranularityRegionReplay(nn.Module):
                     replay_token = self.null_evidence
                     context_token = self.null_evidence
                     padded = fused.new_zeros((max_modalities, self.dim))
+                    padded_coverage = fused.new_zeros(max_modalities)
+                    padded_transforms = fused.new_zeros(max_modalities)
                     padded_weights = fused.new_zeros(max_modalities + 1)
                     padded_weights[-1] = 1.0
                 region_token = self.output(torch.cat([
@@ -489,7 +554,7 @@ class MultiGranularityRegionReplay(nn.Module):
                             region_token, global_token, exact_token, replay_token,
                             context_token, geometry,
                         ]
-                    sequence.extend(modality_tokens)
+                    sequence.extend(sequence_modality_tokens.unbind(0))
                     max_component_slots = max(
                         (len(values) for values in component_token_rows), default=0
                     )
@@ -500,14 +565,20 @@ class MultiGranularityRegionReplay(nn.Module):
                             if component_index < len(values)
                         ]
                         slot_weights = real_weights[available]
-                        slot_weights = slot_weights / slot_weights.sum().clamp_min(1.0e-6)
-                        sequence.append(sum(
+                        slot_mass = slot_weights.sum()
+                        slot_weights = slot_weights / slot_mass.clamp_min(1.0e-6)
+                        slot = sum(
                             (
                                 component_token_rows[modality_index][component_index]
                                 * slot_weights[offset]
                                 for offset, modality_index in enumerate(available)
                             ),
                             start=region_token.new_zeros(self.dim),
+                        )
+                        sequence.append(torch.where(
+                            slot_mass > 0,
+                            slot,
+                            self.null_evidence.to(slot.dtype),
                         ))
                 else:
                     # Global context remains visible for a no-target decision,
@@ -519,15 +590,21 @@ class MultiGranularityRegionReplay(nn.Module):
                 sample_geometries.append(geometry)
                 sample_modalities.append(padded)
                 sample_reliability.append(padded_weights)
+                sample_coverages.append(padded_coverage)
+                sample_transforms.append(padded_transforms)
                 sample_sequences.append(sequence_tensor)
             region_rows.append(torch.stack(sample_regions))
             context_rows.append(torch.stack(sample_contexts))
             geometry_rows.append(torch.stack(sample_geometries))
             modality_rows.append(sample_modalities)
             reliability_rows.append(torch.stack(sample_reliability))
+            coverage_rows.append(torch.stack(sample_coverages))
+            transform_rows.append(torch.stack(sample_transforms))
             sequence_rows.append(sample_sequences)
 
         reliability = torch.stack(reliability_rows)
+        modality_coverage = torch.stack(coverage_rows)
+        view_transform_retargeted = torch.stack(transform_rows) > 0
         flat_sequences = [value for sample in sequence_rows for value in sample]
         sequence_tokens = pad_sequence(flat_sequences, batch_first=True).reshape(
             batch_size, region_count, -1, self.dim
@@ -550,6 +627,9 @@ class MultiGranularityRegionReplay(nn.Module):
             diagnostics={
                 "modality_reliability": reliability,
                 "null_reliability": reliability[..., -1],
+                "modality_coverage": modality_coverage,
+                "modality_coverage_active": modality_coverage > 0,
+                "view_transform_retargeted": view_transform_retargeted,
                 "component_count": component_counts,
                 "selected_component_count": selected_component_counts,
                 "component_coverage": component_coverage,

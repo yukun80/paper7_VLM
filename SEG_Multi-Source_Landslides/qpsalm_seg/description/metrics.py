@@ -97,7 +97,12 @@ def structured_disagreement(
     if not isinstance(first, dict) or not isinstance(second, dict):
         return float(first != second)
     changed = sum(_field(first, name) != _field(second, name) for name in STRUCTURED_FIELDS)
-    return changed / len(STRUCTURED_FIELDS)
+    first_summary = str(_field(first, "summary") or "")
+    second_summary = str(_field(second, "summary") or "")
+    summary_disagreement = 1.0 - caption_token_f1(
+        first_summary, [second_summary]
+    )
+    return (changed + summary_disagreement) / (len(STRUCTURED_FIELDS) + 1)
 
 
 class DescriptionMetricAccumulator:
@@ -110,13 +115,24 @@ class DescriptionMetricAccumulator:
         self.raw_parse_valid = 0
         self.raw_schema_valid = 0
         self.repair_schema_valid = 0
+        self.repair_attempts = 0
+        self.repair_success = 0
+        self.repaired_only_field_correct = 0
+        self.repaired_only_field_total = 0
         self.field_correct = Counter()
         self.field_total = Counter()
         self.field_confusion = Counter()
         self.status_confusion = Counter()
+        self.absent_targets = 0
+        self.absent_false_descriptions = 0
         self.unsupported = 0
         self.claims = 0
+        self.no_factual_claim_samples = 0
+        self.empty_descriptions = 0
         self.caption_f1_sum = 0.0
+        self.summary_token_f1_sum = 0.0
+        self.summary_exact = 0
+        self.summary_nonempty = 0
         self.by_task: dict[str, list[float]] = defaultdict(list)
 
     def update(
@@ -138,6 +154,7 @@ class DescriptionMetricAccumulator:
             return {"caption_token_f1": score, "raw_schema_valid": None}
 
         self.structured_samples += 1
+        self.empty_descriptions += int(not str(prediction).strip())
         predicted = parse_description_output(prediction)
         target = parse_description_output(target_text)
         if target.parsed is None or not target.schema_valid:
@@ -146,30 +163,71 @@ class DescriptionMetricAccumulator:
         self.raw_schema_valid += int(predicted.schema_valid)
         # deterministic_repair always follows the schema by construction; keep
         # this as an engineering diagnostic rather than a scientific score.
-        repaired = parse_description_output(json.dumps(predicted.repaired, ensure_ascii=False))
+        repaired = parse_description_output(json.dumps(
+            predicted.repaired,
+            ensure_ascii=False,
+            allow_nan=False,
+        ))
         self.repair_schema_valid += int(repaired.schema_valid)
+        repair_attempted = not predicted.schema_valid
+        self.repair_attempts += int(repair_attempted)
+        self.repair_success += int(repair_attempted and repaired.schema_valid)
+        # Raw structured 主指标只接受完整 schema-valid object。仍保留 parsed
+        # 原文给 summary/unsupported-claim 诊断，避免非法输出把幻觉藏掉。
+        raw_structured = predicted.parsed if predicted.schema_valid else None
         sample_correct = 0
+        repaired_correct = 0
         for name in STRUCTURED_FIELDS:
             self.field_total[name] += 1
-            match = predicted.parsed is not None and _field(predicted.parsed, name) == _field(target.parsed, name)
+            match = raw_structured is not None and _field(raw_structured, name) == _field(target.parsed, name)
             expected = str(_field(target.parsed, name))
-            observed = str(_field(predicted.parsed, name)) if predicted.parsed is not None else "__invalid__"
+            observed = str(_field(raw_structured, name)) if raw_structured is not None else "__invalid__"
             self.field_confusion[(name, expected, observed)] += 1
             self.field_correct[name] += int(match)
             sample_correct += int(match)
+            if repair_attempted and repaired.schema_valid:
+                repaired_correct += int(
+                    _field(repaired.parsed, name) == _field(target.parsed, name)
+                )
         expected_status = str(_field(target.parsed, "target_status") or "invalid")
-        observed_status = str(_field(predicted.parsed, "target_status") or "invalid")
+        observed_status = str(_field(raw_structured, "target_status") or "invalid")
         self.status_confusion[(expected_status, observed_status)] += 1
+        predicted_summary = str(_field(predicted.parsed, "summary") or "")
+        target_summary = str(_field(target.parsed, "summary") or "")
+        summary_f1 = caption_token_f1(predicted_summary, [target_summary])
+        self.summary_token_f1_sum += summary_f1
+        self.summary_exact += int(predicted_summary == target_summary)
+        self.summary_nonempty += int(bool(predicted_summary.strip()))
         unsupported, claims = unsupported_claim_counts(predicted.parsed, target.parsed)
         self.unsupported += unsupported
         self.claims += claims
+        self.no_factual_claim_samples += int(claims == 0)
+        false_description = bool(
+            expected_status == "absent"
+            and (observed_status != "absent" or unsupported > 0)
+        )
+        self.absent_targets += int(expected_status == "absent")
+        self.absent_false_descriptions += int(false_description)
+        if repair_attempted and repaired.schema_valid:
+            self.repaired_only_field_correct += repaired_correct
+            self.repaired_only_field_total += len(STRUCTURED_FIELDS)
         field_accuracy = sample_correct / len(STRUCTURED_FIELDS)
         self.by_task[task].append(field_accuracy)
         return {
             "raw_schema_valid": predicted.schema_valid,
             "raw_field_accuracy": field_accuracy,
+            "repair_attempted": repair_attempted,
+            "repair_schema_valid": repaired.schema_valid,
+            "repaired_only_field_accuracy": (
+                repaired_correct / len(STRUCTURED_FIELDS)
+                if repair_attempted and repaired.schema_valid else None
+            ),
             "unsupported_claims": unsupported,
             "factual_claims": claims,
+            "false_description": false_description,
+            "summary_token_f1": summary_f1,
+            "summary_exact_match": predicted_summary == target_summary,
+            "summary_nonempty": bool(predicted_summary.strip()),
             "parse_errors": list(predicted.parse_errors),
             "repair_actions": list(predicted.repair_actions),
             "parsed": predicted.parsed,
@@ -194,11 +252,8 @@ class DescriptionMetricAccumulator:
                 active_labels.append(label)
                 recalls.append(recall)
                 f1s.append(f1)
-        absent_total = sum(self.status_confusion[("absent", value)] for value in (*labels, "invalid"))
-        absent_false_description = sum(
-            count for (expected, predicted), count in self.status_confusion.items()
-            if expected == "absent" and predicted not in {"absent"}
-        )
+        absent_total = self.absent_targets
+        absent_false_description = self.absent_false_descriptions
         present_total = sum(self.status_confusion[("present", value)] for value in (*labels, "invalid"))
         present_false_rejection = self.status_confusion[("present", "absent")]
         return {
@@ -246,7 +301,17 @@ class DescriptionMetricAccumulator:
             "num_caption": self.caption_samples,
             "raw_json_parse_rate": self.raw_parse_valid / max(self.structured_samples, 1),
             "raw_schema_valid_rate": self.raw_schema_valid / max(self.structured_samples, 1),
+            "raw_json_invalid_rate": (
+                self.structured_samples - self.raw_schema_valid
+            ) / max(self.structured_samples, 1),
             "repair_schema_valid_rate": self.repair_schema_valid / max(self.structured_samples, 1),
+            "repair_attempts": self.repair_attempts,
+            "repair_success_rate": self.repair_success / max(self.repair_attempts, 1),
+            "repaired_only_field_score": (
+                self.repaired_only_field_correct
+                / max(self.repaired_only_field_total, 1)
+            ),
+            "repaired_only_field_total": self.repaired_only_field_total,
             "structured_field_macro_accuracy": macro,
             "structured_field_accuracy": field_accuracy,
             "structured_field_macro_f1": sum(field_macro_f1.values()) / max(len(field_macro_f1), 1),
@@ -254,7 +319,14 @@ class DescriptionMetricAccumulator:
             "unsupported_factual_claim_rate": self.unsupported / max(self.claims, 1),
             "unsupported_factual_claims": self.unsupported,
             "factual_claims": self.claims,
+            "no_factual_claim_samples": self.no_factual_claim_samples,
+            "empty_description_rate": self.empty_descriptions / max(
+                self.structured_samples, 1
+            ),
             "caption_token_f1": self.caption_f1_sum / max(self.caption_samples, 1),
+            "summary_token_f1": self.summary_token_f1_sum / max(self.structured_samples, 1),
+            "summary_exact_match_rate": self.summary_exact / max(self.structured_samples, 1),
+            "summary_nonempty_rate": self.summary_nonempty / max(self.structured_samples, 1),
             "target_status": self._status_metrics(),
             "by_task": {
                 name: {"n": len(values), "mean_primary_score": sum(values) / max(len(values), 1)}

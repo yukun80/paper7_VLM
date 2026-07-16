@@ -759,7 +759,12 @@ def _write_report(path_ref: str, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     try:
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(
+            json.dumps(
+                payload, ensure_ascii=False, indent=2, allow_nan=False
+            ) + "\n",
+            encoding="utf-8",
+        )
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

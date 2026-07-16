@@ -9,13 +9,14 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import json
 import math
 import os
 import re
 import tempfile
 from copy import deepcopy
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -26,7 +27,40 @@ import yaml
 
 
 SCHEMA_VERSION = "qpsalm_landslide_region_description_v1"
-BUILDER_VERSION = "landslide_bridge_m2_v4_parent_schema_adapter"
+BUILDER_VERSION = "landslide_bridge_m2_v7_expert_review_replay_bound"
+EVALUATION_GATE_PROTOCOL = "landslide_bridge_evaluation_gate_v2"
+EXPERT_ARTIFACT_BINDING_PROTOCOL = (
+    "landslide_bridge_expert_artifact_binding_v1_review_sources_and_outputs"
+)
+EXPERT_REVIEW_REPLAY_PROTOCOL = (
+    "landslide_bridge_expert_review_replay_v1_exact_semantic_projection"
+)
+REVIEW_DECISIONS = {"accept", "revise", "reject"}
+EVALUATION_GATE_THRESHOLDS = (
+    "no_target_rejection",
+    "unsupported_claim_rate",
+    "unavailable_unsupported_claim_rate",
+    "unsupported_claim_rate_noninferiority",
+    "expert_fact_score",
+    "target_status_macro_f1",
+    "present_recall",
+    "absent_recall",
+    "false_description_rate",
+    "false_rejection_rate",
+)
+EVALUATION_GATE_COUNTERFACTUAL_MODES = (
+    "shuffled_mask",
+    "region_swap",
+    "cross_parent_region_swap",
+    "cross_parent_modality_swap",
+    "modality_removal",
+)
+EVALUATION_GATE_SCIENTIFIC_PROTOCOLS = {
+    "erfs_rubric": "qpsalm_erfs_eight_family_parent_macro_v1",
+    "claim_inventory": "qpsalm_structured_claim_inventory_v1",
+    "retrieval_scorer": "qpsalm_same_image_region_retrieval_v2_parent_ranked",
+    "region_protocol_reporting": "separate_assisted_vision_only_v1",
+}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_ROOT = REPO_ROOT.parent
 DATASETS_ROOT = Path(os.environ.get("PAPER7_DATASETS_ROOT") or WORKSPACE_ROOT / "datasets").resolve(strict=False)
@@ -52,6 +86,96 @@ EVIDENCE_SUPPORT_VALUES = {
     "supports", "does_not_support", "insufficient_evidence", "unknown", "unavailable",
 }
 EVIDENCE_SUFFICIENCY_VALUES = {"sufficient", "partial", "insufficient", "unavailable"}
+ABSENT_EVIDENCE_SUPPORT_VALUES = {"insufficient_evidence", "unavailable"}
+ABSENT_EVIDENCE_SUFFICIENCY_VALUES = {"insufficient", "unavailable"}
+
+
+def evaluation_gate_scientific_template() -> dict[str, Any]:
+    """Return the human-completed scientific part of the frozen Pilot gate."""
+    return {
+        **EVALUATION_GATE_SCIENTIFIC_PROTOCOLS,
+        "bootstrap": {
+            "unit": "parent",
+            "confidence": 0.95,
+            "samples": 10000,
+            "seed": 42,
+        },
+        # Pilot 完成后由人工填写；prepare 阶段不得猜测正式反事实覆盖门槛。
+        "counterfactual_minimum_effective_parents": {
+            mode: None for mode in EVALUATION_GATE_COUNTERFACTUAL_MODES
+        },
+    }
+
+
+def validate_frozen_evaluation_gate_science(gate: Any) -> list[str]:
+    """Validate frozen thresholds/statistics without inferring Pilot outcomes."""
+    errors: list[str] = []
+    if not isinstance(gate, dict):
+        return ["evaluation gate 必须是 JSON object"]
+    if gate.get("protocol") != EVALUATION_GATE_PROTOCOL:
+        errors.append(f"evaluation gate protocol 不是 {EVALUATION_GATE_PROTOCOL}")
+    if gate.get("frozen") is not True or gate.get("status") != "frozen_after_pilot":
+        errors.append("evaluation gate 必须由用户显式冻结为 frozen_after_pilot")
+    thresholds = gate.get("thresholds")
+    if not isinstance(thresholds, dict):
+        errors.append("evaluation gate thresholds 必须是 object")
+    else:
+        for key in EVALUATION_GATE_THRESHOLDS:
+            value = thresholds.get(key)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0.0 <= float(value) <= 1.0
+            ):
+                errors.append(f"evaluation gate 阈值必须位于 [0,1]: {key}={value!r}")
+    scientific = gate.get("scientific_protocol")
+    if not isinstance(scientific, dict):
+        errors.append("evaluation gate 缺少 scientific_protocol")
+        return errors
+    for key, expected in EVALUATION_GATE_SCIENTIFIC_PROTOCOLS.items():
+        if scientific.get(key) != expected:
+            errors.append(
+                f"evaluation gate scientific_protocol.{key} 非法: "
+                f"expected={expected!r} observed={scientific.get(key)!r}"
+            )
+    bootstrap = scientific.get("bootstrap")
+    if not isinstance(bootstrap, dict):
+        errors.append("evaluation gate scientific_protocol.bootstrap 必须是 object")
+    else:
+        if bootstrap.get("unit") != "parent":
+            errors.append("evaluation gate bootstrap.unit 必须为 parent")
+        if bootstrap.get("samples") != 10000:
+            errors.append("evaluation gate bootstrap.samples 必须为 10000")
+        confidence = bootstrap.get("confidence")
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isclose(float(confidence), 0.95, rel_tol=0.0, abs_tol=1.0e-12)
+        ):
+            errors.append("evaluation gate bootstrap.confidence 必须为 0.95")
+        seed = bootstrap.get("seed")
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            errors.append("evaluation gate bootstrap.seed 必须为非负整数")
+    minimums = scientific.get("counterfactual_minimum_effective_parents")
+    if not isinstance(minimums, dict):
+        errors.append(
+            "evaluation gate scientific_protocol.counterfactual_minimum_effective_parents "
+            "必须是 object"
+        )
+    else:
+        if set(minimums) != set(EVALUATION_GATE_COUNTERFACTUAL_MODES):
+            errors.append(
+                "evaluation gate counterfactual modes 必须精确匹配正式五种模式"
+            )
+        for mode in EVALUATION_GATE_COUNTERFACTUAL_MODES:
+            value = minimums.get(mode)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                errors.append(
+                    "evaluation gate counterfactual minimum 必须为正整数: "
+                    f"{mode}={value!r}"
+                )
+    return errors
 
 
 def validate_bridge_structured_target(
@@ -89,6 +213,22 @@ def validate_bridge_structured_target(
                 errors.append(f"evidence.{field} 非法或缺失")
         if evidence.get("evidence_sufficiency") not in EVIDENCE_SUFFICIENCY_VALUES:
             errors.append("evidence.evidence_sufficiency 非法或缺失")
+    if status == "absent" and isinstance(region, dict) and isinstance(evidence, dict):
+        # no-target 没有可定位区域；审核修订不得把场景先验写成区域事实。
+        for field in REGION_FIELD_VALUES:
+            if region.get(field) != "unavailable":
+                errors.append(f"absent target 要求 region.{field}=unavailable")
+        for field in EVIDENCE_SUPPORT_FIELDS:
+            if evidence.get(field) not in ABSENT_EVIDENCE_SUPPORT_VALUES:
+                errors.append(
+                    f"absent target 的 evidence.{field} 只能是 "
+                    "insufficient_evidence/unavailable"
+                )
+        if evidence.get("evidence_sufficiency") not in ABSENT_EVIDENCE_SUFFICIENCY_VALUES:
+            errors.append(
+                "absent target 的 evidence.evidence_sufficiency 只能是 "
+                "insufficient/unavailable"
+            )
     return errors
 
 
@@ -100,7 +240,10 @@ def flatten_bridge_structured_target(target: dict[str, Any]) -> dict[str, str]:
     result.update({f"region.{field}": str(region.get(field) or "<missing>") for field in REGION_FIELD_VALUES})
     result.update({
         f"evidence.{field}": str(evidence.get(field) or "<missing>")
-        for field in (*sorted(EVIDENCE_SUPPORT_FIELDS), "evidence_sufficiency")
+        for field in (
+            *sorted(EVIDENCE_SUPPORT_FIELDS),
+            "evidence_sufficiency", "surface_observation", "surrounding_context",
+        )
     })
     return result
 
@@ -214,6 +357,307 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _parse_review_json_field(
+    value: Any,
+    field: str,
+    path: Path,
+    row_number: int,
+) -> Any:
+    if value in (None, ""):
+        return None
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}:{row_number}: {field} 不是合法 JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{path}:{row_number}: {field} 必须是 JSON object")
+    return parsed
+
+
+def read_review_file(
+    path_ref: str | Path,
+    expected_reviewer: str | None = None,
+) -> list[dict[str, Any]]:
+    """Read and normalize one immutable reviewer or arbitration source."""
+    path = resolve_project_path(path_ref)
+    if not path.is_file():
+        raise FileNotFoundError(f"审核文件不存在: {path_ref} -> {path}")
+    if path.suffix.casefold() == ".csv":
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    else:
+        rows = read_jsonl(path)
+    normalized: list[dict[str, Any]] = []
+    first_row = 2 if path.suffix.casefold() == ".csv" else 1
+    for row_number, source in enumerate(rows, start=first_row):
+        row = dict(source)
+        decision = str(row.get("decision") or "").strip().casefold()
+        if decision not in REVIEW_DECISIONS:
+            raise ValueError(
+                f"{path}:{row_number}: decision 必须为 accept/revise/reject，"
+                f"当前={decision!r}"
+            )
+        reviewer_id = str(row.get("reviewer_id") or "").strip()
+        if not reviewer_id:
+            raise ValueError(f"{path}:{row_number}: reviewer_id 不能为空")
+        if expected_reviewer and reviewer_id != expected_reviewer:
+            raise ValueError(
+                f"{path}:{row_number}: reviewer_id 应为 {expected_reviewer}"
+            )
+        row["reviewer_id"] = reviewer_id
+        row["decision"] = decision
+        row["corrected_structured_targets"] = _parse_review_json_field(
+            row.get("corrected_structured_targets"),
+            "corrected_structured_targets",
+            path,
+            row_number,
+        )
+        row["revised_summary"] = str(row.get("revised_summary") or "").strip()
+        if decision == "revise" and (
+            row["corrected_structured_targets"] is None
+            or not row["revised_summary"]
+        ):
+            raise ValueError(
+                f"{path}:{row_number}: revise 必须填写 "
+                "corrected_structured_targets 和 revised_summary"
+            )
+        normalized.append(row)
+    return normalized
+
+
+def unique_review_rows(
+    rows: Sequence[dict[str, Any]],
+    label: str,
+) -> dict[str, dict[str, Any]]:
+    """Index review rows while rejecting missing or duplicated item IDs."""
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item_id = str(row.get("review_item_id") or "").strip()
+        if not item_id:
+            raise ValueError(f"{label}: review_item_id 不能为空")
+        if item_id in result:
+            raise ValueError(f"{label}: review_item_id 重复: {item_id}")
+        result[item_id] = row
+    return result
+
+
+def review_revisions_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Require exact structured and summary agreement for double revisions."""
+    return (
+        left["corrected_structured_targets"]
+        == right["corrected_structured_targets"]
+        and left["revised_summary"] == right["revised_summary"]
+    )
+
+
+def disputed_review_item_ids(
+    left: dict[str, dict[str, Any]],
+    right: dict[str, dict[str, Any]],
+) -> set[str]:
+    """Return decision or exact-revision disagreements requiring arbitration."""
+    if set(left) != set(right):
+        raise ValueError("两份 reviewer item 集合不一致")
+    return {
+        item_id
+        for item_id in left
+        if not (
+            left[item_id]["decision"] == right[item_id]["decision"]
+            and (
+                left[item_id]["decision"] != "revise"
+                or review_revisions_match(left[item_id], right[item_id])
+            )
+        )
+    }
+
+
+def validate_arbitration_usage(
+    arbitration: dict[str, dict[str, Any]],
+    *,
+    selected_ids: set[str],
+    disputed_ids: set[str],
+    reviewer_ids: set[str],
+) -> None:
+    """Reject unknown, non-disputed, or non-independent arbitration records."""
+    unexpected = set(arbitration) - selected_ids
+    if unexpected:
+        raise ValueError(
+            f"arbitration 包含未知 review item: {sorted(unexpected)[:3]}"
+        )
+    arbitration_reviewer_ids = {
+        str(row["reviewer_id"]) for row in arbitration.values()
+    }
+    overlapping = reviewer_ids & arbitration_reviewer_ids
+    if overlapping:
+        raise ValueError(
+            "仲裁者必须独立于 reviewer_1/reviewer_2: "
+            f"{sorted(overlapping)}"
+        )
+    unused = set(arbitration) - disputed_ids
+    if unused:
+        raise ValueError(
+            "arbitration 只能覆盖双审分歧项，存在未使用记录: "
+            f"{sorted(unused)[:3]}"
+        )
+
+
+def _resolved_expert_record(
+    record: dict[str, Any],
+    decision: str,
+    response: dict[str, Any],
+    status: str,
+    reviewer_responses: Sequence[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if decision == "reject":
+        return None
+    if decision == "accept":
+        structured = deepcopy(record["candidate"]["structured_output"])
+        summary = str(record["candidate"]["summary"])
+    else:
+        structured = deepcopy(response["corrected_structured_targets"])
+        summary = str(response["revised_summary"])
+    target_errors = validate_bridge_structured_target(
+        structured,
+        expected_target_status=str(record["target_status"]),
+    )
+    if target_errors:
+        raise ValueError(
+            f"{record['bridge_record_id']}: expert structured target 非法: "
+            f"{target_errors}"
+        )
+    if not summary.strip():
+        raise ValueError(f"{record['bridge_record_id']}: expert summary 不能为空")
+    if not isinstance(record.get("provenance"), dict):
+        raise ValueError(f"{record['bridge_record_id']}: candidate 缺少 provenance")
+    result = deepcopy(record)
+    result["expert_target"] = {
+        "structured_output": structured,
+        "summary": summary,
+        "language": "en",
+        "source": "double_reviewed_pilot",
+    }
+    result["review"] = {
+        "status": status,
+        "final_decision": decision,
+        "reviewer_responses": deepcopy(list(reviewer_responses)),
+    }
+    result["provenance"]["expert_review_merger"] = BUILDER_VERSION
+    return result
+
+
+def replay_expert_review_merge(
+    *,
+    candidates: Sequence[dict[str, Any]],
+    selection: Sequence[dict[str, Any]],
+    reviewer_1: dict[str, dict[str, Any]],
+    reviewer_2: dict[str, dict[str, Any]],
+    arbitration: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Deterministically replay raw reviews into expert and pending projections.
+
+    This function is shared by the publisher and the independent validator so
+    frozen expert truth is derived from the bound human sources, not merely
+    accepted because all files carry self-consistent hashes.
+    """
+    candidate_by_id: dict[str, dict[str, Any]] = {}
+    for row in candidates:
+        record_id = str(row.get("bridge_record_id") or "").strip()
+        if not record_id:
+            raise ValueError("candidate bridge_record_id 不能为空")
+        if record_id in candidate_by_id:
+            raise ValueError(f"candidate bridge_record_id 重复: {record_id}")
+        candidate_by_id[record_id] = row
+    selection_by_item = unique_review_rows(selection, "review_selection")
+    selected_ids = set(selection_by_item)
+    if set(reviewer_1) != selected_ids or set(reviewer_2) != selected_ids:
+        raise ValueError(
+            "两份 reviewer 文件必须恰好覆盖 review_selection；"
+            f"selection={len(selected_ids)} reviewer_1={len(reviewer_1)} "
+            f"reviewer_2={len(reviewer_2)}"
+        )
+    reviewer_ids = {
+        str(row["reviewer_id"])
+        for rows in (reviewer_1.values(), reviewer_2.values())
+        for row in rows
+    }
+    disputed_ids = disputed_review_item_ids(reviewer_1, reviewer_2)
+    validate_arbitration_usage(
+        arbitration,
+        selected_ids=selected_ids,
+        disputed_ids=disputed_ids,
+        reviewer_ids=reviewer_ids,
+    )
+
+    expert: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    final_decisions: Counter[str] = Counter()
+    for item_id in sorted(selected_ids):
+        item = selection_by_item[item_id]
+        record_id = str(item.get("bridge_record_id") or "").strip()
+        if record_id not in candidate_by_id:
+            raise ValueError(
+                f"review_selection 引用未知 candidate: {item_id} -> {record_id!r}"
+            )
+        record = candidate_by_id[record_id]
+        first, second = reviewer_1[item_id], reviewer_2[item_id]
+        responses = [first, second]
+        same = first["decision"] == second["decision"]
+        if same and first["decision"] == "revise":
+            same = review_revisions_match(first, second)
+        if same:
+            decision, response = first["decision"], first
+            status = {
+                "accept": "accepted",
+                "revise": "revised",
+                "reject": "rejected",
+            }[decision]
+        elif item_id in arbitration:
+            response = arbitration[item_id]
+            decision = response["decision"]
+            responses.append(response)
+            status = "arbitrated"
+        else:
+            pending.append({
+                **deepcopy(item),
+                "status": "needs_arbitration",
+                "reviewer_responses": deepcopy(responses),
+            })
+            continue
+        final_decisions[decision] += 1
+        resolved = _resolved_expert_record(
+            record,
+            decision,
+            response,
+            status,
+            responses,
+        )
+        if resolved is not None:
+            expert.append(resolved)
+
+    expert.sort(
+        key=lambda row: (
+            row["split"],
+            row["parent_sample_id"],
+            row["bridge_record_id"],
+        )
+    )
+    pending.sort(
+        key=lambda row: (
+            row["split"],
+            row["parent_sample_id"],
+            row["review_item_id"],
+        )
+    )
+    return {
+        "protocol": EXPERT_REVIEW_REPLAY_PROTOCOL,
+        "expert": expert,
+        "pending": pending,
+        "final_decisions": dict(sorted(final_decisions.items())),
+        "disputed_review_item_ids": sorted(disputed_ids),
+    }
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -268,6 +712,75 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
         while chunk := handle.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def file_artifact_binding(
+    path: str | Path,
+    *,
+    records: int | None = None,
+) -> dict[str, Any]:
+    """Bind one immutable review source or expert output to its live bytes."""
+    resolved = resolve_project_path(path)
+    if not resolved.is_file():
+        raise FileNotFoundError(f"artifact binding 文件不存在: {path} -> {resolved}")
+    result: dict[str, Any] = {
+        "path": to_project_ref(resolved),
+        "sha256": sha256_file(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+    if records is not None:
+        if isinstance(records, bool) or not isinstance(records, int) or records < 0:
+            raise ValueError(f"artifact binding records 非法: {records!r}")
+        result["records"] = records
+    return result
+
+
+def validate_file_artifact_binding(
+    binding: Any,
+    *,
+    label: str,
+    expected_path: str | Path | None = None,
+    expected_records: int | None = None,
+) -> list[str]:
+    """Replay a recorded file binding without trusting a cached validation report."""
+    errors: list[str] = []
+    if not isinstance(binding, dict):
+        return [f"{label} artifact binding 必须是 object"]
+    path_ref = binding.get("path")
+    if not isinstance(path_ref, str) or not path_ref.strip():
+        return [f"{label} artifact binding 缺少 path"]
+    path = resolve_project_path(path_ref)
+    if expected_path is not None:
+        expected = resolve_project_path(expected_path)
+        if path != expected:
+            errors.append(
+                f"{label} artifact path 不匹配: expected={expected} observed={path}"
+            )
+    if not path.is_file():
+        errors.append(f"{label} artifact 文件不存在: {path_ref} -> {path}")
+        return errors
+    expected_sha = binding.get("sha256")
+    if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+        errors.append(f"{label} artifact sha256 非法")
+    elif sha256_file(path) != expected_sha:
+        errors.append(f"{label} artifact hash 漂移: {path_ref}")
+    expected_bytes = binding.get("bytes")
+    if (
+        isinstance(expected_bytes, bool)
+        or not isinstance(expected_bytes, int)
+        or expected_bytes < 0
+    ):
+        errors.append(f"{label} artifact bytes 非法")
+    elif path.stat().st_size != expected_bytes:
+        errors.append(f"{label} artifact bytes 漂移: {path_ref}")
+    if expected_records is not None:
+        observed_records = binding.get("records")
+        if observed_records != expected_records:
+            errors.append(
+                f"{label} artifact records 不匹配: "
+                f"expected={expected_records} observed={observed_records!r}"
+            )
+    return errors
 
 
 def load_array(path_ref: str) -> np.ndarray:
@@ -500,6 +1013,224 @@ def krippendorff_alpha_nominal(ratings: Sequence[Sequence[str | None]]) -> float
     observed_disagreement = disagreements / pairs_total
     expected_disagreement = 1.0 - sum((count / total_ratings) ** 2 for count in counts.values())
     return float(1.0 - observed_disagreement / expected_disagreement) if expected_disagreement > 0 else 1.0
+
+
+def levenshtein_distance(left: str, right: str) -> int:
+    """Deterministic character edit distance for expert summary revisions."""
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(min(
+                current[-1] + 1,
+                previous[right_index] + 1,
+                previous[right_index - 1] + int(left_char != right_char),
+            ))
+        previous = current
+    return previous[-1]
+
+
+def expert_modification_statistics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Measure final expert edits relative to the frozen rule candidate."""
+    distances = []
+    normalized_distances = []
+    changed_fields = total_fields = 0
+    by_decision: Counter[str] = Counter()
+    for row in rows:
+        candidate = row.get("candidate") or {}
+        expert_target = row.get("expert_target") or {}
+        candidate_summary = str(candidate.get("summary") or "")
+        expert_summary = str(expert_target.get("summary") or "")
+        distance = levenshtein_distance(candidate_summary, expert_summary)
+        distances.append(distance)
+        normalized_distances.append(
+            distance / max(len(candidate_summary), len(expert_summary), 1)
+        )
+        candidate_fields = flatten_bridge_structured_target(
+            candidate.get("structured_output") or {}
+        )
+        expert_fields = flatten_bridge_structured_target(
+            expert_target.get("structured_output") or {}
+        )
+        fields = sorted(set(candidate_fields) | set(expert_fields))
+        changed_fields += sum(
+            candidate_fields.get(field) != expert_fields.get(field)
+            for field in fields
+        )
+        total_fields += len(fields)
+        by_decision[
+            str((row.get("review") or {}).get("final_decision") or "unknown")
+        ] += 1
+    return {
+        "num_expert_records": len(rows),
+        "summary_mean_edit_distance_characters": (
+            sum(distances) / len(distances) if distances else None
+        ),
+        "summary_mean_normalized_edit_distance": (
+            sum(normalized_distances) / len(normalized_distances)
+            if normalized_distances else None
+        ),
+        "structured_claim_fields_changed": changed_fields,
+        "structured_claim_fields_total": total_fields,
+        "factual_claim_modification_rate": (
+            changed_fields / total_fields if total_fields else None
+        ),
+        "expert_records_by_final_decision": dict(sorted(by_decision.items())),
+    }
+
+
+def expert_review_report_statistics(
+    *,
+    candidates: Sequence[dict[str, Any]],
+    selection: Sequence[dict[str, Any]],
+    reviewer_1: dict[str, dict[str, Any]],
+    reviewer_2: dict[str, dict[str, Any]],
+    replay: dict[str, Any],
+) -> dict[str, Any]:
+    """Recompute every scientific review statistic from immutable raw sources."""
+    candidate_by_id: dict[str, dict[str, Any]] = {}
+    for row in candidates:
+        record_id = str(row.get("bridge_record_id") or "").strip()
+        if not record_id or record_id in candidate_by_id:
+            raise ValueError(
+                f"candidate bridge_record_id 缺失或重复: {record_id!r}"
+            )
+        candidate_by_id[record_id] = row
+    selection_by_item = unique_review_rows(selection, "review_selection")
+    selected_ids = set(selection_by_item)
+    if set(reviewer_1) != selected_ids or set(reviewer_2) != selected_ids:
+        raise ValueError("review statistics 输入未精确覆盖 review_selection")
+
+    left_decisions = [
+        reviewer_1[item_id]["decision"] for item_id in sorted(selected_ids)
+    ]
+    right_decisions = [
+        reviewer_2[item_id]["decision"] for item_id in sorted(selected_ids)
+    ]
+    field_ratings: dict[str, list[list[str]]] = {}
+    for item_id in sorted(selected_ids):
+        item = selection_by_item[item_id]
+        record_id = str(item.get("bridge_record_id") or "")
+        if record_id not in candidate_by_id:
+            raise ValueError(
+                f"review statistics selection 引用未知 candidate: {record_id!r}"
+            )
+        record = candidate_by_id[record_id]
+        reviewer_fields = []
+        for response in (reviewer_1[item_id], reviewer_2[item_id]):
+            if response["decision"] == "reject":
+                reviewer_fields.append({"review_decision": "reject"})
+                continue
+            structured = (
+                record["candidate"]["structured_output"]
+                if response["decision"] == "accept"
+                else response["corrected_structured_targets"]
+            )
+            target_errors = validate_bridge_structured_target(
+                structured,
+                expected_target_status=str(record["target_status"]),
+            )
+            if target_errors:
+                raise ValueError(
+                    f"{item_id}/{response['reviewer_id']}: structured target 非法: "
+                    f"{target_errors}"
+                )
+            reviewer_fields.append(flatten_bridge_structured_target(structured))
+        field_names = sorted(set(reviewer_fields[0]) | set(reviewer_fields[1]))
+        for field in field_names:
+            field_ratings.setdefault(field, []).append([
+                reviewer_fields[0].get(field, "<rejected>"),
+                reviewer_fields[1].get(field, "<rejected>"),
+            ])
+    field_agreement = {
+        field: {
+            "cohen_kappa": cohen_kappa(
+                [pair[0] for pair in ratings],
+                [pair[1] for pair in ratings],
+            ),
+            "krippendorff_alpha_nominal": krippendorff_alpha_nominal(ratings),
+            "exact_agreement": (
+                sum(pair[0] == pair[1] for pair in ratings)
+                / max(len(ratings), 1)
+            ),
+            "num_items": len(ratings),
+        }
+        for field, ratings in sorted(field_ratings.items())
+    }
+    disputed_field_counts = {
+        field: sum(pair[0] != pair[1] for pair in ratings)
+        for field, ratings in sorted(field_ratings.items())
+    }
+    disagreement_region_sources: Counter[str] = Counter()
+    disagreement_modality_combos: Counter[str] = Counter()
+    disagreement_evidence_levels: Counter[str] = Counter()
+    for item_id in sorted(selected_ids):
+        first, second = reviewer_1[item_id], reviewer_2[item_id]
+        agreed = first["decision"] == second["decision"]
+        if agreed and first["decision"] == "revise":
+            agreed = review_revisions_match(first, second)
+        if agreed:
+            continue
+        record = candidate_by_id[
+            str(selection_by_item[item_id]["bridge_record_id"])
+        ]
+        disagreement_region_sources[
+            str(record.get("region_source") or "unknown")
+        ] += 1
+        disagreement_modality_combos[
+            str(record.get("modality_family_combo") or "unknown")
+        ] += 1
+        evidence = record.get("modality_evidence") or {}
+        values = evidence.values() if isinstance(evidence, dict) else evidence
+        levels = {
+            str(value.get("evidence_level") or "unknown")
+            for value in values
+            if isinstance(value, dict)
+        }
+        for level in levels or {"unknown"}:
+            disagreement_evidence_levels[level] += 1
+
+    final_decisions = Counter(replay.get("final_decisions") or {})
+    resolved_count = sum(final_decisions.values())
+    expert = replay.get("expert") or []
+    pending = replay.get("pending") or []
+    return {
+        "review_items": len(selected_ids),
+        "expert_records": len(expert),
+        "pending_arbitration": len(pending),
+        "final_decisions": dict(sorted(final_decisions.items())),
+        "cohen_kappa_decision": cohen_kappa(left_decisions, right_decisions),
+        "krippendorff_alpha_decision": krippendorff_alpha_nominal([
+            [reviewer_1[item_id]["decision"], reviewer_2[item_id]["decision"]]
+            for item_id in sorted(selected_ids)
+        ]),
+        "initial_decision_agreement_rate": (
+            sum(
+                reviewer_1[item_id]["decision"]
+                == reviewer_2[item_id]["decision"]
+                for item_id in selected_ids
+            )
+            / max(len(selected_ids), 1)
+        ),
+        "field_agreement": field_agreement,
+        "disputed_field_counts": disputed_field_counts,
+        "disagreement_distribution": {
+            "region_source": dict(sorted(disagreement_region_sources.items())),
+            "modality_family_combo": dict(
+                sorted(disagreement_modality_combos.items())
+            ),
+            "evidence_level": dict(sorted(disagreement_evidence_levels.items())),
+        },
+        "reviewer_decision_counts": {
+            "reviewer_1": dict(sorted(Counter(left_decisions).items())),
+            "reviewer_2": dict(sorted(Counter(right_decisions).items())),
+        },
+        "modification_rate": final_decisions["revise"] / max(resolved_count, 1),
+        "acceptance_rate": final_decisions["accept"] / max(resolved_count, 1),
+        "rejection_rate": final_decisions["reject"] / max(resolved_count, 1),
+        "accepted_or_revised_rate": len(expert) / max(len(selected_ids), 1),
+        "expert_modification_statistics": expert_modification_statistics(expert),
+    }
 
 
 def preview_image(path_ref: str, size: int = 512) -> Image.Image:

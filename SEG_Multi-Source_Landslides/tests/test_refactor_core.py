@@ -56,6 +56,8 @@ from qpsalm_seg.description import (
     MultiGranularityRegionReplay,
     SingleVectorRegionPooling,
     rasterize_region_geometry,
+    retarget_region_mask_between_cache_views,
+    transform_region_mask_to_cache,
 )
 import qpsalm_seg.description.mgrr as mgrr_module
 from qpsalm_seg.description.counterfactuals import counterfactual_backbone
@@ -658,7 +660,9 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertGreaterEqual(float(state.diagnostics["component_count"][0, 0]), 2.0)
         self.assertEqual(float(state.diagnostics["roi_grid_sample_count"]), 118.0)
         self.assertEqual(float(state.diagnostics["roi_query_count"]), 2.0)
-        state.region_sequence_tokens[state.region_sequence_mask].sum().backward()
+        selected = state.region_sequence_tokens[state.region_sequence_mask]
+        probe = torch.linspace(0.1, 1.0, selected.shape[-1])
+        (selected * probe).sum().backward()
         self.assertTrue(any(
             parameter.grad is not None and torch.isfinite(parameter.grad).all()
             for parameter in self.model.sane.parameters()
@@ -674,6 +678,82 @@ class ThreeModuleModelTest(unittest.TestCase):
         self.assertEqual(tuple(tokens.shape), (6, 2))
         self.assertTrue(bool(token_valid.all()))
         self.assertTrue(torch.allclose(tokens, torch.ones_like(tokens)))
+
+    def test_mgrr_view_transform_retargets_components_for_native_shapes_and_batch(self) -> None:
+        source_transform = {
+            "source_h": 16, "source_w": 32,
+            "resized_h": 16, "resized_w": 32,
+            "pad_top": 8, "pad_left": 0, "size": 32,
+        }
+        target_transform = {
+            "source_h": 32, "source_w": 16,
+            "resized_h": 32, "resized_w": 16,
+            "pad_top": 0, "pad_left": 8, "size": 32,
+        }
+        source_region = torch.zeros((1, 16, 32))
+        source_region[:, 1:5, 1:5] = 1
+        source_region[:, 11:15, 27:31] = 1
+        reference_region = transform_region_mask_to_cache(
+            source_region, source_transform
+        )
+        target_region = retarget_region_mask_between_cache_views(
+            reference_region, source_transform, target_transform
+        )
+        expected_target = transform_region_mask_to_cache(
+            torch.nn.functional.interpolate(
+                source_region[None], size=(32, 16), mode="nearest"
+            )[0],
+            target_transform,
+        )
+        self.assertTrue(torch.equal(target_region, expected_target))
+        self.assertFalse(torch.equal(reference_region, target_region))
+
+        batch = repeat_batch(synthetic_batch([
+            instance("optical_rgb", "optical", 3, 32),
+            instance("dem", "terrain", 1, 32),
+        ], size=32), 2)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        for sample_index, pyramids in enumerate(backbone.features.samples):
+            backbone.metadata[sample_index]["render_transforms"] = [
+                source_transform, target_transform,
+            ]
+            pyramids[0].instance.metadata["render_transform"] = source_transform
+            pyramids[1].instance.metadata["render_transform"] = target_transform
+            for name in ("detail_valid", "high_valid", "mid_valid", "low_valid"):
+                current = getattr(pyramids[1], name)
+                setattr(pyramids[1], name, torch.nn.functional.interpolate(
+                    target_region[None], size=current.shape[-2:], mode="nearest"
+                )[0])
+        target_detail = backbone.features.samples[0][1].detail
+        target_detail.retain_grad()
+        regions = reference_region[None].repeat(2, 1, 1, 1)
+        mgrr = MultiGranularityRegionReplay(32)
+        state = mgrr(backbone, regions, protocol="vision_only")
+        self.assertEqual(tuple(state.region_tokens.shape), (2, 1, 32))
+        self.assertTrue(bool(
+            state.diagnostics["view_transform_retargeted"][:, :, 1].all()
+        ))
+        self.assertFalse(bool(
+            state.diagnostics["view_transform_retargeted"][:, :, 0].any()
+        ))
+        self.assertTrue(bool(
+            (state.diagnostics["modality_coverage"][:, :, 1] > 0).all()
+        ))
+        self.assertTrue(bool(
+            (state.diagnostics["component_count"] == 2).all()
+        ))
+        selected = state.region_sequence_tokens[state.region_sequence_mask]
+        probe = torch.linspace(0.1, 1.0, selected.shape[-1])
+        (selected * probe).sum().backward()
+        self.assertIsNotNone(target_detail.grad)
+        self.assertGreater(float(target_detail.grad.abs().sum()), 0.0)
+
+        for mode in ("crop_only", "masked_pooling", "full_image_box"):
+            baseline = SingleVectorRegionPooling(32, mode)(backbone, regions)
+            self.assertEqual(tuple(baseline.region_tokens.shape), (2, 1, 32))
+            self.assertTrue(bool(
+                baseline.diagnostics["view_transform_retargeted"][:, :, 1].all()
+            ))
 
     def test_mgrr_reports_component_truncation_without_residual_union_roi(self) -> None:
         batch = synthetic_batch([instance("optical_rgb", "optical", 3, 64)], size=64)
@@ -709,10 +789,93 @@ class ThreeModuleModelTest(unittest.TestCase):
         backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
         mgrr = MultiGranularityRegionReplay(32)
         state = mgrr(backbone, torch.zeros((1, 1, 32, 32)), protocol="vision_only")
-        self.assertAlmostEqual(float(state.diagnostics["null_reliability"][0, 0]), 1.0, places=5)
+        self.assertAlmostEqual(
+            float(state.diagnostics["null_reliability"][0, 0].detach()),
+            1.0,
+            places=5,
+        )
         self.assertEqual(float(state.geometry_tokens.abs().sum()), 0.0)
 
+    def test_mgrr_zero_valid_coverage_is_replaced_by_null_evidence(self) -> None:
+        batch = synthetic_batch([
+            instance("optical_rgb", "optical", 3, 32),
+            instance("dem", "terrain", 1, 32),
+        ], size=32)
+        backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
+        valid_detail = backbone.features.samples[0][0].detail
+        invalid = backbone.features.samples[0][1]
+        valid_detail.retain_grad()
+        invalid.detail.retain_grad()
+        invalid.detail_valid.zero_()
+        invalid.high_valid.zero_()
+        invalid.mid_valid.zero_()
+        invalid.low_valid.zero_()
+        region = torch.zeros((1, 1, 32, 32))
+        region[:, :, 5:20, 7:22] = 1
+        mgrr = MultiGranularityRegionReplay(32)
+        state = mgrr(backbone, region, protocol="vision_only")
+        coverage = state.diagnostics["modality_coverage"][0, 0]
+        reliability = state.diagnostics["modality_reliability"][0, 0]
+        self.assertGreater(float(coverage[0]), 0.0)
+        self.assertEqual(float(coverage[1]), 0.0)
+        self.assertEqual(float(reliability[1].detach()), 0.0)
+        self.assertTrue(torch.equal(
+            state.diagnostics["modality_coverage_active"][0, 0],
+            torch.tensor([True, False]),
+        ))
+        self.assertTrue(torch.allclose(
+            state.modality_tokens[0, 0, 1], mgrr.null_evidence
+        ))
+        selected = state.region_sequence_tokens[state.region_sequence_mask]
+        probe = torch.linspace(0.1, 1.0, selected.shape[-1])
+        (selected * probe).sum().backward()
+        self.assertIsNotNone(valid_detail.grad)
+        self.assertGreater(float(valid_detail.grad.abs().sum()), 0.0)
+        self.assertTrue(
+            invalid.detail.grad is None
+            or float(invalid.detail.grad.abs().sum()) == 0.0
+        )
+
     def test_region_encoder_ablation_modes_share_output_contract(self) -> None:
+        region = torch.zeros((1, 1, 32, 32))
+        region[:, :, 5:20, 7:22] = 1
+        encoder_factories = [
+            lambda: SingleVectorRegionPooling(32, "crop_only"),
+            lambda: SingleVectorRegionPooling(32, "masked_pooling"),
+            lambda: SingleVectorRegionPooling(32, "full_image_box"),
+            lambda: MultiGranularityRegionReplay(32, ablation="roi_replay_only"),
+            lambda: MultiGranularityRegionReplay(32, ablation="no_context"),
+            lambda: MultiGranularityRegionReplay(32, ablation="full"),
+        ]
+        for factory in encoder_factories:
+            self.model.zero_grad(set_to_none=True)
+            backbone = self.model.encode_multisource(
+                synthetic_batch([
+                    instance("optical_rgb", "optical", 3, 32),
+                    instance("dem", "terrain", 1, 32),
+                ], size=32),
+                include_visual_tokens=False,
+            )
+            detail = backbone.features.samples[0][0].detail
+            detail.retain_grad()
+            encoder = factory()
+            state = encoder(backbone, region, protocol="vision_only")
+            self.assertEqual(tuple(state.region_tokens.shape), (1, 1, 32))
+            self.assertEqual(tuple(state.region_sequence_mask.shape[:2]), (1, 1))
+            self.assertTrue(bool(torch.isfinite(state.region_sequence_tokens).all()))
+            selected = state.region_sequence_tokens[state.region_sequence_mask]
+            probe = torch.linspace(0.1, 1.0, selected.shape[-1])
+            (selected * probe).sum().backward()
+            self.assertIsNotNone(detail.grad)
+            self.assertGreater(float(detail.grad.abs().sum()), 0.0)
+            self.assertTrue(any(
+                parameter.grad is not None
+                and bool(torch.isfinite(parameter.grad).all())
+                and float(parameter.grad.abs().sum()) > 0.0
+                for parameter in encoder.parameters()
+            ))
+
+    def test_region_encoder_protocols_do_not_leak_assisted_geometry(self) -> None:
         batch = synthetic_batch([
             instance("optical_rgb", "optical", 3, 32),
             instance("dem", "terrain", 1, 32),
@@ -720,19 +883,87 @@ class ThreeModuleModelTest(unittest.TestCase):
         backbone = self.model.encode_multisource(batch, include_visual_tokens=False)
         region = torch.zeros((1, 1, 32, 32))
         region[:, :, 5:20, 7:22] = 1
-        encoders = [
-            SingleVectorRegionPooling(32, "crop_only"),
-            SingleVectorRegionPooling(32, "masked_pooling"),
-            SingleVectorRegionPooling(32, "full_image_box"),
-            MultiGranularityRegionReplay(32, ablation="roi_replay_only"),
-            MultiGranularityRegionReplay(32, ablation="no_context"),
-            MultiGranularityRegionReplay(32, ablation="full"),
-        ]
-        for encoder in encoders:
-            state = encoder(backbone, region)
-            self.assertEqual(tuple(state.region_tokens.shape), (1, 1, 32))
-            self.assertEqual(tuple(state.region_sequence_mask.shape[:2]), (1, 1))
-            self.assertTrue(bool(torch.isfinite(state.region_sequence_tokens).all()))
+
+        mgrr = MultiGranularityRegionReplay(32)
+        vision_mgrr = mgrr(backbone, region, protocol="vision_only")
+        assisted_mgrr = mgrr(backbone, region, protocol="assisted")
+        self.assertEqual(float(vision_mgrr.geometry_tokens.abs().sum()), 0.0)
+        self.assertGreater(
+            float(assisted_mgrr.geometry_tokens.detach().abs().sum()), 0.0
+        )
+        self.assertEqual(float(vision_mgrr.diagnostics["protocol_assisted"]), 0.0)
+        self.assertEqual(float(assisted_mgrr.diagnostics["protocol_assisted"]), 1.0)
+
+        full_image_box = SingleVectorRegionPooling(32, "full_image_box")
+        vision_box = full_image_box(backbone, region, protocol="vision_only")
+        assisted_box = full_image_box(backbone, region, protocol="assisted")
+        vision_values = vision_box.diagnostics["geometry_input_values"][0, 0]
+        assisted_values = assisted_box.diagnostics["geometry_input_values"][0, 0]
+        self.assertEqual(float(vision_values[0]), 0.0)
+        self.assertGreater(float(vision_values[1:5].abs().sum()), 0.0)
+        self.assertEqual(float(vision_values[5:9].abs().sum()), 0.0)
+        self.assertEqual(float(vision_values[9]), 1.0)
+        self.assertGreater(float(assisted_values[[0, 5, 6, 7, 8]].abs().sum()), 0.0)
+        self.assertFalse(torch.equal(vision_box.geometry_tokens, assisted_box.geometry_tokens))
+        self.assertEqual(float(vision_box.diagnostics["protocol_assisted"]), 0.0)
+        self.assertEqual(float(assisted_box.diagnostics["protocol_assisted"]), 1.0)
+
+        for mode in ("crop_only", "masked_pooling"):
+            baseline = SingleVectorRegionPooling(32, mode)
+            vision_state = baseline(backbone, region, protocol="vision_only")
+            assisted_state = baseline(backbone, region, protocol="assisted")
+            self.assertEqual(float(vision_state.geometry_tokens.abs().sum()), 0.0)
+            self.assertGreater(
+                float(assisted_state.geometry_tokens.detach().abs().sum()), 0.0
+            )
+            self.assertFalse(torch.equal(
+                vision_state.region_tokens, assisted_state.region_tokens
+            ))
+            self.assertEqual(
+                float(vision_state.diagnostics["protocol_assisted"]), 0.0
+            )
+            self.assertEqual(
+                float(assisted_state.diagnostics["protocol_assisted"]), 1.0
+            )
+
+    def test_full_image_box_keeps_visual_evidence_for_null_region(self) -> None:
+        backbone = self.model.encode_multisource(
+            synthetic_batch([
+                instance("optical_rgb", "optical", 3, 32),
+                instance("dem", "terrain", 1, 32),
+            ], size=32),
+            include_visual_tokens=False,
+        )
+        detail = backbone.features.samples[0][0].detail
+        detail.retain_grad()
+        regions = torch.zeros((1, 2, 32, 32))
+        regions[:, 1, 5:20, 7:22] = 1
+        encoder = SingleVectorRegionPooling(32, "full_image_box")
+        state = encoder(backbone, regions, protocol="vision_only")
+        self.assertEqual(
+            state.diagnostics["region_present"].tolist(), [[False, True]]
+        )
+        self.assertTrue(bool(state.diagnostics["visual_evidence_active"].all()))
+        self.assertEqual(
+            float(state.diagnostics["full_image_visual_for_null_region"]), 1.0
+        )
+        self.assertTrue(torch.allclose(
+            state.modality_tokens[:, 0], state.modality_tokens[:, 1]
+        ))
+        self.assertEqual(
+            float(state.diagnostics["geometry_input_values"][0, 0].abs().sum()),
+            0.0,
+        )
+        self.assertGreater(
+            float(state.diagnostics["geometry_input_values"][0, 1].abs().sum()),
+            0.0,
+        )
+        probe = torch.linspace(
+            0.1, 1.0, state.region_sequence_tokens.shape[-1]
+        )
+        (state.region_sequence_tokens[0, 0] * probe).sum().backward()
+        self.assertIsNotNone(detail.grad)
+        self.assertGreater(float(detail.grad.abs().sum()), 0.0)
 
     def test_single_modality_removal_removes_dense_and_visual_evidence(self) -> None:
         batch = synthetic_batch([instance("optical_rgb", "optical", 3, 32)], size=32)

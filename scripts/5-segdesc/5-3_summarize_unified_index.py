@@ -45,6 +45,8 @@ def main() -> None:
         raise ValueError("统一索引 validation errors 非空，拒绝汇总为可用 benchmark")
     if validation.get("protocol") != VALIDATION_PROTOCOL:
         raise ValueError("统一索引 validation protocol 过期，请重新执行 5-2")
+    if validation.get("component_contracts_verified") is not True:
+        raise ValueError("统一索引 component contracts 未通过独立验证")
     manifest = read_json(output / "manifests/component_manifest.json")
     if manifest.get("builder_version") != BUILDER_VERSION:
         raise ValueError("统一索引 builder version 过期，请重新执行 5-1")
@@ -75,6 +77,7 @@ def main() -> None:
         "stale_bridge_gate_ignored": bool(manifest.get("stale_bridge_gate_ignored")),
         "bridge_gate": manifest.get("bridge_gate"),
         "component_validation_reports": manifest.get("component_validation_reports"),
+        "component_contracts_verified": True,
         "storage_mode": manifest.get("storage_mode"),
     }
     print(f"[SEGDESC:SUMMARY] records={len(rows)} parents={report['num_parents']} tasks={len(weighted)}")

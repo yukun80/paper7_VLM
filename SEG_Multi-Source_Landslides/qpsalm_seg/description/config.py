@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
+import math
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ DESCRIPTION_STAGES = (
     "bridge_auto", "bridge_expert", "predicted_mask",
 )
 DESCRIPTION_EVAL_MODES = ("gt_mask", "fixed_prediction", "end_to_end")
+D4_PREDICTED_MASK_FRACTIONS = (0.25, 0.50, 0.75)
 DEFAULT_JOINT_TASK_PATTERN = (
     "segmentation", "global_caption", "segmentation", "region_description",
 )
@@ -54,15 +56,24 @@ class SegDescConfig:
     max_generate_samples: int = 32
     max_new_tokens: int = 256
     evaluation_mode: str = "gt_mask"
+    evaluation_source_dataset: str | None = None
+    evaluation_region_source: str | None = None
     segmentation_mask_threshold: float = 0.5
     counterfactual_samples: int = 16
     counterfactual_modes: list[str] | None = None
+    cycle_localization_samples: int = -1
     checkpoint_metric: str = "auto"
     rsicap_mmrs_fraction: float = 0.30
     bridge_expert_task_pattern: list[str] | None = None
     predicted_mask_fraction: float = 0.25
+    d4_curriculum_sampling_seed: int = 42
     output_dir: str = "outputs/qpsalm_description/run"
     predicted_index: str | None = None
+    predicted_val_index: str | None = None
+    d_minus_one_gate: str | None = None
+    d4_curriculum_gate: str | None = None
+    d4_final_acceptance_gate: str | None = None
+    m6_acceptance_gate: str | None = None
     joint_global_stages: list[str] | None = None
     joint_region_stage: str = "bridge_expert"
     joint_task_pattern: list[str] | None = None
@@ -75,6 +86,28 @@ class SegDescConfig:
         return tuple(self.joint_task_pattern or DEFAULT_JOINT_TASK_PATTERN)
 
     def validate(self) -> None:
+        for name in (
+            "learning_rate",
+            "desc_adapter_lr_scale",
+            "weight_decay",
+            "max_grad_norm",
+            "segmentation_mask_threshold",
+            "rsicap_mmrs_fraction",
+            "predicted_mask_fraction",
+            "segmentation_retention_max_drop",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} 必须是有限数，当前={value!r}")
+        for name in (
+            "learning_rate", "desc_adapter_lr_scale", "max_grad_norm",
+        ):
+            if float(getattr(self, name)) <= 0.0:
+                raise ValueError(f"{name} 必须为正数")
+        if float(self.weight_decay) < 0.0:
+            raise ValueError("weight_decay 必须为非负数")
+        if not 0.0 <= float(self.segmentation_retention_max_drop) <= 1.0:
+            raise ValueError("segmentation_retention_max_drop 必须位于 [0,1]")
         if self.stage not in DESCRIPTION_STAGES:
             raise ValueError(f"未知 description stage={self.stage!r}")
         if self.region_protocol not in {"assisted", "vision_only"}:
@@ -90,23 +123,76 @@ class SegDescConfig:
             raise ValueError(f"未知 evaluation_mode={self.evaluation_mode!r}")
         if self.evaluation_mode == "end_to_end" and self.stage != "bridge_expert":
             raise ValueError("end_to_end evaluation 只支持 bridge_expert stage")
+        if self.evaluation_mode == "fixed_prediction" and self.stage != "predicted_mask":
+            raise ValueError("fixed_prediction evaluation 只支持 predicted_mask stage")
+        if self.evaluation_source_dataset is not None and (
+            self.stage != "rsicap_caption"
+            or self.evaluation_source_dataset != "RSIEval"
+        ):
+            raise ValueError(
+                "evaluation_source_dataset 当前只允许 rsicap_caption/RSIEval 正式测试"
+            )
+        if self.evaluation_region_source is not None and (
+            self.evaluation_region_source != "gt_global_mask"
+            or self.stage != "bridge_expert"
+            or self.evaluation_mode not in {"gt_mask", "end_to_end"}
+        ):
+            raise ValueError(
+                "evaluation_region_source 当前只允许 bridge_expert 的 "
+                "GT-mask/end-to-end 使用 gt_global_mask"
+            )
         if not 0.0 < float(self.segmentation_mask_threshold) < 1.0:
             raise ValueError("segmentation_mask_threshold 必须位于 (0,1)")
+        if int(self.cycle_localization_samples) < -1:
+            raise ValueError("cycle_localization_samples 必须为 -1（关闭）、0（全部）或正整数")
+        if int(self.cycle_localization_samples) >= 0 and (
+            self.stage != "bridge_expert"
+            or self.evaluation_mode != "gt_mask"
+            or self.region_protocol != "vision_only"
+        ):
+            raise ValueError(
+                "cycle localization 只允许 frozen expert Bridge 的 "
+                "Vision-only GT-mask 辅助评价"
+            )
         for name in (
             "batch_size", "grad_accum_steps", "max_steps", "log_interval",
             "val_interval", "save_interval", "joint_segmentation_batch_size",
-            "joint_description_batch_size",
+            "joint_description_batch_size", "max_new_tokens",
         ):
             if int(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} 必须为正整数")
+        for name in (
+            "seed", "warmup_steps", "num_workers", "max_train_samples",
+            "max_val_samples", "max_generate_samples", "counterfactual_samples",
+        ):
+            if int(getattr(self, name)) < 0:
+                raise ValueError(f"{name} 必须为非负整数")
+        if int(self.d4_curriculum_sampling_seed) < 0:
+            raise ValueError("d4_curriculum_sampling_seed 必须为非负整数")
         if self.stage == "predicted_mask" and not self.predicted_index:
             raise ValueError("predicted_mask stage 必须设置 predicted_index")
+        if self.stage == "mmrs_caption" and not self.d_minus_one_gate:
+            raise ValueError("D0 mmrs_caption 必须提供已通过的 d_minus_one_gate")
         if self.evaluation_mode == "fixed_prediction" and not self.predicted_index:
             raise ValueError("fixed_prediction evaluation 需要 predicted_index")
         for name in ("rsicap_mmrs_fraction", "predicted_mask_fraction"):
             value = float(getattr(self, name))
             if not 0.0 <= value < 1.0:
                 raise ValueError(f"{name} 必须位于 [0,1)，当前={value}")
+        if (
+            (
+                self.stage == "predicted_mask"
+                or self.joint_region_stage == "predicted_mask"
+            )
+            and not any(
+                abs(float(self.predicted_mask_fraction) - expected) < 1.0e-12
+                for expected in D4_PREDICTED_MASK_FRACTIONS
+            )
+        ):
+            raise ValueError(
+                "D4 predicted_mask_fraction 必须是预注册 curriculum tier "
+                f"{D4_PREDICTED_MASK_FRACTIONS}"
+            )
         bridge_tasks = self.bridge_expert_task_pattern or [
             "bridge", "bridge", "bridge", "dior", "global_caption",
         ]

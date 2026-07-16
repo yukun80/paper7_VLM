@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections import Counter
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,23 @@ from .threshold import (
 
 
 SAMPLE_IDENTITY_PROTOCOL = "qpsalm_segmentation_eval_population_v1"
+SEGMENTATION_EVAL_MANIFEST_PROTOCOL = (
+    "qpsalm_segmentation_eval_manifest_v3_replay_config_bound"
+)
+SEGMENTATION_EVAL_REPORT_BINDING_PROTOCOL = (
+    "qpsalm_segmentation_eval_report_binding_v2_replay_config"
+)
+SEGMENTATION_PREDICTION_POPULATION_PROTOCOL = (
+    "qpsalm_segmentation_prediction_population_v1_binary_sha256"
+)
+SEGMENTATION_PREDICTION_FIELDS = (
+    "sample_id",
+    "parent_sample_id",
+    "shape",
+    "prediction_sha256",
+    "target_sha256",
+    "valid_sha256",
+)
 SAMPLE_IDENTITY_FIELDS = (
     "sample_id",
     "parent_sample_id",
@@ -92,6 +110,79 @@ def evaluation_population_identity(metadata: list[dict[str, Any]]) -> dict[str, 
     }
 
 
+def segmentation_prediction_population(
+    rows: list[dict[str, Any]],
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    """Bind every thresholded prediction, target and valid mask by sample."""
+
+    normalized = [
+        {field: row.get(field) for field in SEGMENTATION_PREDICTION_FIELDS}
+        for row in rows
+    ]
+    normalized.sort(key=lambda row: str(row.get("sample_id") or ""))
+    sample_ids = [str(row.get("sample_id") or "") for row in normalized]
+    parent_ids = [str(row.get("parent_sample_id") or "") for row in normalized]
+    canonical = [
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for row in normalized
+    ]
+    return {
+        "protocol": SEGMENTATION_PREDICTION_POPULATION_PROTOCOL,
+        "fields": list(SEGMENTATION_PREDICTION_FIELDS),
+        "threshold": float(threshold),
+        "num_records": len(normalized),
+        "num_unique_sample_ids": len(set(sample_ids)),
+        "complete": all(sample_ids) and all(parent_ids),
+        "unique": len(sample_ids) == len(set(sample_ids)),
+        "sha256": hashlib.sha256(
+            "\n".join(canonical).encode("utf-8")
+        ).hexdigest(),
+        "rows": normalized,
+    }
+
+
+def validate_segmentation_prediction_population(value: Any) -> dict[str, Any]:
+    """Recompute a serialized prediction population instead of trusting its summary."""
+
+    if not isinstance(value, dict):
+        raise ValueError("segmentation prediction population 必须是 object")
+    if value.get("protocol") != SEGMENTATION_PREDICTION_POPULATION_PROTOCOL:
+        raise ValueError("segmentation prediction population protocol 不兼容")
+    if tuple(value.get("fields") or ()) != SEGMENTATION_PREDICTION_FIELDS:
+        raise ValueError("segmentation prediction population fields 不兼容")
+    if value.get("complete") is not True or value.get("unique") is not True:
+        raise ValueError("segmentation prediction population 必须 complete 且 unique")
+    rows = value.get("rows")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise ValueError("segmentation prediction population rows 非法")
+    for index, row in enumerate(rows):
+        if set(row) != set(SEGMENTATION_PREDICTION_FIELDS):
+            raise ValueError(f"segmentation prediction row={index} fields 非法")
+        shape = row.get("shape")
+        if (
+            not isinstance(shape, list)
+            or len(shape) != 2
+            or any(isinstance(item, bool) or not isinstance(item, int) or item <= 0 for item in shape)
+        ):
+            raise ValueError(f"segmentation prediction row={index} shape 非法")
+        for field in ("prediction_sha256", "target_sha256", "valid_sha256"):
+            digest = row.get(field)
+            if not isinstance(digest, str) or len(digest) != 64:
+                raise ValueError(f"segmentation prediction row={index} {field} 非法")
+    threshold = float(value.get("threshold"))
+    if not math.isfinite(threshold):
+        raise ValueError("segmentation prediction population threshold 必须有限")
+    rebuilt = segmentation_prediction_population(
+        rows,
+        threshold=threshold,
+    )
+    if rebuilt != value:
+        raise ValueError("segmentation prediction population 汇总与逐行重算不一致")
+    return rebuilt
+
+
 @torch.no_grad()
 def evaluate(
     model: MultiSourceQwenPSALMSeg,
@@ -110,6 +201,7 @@ def evaluate(
     sweep = {value: MetricAccumulator() for value in normalize_thresholds(threshold_sweep)}
     losses, loss_components = [], []
     reliability_records, query_records, proposal_records, saved = [], [], [], []
+    prediction_records: list[dict[str, Any]] = []
     evaluated_metadata: list[dict[str, Any]] = []
     coverage = {
         "family_combos": Counter(), "raw_combos": Counter(), "sensor_combos": Counter(),
@@ -144,6 +236,28 @@ def evaluate(
             ):
                 coverage[field][str(row.get(source, "unknown"))] += 1
         metrics = batch_binary_metrics(logits, target, threshold=threshold, valid_mask=valid)
+        probabilities = torch.sigmoid(logits.float())
+        for sample_index, row in enumerate(metadata):
+            valid_binary = valid[sample_index, 0] >= 0.5
+            prediction_binary = (
+                probabilities[sample_index, 0] >= float(threshold)
+            ) & valid_binary
+            target_binary = (target[sample_index, 0] >= 0.5) & valid_binary
+            mask_shape = list(prediction_binary.shape)
+            prediction_records.append({
+                "sample_id": str(row.get("sample_id") or ""),
+                "parent_sample_id": str(row.get("parent_sample_id") or ""),
+                "shape": mask_shape,
+                "prediction_sha256": hashlib.sha256(
+                    prediction_binary.to(torch.uint8).contiguous().numpy().tobytes()
+                ).hexdigest(),
+                "target_sha256": hashlib.sha256(
+                    target_binary.to(torch.uint8).contiguous().numpy().tobytes()
+                ).hexdigest(),
+                "valid_sha256": hashlib.sha256(
+                    valid_binary.to(torch.uint8).contiguous().numpy().tobytes()
+                ).hexdigest(),
+            })
         canvas_acc.update(metrics, metadata)
         original_acc.update(restored_original_space_metrics(logits, target, metadata, threshold, valid), metadata)
         for value, accumulator in sweep.items():
@@ -186,6 +300,10 @@ def evaluate(
             **{key: dict(sorted(value.items())) for key, value in coverage.items()},
             "max_batches": max_batches,
         },
+        "prediction_population": segmentation_prediction_population(
+            prediction_records,
+            threshold=threshold,
+        ),
         "threshold_sweep": compute_threshold_sweep_report(sweep),
         "metrics": metrics,
         "metrics_original_size": original_metrics,

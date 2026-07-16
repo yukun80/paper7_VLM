@@ -46,7 +46,7 @@ final system. Code existence must never be reported as experimental success.
 | M3 | Task-neutral backbone state and Description Vision Cache v1 implemented | Manual cache build, state-equivalence and cache-isolation validation |
 | M4 | Region encoder ablations and MGRR v2 implemented | Three-seed Small comparison, retrieval, ERFS, UFCR and counterfactual gates |
 | M5 | `desc_adapter`, causal JSON generation, raw parse/repair split and explicit checkpoint migration implemented | Overfit, reload and 24GB smoke tests |
-| M6 | D-1 and D0-D4 curricula, GT/fixed/end-to-end evaluation, OOF v2, factuality and paired CI implemented | Run the curriculum and complete expert/scientific evaluation |
+| M6 | D-1 and D0-D4 curricula, GT/fixed/end-to-end evaluation, OOF v3 source/checkpoint replay, factuality and paired CI implemented | Run the curriculum and complete expert/scientific evaluation |
 | M7 | Task-isolated alternating training and strict segmentation-retention gate implemented | Initialize from accepted M6 weights and pass exact-population full-val retention |
 
 Only after every Small gate passes may the project build and train the Full description system.
@@ -265,15 +265,27 @@ The evaluation gate starts as
 thresholds and explicitly set the v2 gate to `frozen_after_pilot`. The gate is bound to current
 Pilot, selection and candidate hashes.
 
+The current Bridge builder is `landslide_bridge_m2_v7_expert_review_replay_bound`. Its merge report
+also binds both reviewer sources, optional arbitration, the human gate source, every expert split,
+pending arbitration and the published gate under
+`landslide_bridge_expert_artifact_binding_v1_review_sources_and_outputs`; the validation report
+then independently replays the candidate/selection/reviewer/arbitration merge under
+`landslide_bridge_expert_review_replay_v1_exact_semantic_projection` and binds that merge report.
+The validator also recomputes decision rates, reviewer agreement, field disagreements,
+evidence/modality distributions, and expert edit statistics from those immutable sources.
+Frozen expert consumers and unified publication must require this semantic replay plus the live
+files and exact `expert_all` split projections. Older v4/v5/v6 Bridge artifacts must be rebuilt
+before human review and cannot be relabelled as v7.
+
 ### Unified index publication
 
 Current protocols:
 
 ```text
-builder:    qpsalm_segdesc_index_builder_v2_expert_gate_bound
+builder:    qpsalm_segdesc_index_builder_v3_component_contract_bound
 schema:     qpsalm_segdesc_index_v1
-validation: qpsalm_segdesc_index_validation_v2
-statistics: qpsalm_segdesc_index_statistics_v2
+validation: qpsalm_segdesc_index_validation_v3_component_contract_bound
+statistics: qpsalm_segdesc_index_statistics_v3_component_contract_bound
 ```
 
 Top-level task groups are:
@@ -298,20 +310,64 @@ Important current versions:
 ```text
 Description Vision Cache: task_neutral_parent_visual_features_v1
 MGRR:                    qpsalm_mgrr_v2_multiscale_grid_replay
+M4 seed gate:            qpsalm_description_seed_gate_v12_strict_json_finite
+M4 suite gate:           qpsalm_m4_region_encoder_suite_v8_strict_json_finite
 Description sequence:    qpsalm_description_causal_v4_stage_separated
 SegDesc checkpoint:      qpsalm_segdesc_v1
-Joint training:          qpsalm_segdesc_joint_v3_task_isolated
+Region data binding:     qpsalm_region_training_data_binding_v2_cache_candidate_bound
+Checkpoint provenance:  qpsalm_segdesc_checkpoint_provenance_v3_segmentation_lineage_bound
+Description evaluation: qpsalm_description_evaluation_v16_atomic_artifact_bound
+Evaluation publication: qpsalm_description_evaluation_publication_v1_artifact_bound
+Evaluation checkpoint:  qpsalm_description_evaluation_checkpoint_binding_v5_run_completion_bound
+Stage lineage:           qpsalm_description_stage_lineage_v3_run_completion_bound
+Checkpoint completion:  qpsalm_segdesc_checkpoint_run_completion_v1_selection_role_bound
+D-1 gate:                qpsalm_d_minus_one_engineering_gate_v7_training_completion_bound
+D-1 acceptance:          qpsalm_d_minus_one_acceptance_v5_training_completion_bound
+End-to-end target:       qpsalm_end_to_end_region_target_v3_source_bound
+D4 curriculum:           qpsalm_d4_curriculum_gate_v6_strict_json_finite
+M6 acceptance:           qpsalm_m6_acceptance_v10_strict_json_finite
+Joint training:          qpsalm_segdesc_joint_v7_strict_json_finite
+Joint initialization:    qpsalm_segdesc_joint_initialization_v4_run_completion_bound
+Joint progress:          qpsalm_segdesc_joint_progress_v3_parent_population_list_bound
+Segmentation lineage:    qpsalm_segmentation_migration_lineage_v1_source_bytes_bound
+Resume reconciliation:  qpsalm_segdesc_resume_reconciliation_v1_checkpoint_cursor_bound
+Description completion: qpsalm_description_training_completion_v3_checkpoint_replayed
+Joint completion:       qpsalm_segdesc_joint_training_completion_v3_checkpoint_replayed
+Terminal checkpoint:     qpsalm_segdesc_terminal_checkpoint_audit_v2_role_progress_replayed
+Segmentation eval:       qpsalm_segmentation_eval_manifest_v3_replay_config_bound
+M7 retention:            qpsalm_segdesc_retention_v22_run_completion_bound
+M7 seed gate:            qpsalm_segdesc_retention_seed_gate_v18_run_completion_bound
 ```
 
 - Keep `MultisourceBackboneState`, `SegmentationState`, and `RegionEvidenceState` distinct.
+- M3 cache construction must reject stale Description/Bridge builder generations before visual
+  encoding and bind both benchmark validation-report fingerprints alongside input-index hashes.
 - Global caption stages must not inject MGRR region tokens.
 - D0/D1 train global caption components; D2 starts region alignment/MGRR; D3a is auto Bridge;
   D3b requires frozen expert Bridge; D4 uses out-of-fold predicted masks.
 - `--resume` is only for the same stage/run. Use `--initialize-from` between D0-D4 stages.
+- Every D0-D4/M7 initialize or resume must retain the same original segmentation checkpoint
+  identity and revalidate its source bytes; a copied migration dictionary is not sufficient.
+- Resume must use the newest recoverable best/last state in that run. Archive and atomically
+  remove history rows newer than the checkpoint; never fork an active run timeline.
 - Never silently use `strict=False` to hide checkpoint incompatibility.
 - `default` is the segmentation adapter and `desc_adapter` is the description adapter. Only the
   adapter belonging to the current task may be active/trainable.
 - Main structured metrics use raw, unrepaired JSON. Deterministic repair is analysis-only.
+- Description JSON/JSONL artifacts use `allow_nan=False`; reject non-finite values before
+  replacing an existing atomic artifact, and use the shared strict decoder when formal gates
+  reopen benchmark, cache, report or review artifacts.
+- SegDesc checkpoint save/load/initialize/formal provenance must recursively reject non-finite
+  publishable metadata; represent an unavailable best score with `null`, never `-inf`.
+- Formal evaluation atomically materializes every consumed region mask and the cycle source,
+  valid, effective-prediction and effective-target masks as role-bound binary NPY artifacts;
+  gates reopen them and recompute projection, valid-mask application and pixel statistics instead
+  of trusting JSON counts. GT/fixed masks must also replay exactly from the bound source NPY plus
+  the lookup key, cache fingerprint and render transform reopened from the current M3 shard record.
+  The artifact directory must contain no unbound or `.part` files. Cycle valid masks must equal
+  the union of the shard record's view-valid masks. End-to-end
+  evaluation separately preserves the source-space online prediction and replays its projection
+  to the descriptor canvas.
 - GT-mask, fixed-prediction and end-to-end results must be reported separately.
 - OOF predicted masks must be generated by checkpoints that excluded the target parent fold.
 - M7 uses separate task DataLoaders and same-task gradient accumulation. Do not mix task types
@@ -409,7 +465,8 @@ Minimum stage gates:
    no `.part` file, and complete answer provenance.
 3. Bridge prepare is `awaiting_expert_review`, covers the requested Pilot quota and has no expert
    labels. Frozen Bridge requires complete reviews, zero pending arbitration, all three expert
-   splits, and a valid bound gate.
+   splits, a valid bound gate, immutable reviewer/arbitration sources, and a replayable v6 expert
+   artifact binding.
 4. Unified index line number, record ID, component hash, component validation hash, task mapping,
    split partition and expert publication state all match.
 5. MGRR enters the main model only after fixed-parent three-seed gains in expert factuality and

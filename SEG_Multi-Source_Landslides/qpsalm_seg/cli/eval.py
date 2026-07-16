@@ -17,6 +17,7 @@ SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -29,6 +30,14 @@ from qpsalm_seg.config import (
 )
 from qpsalm_seg.presets import PRESET_CHOICES, apply_preset
 from qpsalm_seg.runtime import torch_preflight
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def parse_args() -> argparse.Namespace:
@@ -113,13 +122,21 @@ def main() -> None:
 
     from qpsalm_seg.engine.checkpoint import load_checkpoint
     from qpsalm_seg.engine.common import build_eval_loader, build_model, resolve_device, utc_now, write_json
-    from qpsalm_seg.engine.evaluator import evaluate
+    from qpsalm_seg.engine.evaluator import (
+        SEGMENTATION_EVAL_MANIFEST_PROTOCOL,
+        SEGMENTATION_EVAL_REPORT_BINDING_PROTOCOL,
+        evaluate,
+        validate_segmentation_prediction_population,
+    )
+    from qpsalm_seg.engine.threshold import normalize_thresholds
     from qpsalm_seg.paths import resolve_repo_path
 
     device = resolve_device(args.device)
     loader = build_eval_loader(config, args.split)
     model = build_model(config, device)
     step = load_checkpoint(args.checkpoint, model)
+    checkpoint_path = resolve_repo_path(args.checkpoint) or Path(args.checkpoint)
+    checkpoint_sha256 = _sha256_file(checkpoint_path)
     out_dir = resolve_repo_path(config.output_dir) or Path(config.output_dir)
     if args.overwrite_output and out_dir.exists():
         shutil.rmtree(out_dir)
@@ -137,28 +154,45 @@ def main() -> None:
         threshold_sweep=config.threshold_sweep,
     )
     report["checkpoint_step"] = step
+    report_path = out_dir / "eval_report.json"
+    prediction_population = validate_segmentation_prediction_population(
+        report.get("prediction_population")
+    )
+    write_json(report_path, report)
+    report_binding = {
+        "protocol": SEGMENTATION_EVAL_REPORT_BINDING_PROTOCOL,
+        "path": str(report_path.resolve(strict=False)),
+        "sha256": _sha256_file(report_path),
+        "bytes": int(report_path.stat().st_size),
+        "prediction_population_sha256": prediction_population["sha256"],
+        "eval_threshold": float(report["threshold"]),
+        "threshold_sweep": normalize_thresholds(config.threshold_sweep),
+    }
     write_json(
         out_dir / "eval_manifest.json",
         {
+            "protocol": SEGMENTATION_EVAL_MANIFEST_PROTOCOL,
             "created_at_utc": utc_now(),
             "created_by": "qpsalm-eval",
             "checkpoint": str(args.checkpoint),
+            "checkpoint_sha256": checkpoint_sha256,
             "checkpoint_step": step,
             "split": args.split,
             "preset": config.preset,
             "visualize_all": bool(args.visualize_all),
             "export_multimodal_overview": bool(args.export_multimodal_overview),
             "resolved_config": dict(config.__dict__),
+            # 正式 retention 必须能证明读取的指标就是本次评估原子发布的报告。
+            "eval_report_binding": report_binding,
         },
     )
-    (out_dir / "eval_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if args.print_full_report:
         print(json.dumps(report, ensure_ascii=False))
     else:
         overall = (report.get("metrics") or {}).get("overall") or {}
         positive = (report.get("metrics") or {}).get("positive_only") or {}
         payload = {
-            "eval_report": str(out_dir / "eval_report.json"),
+            "eval_report": str(report_path),
             "checkpoint_step": step,
             "split": args.split,
             "n": (report.get("coverage") or {}).get("num_samples"),

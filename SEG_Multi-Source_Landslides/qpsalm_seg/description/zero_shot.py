@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
+import time
 from typing import Any
 
 from PIL import Image
@@ -15,18 +18,185 @@ from tqdm import tqdm
 from qpsalm_seg.controllers import select_qwen_model_class, validate_qwen_model_dir
 from qpsalm_seg.paths import resolve_project_path
 
+from .json_protocol import strict_json_loads
 from .metrics import bootstrap_mean_ci, caption_token_f1
 
 
-def _rows(benchmark: str | Path, split: str, max_samples: int) -> list[dict[str, Any]]:
+ZERO_SHOT_PROTOCOL = (
+    "qpsalm_qwen_zero_shot_global_caption_v3_materialized_image_bound"
+)
+ZERO_SHOT_INPUT_PROTOCOL = (
+    "qpsalm_d_minus_one_zero_shot_input_binding_v2_materialized_image"
+)
+DESCRIPTION_BUILDER_VERSION = "description_benchmark_m1_v4_answer_trace"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _input_audit(
+    benchmark: str | Path, split: str, max_samples: int, seed: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     root = resolve_project_path(benchmark) or Path(benchmark)
+    index_path = root / f"indexes/{split}.jsonl"
+    report_path = root / "reports/validation_report.json"
+    if not index_path.is_file() or not report_path.is_file():
+        raise FileNotFoundError(
+            f"zero-shot 缺少 Description index/report: {index_path}, {report_path}"
+        )
+    validation = strict_json_loads(report_path.read_text(encoding="utf-8"))
+    if (
+        validation.get("builder_version") != DESCRIPTION_BUILDER_VERSION
+        or validation.get("errors")
+        or int(
+            validation.get(
+                "verified_perceptual_duplicate_cross_split_groups", -1
+            )
+        ) != 0
+    ):
+        raise RuntimeError(
+            "zero-shot baseline 要求 engineering-valid Description M1.1 v4，"
+            "且 verified cross-split cluster 必须为零"
+        )
     values = [
-        json.loads(line)
-        for line in (root / f"indexes/{split}.jsonl").read_text(encoding="utf-8").splitlines()
+        strict_json_loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     values = [row for row in values if row.get("task_family") == "global_caption"]
-    return values[:max_samples] if max_samples > 0 else values
+    if max_samples > 0:
+        values = sorted(
+            values,
+            key=lambda row: hashlib.sha256(
+                f"{seed}:d-minus-one-zero-shot:{row['sample_id']}".encode()
+            ).hexdigest(),
+        )[:max_samples]
+    if not values:
+        raise RuntimeError("zero-shot global-caption population 为空")
+    sample_ids = [str(row.get("sample_id") or "") for row in values]
+    if (
+        any(not sample_id for sample_id in sample_ids)
+        or len(sample_ids) != len(set(sample_ids))
+        or any(str(row.get("split") or "") != str(split) for row in values)
+    ):
+        raise RuntimeError("zero-shot population sample_id/split 非法")
+    materialized_root = (root / "data").resolve(strict=False)
+    identities = []
+    image_identities = []
+    for row in values:
+        visual = dict(row.get("visual_ref") or {})
+        visual_ref = str(visual.get("path") or "")
+        expected_sha256 = str(visual.get("sha256") or "")
+        image_path = resolve_project_path(visual_ref)
+        if image_path is None or not image_path.is_file():
+            raise FileNotFoundError(
+                f"zero-shot materialized image 不存在: {visual_ref}"
+            )
+        try:
+            image_path.resolve(strict=False).relative_to(materialized_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"zero-shot image 不属于当前 M1.1 data/: {visual_ref}"
+            ) from exc
+        observed_sha256 = _sha256_file(image_path)
+        if (
+            visual.get("storage_mode") != "materialized_copy"
+            or len(expected_sha256) != 64
+            or observed_sha256 != expected_sha256
+        ):
+            raise RuntimeError(
+                f"zero-shot materialized image SHA/storage 非法: {visual_ref}"
+            )
+        image_identity = {
+            "visual_ref": visual_ref,
+            "visual_sha256": observed_sha256,
+        }
+        image_identities.append(image_identity)
+        identities.append({
+            "sample_id": str(row["sample_id"]),
+            "parent_sample_id": str(row["parent_sample_id"]),
+            "source_dataset": str(row["source_dataset"]),
+            "instruction_sha256": hashlib.sha256(
+                str(row["instruction"]).encode("utf-8")
+            ).hexdigest(),
+            "answer_sha256": sorted(
+                hashlib.sha256(
+                    str(answer.get("text") or "").encode("utf-8")
+                ).hexdigest()
+                for answer in row.get("answers", [])
+                if float(answer.get("caption_quality_weight", 1.0)) > 0
+            ),
+            **image_identity,
+        })
+    encoded = json.dumps(
+        identities,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return values, {
+        "protocol": ZERO_SHOT_INPUT_PROTOCOL,
+        "benchmark_root": str(root.resolve(strict=False)),
+        "builder_version": validation.get("builder_version"),
+        "index": str(index_path.resolve(strict=False)),
+        "index_sha256": _sha256_file(index_path),
+        "validation_report": str(report_path.resolve(strict=False)),
+        "validation_report_sha256": _sha256_file(report_path),
+        "split": str(split),
+        "requested_max_samples": int(max_samples),
+        "selected_samples": len(values),
+        "population_sha256": hashlib.sha256(encoded).hexdigest(),
+        "materialized_images": len(image_identities),
+        "materialized_image_population_sha256": hashlib.sha256(json.dumps(
+            image_identities,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")).hexdigest(),
+        "sampling_seed": int(seed),
+        "sampling_policy": "sha256_ranked_global_caption_v1",
+    }
+
+
+def _model_identity(model_dir: Path) -> dict[str, Any]:
+    files = {}
+    for name in (
+        "config.json", "generation_config.json", "preprocessor_config.json",
+        "processor_config.json", "tokenizer_config.json",
+    ):
+        path = model_dir / name
+        if path.is_file():
+            files[name] = _sha256_file(path)
+    if "config.json" not in files:
+        raise FileNotFoundError(f"Qwen model 缺少 config.json: {model_dir}")
+    encoded = json.dumps(
+        files,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    return {
+        "model_dir": str(model_dir.resolve(strict=False)),
+        "metadata_file_sha256": files,
+        "metadata_snapshot_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
 
 
 @torch.no_grad()
@@ -42,9 +212,11 @@ def evaluate_zero_shot_global_caption(
     seed: int,
     load_4bit: bool,
 ) -> dict[str, Any]:
+    model_dir = validate_qwen_model_dir(model_path)
+    rows, input_audit = _input_audit(benchmark, split, max_samples, seed)
+    model_audit = _model_identity(model_dir)
     from transformers import AutoProcessor, BitsAndBytesConfig
 
-    model_dir = validate_qwen_model_dir(model_path)
     processor = AutoProcessor.from_pretrained(str(model_dir), local_files_only=True)
     load_args: dict[str, Any] = {
         "local_files_only": True,
@@ -65,7 +237,6 @@ def evaluate_zero_shot_global_caption(
     if not load_4bit:
         model.to(device)
     model.eval()
-    rows = _rows(benchmark, split, max_samples)
     outputs = []
     scores = []
     for row in tqdm(rows, desc="qwen-zero-shot-caption", unit="sample"):
@@ -107,17 +278,49 @@ def evaluate_zero_shot_global_caption(
         })
     target = resolve_project_path(output_dir) or Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
-    (target / "raw_generations.jsonl").write_text(
-        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in outputs), encoding="utf-8"
+    _atomic_text(
+        target / "raw_generations.jsonl",
+        "".join(
+            json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n"
+            for row in outputs
+        ),
     )
+    generation_path = target / "raw_generations.jsonl"
+    nonempty = sum(bool(str(row["prediction"]).strip()) for row in outputs)
+    checks = {
+        "description_input_valid": input_audit["builder_version"]
+        == DESCRIPTION_BUILDER_VERSION,
+        "materialized_images_bound": input_audit["materialized_images"]
+        == len(rows),
+        "all_selected_samples_generated": len(outputs)
+        == int(input_audit["selected_samples"]),
+        "all_predictions_nonempty": nonempty == len(outputs),
+        "no_region_capability_claim": True,
+        "model_metadata_bound": bool(model_audit["metadata_snapshot_sha256"]),
+    }
+    errors = [name for name, passed in checks.items() if not passed]
     report = {
-        "protocol": "qpsalm_qwen_zero_shot_global_caption_v1",
+        "protocol": ZERO_SHOT_PROTOCOL,
+        "status": "engineering-valid" if not errors else "engineering-invalid",
         "split": split,
         "num_samples": len(outputs),
+        "num_nonempty_predictions": nonempty,
         "caption_token_f1": sum(scores) / max(len(scores), 1),
         "bootstrap_ci": bootstrap_mean_ci(scores, seed=seed),
+        "statistics_seed": int(seed),
         "load_4bit": load_4bit,
         "region_capability_claimed": False,
+        "input_audit": input_audit,
+        "model_audit": model_audit,
+        "raw_generations": str(generation_path.resolve(strict=False)),
+        "raw_generations_sha256": _sha256_file(generation_path),
+        "checks": checks,
+        "errors": errors,
     }
-    (target / "eval_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _atomic_text(
+        target / "eval_report.json",
+        json.dumps(
+            report, ensure_ascii=False, indent=2, allow_nan=False
+        ) + "\n",
+    )
     return report

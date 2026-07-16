@@ -9,7 +9,7 @@ SEG_Multi-Source_Landslides/configs/qpsalm_v2_small.yaml --preset qwen_psalm_ful
 --checkpoint outputs/qpsalm_v2/RUN/checkpoint_best.pt --source-index
 benchmark/landslide_region_description_v1_small/indexes/expert_val.jsonl --split val
 --output-dir outputs/qpsalm_description/predicted_val --device cuda
-主要输出：原尺寸 .npy mask、qpsalm_predicted_region_v1 JSONL 和 report.json。
+主要输出：原尺寸 .npy mask、qpsalm_predicted_region_v2_checkpoint_bound JSONL 和 report.json。
 写入行为：只写 --output-dir；train 未提供 fold 审计信息时会拒绝运行。
 所属流程：M6 D4 离线 predicted-mask curriculum。
 """
@@ -24,7 +24,10 @@ import shutil
 import torch
 
 from qpsalm_seg.config import apply_config_overrides, load_config
-from qpsalm_seg.paths import resolve_project_path
+from qpsalm_seg.paths import (
+    resolve_project_path,
+    validate_output_replacement_safety,
+)
 from qpsalm_seg.presets import PRESET_CHOICES, apply_preset
 
 
@@ -64,6 +67,24 @@ def main() -> None:
         "train_vflip_prob": 0.0,
     })
     output = resolve_project_path(args.output_dir) or Path(args.output_dir)
+    try:
+        validate_output_replacement_safety(output, {
+            "checkpoint": args.checkpoint,
+            "source-index": args.source_index,
+            "vision-feature-cache": args.vision_feature_cache,
+            "train-index": args.train_index,
+            "val-index": args.val_index,
+            "prediction-index": args.prediction_index,
+            "fold-manifest": args.fold_manifest,
+        })
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if output.exists() and not output.is_dir():
+        raise SystemExit(f"predicted-region output-dir 不是目录: {output}")
+    if output.is_dir() and any(output.iterdir()) and not args.overwrite_output:
+        raise SystemExit(
+            "predicted-region output-dir 已非空；请改用新目录或显式 --overwrite-output"
+        )
     if args.overwrite_output and output.exists():
         shutil.rmtree(output)
     from qpsalm_seg.description.predicted_regions import export_predicted_regions

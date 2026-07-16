@@ -24,6 +24,7 @@ from typing import Any
 
 from qpsalm_seg.paths import resolve_project_path
 from qpsalm_seg.schema import MODALITY_FAMILIES
+from qpsalm_seg.description.json_protocol import strict_json_loads
 
 
 REPORT_FORMAT = "qpsalm_ablation_evidence_v1"
@@ -65,7 +66,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = strict_json_loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"JSON 顶层必须是 object: {path}")
     return value
@@ -285,7 +286,12 @@ def _write(path_ref: str, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     try:
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(
+            json.dumps(
+                payload, ensure_ascii=False, indent=2, allow_nan=False
+            ) + "\n",
+            encoding="utf-8",
+        )
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

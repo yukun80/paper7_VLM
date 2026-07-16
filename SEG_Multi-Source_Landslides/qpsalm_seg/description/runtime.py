@@ -78,13 +78,21 @@ def description_parameter_groups(
     else:
         trainable_prefixes = (
             "description_backbone.", "mgrr.", "region_to_hidden.",
-            "description_view_to_hidden.", "alignment_text_projection.",
+            "description_view_to_hidden.",
         )
         direct_names = {
-            "region_type", "instruction_type", "visual_type", "alignment_temperature",
+            "region_type", "instruction_type", "visual_type",
         }
+        if config.stage == "bridge_expert":
+            trainable_prefixes += ("alignment_text_projection.",)
+            direct_names.add("alignment_temperature")
+    train_desc_adapter = not alignment_stage
     for name, parameter in model.named_parameters():
-        if f".{DESCRIPTION_ADAPTER_NAME}." in name and "lora_" in name:
+        if (
+            train_desc_adapter
+            and f".{DESCRIPTION_ADAPTER_NAME}." in name
+            and "lora_" in name
+        ):
             selected["desc_adapter"].append(parameter)
         elif name in direct_names or name.startswith(trainable_prefixes):
             no_decay = (
@@ -93,20 +101,14 @@ def description_parameter_groups(
             selected[
                 "description_modules_no_decay" if no_decay else "description_modules_decay"
             ].append(parameter)
-    if not selected["desc_adapter"]:
+    if train_desc_adapter and not selected["desc_adapter"]:
         raise RuntimeError("optimizer 未找到 desc_adapter LoRA 参数")
     if not selected["description_modules_decay"] and not selected["description_modules_no_decay"]:
         raise RuntimeError(f"optimizer 未找到 stage={config.stage} 对应的 description 参数")
     for values in selected.values():
         for parameter in values:
             parameter.requires_grad_(True)
-    return [
-        {
-            "name": "desc_adapter",
-            "params": selected["desc_adapter"],
-            "lr": config.learning_rate * config.desc_adapter_lr_scale,
-            "weight_decay": 0.0,
-        },
+    groups = [
         {
             "name": "description_modules_decay",
             "params": selected["description_modules_decay"],
@@ -120,6 +122,14 @@ def description_parameter_groups(
             "weight_decay": 0.0,
         },
     ]
+    if selected["desc_adapter"]:
+        groups.insert(0, {
+            "name": "desc_adapter",
+            "params": selected["desc_adapter"],
+            "lr": config.learning_rate * config.desc_adapter_lr_scale,
+            "weight_decay": 0.0,
+        })
+    return groups
 
 
 def description_trainable_parameter_manifest(

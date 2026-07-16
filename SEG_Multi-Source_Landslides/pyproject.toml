@@ -46,10 +46,23 @@ qpsalm-build-oof-folds = "qpsalm_seg.cli.build_oof_folds:main"
 qpsalm-merge-oof-predictions = "qpsalm_seg.cli.merge_oof_predictions:main"
 qpsalm-train-segdesc-joint = "qpsalm_seg.cli.train_segdesc_joint:main"
 qpsalm-eval-segdesc-retention = "qpsalm_seg.cli.eval_segdesc_retention:main"
+qpsalm-compare-segdesc-retention = "qpsalm_seg.cli.compare_segdesc_retention:main"
 qpsalm-compare-description-runs = "qpsalm_seg.cli.compare_description_runs:main"
 qpsalm-eval-description-zero-shot = "qpsalm_seg.cli.eval_description_zero_shot:main"
+qpsalm-validate-d-minus-one = "qpsalm_seg.cli.validate_d_minus_one:main"
+qpsalm-validate-d4-curriculum = "qpsalm_seg.cli.validate_d4_curriculum:main"
+qpsalm-validate-m4-region-encoder-suite = "qpsalm_seg.cli.validate_m4_region_encoder_suite:main"
+qpsalm-validate-m6-acceptance = "qpsalm_seg.cli.validate_m6_acceptance:main"
 qpsalm-demo-description = "qpsalm_seg.cli.demo_description:main"
 qpsalm-score-expert-factuality = "qpsalm_seg.cli.score_expert_factuality:main"
+qpsalm-score-caption-metrics = "qpsalm_seg.cli.score_caption_metrics:main"
+qpsalm-score-caption-human-review = "qpsalm_seg.cli.score_caption_human_review:main"
+
+[project.optional-dependencies]
+caption-eval = [
+  "bert-score>=0.3.13",
+  "pycocoevalcap>=1.2",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

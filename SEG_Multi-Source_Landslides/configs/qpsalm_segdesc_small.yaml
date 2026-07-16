@@ -29,13 +29,16 @@ max_val_samples: 256
 max_generate_samples: 32
 max_new_tokens: 256
 evaluation_mode: gt_mask
+evaluation_region_source: null
 segmentation_mask_threshold: 0.5
 counterfactual_samples: 16
+cycle_localization_samples: -1
 counterfactual_modes:
   - full_mask
   - zero_mask
   - shuffled_mask
   - region_swap
+  - cross_parent_region_swap
   - modality_removal
   - cross_parent_modality_swap
 checkpoint_metric: auto
@@ -47,6 +50,12 @@ bridge_expert_task_pattern:
   - dior
   - global_caption
 predicted_mask_fraction: 0.25
+d4_curriculum_sampling_seed: 42
+predicted_val_index: null
+d_minus_one_gate: null
+d4_curriculum_gate: null
+d4_final_acceptance_gate: null
+m6_acceptance_gate: null
 output_dir: outputs/qpsalm_description/small_bridge_auto
 joint_global_stages:
   - mmrs_caption

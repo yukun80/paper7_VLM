@@ -18,10 +18,14 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import traceback
 
 import torch
 
-from qpsalm_seg.paths import resolve_project_path
+from qpsalm_seg.paths import (
+    resolve_project_path,
+    validate_output_replacement_safety,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,22 +46,48 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     output = resolve_project_path(args.output_dir) or Path(args.output_dir)
+    try:
+        validate_output_replacement_safety(output, {
+            "model": args.model,
+            "benchmark": args.benchmark,
+        })
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if output.exists() and not output.is_dir():
+        raise SystemExit(f"zero-shot output-dir 不是目录: {output}")
     if args.overwrite_output and output.exists():
         shutil.rmtree(output)
+    elif output.is_dir() and any(output.iterdir()):
+        raise SystemExit(
+            "zero-shot output-dir 已非空；请改用新目录或显式 --overwrite-output"
+        )
+    output.mkdir(parents=True, exist_ok=True)
+    from qpsalm_seg.description.common import write_json
     from qpsalm_seg.description.zero_shot import evaluate_zero_shot_global_caption
 
-    report = evaluate_zero_shot_global_caption(
-        model_path=args.model,
-        benchmark=args.benchmark,
-        split=args.split,
-        output_dir=output,
-        device=torch.device(args.device),
-        max_samples=args.max_samples,
-        max_new_tokens=args.max_new_tokens,
-        seed=args.seed,
-        load_4bit=not args.no_4bit,
-    )
-    print(json.dumps(report, ensure_ascii=False))
+    try:
+        report = evaluate_zero_shot_global_caption(
+            model_path=args.model,
+            benchmark=args.benchmark,
+            split=args.split,
+            output_dir=output,
+            device=torch.device(args.device),
+            max_samples=args.max_samples,
+            max_new_tokens=args.max_new_tokens,
+            seed=args.seed,
+            load_4bit=not args.no_4bit,
+        )
+    except BaseException as exc:
+        (output / "eval_report.json").unlink(missing_ok=True)
+        write_json(output / "failure_report.json", {
+            "protocol": "qpsalm_qwen_zero_shot_failure_v2_no_partial_report",
+            "eval_report_published": False,
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        })
+        raise
+    print(json.dumps(report, ensure_ascii=False, allow_nan=False))
 
 
 if __name__ == "__main__":

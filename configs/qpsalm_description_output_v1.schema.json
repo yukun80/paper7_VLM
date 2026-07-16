@@ -35,7 +35,36 @@
       }
     },
     "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-    "summary": {"type": "string"}
-  }
+    "summary": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"target_status": {"const": "absent"}},
+        "required": ["target_status"]
+      },
+      "then": {
+        "properties": {
+          "region": {
+            "properties": {
+              "location": {"const": "unavailable"},
+              "size_class": {"const": "unavailable"},
+              "shape": {"const": "unavailable"},
+              "elongation": {"const": "unavailable"},
+              "compactness": {"const": "unavailable"},
+              "fragmentation": {"const": "unavailable"}
+            }
+          },
+          "evidence": {
+            "properties": {
+              "terrain_support": {"enum": ["insufficient_evidence", "unavailable"]},
+              "sar_support": {"enum": ["insufficient_evidence", "unavailable"]},
+              "deformation_support": {"enum": ["insufficient_evidence", "unavailable"]},
+              "evidence_sufficiency": {"enum": ["insufficient", "unavailable"]}
+            }
+          }
+        }
+      }
+    }
+  ]
 }
-

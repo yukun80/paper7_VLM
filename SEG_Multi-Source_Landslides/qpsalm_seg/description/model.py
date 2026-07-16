@@ -155,17 +155,11 @@ class SegmentationGroundedDescriptionModel(nn.Module):
         region_valid_mask: torch.Tensor | None = None,
         protocol: RegionProtocol = "vision_only",
     ) -> RegionEvidenceState:
-        if self.region_encoder_name in {"mgrr", "mgrr_no_context", "roi_replay_only"}:
-            return self.mgrr(
-                backbone,
-                region_masks,
-                region_valid_mask=region_valid_mask,
-                protocol=protocol,
-            )
         return self.mgrr(
             backbone,
             region_masks,
             region_valid_mask=region_valid_mask,
+            protocol=protocol,
         )
 
     def _description_region_state(

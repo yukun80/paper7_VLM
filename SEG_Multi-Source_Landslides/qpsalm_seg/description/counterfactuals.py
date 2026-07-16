@@ -20,6 +20,7 @@ from qpsalm_seg.schema import (
 
 COUNTERFACTUAL_MODES = (
     "full_mask", "zero_mask", "shuffled_mask", "region_swap",
+    "cross_parent_region_swap",
     "modality_removal", "cross_parent_modality_swap",
 )
 
@@ -71,10 +72,11 @@ def counterfactual_region_masks(region_masks: torch.Tensor, mode: str) -> torch.
         flat = region_masks.flatten(-2)
         shift = max(flat.shape[-1] // 3, 1)
         return torch.roll(flat.flip(-1), shifts=shift, dims=-1).view_as(region_masks)
-    if mode == "region_swap":
+    if mode in {"region_swap", "cross_parent_region_swap"}:
+        scope = "同一 parent" if mode == "region_swap" else "不同 parent"
         raise ValueError(
-            "region_swap 必须由 DescriptionTaskDataset 解析同一 parent 的真实区域；"
-            "禁止跨 parent 滚动或几何翻转伪造区域"
+            f"{mode} 必须由 DescriptionTaskDataset 解析{scope}的真实 donor 区域；"
+            "禁止用 batch 滚动或几何翻转伪造区域"
         )
     raise ValueError(f"未知 region counterfactual={mode!r}")
 

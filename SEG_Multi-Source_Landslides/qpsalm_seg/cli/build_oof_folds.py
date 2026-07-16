@@ -23,7 +23,10 @@ from pathlib import Path
 import shutil
 
 from qpsalm_seg.description.oof import build_oof_fold_indexes
-from qpsalm_seg.paths import resolve_project_path
+from qpsalm_seg.paths import (
+    resolve_project_path,
+    validate_output_replacement_safety,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +43,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     output = resolve_project_path(args.output_dir) or Path(args.output_dir)
+    try:
+        validate_output_replacement_safety(output, {
+            "segmentation-index": args.segmentation_index,
+            "bridge-index": args.bridge_index,
+        })
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if output.exists() and not output.is_dir():
+        raise SystemExit(f"OOF output-dir 不是目录: {output}")
     if output.exists():
         if not args.overwrite_output:
             raise FileExistsError(f"output 已存在，使用 --overwrite-output: {output}")

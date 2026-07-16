@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -19,17 +20,26 @@ from typing import Any
 
 from landslide_bridge_common import (
     BUILDER_VERSION,
+    EXPERT_ARTIFACT_BINDING_PROTOCOL,
+    EXPERT_REVIEW_REPLAY_PROTOCOL,
     REPO_ROOT,
     binary_mask,
     bridge_dir,
     ensure_writable,
+    expert_review_report_statistics,
+    file_artifact_binding,
     load_config,
     mask_digest,
     read_json,
     read_jsonl,
+    read_review_file,
+    replay_expert_review_merge,
     resolve_project_path,
     sha256_file,
     validate_bridge_structured_target,
+    validate_file_artifact_binding,
+    validate_frozen_evaluation_gate_science,
+    unique_review_rows,
     write_json,
 )
 
@@ -112,6 +122,30 @@ def validate_record(record: dict[str, Any], errors: list[str], mask_refs: set[st
         errors.append(f"{record_id}: candidate origin 非法")
     if not str(record["candidate"].get("summary") or "").strip():
         errors.append(f"{record_id}: candidate summary 为空")
+    structured_errors = validate_bridge_structured_target(
+        record.get("structured_targets"),
+        expected_target_status=str(record.get("target_status")),
+    )
+    if structured_errors:
+        errors.append(
+            f"{record_id}: structured_targets 非法 -> {structured_errors}"
+        )
+    candidate_errors = validate_bridge_structured_target(
+        record.get("candidate", {}).get("structured_output"),
+        expected_target_status=str(record.get("target_status")),
+    )
+    if candidate_errors:
+        errors.append(
+            f"{record_id}: candidate structured_output 非法 -> {candidate_errors}"
+        )
+    if (
+        record.get("candidate", {}).get("origin") == "deterministic_rules"
+        and record.get("candidate", {}).get("structured_output")
+        != record.get("structured_targets")
+    ):
+        errors.append(
+            f"{record_id}: deterministic candidate 必须逐字段复制 structured_targets"
+        )
 
     paths = _record_paths(record)
     if any(path.startswith("datasets/") for path in paths):
@@ -240,6 +274,230 @@ def _validate_files(output_dir: Path, referenced_masks: set[str], errors: list[s
         errors.append(f"存在缺失 region mask: {sorted(str(path) for path in missing)[:3]}")
 
 
+def _artifact_record_count(binding: Any, label: str, errors: list[str]) -> int | None:
+    if not isinstance(binding, dict) or not isinstance(binding.get("path"), str):
+        return None
+    path = resolve_project_path(binding["path"])
+    if not path.is_file():
+        return None
+    try:
+        if path.suffix.casefold() == ".csv":
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                return sum(1 for _ in csv.DictReader(handle))
+        return len(read_jsonl(path))
+    except Exception as exc:
+        errors.append(f"{label} artifact 无法读取记录数: {exc}")
+        return None
+
+
+def _validate_expert_artifact_binding(
+    output_dir: Path,
+    review_report: dict[str, Any],
+    *,
+    expert: list[dict[str, Any]],
+    split_rows: dict[str, list[dict[str, Any]]],
+    pending: list[dict[str, Any]],
+    errors: list[str],
+) -> dict[str, Any] | None:
+    """Replay raw sources, output bytes, and the exact expert merge semantics."""
+    binding = review_report.get("expert_artifact_binding")
+    if not isinstance(binding, dict):
+        errors.append("expert_review_report 缺少 expert_artifact_binding")
+        return None
+    if binding.get("protocol") != EXPERT_ARTIFACT_BINDING_PROTOCOL:
+        errors.append("expert artifact binding protocol 过期或非法")
+    if binding.get("builder_version") != BUILDER_VERSION:
+        errors.append("expert artifact binding builder_version 与当前 Bridge 不一致")
+    sources = binding.get("sources")
+    outputs = binding.get("outputs")
+    expected_source_keys = {
+        "reviewer_1", "reviewer_2", "arbitration", "evaluation_gate_source",
+    }
+    expected_output_paths = {
+        "expert_all": output_dir / "indexes/expert_all.jsonl",
+        "expert_train": output_dir / "indexes/expert_train.jsonl",
+        "expert_val": output_dir / "indexes/expert_val.jsonl",
+        "expert_test": output_dir / "indexes/expert_test.jsonl",
+        "pending_arbitration": output_dir / "indexes/pending_arbitration.jsonl",
+        "evaluation_gate": output_dir / "manifests/evaluation_gate_manifest.json",
+    }
+    if not isinstance(sources, dict) or set(sources) != expected_source_keys:
+        errors.append("expert artifact binding sources 集合不完整")
+        sources = sources if isinstance(sources, dict) else {}
+    if not isinstance(outputs, dict) or set(outputs) != set(expected_output_paths):
+        errors.append("expert artifact binding outputs 集合不完整")
+        outputs = outputs if isinstance(outputs, dict) else {}
+
+    for name in ("reviewer_1", "reviewer_2"):
+        source_binding = sources.get(name)
+        count = _artifact_record_count(source_binding, name, errors)
+        errors.extend(validate_file_artifact_binding(
+            source_binding,
+            label=name,
+            expected_records=count,
+        ))
+        if count != int(review_report.get("review_items", -1)):
+            errors.append(
+                f"{name} 记录数必须等于 review_items: "
+                f"expected={review_report.get('review_items')} observed={count}"
+            )
+    arbitration_binding = sources.get("arbitration")
+    if arbitration_binding is not None:
+        count = _artifact_record_count(arbitration_binding, "arbitration", errors)
+        errors.extend(validate_file_artifact_binding(
+            arbitration_binding,
+            label="arbitration",
+            expected_records=count,
+        ))
+    gate_source_binding = sources.get("evaluation_gate_source")
+    errors.extend(validate_file_artifact_binding(
+        gate_source_binding,
+        label="evaluation_gate_source",
+    ))
+    if isinstance(gate_source_binding, dict):
+        gate_source_path = resolve_project_path(
+            str(gate_source_binding.get("path") or "")
+        )
+        gate_output_path = expected_output_paths["evaluation_gate"]
+        if gate_source_path.is_file() and gate_output_path.is_file():
+            source_gate = read_json(gate_source_path)
+            expected_gate = dict(source_gate)
+            expected_gate["source_file"] = gate_source_binding.get("path")
+            if read_json(gate_output_path) != expected_gate:
+                errors.append(
+                    "published evaluation gate 不是 frozen gate source 的精确带来源副本"
+                )
+
+    expected_counts = {
+        "expert_all": len(expert),
+        "expert_train": len(split_rows.get("train", [])),
+        "expert_val": len(split_rows.get("val", [])),
+        "expert_test": len(split_rows.get("test", [])),
+        "pending_arbitration": len(pending),
+    }
+    for name, path in expected_output_paths.items():
+        errors.extend(validate_file_artifact_binding(
+            outputs.get(name),
+            label=name,
+            expected_path=path,
+            expected_records=expected_counts.get(name),
+        ))
+
+    semantic_replay: dict[str, Any] | None = None
+    try:
+        reviewer_paths = {
+            name: resolve_project_path(str(sources[name]["path"]))
+            for name in ("reviewer_1", "reviewer_2")
+            if isinstance(sources.get(name), dict)
+        }
+        if set(reviewer_paths) != {"reviewer_1", "reviewer_2"}:
+            raise ValueError("双审 source binding 不完整")
+        if reviewer_paths["reviewer_1"] == reviewer_paths["reviewer_2"]:
+            raise ValueError("两名独立 reviewer 不得绑定同一个物理文件")
+        source_paths = set(reviewer_paths.values())
+        for name in ("arbitration", "evaluation_gate_source"):
+            source_binding = sources.get(name)
+            if isinstance(source_binding, dict):
+                source_paths.add(
+                    resolve_project_path(str(source_binding.get("path") or ""))
+                )
+        output_paths = {
+            resolve_project_path(str(value.get("path") or ""))
+            for value in outputs.values()
+            if isinstance(value, dict)
+        }
+        collisions = source_paths & output_paths
+        if collisions:
+            raise ValueError(
+                "人工 review/gate source 与派生输出路径冲突: "
+                f"{sorted(str(path) for path in collisions)}"
+            )
+
+        left = unique_review_rows(
+            read_review_file(reviewer_paths["reviewer_1"], "reviewer_1"),
+            "reviewer_1",
+        )
+        right = unique_review_rows(
+            read_review_file(reviewer_paths["reviewer_2"], "reviewer_2"),
+            "reviewer_2",
+        )
+        arbitration_binding = sources.get("arbitration")
+        arbitration = (
+            unique_review_rows(
+                read_review_file(str(arbitration_binding["path"])),
+                "arbitration",
+            )
+            if isinstance(arbitration_binding, dict)
+            else {}
+        )
+        candidate_path = output_dir / "indexes/candidate_all.jsonl"
+        selection_path = output_dir / "manifests/review_selection.jsonl"
+        replay = replay_expert_review_merge(
+            candidates=read_jsonl(candidate_path),
+            selection=read_jsonl(selection_path),
+            reviewer_1=left,
+            reviewer_2=right,
+            arbitration=arbitration,
+        )
+        if replay["expert"] != expert:
+            errors.append(
+                "expert_all 不是 candidate/selection/双审/仲裁源的精确语义重放结果"
+            )
+        if replay["pending"] != pending:
+            errors.append(
+                "pending_arbitration 不是双审分歧与仲裁源的精确语义重放结果"
+            )
+        if review_report.get("final_decisions") != replay["final_decisions"]:
+            errors.append(
+                "expert_review_report final_decisions 与语义重放结果不一致"
+            )
+        replay_statistics = expert_review_report_statistics(
+            candidates=read_jsonl(candidate_path),
+            selection=read_jsonl(selection_path),
+            reviewer_1=left,
+            reviewer_2=right,
+            replay=replay,
+        )
+        statistics_mismatches = [
+            field
+            for field, expected in replay_statistics.items()
+            if review_report.get(field) != expected
+        ]
+        if statistics_mismatches:
+            errors.append(
+                "expert_review_report 审核统计不是 raw review/expert 的精确重算结果: "
+                f"{statistics_mismatches}"
+            )
+        semantic_replay = {
+            "protocol": EXPERT_REVIEW_REPLAY_PROTOCOL,
+            "candidate_index": file_artifact_binding(
+                candidate_path,
+                records=len(read_jsonl(candidate_path)),
+            ),
+            "review_selection": file_artifact_binding(
+                selection_path,
+                records=len(read_jsonl(selection_path)),
+            ),
+            "review_items": len(left),
+            "disputed_review_items": len(replay["disputed_review_item_ids"]),
+            "expert_records": len(replay["expert"]),
+            "pending_arbitration": len(replay["pending"]),
+            "final_decisions": replay["final_decisions"],
+            "review_report_statistics_verified": not statistics_mismatches,
+        }
+    except Exception as exc:
+        errors.append(f"expert review semantic replay 失败: {exc}")
+    return {
+        "protocol": EXPERT_ARTIFACT_BINDING_PROTOCOL,
+        "builder_version": BUILDER_VERSION,
+        "review_report": file_artifact_binding(
+            output_dir / "reports/expert_review_report.json"
+        ),
+        "merge_artifacts": binding,
+        "semantic_replay": semantic_replay,
+    }
+
+
 def _validate_expert(output_dir: Path, errors: list[str]) -> dict[str, Any]:
     required = [
         output_dir / "indexes/expert_all.jsonl",
@@ -255,12 +513,9 @@ def _validate_expert(output_dir: Path, errors: list[str]) -> dict[str, Any]:
     pending = read_jsonl(required[1])
     review_report = read_json(required[2])
     gate = read_json(required[3])
-    if gate.get("protocol") != "landslide_bridge_evaluation_gate_v2":
-        errors.append("evaluation gate protocol 不是 landslide_bridge_evaluation_gate_v2")
+    errors.extend(validate_frozen_evaluation_gate_science(gate))
     if pending:
         errors.append(f"仍有 {len(pending)} 条待仲裁记录")
-    if gate.get("frozen") is not True or gate.get("status") != "frozen_after_pilot":
-        errors.append("evaluation gate 尚未由用户冻结")
     binding_paths = {
         "pilot_parent_manifest_sha256": output_dir / "manifests/pilot_parent_manifest.jsonl",
         "review_selection_sha256": output_dir / "manifests/review_selection.jsonl",
@@ -277,23 +532,83 @@ def _validate_expert(output_dir: Path, errors: list[str]) -> dict[str, Any]:
         errors.append("evaluation gate builder_version 与当前 Bridge 不一致")
     if gate.get("bindings") != expected_bindings:
         errors.append("evaluation gate 与当前 Pilot/candidate hash 不一致")
-    thresholds = gate.get("thresholds") or {}
-    for key in ("no_target_rejection", "unsupported_claim_rate", "expert_fact_score"):
-        value = thresholds.get(key)
-        if not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0:
-            errors.append(f"evaluation gate 阈值非法: {key}={value!r}")
     if review_report.get("status") != "complete":
         errors.append("expert_review_report 尚未 complete")
+    if review_report.get("builder_version") != BUILDER_VERSION:
+        errors.append("expert_review_report builder_version 与当前 Bridge 不一致")
+    if review_report.get("frozen_evaluation_gate") is not True:
+        errors.append("expert_review_report 未绑定 frozen evaluation gate")
     if not isinstance(review_report.get("field_agreement"), dict) or not review_report["field_agreement"]:
         errors.append("expert_review_report 缺少字段级一致性统计")
+    if not isinstance(review_report.get("disputed_field_counts"), dict):
+        errors.append("expert_review_report 缺少 disputed field 统计")
+    disagreement = review_report.get("disagreement_distribution")
+    if not isinstance(disagreement, dict) or set(disagreement) != {
+        "region_source", "modality_family_combo", "evidence_level",
+    }:
+        errors.append("expert_review_report 缺少争议证据/模态分布")
+    for name in ("acceptance_rate", "modification_rate", "rejection_rate"):
+        value = review_report.get(name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not 0.0 <= float(value) <= 1.0
+        ):
+            errors.append(f"expert_review_report {name} 非法")
+    modifications = review_report.get("expert_modification_statistics")
+    required_modification_fields = {
+        "summary_mean_edit_distance_characters",
+        "summary_mean_normalized_edit_distance",
+        "factual_claim_modification_rate",
+        "structured_claim_fields_changed",
+        "structured_claim_fields_total",
+    }
+    if not isinstance(modifications, dict) or not required_modification_fields.issubset(
+        modifications
+    ):
+        errors.append("expert_review_report 缺少 summary/claim 修改统计")
     if int(review_report.get("pending_arbitration", -1)) != len(pending):
         errors.append("expert_review_report pending 数与索引不一致")
+    review_selection_path = output_dir / "manifests/review_selection.jsonl"
+    selection_count = (
+        len(read_jsonl(review_selection_path))
+        if review_selection_path.is_file() else -1
+    )
+    if int(review_report.get("review_items", -1)) != selection_count:
+        errors.append(
+            "expert_review_report 必须精确覆盖完整 review_selection: "
+            f"expected={selection_count} observed={review_report.get('review_items')!r}"
+        )
+    final_decisions = review_report.get("final_decisions")
+    try:
+        final_decision_count = (
+            sum(int(value) for value in final_decisions.values())
+            if isinstance(final_decisions, dict) else -1
+        )
+    except (TypeError, ValueError):
+        final_decision_count = -1
+    if final_decision_count != selection_count:
+        errors.append("expert_review_report final_decisions 未精确覆盖 review_selection")
+    split_rows: dict[str, list[dict[str, Any]]] = {}
     for split in ("train", "val", "test"):
         split_path = output_dir / f"indexes/expert_{split}.jsonl"
         if not split_path.is_file():
             errors.append(f"缺少 expert split index: {split_path}")
-        elif not read_jsonl(split_path):
-            errors.append(f"expert_{split}.jsonl 为空，Pilot 不能冻结该 split")
+            split_rows[split] = []
+        else:
+            split_rows[split] = read_jsonl(split_path)
+            if not split_rows[split]:
+                errors.append(f"expert_{split}.jsonl 为空，Pilot 不能冻结该 split")
+            expected_split_rows = [row for row in expert if row.get("split") == split]
+            if split_rows[split] != expected_split_rows:
+                errors.append(
+                    f"expert_{split}.jsonl 与 expert_all 的精确 split 投影不一致"
+                )
+    expert_ids = [str(row.get("bridge_record_id") or "") for row in expert]
+    if not all(expert_ids) or len(expert_ids) != len(set(expert_ids)):
+        errors.append("expert_all bridge_record_id 缺失或重复")
+    if int(review_report.get("expert_records", -1)) != len(expert):
+        errors.append("expert_review_report expert_records 与 expert_all 不一致")
     for row in expert:
         if row.get("review", {}).get("status") not in {"accepted", "revised", "arbitrated"}:
             errors.append(f"expert record 审核状态非法: {row.get('bridge_record_id')}")
@@ -307,10 +622,19 @@ def _validate_expert(output_dir: Path, errors: list[str]) -> dict[str, Any]:
             errors.append(
                 f"expert record structured target 非法: {row.get('bridge_record_id')} -> {target_errors}"
             )
+    artifact_binding = _validate_expert_artifact_binding(
+        output_dir,
+        review_report,
+        expert=expert,
+        split_rows=split_rows,
+        pending=pending,
+        errors=errors,
+    )
     return {
         "expert_records": len(expert),
         "pending_arbitration": len(pending),
         "gate_frozen": gate.get("frozen") is True,
+        "artifact_binding": artifact_binding,
     }
 
 
@@ -414,6 +738,7 @@ def main() -> None:
         "smoke_only" if not args.require_expert_complete and not errors else
         "invalid"
     )
+    expert_artifact_binding = expert_status.pop("artifact_binding", None)
     report = {
         "builder_version": BUILDER_VERSION,
         "mode": args.mode,
@@ -428,6 +753,7 @@ def main() -> None:
             row["region_source"] for row in rows["candidates"]
         ).items())),
         "expert": expert_status,
+        "expert_artifact_binding": expert_artifact_binding,
         "errors": errors,
         "warnings": warnings,
     }

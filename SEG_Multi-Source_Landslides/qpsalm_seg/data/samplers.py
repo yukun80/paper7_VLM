@@ -48,6 +48,8 @@ def largest_remainder_quota(total: int, labels: list, weights: list[float]) -> d
 class TaskBalancedSizeBucketBatchSampler(Sampler[list[int]]):
     """Draw task-balanced batches with homogeneous spatial and Qwen sequence load."""
 
+    protocol = "qpsalm_task_balanced_size_bucket_v2_epoch_addressable"
+
     def __init__(self, dataset, batch_size: int, *, shuffle: bool, seed: int, drop_last: bool = False, task_weights: dict[str, float] | None = None, balance_tasks: bool = True) -> None:
         self.dataset = dataset
         self.batch_size = max(1, int(batch_size))
@@ -57,6 +59,12 @@ class TaskBalancedSizeBucketBatchSampler(Sampler[list[int]]):
         self.task_weights = {**TASK_WEIGHTS, **(task_weights or {})}
         self.balance_tasks = bool(balance_tasks)
         self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        """Expose deterministic epoch addressing without changing legacy iteration."""
+        if int(epoch) < 0:
+            raise ValueError("sampler epoch must be non-negative")
+        self.epoch = int(epoch)
 
     def __iter__(self) -> Iterator[list[int]]:
         grouped: dict[tuple[int, int], dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))

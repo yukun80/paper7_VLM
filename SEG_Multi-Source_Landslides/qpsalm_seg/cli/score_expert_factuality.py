@@ -8,7 +8,7 @@ qpsalm_seg.cli.score_expert_factuality --eval-dir outputs/RUN/eval_gt --write-te
 --output outputs/RUN/eval_gt/expert_review_template.jsonl
 审核后命令：同一入口提供两次 --review，并将 --output 指向 expert_factuality_report.json。
 主要输入：raw_generations.jsonl 和人工填写的 review JSONL。
-主要输出：审核模板或 qpsalm_expert_region_factuality_v1 报告。
+主要输出：审核模板或 qpsalm_expert_region_factuality_v2_source_revalidated 报告。
 写入行为：只写 --output；不会修改模型输出或审核文件。
 所属流程：M6 正式 ERFS 主要终点评价。
 """
@@ -46,10 +46,16 @@ def main() -> None:
             raise ValueError("--write-template 与 --review 不能同时使用")
         rows = build_expert_review_template(args.eval_dir)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
-            encoding="utf-8",
+        encoded = "".join(
+            json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n"
+            for row in rows
         )
+        temporary = output.with_suffix(output.suffix + ".tmp")
+        try:
+            temporary.write_text(encoded, encoding="utf-8")
+            temporary.replace(output)
+        finally:
+            temporary.unlink(missing_ok=True)
         print(json.dumps({"template": str(output), "num_samples": len(rows)}, ensure_ascii=False))
         return
     if len(args.review) < args.minimum_reviewers:
@@ -70,4 +76,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

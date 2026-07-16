@@ -20,13 +20,19 @@ from typing import Any
 from segdesc_common import (
     BUILDER_VERSION,
     INDEX_SCHEMA,
+    SEGMENTATION_INSTRUCTION_REPORT,
     TASK_WEIGHTS,
+    bridge_expert_artifact_errors,
     bridge_publication_policy,
+    component_contract_errors,
+    component_validation_contract,
     ensure_output,
     project_ref,
     read_json,
     read_jsonl,
     resolve_path,
+    segmentation_instruction_contract_errors,
+    segmentation_instruction_validation_contract,
     sha256_file,
     write_json,
     write_jsonl,
@@ -47,23 +53,68 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _validated(root: Path) -> dict[str, Any]:
+def _validated(root: Path, *, component: str, mode: str) -> dict[str, Any]:
     path = root / "reports/validation_report.json"
     if not path.is_file():
         raise FileNotFoundError(f"缺少 validation report: {path}")
     report = read_json(path)
     if report.get("errors"):
         raise ValueError(f"component validation errors 非空: {path}")
+    contract_errors = component_contract_errors(
+        component, report, mode=mode, root=root,
+    )
+    if contract_errors:
+        raise ValueError(
+            f"component validation contract 过期: {component}:{path}: "
+            + "; ".join(contract_errors)
+        )
+    if component == "bridge" and report.get("status") == "expert_pilot_frozen":
+        artifact_errors = bridge_expert_artifact_errors(root, report)
+        if artifact_errors:
+            raise ValueError(
+                "frozen Bridge expert artifact contract 无效: "
+                + "; ".join(artifact_errors)
+            )
     return report
 
 
-def _validation_binding(root: Path, report: dict[str, Any]) -> dict[str, Any]:
+def _validation_binding(
+    root: Path,
+    report: dict[str, Any],
+    *,
+    component: str,
+    mode: str,
+) -> dict[str, Any]:
     path = root / "reports/validation_report.json"
     return {
         "path": project_ref(path),
         "sha256": sha256_file(path),
         "status": report.get("status"),
         "errors": len(report.get("errors") or []),
+        "contract": component_validation_contract(
+            component, mode=mode, root=root,
+        ),
+    }
+
+
+def _segmentation_instruction_binding(root: Path) -> dict[str, Any]:
+    path = root / SEGMENTATION_INSTRUCTION_REPORT
+    if not path.is_file():
+        raise FileNotFoundError(f"缺少 segmentation instruction validation report: {path}")
+    report = read_json(path)
+    if report.get("errors"):
+        raise ValueError(f"segmentation instruction validation errors 非空: {path}")
+    contract_errors = segmentation_instruction_contract_errors(report, root=root)
+    if contract_errors:
+        raise ValueError(
+            f"segmentation instruction validation contract 过期: {path}: "
+            + "; ".join(contract_errors)
+        )
+    return {
+        "path": project_ref(path),
+        "sha256": sha256_file(path),
+        "errors": len(report.get("errors") or []),
+        "contract": segmentation_instruction_validation_contract(root),
     }
 
 
@@ -75,7 +126,8 @@ def _record_id(row: dict[str, Any]) -> str:
 
 
 def _task_row(
-    row: dict[str, Any], *, component: str, task_group: str, index: Path, line_number: int,
+    row: dict[str, Any], *, component: str, task_group: str, index: Path,
+    index_sha256: str, line_number: int,
 ) -> dict[str, Any]:
     record_id = _record_id(row)
     parent = str(row.get("parent_sample_id") or record_id)
@@ -86,7 +138,7 @@ def _task_row(
         "unified_record_id": hashlib.sha256(key.encode()).hexdigest()[:24],
         "component": component,
         "component_index": project_ref(index),
-        "component_index_sha256": sha256_file(index),
+        "component_index_sha256": index_sha256,
         "component_line_number": int(line_number),
         "component_record_id": record_id,
         "parent_sample_id": parent,
@@ -101,16 +153,21 @@ def _task_row(
 def _append(rows: list[dict[str, Any]], index: Path, component: str, task_group_fn) -> None:
     source = read_jsonl(index)
     digest = sha256_file(index)
+    added_by_task: Counter[str] = Counter()
     for line_number, row in enumerate(source, start=1):
         task_group = task_group_fn(row)
         if task_group is None:
             continue
         value = _task_row(
             row, component=component, task_group=task_group,
-            index=index, line_number=line_number,
+            index=index, index_sha256=digest, line_number=line_number,
         )
-        value["component_index_sha256"] = digest
         rows.append(value)
+        added_by_task[task_group] += 1
+    print(
+        f"[SEGDESC:INDEX] component={component} source={index.name} "
+        f"records={sum(added_by_task.values())} tasks={dict(sorted(added_by_task.items()))}"
+    )
 
 
 def main() -> None:
@@ -119,9 +176,13 @@ def main() -> None:
     description = resolve_path(args.description_benchmark or f"benchmark/qpsalm_description_v2_{args.mode}")
     bridge = resolve_path(args.bridge_benchmark or f"benchmark/landslide_region_description_v1_{args.mode}")
     output = resolve_path(args.output_dir or f"benchmark/multisource_landslide_segdesc_v1_{args.mode}")
-    description_report = _validated(description)
-    segmentation_report = _validated(segmentation)
-    bridge_report = _validated(bridge)
+    description_report = _validated(
+        description, component="description", mode=args.mode,
+    )
+    segmentation_report = _validated(
+        segmentation, component="segmentation", mode=args.mode,
+    )
+    bridge_report = _validated(bridge, component="bridge", mode=args.mode)
     bridge_status = str(bridge_report.get("status") or "")
     ensure_output(output, args.overwrite, args.dry_run)
 
@@ -176,9 +237,22 @@ def main() -> None:
         "mode": args.mode,
         "components": components,
         "component_validation_reports": {
-            "segmentation": _validation_binding(segmentation, segmentation_report),
-            "description": _validation_binding(description, description_report),
-            "bridge": _validation_binding(bridge, bridge_report),
+            "segmentation": {
+                **_validation_binding(
+                    segmentation, segmentation_report,
+                    component="segmentation", mode=args.mode,
+                ),
+                "instruction_validation": _segmentation_instruction_binding(
+                    segmentation,
+                ),
+            },
+            "description": _validation_binding(
+                description, description_report,
+                component="description", mode=args.mode,
+            ),
+            "bridge": _validation_binding(
+                bridge, bridge_report, component="bridge", mode=args.mode,
+            ),
         },
         "bridge_status": bridge_status,
         "bridge_gate": (
