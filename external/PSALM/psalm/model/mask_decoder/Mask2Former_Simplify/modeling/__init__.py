@@ -1,1 +1,0 @@
-from .MaskFormerModel import MaskFormerModel
