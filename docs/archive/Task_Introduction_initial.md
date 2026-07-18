@@ -1,3 +1,10 @@
+# 初始多源滑坡分割研究任务书（历史归档）
+
+> 归档状态：这是项目早期的研究任务与教学交付草案，不是当前 benchmark、模型协议或
+> 运行手册。当前运行命令以仓库根目录 `README.md` 为准，分割算法以
+> `SEG_Multi-Source_Landslides/ALGORITHM.md` 为准，SegDesc 科学设计以
+> `docs/benchmark_GAR.md` 为准。
+
 # 一、研究背景说明
 
 当前工程和科研问题是：现有滑坡遥感分割模型通常只能处理固定输入形式，例如只用高分辨率光学图像，或固定使用 Sentinel-2 + Sentinel-1 + DEM 的多模态组合。但在真实地质灾害监测中，不同区域、不同灾害事件、不同数据来源往往只有部分传感器可用：有的区域只有高分辨率光学影像，有的区域只有 Sentinel-2 多光谱影像，有的区域有 SAR，有的区域有 DEM 或同期 InSAR 形变速率。也就是说，真实场景中的输入模态是不完整、不统一、不等尺度的。
@@ -112,13 +119,6 @@
 输出是什么：U-Net/DeepLab/SegFormer/Mask2Former 等模型结果。
 注意什么：baseline 必须公平，不能只选很弱模型；每个模态组合至少要有一个传统模型对比。
 如何进入下一步：baseline 结果作为新模型性能参照。
-(qwen3vl) yukun80@SARLAB4090:~/codes/paper7_VLM$ /home/yukun80/miniconda3/envs/qwen3vl/bin/qpsalm-train   --config SEG_Multi-Source_Landslides/configs/qpsalm_small_qwen_text_probe.yaml   --device cuda   --batch-size 1   --target-size 128   --num-workers 4   --max-steps 1000
-Loading weights: 100%|███████████████████████████████████████████████████| 625/625 [00:00<00:00, 3350.40it/s]
-step=0 epoch=0 loss=1.5967 lr=4e-05 iou=0.0000 dice=0.0000
-step=1 epoch=0 loss=1.3100 lr=6e-05 iou=0.0000 dice=0.0000
-step=2 epoch=0 loss=1.3026 lr=8e-05 iou=0.0000 dice=0.0000
-step=3 epoch=0 loss=1.2207 lr=0.0001 iou=0.0000 dice=0.0000
-step=4 epoch=0 loss=1.4743 lr=0.0001 iou=0.0000 dice=0.0000
 
 步骤 6：实现 Multi-Source Qwen-PSALM-Seg 原型。
 这一步做什么：搭建 Qwen3-VL-2B + modality adapter + PSALM-style mask tokens + mask proposal decoder。

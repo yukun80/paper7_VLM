@@ -1,5 +1,9 @@
 # SANE-QMEF-PMRD Algorithm
 
+> Canonical scope: this file defines the current segmentation algorithm and its known validation
+> boundaries. Runnable commands belong in the repository root `README.md`; SegDesc design and
+> scientific gates belong in `docs/benchmark_GAR.md`.
+
 ## Problem Scope
 
 Multi-Source Qwen-PSALM-Seg solves single-temporal or contemporaneous multi-source landslide instruction segmentation. A sample may contain any number of optical, multispectral, SAR, terrain, and deformation products with different channel counts, native H/W, GSD, validity, and quality. The model predicts a semantic landslide mask through a set of mask proposals; it does not use a bounding-box branch.
@@ -94,3 +98,34 @@ The task-balanced sampler allocates the epoch-wide batch quota before assigning 
 Instruction and visual truthfulness are evaluated with paired reports from the same checkpoint, split, preset, and exact sample IDs. Normal evidence must outperform each of shuffled/fixed-generic/no-semantic instructions and shuffled/text-only/at-least-one-family-removed visual evidence on a composite of final-mask, proposal-selection, component, and paired/no-target sensitivity metrics. Image-text delta is reported as a strategy comparison rather than assumed to be a degradation baseline.
 
 The staged presets are `raw_sane_baseline`, `raw_sane_qmef`, `raw_sane_qmef_pmrd`, `pretrained_sane_qmef_pmrd`, `qwen_mask_query_frozen`, and `qwen_psalm_full`. The full Qwen preset first warms up the dense segmentation path and controller-side prompts, then activates the final four language-block LoRA adapters at a lower learning rate. A module should be treated as a validated contribution only after improving positive-only IoU/Dice, instruction sensitivity, or component-set metrics in at least two of three fixed-small-v2 seeds.
+
+## Known Limitations and Unvalidated Hypotheses
+
+These boundaries are current implementation facts or unresolved experimental questions. They
+must not be rewritten as demonstrated scientific contributions before the corresponding tests
+pass.
+
+- **Cached Qwen evidence is not a native online multimodal forward.** The language decoder is
+  conditioned on cached multi-view visual tokens. Dense localization comes from SANE/QMEF/PMRD;
+  the paper must not claim complete end-to-end Qwen3-VL visual grounding or native image-grid
+  mRoPE equivalence.
+- **Reliability may attenuate evidence more than once.** Reliability weights affect fused
+  features, query attention, query context and PMRD detail gating. Null-mass and context-norm
+  distributions require explicit monitoring before this can be claimed as calibrated evidence
+  rejection.
+- **QMEF coordinate conventions are not fully unified.** Native feature resizing uses
+  `align_corners=False`, while parts of deformable sampling use `align_corners=True`. Small-object
+  and boundary claims require a controlled alignment test or an implementation correction.
+- **Renderer channels are qualitative views.** The SAR difference channel clips source `VV-VH`
+  to a normalized interval, and DEM hillshade/slope views are derived from normalized elevation
+  rather than physical elevation differences and GSD. They must not be described as calibrated
+  dB contrast, physical slope angle or physical hillshade.
+- **Sixteen mask queries are a preset, not a proven optimum.** Component-count statistics and
+  controlled 8/16/32-query comparisons are still required; connected components must not be
+  presented as human landslide instances.
+- **Checkpoint selection optimizes positive-only Dice by default.** Empty-target false positives
+  and instruction sensitivity remain separate diagnostics. Any composite selection rule must be
+  frozen on validation data before it is used for a scientific comparison.
+
+The earlier reasoning and wider issue inventory are retained only as a historical snapshot in
+`docs/archive/opt_refactor_algo_2026-07.md`.

@@ -82,34 +82,15 @@ MultisourceBackboneState
 - `qpsalm_description_vision_cache_v1` 独立于 segmentation Vision Cache v3，按 parent 缓存，
   禁止包含 instruction、region mask、答案或 segmentation state。
 - Qwen 基座共享，`default` adapter 用于分割，`desc_adapter` 用于描述；每个 batch 只激活一个。
-- `crop_only`、`full_image_box`、`masked_pooling`、`roi_replay_only`、
-  `mgrr_no_context` 和 `mgrr` 使用同一 trainer/evaluator，便于受控消融。
-- `mgrr` 使用 `qpsalm_mgrr_v2_multiscale_grid_replay`，在 detail/high/mid/low 上执行
-  `7×7/7×7/4×4/2×2` 网格 replay；组件目录只解析一次并由全部模态共享，残余斑块不使用
-  union bbox。
-- D0/D1 全图 caption 只消费 task-neutral visual tokens，并冻结 MGRR 与 description spatial
-  backbone；D2 首次训练区域 replay/alignment，D3/D4 才训练完整描述模块。
-- 描述 causal sequence 协议为 `qpsalm_description_causal_v4_stage_separated`；v3 实验描述
-  checkpoint 不兼容，分割 checkpoint 与视觉 cache 不受影响。
-- 描述 checkpoint 协议为 `qpsalm_segdesc_v1`。跨 D-stage 使用 `--initialize-from`，同 stage
-  中断续训才使用 `--resume`。
+- description causal sequence 使用
+  `qpsalm_description_causal_v5_stage_separated_schema_ordered`，checkpoint 使用
+  `qpsalm_segdesc_v1`；跨 D-stage 使用 `--initialize-from`，同 stage 中断续训才使用 `--resume`。
+- D0/D1 是全图 caption，D2 首次启用区域 replay，D3a 是 auto Bridge；D3b 及其后的专家路径
+  必须等待冻结的真实 Bridge。
+- M6 分开报告 GT-mask、fixed-prediction 和 end-to-end；M7 使用独立 task DataLoader 和
+  exact-population segmentation retention，不允许用 monitor subset 代替正式门禁。
 
-M6 支持 GT-mask、fixed-prediction 和 end-to-end 三套评价，以及 full/zero/shuffled mask、
-region swap、modality removal 和 cross-parent modality swap。其中 region swap 只接受同一
-parent 的另一个真实 mask/box；没有候选时记为覆盖不足，禁止用跨 parent batch 滚动或 mask
-翻转替代。cross-parent modality swap 也会按 `parent_sample_id` 选择 donor 并记录来源，同
-parent 的不同 instruction 不会被当成跨图对照，且不依赖 eval batch 大小。D4 的 train
-predicted masks 必须
-来自 parent-level OOF segmentation checkpoint；代码会核验 fold train/holdout index hash 和
-checkpoint 内记录的训练索引、逐 mask hash/shape 和完整 fold 覆盖。独立描述 eval 默认完整
-split 和完整 generation，反事实报告同时给出 paired target-score/claim-count bootstrap CI。
-M7 使用独立 segmentation/global-caption/region-description DataLoader 交替训练，并且只有
-训练开始前冻结的 monitor baseline 在 resume 后保持相同 population identity，周期 monitor
-才可用于 checkpoint 选择；`--resume` 不能与 `--overwrite-output` 同时使用。最终只有
-完整 val 的样本身份 SHA-256 与基线完全一致、样本身份完整且无重复、阈值相同和 checkpoint
-明确来自 joint stage，才能通过正式 positive Dice retention gate。旧版不含
-`coverage.sample_population` 的 baseline 报告必须用当前评估器重新生成。
-
-当前代码提供 M0-M7 工程路径，但 M2 专家审核、Small 三 seed MGRR 门槛和 M7 retention
-仍必须由人工运行后才能宣称科学验收。完整的手动命令、顺序和准入条件统一维护在仓库根目录
-[README.md](../README.md)，研究协议见 [docs/benchmark_GAR.md](../docs/benchmark_GAR.md)。
+当前 M1.1、M3、D-1 和 D0 已通过 Small 工程门禁；M2 仍是
+`awaiting_expert_review`，下一训练阶段是 D1。工程通过不等于科学验收。完整命令与当前状态只在
+仓库根目录 [README.md](../README.md) 维护；分割算法见 [ALGORITHM.md](ALGORITHM.md)，SegDesc
+研究协议见 [docs/benchmark_GAR.md](../docs/benchmark_GAR.md)。

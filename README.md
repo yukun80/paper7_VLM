@@ -284,77 +284,31 @@ python -m qpsalm_seg.cli.segdesc cache verify \
 
 ## Segmentation-Grounded Description M3-M7
 
-代码使用 `qpsalm_segdesc_config_v2`，将 model/data/training/evaluation/joint 分成显式
-dataclass section；D-1、D0-D4 的数据源、region-token 策略、初始化角色和人工门禁集中在
-`StageSpec`。统一入口为 `python -m qpsalm_seg.cli.segdesc`（editable 安装后也可使用
-`qpsalm-segdesc`）；其中 `train d-minus-one` 固化 64 样本/100 step 工程预算，并将 batch size
-默认设为 2（显式覆盖也必须至少为 2）；`evaluate zero-shot` 固化 64 条输入，
-`train joint` 进入 M7。旧 `python -m qpsalm_seg.cli.*` 命令暂时只作为薄转发保留。
-运行时代码只通过显式 section 访问配置；`resolved_config.json`、checkpoint 与 resume binding
-均保存完整的嵌套 v2 object。旧 flat config/checkpoint 不会由运行时隐式补默认值或兼容加载。
-训练 batch 将 `structured_outputs`（JSON/free-text 输出格式）与 `use_region_tokens`
-（全图/区域视觉路由）作为两个独立字段；因此 DIOR box 可以保持自由文本目标，同时仍显式经过
-MGRR，不能因输出不是 JSON 而退化为全图 caption。
+统一入口为 `python -m qpsalm_seg.cli.segdesc`（editable 安装后也可使用
+`qpsalm-segdesc`）；旧 `python -m qpsalm_seg.cli.*` 命令仅作为薄转发保留。配置使用
+`qpsalm_segdesc_config_v2`，D-1、D0-D4 的数据源、region-token 路由、初始化角色和人工门禁由
+`StageSpec` 固定。公开状态、MGRR、双 Adapter、输出 schema 和 artifact replay 的设计依据统一见
+[docs/benchmark_GAR.md](docs/benchmark_GAR.md)；本 README 只维护可运行命令及其准入条件。
 
-以下命令均从仓库根目录手动运行。`--resume` 只用于同一 stage 中断续训，会恢复优化器、
-scheduler、Python/NumPy/Torch CPU/CUDA RNG，以及每条训练 stream 的 epoch/batch cursor；
-`--initialize-from` 用于进入下一个 stage，只加载模型权重并重置该 stage 的优化状态。
-训练器会核对 checkpoint metadata 中的 stage，并强制
-`D0 -> D1 -> D2 -> D3a -> D3b -> D4`。D-1 与 D0 都从 segmentation checkpoint 新建，
-但 D0 必须额外提供当前 D-1 v13 统一门禁；由此产生的 v11 acceptance 会沿后续 checkpoint lineage 传播并在
-M7/full-val retention 时重新验证。后续 stage 缺少前序 `--initialize-from` 或试图跳级都会在
-加载权重前失败。
-跨 stage 与独立评价同时绑定 checkpoint 的选择角色：D3a/工程 bridge-auto 只能使用
-`terminal_last`，其余有 validation 的 D0/D1/D2/D3b/D4 正式迁移与评价只能使用
-`validation_best`。复制或重命名文件不会改变该内部角色，并且脱离原 run completion 后会被
-`qpsalm_description_evaluation_checkpoint_binding_v5_run_completion_bound` 拒绝。
-当消融实验显式改变 `region_encoder` 时，初始化器只重新初始化该 encoder，并严格迁移其余
-共享参数；迁移报告会记录跳过的 region keys。其他架构差异仍会直接失败。
-不得用 `--resume` 跨越 D0-D4。M2 专家数据未冻结前，可继续运行不依赖专家真值的 M3-M5、
-D-1、D0-D2 和 D3a 工程验证；D3b、正式 M4 科学门禁、D4、M6 专家验收及 M7 最终验收仍等待
-冻结的专家 Bridge，不能把 auto-only/candidate 输出作为正式科学结果。
+以下命令均从仓库根目录手动运行。`--resume` 只用于同一 stage、同一 run，会恢复优化器、
+scheduler、RNG、数据游标和历史；`--initialize-from` 只用于进入下一 stage，并重置优化状态。
+训练顺序固定为 `D0 -> D1 -> D2 -> D3a -> D3b -> D4`，不得跳级或用 resume 跨 stage。
+D3a 工程训练消费 `terminal_last`，具有正式 validation 的迁移与评价消费
+`validation_best`；复制或重命名 checkpoint 不会改变角色。
 
-训练 CLI 对输出目录采用单 run 所有权：新 run 的目录必须为空（或显式
-`--overwrite-output`），`--resume` 必须引用同一输出目录中的 checkpoint，并保留原历史和审计。
-M3–M7 输出路径还必须与 config、benchmark、cache、checkpoint、prediction index 和 gate 输入完全
-隔离；即使目录尚不存在，也不能把新输出建在这些重放证据内部，覆盖时更不能包含任一输入。
-resume 还会逐字段核对 checkpoint 保存的完整 config；学习率、scheduler 总步数、梯度累积、
-task pattern、数据比例等任一变化都必须新建 run，跨 stage 只能使用 `--initialize-from`。
-当前 D0-D4 使用 `qpsalm_description_training_progress_v1_loader_cursor_bound`，M7 使用
-`qpsalm_segdesc_joint_progress_v3_parent_population_list_bound`。两者都把有序数据 population、sampler、
-worker 配置、每 epoch batch 数和下一 microbatch 位置写入 checkpoint；旧 checkpoint 若缺少
-RNG/progress 字段只能作为协议允许的 `--initialize-from` 来源，不能继续 `--resume`。
-当前 `qpsalm_segdesc_resume_reconciliation_v1_checkpoint_cursor_bound` 还要求恢复点不早于同目录
-best/last；若崩溃前已写入晚于 checkpoint 的 history 行，会先逐字节归档再原子回退 active
-history，禁止重复 step 或从旧 checkpoint 分叉同一 run。
-所有 D-1/D0-D4、正式 description evaluation、M7 训练和 retention 命令都应显式传入
-`--seed`。跨 D-stage 初始化及进入 M7 时，源 checkpoint 保存的训练 seed 必须与目标 seed
-一致；评价报告也同时绑定 checkpoint seed 与 runtime seed。更换 seed 必须从该 seed 的 D0
-重新建立完整训练链，不能把不同 seed 的中间 checkpoint 拼接后重新命名。
-独立训练与 M7 都会原子写入 `failure_report.json` 或 checkpoint-replayed v3
-`training_report.json`；后者不仅绑定 last checkpoint、active history、progress/coverage 和核心
-manifest 的 SHA，还要求终态内部声明 `checkpoint_role=terminal_last`，并从 checkpoint 本体重放
-最终 step、stage、progress protocol/cursor，三者与
-训练返回值不一致时写失败终态。磁盘 progress/coverage 必须与 checkpoint metadata 逐字段相等，
-history 必须严格递增并恰好结束于 checkpoint step；这些文件的二次 binding 还要与 completion
-artifact binding 一致。独立训练与 M7 的具体协议分别为
-`qpsalm_description_training_completion_v3_checkpoint_replayed` 和
-`qpsalm_segdesc_joint_training_completion_v3_checkpoint_replayed`。当前
-`qpsalm_segdesc_checkpoint_run_completion_v1_selection_role_bound` 会进一步把实际消费的
-`validation_best` 或 `terminal_last` 与同目录成功 completion、selection report 和 terminal
-证据绑定；D0–D4 跨阶段初始化、正式评价、M7 初始化与 retention 都使用该检查。合法 resume 会先把旧失败
-报告归档进 `failure_history.json`，已有成功终态的
-目录则禁止再次 resume。旧的只含启动 manifest、没有这两类终态报告的目录不能视为成功，也不要
-继续追加。
+每个输出目录只属于一个 run，且不得位于 config、benchmark、cache、checkpoint、prediction
+index 或 gate 输入内部。所有训练和正式评价显式传入 `--seed`；更换 seed 必须从对应 D0
+重建完整链。成功运行以原子发布的 `training_report.json` 和绑定 checkpoint 为准，失败运行以
+`failure_report.json` 为准；只有启动 manifest 的目录不能视为完成。完整的 resume reconciliation、
+selection-role 和 completion replay 字段由 GAR 定义，运行时会严格重验。
 
-当前 M4 使用 `qpsalm_mgrr_v2_multiscale_grid_replay`：四尺度 RoI 网格为
-`7×7/7×7/4×4/2×2`，由两个 learnable queries 压缩，并单独记录 component coverage 与
-residual ratio。该协议改变了 MGRR 参数形状和描述序列协议；此前生成的实验性 segdesc
-checkpoint 不兼容，需要从分割 checkpoint 重新开始 D-1/D0，而 segmentation checkpoint 和
-两类 vision cache 无需因此重建。
-不同缓存 view 的原生尺寸或长宽比不一致时，region 与 component mask 会先移除 reference
-view 的 renderer padding，再经规范化源坐标映射到目标 view 的 resize/pad canvas；MGRR 和
-三种单向量 baseline 共用该路径，并在 diagnostics 中记录 `view_transform_retargeted`。
+M2 未冻结前，只允许继续 M3–M5、D-1、D0–D2 和 D3a 等不依赖专家真值的工程路径。
+D3b、正式 M4、D4、M6 专家验收和 M7 最终验收必须等待真实 Bridge 冻结；candidate 或
+auto-only 文本不得作为 expert val/test。
+
+M4 使用 `qpsalm_mgrr_v2_multiscale_grid_replay`。其多尺度 replay、component/residual、跨 view
+坐标映射和六种 region encoder 的精确定义见 GAR；旧实验性 SegDesc checkpoint 不兼容，
+但现有 segmentation checkpoint 和两类 vision cache 不因此重建。
 
 先发布只含 component 引用、hash 和精确 JSONL 行号的统一索引。它不复制 M1/M2 图片或 mask，
 并绑定三个 component validation report。v3 publication contract 还会独立核对 Landslide V2
@@ -1869,5 +1823,8 @@ PYTHONPATH=SEG_Multi-Source_Landslides python -B -m unittest \
   SEG_Multi-Source_Landslides/tests/test_segdesc_architecture.py -v
 ```
 
-分割算法设计见 [docs/opt_refactor_algo.md](docs/opt_refactor_algo.md)，描述 benchmark、MGRR、
-双 Adapter、训练课程和科学门槛见 [docs/benchmark_GAR.md](docs/benchmark_GAR.md)。
+当前分割算法与已知限制见
+[SEG_Multi-Source_Landslides/ALGORITHM.md](SEG_Multi-Source_Landslides/ALGORITHM.md)，描述
+benchmark、MGRR、双 Adapter、训练课程和科学门槛见
+[docs/benchmark_GAR.md](docs/benchmark_GAR.md)。早期研究任务与重构评审只保留在
+`docs/archive/`，不作为当前运行或协议依据。

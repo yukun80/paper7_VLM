@@ -10,7 +10,7 @@ data/**/mask/mask.npy 和已有 preview/visual.png。
 主要输出：data/**/referring/**/mask.npy、preview/referring.png、
 indexes/referring_target_*.jsonl 和 sample_meta.json 中的 referring_targets。
 写入行为：不会读取或改写 datasets/，也不会重写已有模态 .npy；会写 referring 派生产物。
-所属流程：benchmark 构建 1-6；当前主模型不直接使用 referring 数据，但 benchmark 流程保留该产物。
+所属流程：benchmark 构建 1-6；referring targets 进入 instruction segmentation、Bridge 与后续区域任务。
 推荐运行命令：
   python scripts/1-benchmark/1-6_build_referring_targets.py \
     --benchmark-dir benchmark/multisource_landslide_v2_small

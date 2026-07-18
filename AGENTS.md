@@ -31,8 +31,9 @@ The first description architecture is sequential rather than a single monolithic
 encode_multisource -> segment -> build region evidence -> describe
 ```
 
-The governing description plan is `docs/benchmark_GAR.md`. The older segmentation refactor
-rationale is in `docs/opt_refactor_algo.md`. Read both before changing model contracts.
+The governing description plan is `docs/benchmark_GAR.md`. The current segmentation contract and
+known limitations are in `SEG_Multi-Source_Landslides/ALGORITHM.md`. Read both before changing
+model contracts; files under `docs/archive/` are historical context only.
 
 ## 2. Current Research Status
 
@@ -41,51 +42,31 @@ final system. Code existence must never be reported as experimental success.
 
 | Stage | Engineering state | Scientific/manual gate still required |
 | --- | --- | --- |
-| M0/M1/M1.1 | Description Small rebuilt with current v4 protocol: 40,963 records, 19,685 parents, `errors == []`, zero verified cross-split clusters | RSIEval 943/936 warning remains documented; Full is not authorized |
-| M2 | Current v7 prepare is engineering-valid: 33,114 regions, complete 300-parent 180/60/60 Pilot, 485 review items, zero expert labels | Two independent reviews, arbitration, and a frozen Pilot gate; current status is `awaiting_expert_review` |
-| M3 | M3 v3 strict cache migration/deep validation passed: 25,239 records, 99 shards, 24,212,256,037 reused bytes | Engineering-valid; preserve the old cache and segmentation Vision Cache v3 as read-only sources |
+| M0/M1/M1.1 | Description Small v4 is engineering-valid with zero verified cross-split clusters | Preserve the documented RSIEval count warning; Full is not authorized |
+| M2 | Bridge v7 prepare is engineering-valid and the 300-parent Pilot package is complete | Current status is `awaiting_expert_review`; two reviews, arbitration and a human-frozen gate remain |
+| M3 | Description Vision Cache v1 M3 v3 migration and deep validation passed | Preserve the old cache and segmentation Vision Cache v3 as read-only sources |
 | M4 | Region encoder ablations and MGRR v2 implemented | Three-seed Small comparison, retrieval, ERFS, UFCR and counterfactual gates |
-| M5 | D-1 v13 engineering gate passed, including zero-shot, 100-step overfit, stateful strict reload, structured raw JSON and 24 GiB gate | Engineering-valid; this is not M4 expert/scientific evidence |
-| M6 | D-1 and D0-D4 curricula, GT/fixed/end-to-end evaluation, OOF v3 source/checkpoint replay, factuality and paired CI implemented; D0 Small completed 1,000 steps with completion v3 | Run D1, D2 and D3a; D3b/D4/formal expert acceptance wait for frozen M2 |
+| M5 | D-1 zero-shot/overfit/reload/structured-output/24 GiB engineering gate passed | This is not M4 expert or scientific evidence |
+| M6 | D0 Small completed; D0-D4 and the three evaluation modes are implemented | Run D1, D2 and D3a; D3b/D4/formal expert acceptance wait for frozen M2 |
 | M7 | Task-isolated alternating training and strict segmentation-retention gate implemented | Initialize from accepted M6 weights and pass exact-population full-val retention |
 
 Only after every Small gate passes may the project build and train the Full description system.
 
 ### Current artifact snapshot
 
-This snapshot was re-audited on 2026-07-18; still re-check live reports before every new run:
+This orientation was re-audited on 2026-07-18. Exact counts, hashes, warnings and scores belong in
+the live reports and the root README, not in this policy file:
 
-- `../benchmark/multisource_landslide_v2_small` final validation has 5,561 parents and
-  `errors == []`; 11 GDCLD preview low-contrast warnings remain part of the quality record.
-- `../benchmark/qpsalm_description_v2_small` is current
-  `description_benchmark_m1_v4_answer_trace`: 40,963 records, 19,685 parents,
-  `errors == []`, and zero verified perceptual cross-split groups. Its only warning records the
-  local RSIEval 943 QA versus README 936 discrepancy.
-- `../benchmark/landslide_region_description_v1_small` is current Bridge v7 prepare with
-  33,114 records, complete 300-parent 180/60/60 Pilot, 485 review items, zero expert labels and
-  status `awaiting_expert_review`. Candidate/auto text is not expert truth.
-- `../benchmark/multisource_landslide_segdesc_v1_small` is current reference-only Unified v3:
-  96,069 records, 27,982 parents, component contracts verified, zero expert records and no
-  expert index publication.
-- `outputs/qpsalm_description/cache/small_vision_v1_m3v3` passed strict M3 v3 migration and
-  validation: 25,239 records, 99 shards and 24,212,256,037 reused bytes; all published replay,
-  hardlink and segmentation source-cache checks are true.
-- `outputs/qpsalm_description/d_minus_1_gate_structured_v2_seed42.json` is current v13 with
-  `status=engineering-valid`, `d_minus_one_complete=true`, all checks true and `errors=[]`.
-- `outputs/qpsalm_description/d0_preflight_seed42/preflight_report.json` is current v6 with
-  `ready=true`, `optimizer_steps=0`, all checks true and a unique formal launch.
-- `outputs/qpsalm_description/d0_mmrs_seed42/training_report.json` is completion v3 with
-  `terminal_status=completed`, 1,000 steps, terminal-last at step 1000 and best score
-  0.5602917596. Its 256-parent dev monitor generated only 32 captions; do not present that
-  monitor score as a complete scientific evaluation. The next runnable curriculum stage is D1
-  initialized from this run's `checkpoint_best.pt`.
-- The completed segmentation run is
-  `outputs/qpsalm_v2/small_qwen_b4_bf16_nockpt`. It contains best/last checkpoints, full-val
-  evaluation, galleries, and training manifests. The last reported full-val metrics were
-  approximately IoU `0.3975`, Dice `0.4758`, positive IoU `0.3055`, and positive Dice `0.3959`.
-  Verify the current `eval_report.json` before quoting them.
-- The worktree was clean immediately before this documentation sync. Future tasks must still
-  preserve any new user edits and must not restore user-deleted files under `external/`.
+- Landslide V2 Small, Description M1.1 Small, auto-only Unified v3, M3 migration and D-1 are
+  engineering-valid.
+- Bridge remains `awaiting_expert_review`; it contains no expert truth and publishes no expert
+  Unified rows.
+- D0 completed successfully. Preserve its run and start D1 from its `checkpoint_best.pt` using
+  the root README command.
+- D3b, formal expert M4/M6 evaluation, D4 scientific acceptance and M7 final acceptance remain
+  blocked by their stated human/scientific gates.
+- Before every new run, reopen the relevant validation/gate/completion reports and run
+  `git status --short`; never infer current state from this dated orientation alone.
 
 ## 3. Collaboration Rules
 
@@ -321,43 +302,12 @@ all match.
 
 ### M3-M7 model protocols
 
-Important current versions:
-
-```text
-Description Vision Cache: task_neutral_parent_visual_features_v1
-MGRR:                    qpsalm_mgrr_v2_multiscale_grid_replay
-M4 seed gate:            qpsalm_description_seed_gate_v12_strict_json_finite
-M4 suite gate:           qpsalm_m4_region_encoder_suite_v8_strict_json_finite
-Description sequence:    qpsalm_description_causal_v5_stage_separated_schema_ordered
-Structured generation:   qpsalm_description_structured_generation_v2_token_stream_bound
-SegDesc checkpoint:      qpsalm_segdesc_v1
-Region data binding:     qpsalm_region_training_data_binding_v2_cache_candidate_bound
-Checkpoint provenance:  qpsalm_segdesc_checkpoint_provenance_v3_segmentation_lineage_bound
-Description evaluation: qpsalm_description_evaluation_v17_structured_decoder_bound
-Evaluation publication: qpsalm_description_evaluation_publication_v1_artifact_bound
-Evaluation checkpoint:  qpsalm_description_evaluation_checkpoint_binding_v5_run_completion_bound
-Stage lineage:           qpsalm_description_stage_lineage_v3_run_completion_bound
-Checkpoint completion:  qpsalm_segdesc_checkpoint_run_completion_v1_selection_role_bound
-D-1 overfit:             qpsalm_d_minus_one_overfit_validation_v10_structured_decoder_bound
-D-1 gate:                qpsalm_d_minus_one_engineering_gate_v13_structured_decoder_bound
-D-1 acceptance:          qpsalm_d_minus_one_acceptance_v11_structured_decoder_bound
-D0 preflight:            qpsalm_d0_preflight_v6_region_route_bound
-D0 preflight acceptance: qpsalm_d0_preflight_acceptance_v6_region_route_consumed
-End-to-end target:       qpsalm_end_to_end_region_target_v3_source_bound
-D4 curriculum:           qpsalm_d4_curriculum_gate_v6_strict_json_finite
-M6 acceptance:           qpsalm_m6_acceptance_v10_strict_json_finite
-Joint training:          qpsalm_segdesc_joint_v7_strict_json_finite
-Joint initialization:    qpsalm_segdesc_joint_initialization_v4_run_completion_bound
-Joint progress:          qpsalm_segdesc_joint_progress_v3_parent_population_list_bound
-Segmentation lineage:    qpsalm_segmentation_migration_lineage_v1_source_bytes_bound
-Resume reconciliation:  qpsalm_segdesc_resume_reconciliation_v1_checkpoint_cursor_bound
-Description completion: qpsalm_description_training_completion_v3_checkpoint_replayed
-Joint completion:       qpsalm_segdesc_joint_training_completion_v3_checkpoint_replayed
-Terminal checkpoint:     qpsalm_segdesc_terminal_checkpoint_audit_v2_role_progress_replayed
-Segmentation eval:       qpsalm_segmentation_eval_manifest_v3_replay_config_bound
-M7 retention:            qpsalm_segdesc_retention_v22_run_completion_bound
-M7 seed gate:            qpsalm_segdesc_retention_seed_gate_v18_run_completion_bound
-```
+Do not copy the complete version inventory into this policy file. Reopen
+`SEG_Multi-Source_Landslides/qpsalm_seg/description/protocols/versions.py`, the owning
+evaluation/training modules and the live artifact before changing or quoting a protocol. The
+stable public boundaries are Description Vision Cache v1, `qpsalm_segdesc_v1`,
+`MultisourceBackboneState`, `SegmentationState` and `RegionEvidenceState`; exact gate/report
+generations remain code-owned.
 
 - Keep `MultisourceBackboneState`, `SegmentationState`, and `RegionEvidenceState` distinct.
 - M3 cache construction must reject stale Description/Bridge builder generations before visual
@@ -402,76 +352,14 @@ protocol tests remain functional when the environment has not yet been reinstall
 
 ## 8. Manual Workflows
 
-Run all commands from the repository root with the `qwen3vl` environment activated. The agent
-should provide these commands but not execute them unless explicitly asked.
+The root `README.md` is the only run manual for benchmark construction, cache migration,
+segmentation, D-1, D0-D4, OOF, expert evaluation, M7, demos and tests. Run commands from the
+repository root with `qwen3vl` active. The agent may quote the exact relevant command but must not
+maintain a second abbreviated workflow here or improvise around a published gate.
 
-### Landslide Benchmark V2 Small
-
-```bash
-SMALL_LIMIT=500 bash scripts/run_1_build_benchmark.sh small
-bash scripts/run_2_build_instruction_dataset.sh small
-```
-
-`SMALL_LIMIT` means a parent limit per `dataset_name + split`, not a global split limit.
-
-### Description M1.1 Small rebuild
-
-```bash
-RUN_CONTROL=--overwrite \
-DESCRIPTION_COPY_WORKERS=8 \
-PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
-bash scripts/run_3_build_description_benchmark.sh small
-```
-
-### M2 prepare
-
-```bash
-BRIDGE_STAGE=prepare \
-BRIDGE_PILOT_PARENTS=300 \
-RUN_CONTROL=--overwrite \
-PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
-bash scripts/run_4_build_landslide_bridge.sh small
-```
-
-Do not invent completed reviewer files or a frozen gate. Merge only after the user supplies real
-reviews, arbitration where needed, and a filled gate.
-
-### Unified index
-
-```bash
-RUN_CONTROL=--overwrite \
-PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
-bash scripts/run_5_build_segdesc_dataset.sh small
-```
-
-### Segmentation training
-
-```bash
-BENCHMARK_SIZE=small \
-PRESET=qwen_psalm_full \
-SEED=42 \
-RUN_NAME=small_qwen_b4_bf16_nockpt \
-RUN_CONTROL=--overwrite \
-CACHE_CONTROL=reuse \
-bash SEG_Multi-Source_Landslides/scripts/run_qpsalm_experiment.sh
-```
-
-Do not overwrite the existing completed run unless the user explicitly requests retraining with
-that same name.
-
-### Protocol tests
-
-```bash
-PYTHONPATH=SEG_Multi-Source_Landslides \
-python -B -m unittest \
-  SEG_Multi-Source_Landslides/tests/test_description_benchmark.py \
-  SEG_Multi-Source_Landslides/tests/test_landslide_bridge.py \
-  SEG_Multi-Source_Landslides/tests/test_segdesc_unified_index.py \
-  SEG_Multi-Source_Landslides/tests/test_segdesc_protocol.py -v
-```
-
-For complete D0-D4, OOF, expert factuality, three-seed comparison, M7 and demo commands, use the
-root `README.md`; do not duplicate or improvise abbreviated scientific workflows.
+Do not overwrite accepted benchmark, cache or run directories unless the user explicitly requests
+that exact rebuild. Bridge merge still requires real reviewer files, arbitration where needed and
+a human-frozen gate.
 
 ## 9. Validation and Scientific Gates
 
@@ -521,21 +409,18 @@ At the beginning of a new task:
 
 1. Read this file, `docs/benchmark_GAR.md`, and the relevant README section.
 2. Run only read-only inspection: `git status --short`, inspect current validation reports, and
-   identify whether the user has rebuilt M1.1 or M2 since this snapshot.
+   identify the latest accepted benchmark, cache, gate and training completion artifacts.
 3. Do not assume generated benchmark counts or statuses from an older conversation.
 4. Preserve the current dirty worktree and inspect nearby edits before changing a file.
 5. Ask for or read the user's latest command log; do not rerun their expensive workflow.
 6. Make the smallest protocol-correct change, add focused synthetic tests, and provide manual
    commands for verification.
 
-The immediate continuation at the time of this update is:
+Current cursor as of 2026-07-18:
 
 ```text
-preserve the accepted M3 migration, D-1 gate and completed D0 run; do not overwrite them
--> start D1 rsicap_caption from D0 checkpoint_best.pt using the README command
--> validate D1 completion and keep the independent RSIEval test generation frozen for evaluation
--> continue D2 region alignment and D3a auto Bridge engineering stages
--> in parallel complete real M2 reviews, arbitration and the human-frozen Pilot gate
--> publish expert Unified rows only after Bridge becomes expert_pilot_frozen
--> keep D3b, formal expert M4/M6 evaluation, D4 scientific acceptance and M7 final acceptance blocked until their stated gates pass
+preserve accepted M3, D-1 and D0 artifacts
+-> run D1, D2 and D3a in order using the root README
+-> complete real M2 review/arbitration/gate work in parallel
+-> keep expert Unified, D3b, formal M4/M6, D4 and M7 blocked until their gates pass
 ```

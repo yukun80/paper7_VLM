@@ -1,6 +1,6 @@
 # 多源滑坡分割—区域描述统一模型：Benchmark 与算法实施方案
 
-> 文档状态：实施基线 v2
+> 文档状态：实施基线 v2；工程状态复核于 2026-07-18
 >
 > 当前前置能力：Landslide Benchmark V2、SANE、QMEF、PMRD、Qwen mask-query controller
 >
@@ -10,16 +10,16 @@
 
 | 阶段 | 工程状态 | 仍需人工完成的门槛 |
 |---|---|---|
-| M0/M1/M1.1 | 构建、图片物化、verified near-duplicate canonical merge、验证与汇总代码已实现 | 重新构建 Small，确认 `errors == []`、verified cluster 不跨 split |
-| M2 | region inventory、三级证据、candidate、双人 review package、审核合并与验证代码已实现 | 完成两名专家审核、必要仲裁并冻结 Pilot gate |
-| M3 | task-neutral backbone state、独立 Description Vision Cache v1 已实现 | 手工运行 cache 构建、state 等价与 cache 隔离测试 |
+| M0/M1/M1.1 | Description Small v4 已重建并通过工程验证，verified cluster 不跨 split | 保留 RSIEval 数量 warning；未授权 Full |
+| M2 | Bridge v7 prepare 与 300-parent Pilot review package 已通过工程验证 | 当前为 `awaiting_expert_review`；完成两名专家审核、必要仲裁并冻结 Pilot gate |
+| M3 | task-neutral state 与 Description Vision Cache v1 M3 v3 migration/deep validation 已通过 | 保留旧 cache 与 segmentation Vision Cache v3 只读证据，不得覆盖 |
 | M4 | 六种 region encoder 消融、MGRR 多粒度 token sequence 与反事实接口已实现 | Small 三 seed 消融、ERFS、retrieval 和 UFCR 门槛 |
-| M5 | `desc_adapter`、causal generation、raw parser/repair、显式 checkpoint 迁移已实现 | 过拟合、迁移/reload 和 24GB smoke |
-| M6 | D-1、D0-D4、GT/fixed/end-to-end、OOF v3 source/checkpoint replay、盲审事实性评分和反事实 paired CI 已实现 | 按课程顺序训练，完成专家评价和三 seed 统计 |
+| M5 | `desc_adapter`、causal generation、raw parser/repair 与 D-1 工程门禁已通过 | D-1 不替代 M4 专家或科学门禁 |
+| M6 | D0 Small 已完成；D0-D4、GT/fixed/end-to-end、OOF replay、事实性和 paired CI 已实现 | 下一阶段为 D1；随后运行 D2、D3a，专家阶段等待 M2 冻结 |
 | M7 | 同任务梯度累积的独立 DataLoader 交替训练、严格 full-val retention 与三种子聚合 gate 已实现 | 从通过 M6 的 checkpoint 初始化并让三条独立 seed 链全部通过 full-val retention |
 
-因此，当前仓库可称为 **M0-M7 engineering-complete candidate**，不能在人工审核、Small
-实验和固定统计门槛完成前称为 scientifically validated，也不能直接进入 Full。
+因此，当前仓库仍是 **M0-M7 engineering-complete candidate**：D0 的完成证明训练闭环可运行，
+但不能替代 M2 人工审核、Small 科学实验和固定统计门槛，也不能据此进入 Full。
 
 ---
 
@@ -2047,19 +2047,9 @@ merge/validate 日志接受专家真值。
 - expert val/test 与标注一致性报告；
 - 冻结 `evaluation_gate_manifest.json` 中的 Pilot 阈值和统计协议。
 
-推荐人工入口：
-
-```bash
-BRIDGE_STAGE=prepare \
-BRIDGE_PILOT_PARENTS=300 \
-RUN_CONTROL=--overwrite \
-PYTHON_BIN=/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
-bash scripts/run_4_build_landslide_bridge.sh small
-```
-
-prepare 验证通过只表示自动构建有效，状态必须是 `awaiting_expert_review`。审核完成后使用
-`BRIDGE_STAGE=merge`，并提供 `REVIEWER_1`、`REVIEWER_2`、必要的
-`ARBITRATION_FILE` 和人工冻结的 `EVALUATION_GATE`；程序不得从空模板或规则候选推断专家标签。
+人工入口和环境变量只在根 `README.md` 维护。prepare 验证通过只表示自动构建有效，状态必须是
+`awaiting_expert_review`。审核完成后的 merge 必须显式提供两份 reviewer 结果、必要仲裁和人工
+冻结的 evaluation gate；程序不得从空模板或规则候选推断专家标签。
 
 M3-M7 工程包固定使用 `qpsalm_seg.description` 下的一层子包：`modeling/`、`data/`、
 `training/`、`evaluation/`、`protocols/`、`workflows/`。依赖按
@@ -2194,32 +2184,20 @@ population 指纹；还必须比较 execution audit 导出的三任务训练 loa
 
 ---
 
-## 十五、人工实施顺序
+## 十五、剩余人工实施顺序（2026-07-18 游标）
 
-1. 运行 RSGPT/MMRS/DIOR 数据审计；
-2. 人工确认 license、RSIEval QA 差异、RSICap scene mapping 和 DIOR 多轮解析；
-3. 冻结 `description_ontology_v1`、输出 JSON Schema 和英语协议；
-4. 构建 `rs_global_caption_v1_small`；
-5. 构建 `rs_region_alignment_v1_small`；
-6. 抽检 100 条 global caption 和 100 个 region pair；
-7. 完成跨数据集去重和 split freeze；
-8. 实现单图适配并建立 `qpsalm_description_vision_cache_v1`；
-9. 暴露 task-neutral backbone state 并验证 cache v3 隔离；
-10. 进行固定 64 条样本、100 optimizer steps 过拟合；
-11. 训练 D0 MMRS Caption Small；
-12. 训练 D1 RSICap 校准；
-13. 训练 D2 DIOR region alignment；
-14. 构建 300-parent Landslide Bridge pilot；
-15. 完成专家审核、标注一致性分析并冻结 expert val/test；
-16. 冻结 `evaluation_gate_manifest.json`；
-17. 实现和消融 MGRR、global component replay 及 Assisted/Vision-only；
-18. 训练 D3a 自动结构化 GT-mask 描述；
-19. 训练 D3b 专家 Bridge 文本校准；
-20. 执行 mask、region 和 modality 反事实测试；
-21. 生成 out-of-fold/fixed predicted masks；
-22. 训练 D4 predicted-mask curriculum；
-23. 训练 D5 双 adapter 交替任务并检查 segmentation retention；
-24. Small 门槛全部通过后进入 Full。
+已接受的 M1.1、M3、D-1 和 D0 产物不得覆盖。剩余流程为：
+
+1. 从 D0 `validation_best` 初始化并完成 D1 RSICap 校准，冻结独立 RSIEval test generation；
+2. 从 D1 `validation_best` 初始化并完成 D2 DIOR region alignment；
+3. 从 D2 `validation_best` 初始化并完成 D3a 自动 Bridge 工程训练；
+4. 与 D1–D3a 并行完成两份真实 M2 reviewer 结果、必要仲裁和人工 Pilot gate；
+5. 仅在 Bridge 达到 `expert_pilot_frozen` 后发布 expert Unified，并运行 D3b；
+6. 完成三 seed M4、专家事实性、retrieval、ERFS、UFCR 和反事实门槛；
+7. 生成严格 OOF/fixed predictions，训练并验收 D4；
+8. 完成 GT-mask、fixed-prediction、end-to-end M6 接受门禁；
+9. 从接受的 D4/M6 权重运行三 seed M7，并通过 exact-population full-val retention；
+10. 只有全部 Small 门槛通过后才进入 Full。
 
 ---
 

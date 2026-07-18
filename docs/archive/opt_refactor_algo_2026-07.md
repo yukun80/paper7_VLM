@@ -1,4 +1,10 @@
-# 一、当前模型的实际设计
+# SANE–QMEF–PMRD 重构评审快照（历史归档，2026-07）
+
+> 归档状态：本文记录一次阶段性重构评审，其中“当前”“仍需处理”等措辞只代表归档时点。
+> 当前分割算法契约与仍有效的限制统一维护在
+> `SEG_Multi-Source_Landslides/ALGORITHM.md`；SegDesc 设计见 `docs/benchmark_GAR.md`。
+
+# 一、归档时模型的实际设计
 
 ## 1. SANE：预训练特征与遥感物理信息共同编码
 
