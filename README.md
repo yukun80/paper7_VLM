@@ -31,6 +31,30 @@ export PYTHONPATH=SEG_Multi-Source_Landslides${PYTHONPATH:+:${PYTHONPATH}}
 python -m pip install -e SEG_Multi-Source_Landslides
 ```
 
+## 当前 Small 工程进展（2026-07-18）
+
+以下状态来自当前落盘 validation、gate 和 training completion report，不以“代码存在”或
+“命令退出成功”替代验收：
+
+| 对象 | 当前证据 | 状态 |
+| --- | --- | --- |
+| Landslide V2 Small | final 5,561 parents，`errors=[]`；保留 11 条 GDCLD preview 低对比 warning | engineering-valid |
+| Description M1.1 Small | `description_benchmark_m1_v4_answer_trace`，40,963 records / 19,685 parents，verified cross-split clusters = 0 | engineering-valid |
+| M2 Bridge Small | v7 prepare，33,114 regions；300 Pilot parents = 180/60/60；485 review items；0 expert labels | `awaiting_expert_review` |
+| Unified SegDesc Small | v3 component contract，96,069 references / 27,982 parents；0 expert records | engineering-valid、auto-only |
+| Description Vision Cache | M3 v3 strict migration，25,239 records / 99 shards；24,212,256,037 bytes 严格复用并重放 | engineering-valid |
+| D-1 | v13 gate，zero-shot + 64-sample/100-step overfit，`d_minus_one_complete=true`、`errors=[]` | engineering-valid |
+| D0 | preflight v6 ready；MMRS caption 1,000 steps；completion v3 `terminal_status=completed` | engineering-valid |
+| D1/D2/D3a | 实现与门禁已存在，尚未运行当前 Small 正式课程 | pending engineering runs |
+| D3b/D4/M6 expert/M7 final | 需要冻结的真实专家 Bridge 及后续科学门禁 | blocked by human review |
+
+D0 当前接受的 run 是 `outputs/qpsalm_description/d0_mmrs_seed42`：best/last 均到 step 1000，
+best score 为 0.5602917596，256 条 dev 样本的 teacher-forced loss 为 1.6976218831；monitor
+generation 只覆盖其中 32 条，caption token F1 为 0.5602917596（95% parent bootstrap CI
+0.5039–0.6137）。这些数值证明训练、验证、checkpoint 和 completion 链路有效，不是完整
+RSIEval、专家事实性或 grounded-region 科学结论。不要覆盖该 D0 目录；下一阶段从其
+`checkpoint_best.pt` 显式初始化 D1。
+
 ## 构建 Benchmark V2
 
 构建 small：
@@ -506,6 +530,21 @@ report SHA 一并固化。D1–D4 初始化、M7
 初始化/续训和正式 retention 都继续按原 gate 路径、
 SHA 与当前 `description_benchmark` 重验；任一 zero-shot、overfit、checkpoint、输入 benchmark
 漂移或中途切换另一份 M1.1 root 都会使后续链失效。
+
+当前 Small 已完成上述 D0 闭环：
+
+```text
+preflight: outputs/qpsalm_description/d0_preflight_seed42/preflight_report.json
+run:       outputs/qpsalm_description/d0_mmrs_seed42
+status:    terminal_status=completed, steps=1000, best checkpoint step=1000
+```
+
+`training_report.json` 使用
+`qpsalm_description_training_completion_v3_checkpoint_replayed`，绑定 best/last checkpoint、
+D0 preflight acceptance、dataset/config/history/progress/trainable manifest 和 validation-best；
+目录中没有 `failure_report.json`。因此后续不得用同名新 run 覆盖它，D1 必须通过下文
+`--initialize-from .../checkpoint_best.pt` 建立新的 optimizer 与 stage lineage。
+
 每次 D0–D4 initialize/resume 还会重算
 `qpsalm_segmentation_migration_lineage_v1_source_bytes_bound`，要求当前配置与源 SegDesc
 checkpoint 都指向同一份原始 segmentation checkpoint SHA/format/step/白名单，并重新读取可访问的
