@@ -371,8 +371,8 @@ def checkpoint_metadata_report(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         # Formal gates publish this exact projection as JSON; reject a checkpoint
         # that could only be represented through Python's NaN/Infinity extension.
-        # StageSpec contains tuple fields: normalize them through the exact JSON
-        # boundary now so initial publication and later replay cannot disagree as
+        # Runtime metadata may contain tuples: normalize it through the exact JSON
+        # boundary so initial publication and later replay cannot disagree as
         # tuple versus list while representing identical artifact metadata.
         encoded = json.dumps(report, ensure_ascii=False, allow_nan=False)
         canonical_report = json.loads(encoded)

@@ -370,6 +370,15 @@ class SegDescArchitectureTest(unittest.TestCase):
             d0.data_sources,
             ("description_v4:mmrs_global_caption_train",),
         )
+        serialized_d0 = d0.to_dict()
+        self.assertEqual(
+            serialized_d0["data_sources"],
+            ["description_v4:mmrs_global_caption_train"],
+        )
+        self.assertEqual(
+            serialized_d0,
+            json.loads(json.dumps(serialized_d0)),
+        )
         self.assertTrue(d0.trains_desc_adapter)
         self.assertEqual(d0.initialization_kind, "segmentation_checkpoint")
         self.assertIsNone(d0.initialize_from_stage)
@@ -977,6 +986,7 @@ class SegDescArchitectureTest(unittest.TestCase):
                 return_value={
                     "num_samples": 1,
                     "population_sha256": "a" * 64,
+                    "stage_spec": {"data_sources": ("synthetic",)},
                 },
             ))
             preflight_loader = enter(mock.patch(
@@ -1034,6 +1044,7 @@ class SegDescArchitectureTest(unittest.TestCase):
                 return_value={
                     "num_samples": 1,
                     "population_sha256": "a" * 64,
+                    "stage_spec": {"data_sources": ("synthetic",)},
                 },
             ))
             acceptance_loader = enter(mock.patch(

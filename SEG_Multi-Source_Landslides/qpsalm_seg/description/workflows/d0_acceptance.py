@@ -214,18 +214,33 @@ def validate_d0_preflight_for_launch(
         dataset_audit,
     )
     loader_report = dict(report.get("loader") or {})
-    if (
-        dataset_audit != report.get("dataset")
-        or collator_audit != report.get("collator")
-        or stream_binding != loader_report.get("stream_binding")
-        or int(loader_report.get("batches", -1)) != len(loader)
-        or int(loader_report.get("num_workers", -1))
-        != int(config.data.num_workers)
-        or loader_report.get("batch_sampler")
-        != type(loader.batch_sampler).__name__
+    # Preflight is a JSON artifact. Compare its structured contracts at that
+    # exact serialization boundary so tuple/list representation cannot mimic
+    # data drift, while every key and scalar value remains hash-bound.
+    drifted: list[str] = []
+    for name, live, expected in (
+        ("dataset", dataset_audit, report.get("dataset")),
+        ("collator", collator_audit, report.get("collator")),
+        (
+            "stream_binding",
+            stream_binding,
+            loader_report.get("stream_binding"),
+        ),
     ):
+        if canonical_sha256(live) != canonical_sha256(expected):
+            drifted.append(name)
+    if int(loader_report.get("batches", -1)) != len(loader):
+        drifted.append("batches")
+    if int(loader_report.get("num_workers", -1)) != int(
+        config.data.num_workers
+    ):
+        drifted.append("num_workers")
+    if loader_report.get("batch_sampler") != type(loader.batch_sampler).__name__:
+        drifted.append("batch_sampler")
+    if drifted:
         raise ValueError(
-            "D0 preflight 后 dataset/collator/formal loader binding 已漂移"
+            "D0 preflight 后 dataset/collator/formal loader binding 已漂移: "
+            + ", ".join(drifted)
         )
     construction_contract = {
         "protocol": D0_CONSTRUCTION_CONTRACT_PROTOCOL,

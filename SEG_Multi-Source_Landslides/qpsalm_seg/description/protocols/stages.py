@@ -42,7 +42,17 @@ class StageSpec:
         return self.initialize_from_stage is not None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # StageSpec 内部用 tuple 保证注册表不可变；artifact/report 边界必须
+        # 输出标准 JSON array，避免写盘后的 list 与 live tuple 被误判漂移。
+        for name in (
+            "data_sources",
+            "gate_requirements",
+            "trainable_prefixes",
+            "trainable_direct_parameters",
+        ):
+            payload[name] = list(payload[name])
+        return payload
 
 
 _GLOBAL_TRAINABLE_PREFIXES = ("description_view_to_hidden.",)
