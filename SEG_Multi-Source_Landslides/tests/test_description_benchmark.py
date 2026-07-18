@@ -33,14 +33,16 @@ from description_common import (  # noqa: E402
     perceptual_rgb_mae,
 )
 from qpsalm_seg.data import build_single_image_modality_instance  # noqa: E402
-from qpsalm_seg.cli.cache_description_vision_features import (  # noqa: E402
-    _input_fingerprints,
+from qpsalm_seg.description.data.cache_builder import (  # noqa: E402
+    build_input_fingerprints,
 )
-from qpsalm_seg.description.data import (  # noqa: E402
-    BRIDGE_BUILDER_VERSION,
+from qpsalm_seg.description.data.datasets import (  # noqa: E402
     DESCRIPTION_BUILDER_VERSION,
 )
-from qpsalm_seg.description.vision_cache import (  # noqa: E402
+from qpsalm_seg.description.data.expert_contracts import (  # noqa: E402
+    BRIDGE_BUILDER_VERSION,
+)
+from qpsalm_seg.description.data.vision_cache import (  # noqa: E402
     DESCRIPTION_CACHE_BUILDER_VERSION,
     DESCRIPTION_CACHE_FORMAT,
     DESCRIPTION_CACHE_PROTOCOL,
@@ -51,7 +53,7 @@ from qpsalm_seg.description.vision_cache import (  # noqa: E402
     source_cache_snapshot,
     validate_source_cache_snapshot,
 )
-from qpsalm_seg.description.output_protocol import (  # noqa: E402
+from qpsalm_seg.description.protocols.output import (  # noqa: E402
     _builtin_schema_issues,
     parse_description_output,
 )
@@ -298,7 +300,7 @@ class DescriptionBenchmarkProtocolTest(unittest.TestCase):
                 json.dumps(bridge_payload), encoding="utf-8"
             )
             with self.assertRaisesRegex(RuntimeError, "builder 过期"):
-                _input_fingerprints(
+                build_input_fingerprints(
                     ("single_image", "multisource_parent"),
                     description_ref=str(description),
                     description_dir=description,
@@ -310,7 +312,7 @@ class DescriptionBenchmarkProtocolTest(unittest.TestCase):
             bridge_report.write_text(
                 json.dumps(bridge_payload), encoding="utf-8"
             )
-            fingerprints = _input_fingerprints(
+            fingerprints = build_input_fingerprints(
                 ("single_image", "multisource_parent"),
                 description_ref=str(description),
                 description_dir=description,
@@ -427,6 +429,7 @@ class DescriptionBenchmarkProtocolTest(unittest.TestCase):
             record = _synthetic_cache_record("single_image", "parent_001")
             _write_synthetic_description_cache(root, [[record]])
             record["instruction"] = "task text must never be cached"
+            record["views"][0]["condition"] = "nested task leak"
             record["parent_sample_id"] = "parent_changed"
             torch.save(
                 {"format": DESCRIPTION_CACHE_FORMAT, "records": [record]},
@@ -434,6 +437,7 @@ class DescriptionBenchmarkProtocolTest(unittest.TestCase):
             )
             report = DescriptionVisionFeatureBank(root).validate_all()
             self.assertTrue(any("任务相关字段" in error for error in report["errors"]))
+            self.assertTrue(any("views.0.condition" in error for error in report["errors"]))
             self.assertTrue(any("parent_sample_id 不一致" in error for error in report["errors"]))
 
     def test_description_cache_deep_validation_rejects_input_drift(self) -> None:

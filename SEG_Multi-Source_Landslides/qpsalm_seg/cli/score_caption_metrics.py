@@ -16,17 +16,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
-import traceback
 
-from qpsalm_seg.description.caption_metrics import (
-    score_caption_metrics,
-    write_caption_metric_report,
+from qpsalm_seg.description.workflows.review import (
+    ReviewLaunchError,
+    run_caption_metric_scoring,
 )
-from qpsalm_seg.paths import resolve_project_path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Score official RSIEval caption metrics.")
     parser.add_argument("--eval-dir", required=True)
     parser.add_argument("--bertscore-model", required=True)
@@ -41,34 +38,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", required=True)
     parser.add_argument("--overwrite-output", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    output = resolve_project_path(args.output) or Path(args.output)
-    if output.exists() and not args.overwrite_output:
-        raise SystemExit("caption metric output 已存在；请改路径或使用 --overwrite-output")
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     try:
-        report = score_caption_metrics(
-            args.eval_dir,
+        report = run_caption_metric_scoring(
+            eval_dir=args.eval_dir,
             bertscore_model=args.bertscore_model,
             bertscore_num_layers=args.bertscore_num_layers,
             bertscore_batch_size=args.bertscore_batch_size,
             device=args.device,
             seed=args.seed,
+            output=args.output,
+            overwrite_output=args.overwrite_output,
         )
-    except BaseException as exc:
-        failure = {
-            "protocol": "qpsalm_rsieval_caption_metrics_failure_v1",
-            "exception_type": type(exc).__name__,
-            "message": str(exc),
-            "traceback": traceback.format_exc(),
-        }
-        failure_path = output.with_name(output.stem + ".failure.json")
-        write_caption_metric_report(failure_path, failure)
-        raise
-    write_caption_metric_report(output, report)
+    except ReviewLaunchError as exc:
+        raise SystemExit(str(exc)) from exc
     print(json.dumps(report, ensure_ascii=False))
 
 

@@ -712,8 +712,30 @@ qpsalm_description_vision_cache_v1
 `qpsalm_description_vision_cache_validation_v2_shard_content_bound`。manifest 必须为每个 shard
 保存路径、字节数、record 数和 SHA-256；深度验证和训练期首次加载都核验 shard 内容，因此即使
 tensor shape、lookup 和来源 metadata 均未改变，任一 tensor 数值位翻转也会失败。旧 v2 cache
-不含该证据，必须重建；公开 `qpsalm_description_vision_cache_v1` format 与
+不能被运行时直接读取；只允许一次 side-by-side 严格迁移：逐 shard 补齐 SHA/size/record count，
+逐 record 校验 shape/finite/fingerprint/lookup/task-neutral 字段，再按当前 Description v4、Bridge
+v7 和 segmentation cache v3 重放每个 parent 的 `source_content_hash`。全部一致且同文件系统时
+才允许 hardlink 复用并记录 inode audit；否则必须完整重建。迁移不修改旧 cache，也不引入宽松
+runtime fallback。staging 验证不能直接代表成功：发布到正式目录后必须再次遍历全部 shards，
+重放 source/target inode、旧 cache report hash 和 segmentation cache v3 的 build-time snapshot，
+只有终态报告仍有效时 migration 才返回成功。
+当前 migration report 协议为
+`qpsalm_description_vision_cache_migration_v2_published_replay_bound`；旧的无发布终态 replay 报告
+不得进入 readiness。
+公开 `qpsalm_description_vision_cache_v1` format 与
 `task_neutral_parent_visual_features_v1` 协议不变。
+首次 D-1 前的手工 artifact 批次还必须发布
+`qpsalm_segdesc_artifact_readiness_v2_training_consumable`：它重新打开 Description v4、
+Bridge v7、Unified v3、M3 artifact origin 和全部 cache shards，核对当前 component validation、
+Unified all/split population、expert publication 状态与嵌套文件 SHA。只有 readiness 报告为
+`status=engineering-valid`、`ready=true`、`errors=[]` 才可进入 D-1；Bridge 为
+`awaiting_expert_review` 时必须仍为 0 expert、gate 未冻结，readiness 不提升其科学状态。
+当前 D-1 overfit 必须显式传入该报告；训练入口先完整重算报告，再把
+`qpsalm_segdesc_artifact_readiness_acceptance_v1_live_replayed` 写入 dataset summary、checkpoint
+data audit 和 overfit report。后续 D-1/D0 门禁绑定原报告字节及其嵌套文件 SHA，不能只依赖脚本
+执行顺序或手工声称 Unified v3 已发布。
+严格迁移 origin 必须重放旧 cache manifest/report hash 和每个 hardlink 的 source/target inode；
+若内容漂移后改为完整重建，则只接受无 migration metadata 的当前 M3 v3 builder artifact。
 运行时 reader 必须要求已发布且成功的 `validation_report.json`，并逐项核对当前 manifest SHA、
 输入指纹、component/record/shard 数、全部 shard bytes/hash 与 source cache 隔离统计。builder
 深度扫描阶段只能通过显式内部参数在报告发布前打开 cache；训练、评价和 demo 不允许绕过。
@@ -1225,38 +1247,69 @@ load_segmentation_backbone_checkpoint(...)
 正式预适配前完成：
 
 - Qwen zero-shot baseline；
-- 32–64 条 global/box/mask/null 混合样本过拟合；
+- 固定 64 条 global/box/mask/null 混合样本、100 optimizer steps 过拟合；其
+  `StageSpec.region_token_policy=mixed_explicit`，global 禁止区域路径，
+  box/mask/null 必须消费区域证据；
 - causal label mask 检查；
 - region token 梯度检查；
 - adapter 切换和 checkpoint reload；
 - batch size > 1、不同图像尺寸和空 region。
 
-D-1 的 32–64 条样本不是从单一 Bridge index 直接截断。当前协议按 seed 做确定性
+D-1 的 64 条样本不是从单一 Bridge index 直接截断。当前协议按 seed 做确定性
 分层并以 round-robin 顺序组成四路等额混合：M1.1 `global_caption/full_image`、M1.1
 `region_referring_expression/box`、M2 有掩膜 candidate、M2 `no_target`。Bridge
 `region_geometry` 中由 mask 推导的 bbox 不能冒充 box-conditioned 样本。M2 candidate
 只用于工程过拟合，报告必须写明 `expert_truth_used=false`；它不构成专家评价。
+输出格式与区域视觉路由必须解耦：M1.1 DIOR box 的训练目标可以是自由文本，但 batch 中必须设置
+`use_region_tokens=true` 并实际消费 box/MGRR token；`structured_outputs` 只控制 JSON/free-text
+response contract，不能再兼任视觉路由开关。
+统一 `train d-minus-one` 入口将工程 overfit 固定为 64 条、100 optimizer steps，batch size
+默认 2 且不得小于 2；`evaluate zero-shot` 固定选择 64 条。冲突的 CLI 覆盖在加载模型前拒绝，
+避免以非预注册预算生成看似同名的 D-1 报告。
 
 过拟合 run 结束后必须生成当前
-`qpsalm_d_minus_one_overfit_validation_v5_strict_json_finite` 的
+`qpsalm_d_minus_one_overfit_validation_v10_structured_decoder_bound` 的
 `d_minus_one_overfit_validation.json`，绑定四路 population、Description/Bridge validation
-与 index 哈希、causal v4、stage-aware gradient gate、`desc_adapter` 隔离、loss 下降、raw
+与 index 哈希、causal v5、task-path-aware gradient gate、`desc_adapter` 隔离、loss 下降、raw
 JSON/schema/nonempty-summary smoke、严格 checkpoint reload、batch size > 1、多种原生尺寸、
 null region 和不超过 24 GiB 的峰值显存。严格 reload 必须先改变一个 checkpoint 内的
-`desc_adapter` LoRA 哨兵，再通过正常 model/optimizer/scheduler loader 恢复到逐字节一致；
+`desc_adapter` LoRA 哨兵，并分别扰动 optimizer、scheduler、训练 RNG 及启用时的 GradScaler，
+再通过正常 loader 恢复并核对各自状态指纹；
+structured route 不再让 decoder 自由生成整段 JSON 语法，而采用
+`qpsalm_description_structured_generation_v2_token_stream_bound`：固定 schema key/标点，
+由 Qwen live logits 选择 enum 与自由文本 token，并在 decoding 期间执行 absent 条件约束。
+最终 JSON 是模型 decoder 的 raw 输出，不允许从已生成文本做 repair，也不读取 GT；逐行 audit
+必须绑定 raw SHA、实际 causal token-stream SHA、forced/model-selected token 数和字段终止原因；
+token stream 与发布 raw JSON 必须逐字节相同。
+该 protocol 进入 checkpoint architecture spec；旧 unconstrained D-1 checkpoint/report 不允许
+原位补字段或 resume，必须从 segmentation checkpoint 新建 run。
+当前梯度协议为 `qpsalm_description_gradient_gate_v4_window_homogeneous`。当前
+`qpsalm_d_minus_one_task_path_batch_sampler_v1_window_homogeneous` 将连续
+`grad_accum_steps` 个 microbatch 组织为单一 global 或 region 路径；纯 global window 必须证明
+MGRR、spatial backbone 和 region projector 为零梯度，region window 必须证明这些模块获得非零
+有限梯度。混合路径的梯度不得同时充当两条 path report。只有两条任务路径都被真实观察后，
+D-1 梯度子门禁才完成，不能让随机首批样本的类别顺序决定 run 成败。
+最终只读门禁必须逐 path 重放 required nonzero/zero module inventory、梯度计数、有限 norm 和
+checks 全集；只有顶层 `passed=true`/`all_required_streams_checked=true` 的旧文件无效。
+第 100 步 terminal checkpoint 只有在两条路径门禁完成后才能保存，并在 checkpoint metadata 中
+嵌入同一完整 gradient proof。若进程在 checkpoint 已落盘、strict reload/报告发布前中断，
+同 run `--resume` 从 checkpoint 重放该 proof 与 final validation artifact 后只完成终态发布，
+不得伪造新的 optimizer step，也不得只信任目录中的独立 gradient JSON。
 显存门禁必须观察到真实 CUDA 正峰值，CPU/缺失记录的 `0 GiB` 不得通过。history、resolved
 config、dataset summary、gradient/trainable manifest、validation/raw generation、checkpoint
 和显式 segmentation migration 均写入不可变哈希绑定；ontology、record schema 与 output
 schema 也作为独立源文件绑定，并在后续门禁中与当前仓库字节级重验。checkpoint 必须以内存映射
 重放当前 format/step/metadata 和实际 migration，再按其 architecture binding 核验 M3 manifest、
-validation report 与全部 shard SHA；只伪造 reload 汇总不能通过。旧 v1-v3 报告不兼容。该报告
-只表示 overfit subgate，不能单独把 D-1 标为完成。原生 Qwen zero-shot report 还必须绑定
-模型元数据、M1.1 输入 population 与 raw generation；最后由
-`qpsalm_d_minus_one_engineering_gate_v7_training_completion_bound` 从当前 M1.1 index 重建 zero-shot
+validation report 与全部 shard SHA；只伪造 reload 汇总不能通过。旧 v1-v7 报告不兼容。该报告
+还必须逐 batch 检查 prefix/padding label mask、target 连续性与监督 EOS，将结果写入每条 history，
+并由只读验证器从绑定的 history 重放；仅在汇总报告中声明 causal v5 不得通过。该报告只表示
+overfit subgate，不能单独把 D-1 标为完成。原生 Qwen zero-shot report 还必须逐文件绑定
+本地模型权重、tokenizer、配置字节，以及 M1.1 输入 population 与 raw generation；最后由
+`qpsalm_d_minus_one_engineering_gate_v13_structured_decoder_bound` 从当前 M1.1 index 重建 zero-shot
 population，逐张重开所选 benchmark `data/` 图像并核对 `materialized_copy`、登记 SHA 与 live SHA，
-重验 Qwen 元数据和 overfit 运行源，再核验两个 run 使用同一 M1.1 validation
+重验 Qwen 模型文件和 overfit 运行源，再核验两个 run 使用同一 M1.1 validation
 report 和 seed，才允许 `d_minus_one_complete=true`。zero-shot 不声称 region capability，也不设置
-人为性能阈值，只作为明确记录的基线。v7 还把 CLI 成功发布的 `training_report.json` 纳入必需
+人为性能阈值，只作为明确记录的基线。当前 gate 还把 CLI 成功发布的 `training_report.json` 纳入必需
 证据：逐项重放其 artifact binding，要求终态 checkpoint 声明 `terminal_last`，checkpoint/
 progress/history 共享同一最终 step，history 严格递增结束于该 step，并要求当前 overfit validation
 正是完成报告所绑定的文件。训练在完成报告发布前中断、完成报告漂移或目录仍含
@@ -1271,12 +1324,42 @@ D-1 取样前还必须重放两条 live 数据链：
 summary/checkpoint data binding，任何 cache 构建后的索引漂移都必须拒绝。
 
 D0 是第一个正式预适配 stage，必须显式传入上述当前 D-1 gate。训练器深度重算 gate 后写入
-`qpsalm_d_minus_one_acceptance_v5_training_completion_bound`，将 D-1 使用的 M1.1 benchmark root、
+`qpsalm_d_minus_one_acceptance_v11_structured_decoder_bound`，将 D-1 使用的 M1.1 benchmark root、
 builder、validation report SHA、zero-shot materialized-image population SHA 和 overfit training
 completion report SHA 固化，并将其逐
 stage 保存到 checkpoint metadata 与 lineage；
 D1–D4、M7 初始化/续训和最终 retention 都必须从原 zero-shot/overfit 源重新验证该 acceptance。
-仅有 overfit subgate、旧 v1-v3 gate、编辑过的 gate 或已漂移输入都不能启动/延续正式课程。
+仅有 overfit subgate、旧 v1-v9 gate、编辑过的 gate 或已漂移输入都不能启动/延续正式课程。
+
+正式 D0 前必须先发布 `qpsalm_d0_preflight_v6_region_route_bound`：重验 D-1、Description/Bridge、
+当前 M3 cache 全 shard 和 segmentation migration，构建 model、dataset、collator、optimizer 与
+trainable parameter manifest，但不得执行 backward 或 `optimizer.step`。只有报告满足
+`status=engineering-valid`、`ready=true`、`optimizer_steps=0`、`errors=[]`，并且
+`formal_training_launch.unique=true`，才允许执行报告发布的唯一正式 D0 训练命令。preflight
+与正式入口必须用集中协议中的 `seed + 11003` 构造相同 D0 sampler，逐项重放 dataset
+population、首批 collator tensor 和完整 stream binding；首批审计使用
+`qpsalm_description_collator_audit_v3_output_format_region_route_separated`，必须直接消费训练 collator 的
+`requests/instructions/target_texts/reference_texts/structured_outputs/use_region_tokens/metadata/region_masks/weights`
+契约，不允许用 synthetic-only 的影子字段代替。该命令必须绑定
+`qpsalm_d0_training_launch_v2_exact_command_bound` 的完整 argv 与 shell rendering；正式入口必须
+从当前 config、Python executable、device、gate、output 和 report path 重建后逐字段相等，
+只比较部分参数或信任可编辑的 command 字符串不得通过。该命令还必须绑定
+preflight 原子写出的 resolved config SHA 和一个与 preflight 目录完全分离的正式 output-dir；
+正式目录必须不存在或为空，发布命令不得携带 `--overwrite-output`。报告之外手工重构的近似命令
+不属于验收协议；若目录在预检后被占用，应安全失败并重新预检，而不是覆盖已有 run。
+正式 D0 还必须通过 `--d0-preflight-report` 绑定该报告；启动前重验 resolved config SHA、device、D-1
+acceptance、Description/Bridge 工程 binding、cache 文件元数据快照及其 segmentation cache v3
+source provenance，并把当前 acceptance 原子
+写入训练目录。该 acceptance 使用
+`qpsalm_d0_preflight_acceptance_v6_region_route_consumed`，并携带
+`qpsalm_d0_construction_contract_v2_region_route_replayed`；正式 trainer 在首个 optimizer step 前必须
+用实际 migration、dataset/collator/loader、trainable manifest 和 optimizer spec 重建后完全相等。
+没有 ready report、报告或输入漂移、以及绕开统一入口的 D0 均不得训练。
+preflight 不是训练结果，也不能代替 D0 checkpoint。
+
+D-1/D0-D4 的 checkpoint、run completion report 与训练/验证 JSONL history 均采用同目录临时
+文件替换发布；history 只允许单训练进程写入，若既有文件以不完整 JSON 行结尾则拒绝继续追加，
+由显式 resume reconciliation 处理可恢复时间线。
 
 ### D0：MMRS Caption 场景预适配
 
@@ -1296,8 +1379,10 @@ tokens，不注入随机初始化的 exact-mask、component RoI 或 context-ring
 开始训练，避免全图 caption 预适配被尚未校准的 region replay 污染。缓存读取也采用
 `include_spatial=false` 快速路径，只加载 view tokens 和 valid mask，不搬运或投影四尺度 spatial
 features。每次运行必须输出 `trainable_parameter_manifest.json`，逐组记录参数名、数量、学习率和
-weight decay。对应 causal sequence 协议为 `qpsalm_description_causal_v4_stage_separated`；
-旧的 v3 描述 checkpoint 不允许继续初始化 D0-D4，但分割 checkpoint、segmentation Vision
+weight decay。对应 causal sequence 协议为
+`qpsalm_description_causal_v5_stage_separated_schema_ordered`；训练 target 和 schema-constrained
+raw generation 使用相同字段顺序，旧的 v4 及更早描述 checkpoint 不允许继续初始化 D0-D4，
+但分割 checkpoint、segmentation Vision
 Cache v3 和 Description Vision Cache v1 无需重建。
 
 每个 parent 每个 epoch 采样一条参考 caption，受 source 和 caption quality 权重控制，避免 NWPU 数量支配训练。
@@ -1780,7 +1865,7 @@ validation report 改名。
 不能被误当作 cross-parent 对照。donor 由数据集 parent 目录显式解析并单独编码，不依赖当前
 DataLoader batch 中恰好出现另一个 parent，因此 `batch_size=1` 也必须能够执行该对照。
 正式 paired gate 只接受
-`qpsalm_description_evaluation_v16_atomic_artifact_bound` 报告；该协议除上述 donor/region
+`qpsalm_description_evaluation_v17_structured_decoder_bound` 报告；该协议除上述 donor/region
 身份外，还冻结 `max_val_samples=0` 的完整 population 请求、generation population SHA-256、
 逐样本全部 references、materialized visual
 identity、DIOR retrieval population SHA-256、description checkpoint SHA、训练/评价 stage、
@@ -1792,7 +1877,11 @@ OOF/fixed prediction artifact audit。每条实际送入 descriptor 的二值 re
 localization 在 valid-mask 后的 prediction/target，都必须按 sample/role 原子物化为 NPY；正式 gate
 重新打开这些文件并重算 area 与 pixel IoU。GT/fixed 输入还必须从绑定的 Bridge/predicted source
 NPY 逐像素重放，并从 checkpoint 绑定的 M3 shard record 重开 lookup key、cache fingerprint 与
-reference-view render transform，禁止只信任评价行复制的 transform；cycle 还必须保存 source-space prediction 和
+reference-view render transform，禁止只信任评价行复制的 transform。若 M3 复用了经过
+segmentation size bucket 的 Vision Cache v3，Bridge/native mask 必须先按完整场景范围以 nearest
+映射到该 transform 的 `source_h/source_w`，再执行 resize/pad；两段映射及其源/目标尺寸必须写入
+`qpsalm_description_region_input_source_v2_native_cache_projection_bound` 并可逐像素重放，不能把
+尺寸不一致视为任意 resize。cycle 还必须保存 source-space prediction 和
 descriptor valid mask，后者必须等于该 record 全部 view-valid masks 的 union，并据此重新生成
 effective prediction/target；mask artifact 目录不得残留未绑定文件或 `.part`；end-to-end 必须另存
 source-space 在线预测并重放其 cache 投影。不能只比较 audit 字典或接受彼此自洽的伪造计数。
@@ -1874,7 +1963,8 @@ generated text -> segment/ground -> region IoU
 Bridge 的 Vision-only + GT-mask 评价中启用，直接使用未修复 raw generation 替换
 segmentation semantic prompt，并强制激活 `default` segmentation adapter。物理模态、active
 subset 和 segmentation Vision Cache v3 保持不变；预测 mask 先按原 segmentation resize/pad
-恢复到原图，再使用 Description cache 的 render transform 投影到 reference canvas，与真实
+恢复到原图；若 cache view 来自 size-bucketed modality，先以 nearest/full-extent 映射到其
+render-source canvas，再使用 Description cache 的 render transform 投影到 reference canvas，与真实
 region mask 计算 IoU。正式评价同时物化恢复后的 source mask、descriptor valid mask 及应用
 valid mask 后的 prediction/target；gate 必须从前两者重放后两者。no-target 的
 target/prediction 均为空时 IoU 定义为 1，并单独报告
@@ -1970,6 +2060,17 @@ bash scripts/run_4_build_landslide_bridge.sh small
 prepare 验证通过只表示自动构建有效，状态必须是 `awaiting_expert_review`。审核完成后使用
 `BRIDGE_STAGE=merge`，并提供 `REVIEWER_1`、`REVIEWER_2`、必要的
 `ARBITRATION_FILE` 和人工冻结的 `EVALUATION_GATE`；程序不得从空模板或规则候选推断专家标签。
+
+M3-M7 工程包固定使用 `qpsalm_seg.description` 下的一层子包：`modeling/`、`data/`、
+`training/`、`evaluation/`、`protocols/`、`workflows/`。依赖按
+`CLI -> workflows -> training/evaluation -> data/modeling -> protocols` 单向流动；同层可调用
+明确的公共契约，但禁止跨模块导入下划线私有符号。`description/__init__.py` 只惰性导出三类
+state、region encoding/geometry 等少量稳定契约，不 eager-import trainer/evaluator。配置协议为
+`qpsalm_segdesc_config_v2`，model/data/training/evaluation/joint 使用独立 dataclass；
+D-1 与 D0-D4 的 stage 条件统一由不可变 `StageSpec` 注册表给出。统一薄入口为
+`qpsalm-segdesc cache|train|evaluate|validate`，其中 M7 由 `train joint` 进入；算法不得写入 CLI。
+运行时不得提供 flat attribute/config 兼容视图；run artifact 与 checkpoint 必须保存字段完整的
+嵌套 v2 配置，resume、stage lineage、M4/M7 paired audit 均以该 canonical object 为准。
 
 ### M3：Task-neutral Backbone State
 
@@ -2079,7 +2180,7 @@ population 指纹；还必须比较 execution audit 导出的三任务训练 loa
 2. RSIEval 与 train/dev 的 exact、near-duplicate、source-scene 检查通过；
 3. DIOR 多轮 pair 展开和 bbox 转换人工抽检无系统性错误；
 4. single-image 适配、`qpsalm_description_vision_cache_v1` 和 cache v3 隔离验证通过；
-5. 32–64 样本过拟合、显式 checkpoint 迁移/reload、raw JSON generation 和 parser smoke 通过；
+5. 固定 64 样本、100 optimizer steps 过拟合，显式 checkpoint 迁移/reload、raw JSON generation 和 parser smoke 通过；
 6. target-status macro-F1、present recall、absent recall、false description 和 false rejection 均达到 Pilot 冻结门槛，不允许只靠预测 absent 通过；
 7. 总体及 unavailable-modality 子集的 UFCR 达到 Pilot 冻结门槛，claim 级分母和 empty-description 数量完整报告；
 8. full MGRR 相比 crop-only 和 single-vector pooling 在至少 2/3 seeds 同时改善 ERFS 与 same-image retrieval R@1，且 UFCR 满足冻结的非劣界限；ERFS 和 R@1 的 paired bootstrap 95% CI 均不跨 0；
@@ -2104,7 +2205,7 @@ population 指纹；还必须比较 execution audit 导出的三任务训练 loa
 7. 完成跨数据集去重和 split freeze；
 8. 实现单图适配并建立 `qpsalm_description_vision_cache_v1`；
 9. 暴露 task-neutral backbone state 并验证 cache v3 隔离；
-10. 进行 32–64 条样本过拟合；
+10. 进行固定 64 条样本、100 optimizer steps 过拟合；
 11. 训练 D0 MMRS Caption Small；
 12. 训练 D1 RSICap 校准；
 13. 训练 D2 DIOR region alignment；

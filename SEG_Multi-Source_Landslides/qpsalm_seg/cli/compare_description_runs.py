@@ -29,17 +29,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from qpsalm_seg.description.common import write_json
-from qpsalm_seg.description.comparison import (
-    compare_description_seeds,
-    validate_m4_seed_gate,
+from qpsalm_seg.description.workflows.comparison import (
+    run_description_seed_comparison,
 )
-from qpsalm_seg.paths import resolve_project_path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare paired description runs.")
     parser.add_argument("--baseline", action="append", required=True)
     parser.add_argument("--candidate", action="append", required=True)
@@ -54,29 +50,22 @@ def parse_args() -> argparse.Namespace:
         help="必须是当前 expert_pilot_frozen Bridge；正式阈值只从其 gate 读取",
     )
     parser.add_argument("--output", required=True)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    report = compare_description_seeds(
-        args.baseline,
-        args.candidate,
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    report = run_description_seed_comparison(
+        baseline_dirs=args.baseline,
+        candidate_dirs=args.candidate,
         seeds=args.seed,
         bridge_benchmark=args.bridge_benchmark,
         baseline_retrieval_dirs=args.baseline_retrieval,
         candidate_retrieval_dirs=args.candidate_retrieval,
         baseline_expert_reports=args.baseline_expert,
         candidate_expert_reports=args.candidate_expert,
+        output=args.output,
     )
-    output = resolve_project_path(args.output) or Path(args.output)
-    candidate = output.with_name(f".{output.name}.candidate")
-    try:
-        write_json(candidate, report)
-        validate_m4_seed_gate(candidate)
-        candidate.replace(output)
-    finally:
-        candidate.unlink(missing_ok=True)
     print(json.dumps(report, ensure_ascii=False, allow_nan=False))
     if not report["passed_fraction_gate"]:
         raise SystemExit(2)

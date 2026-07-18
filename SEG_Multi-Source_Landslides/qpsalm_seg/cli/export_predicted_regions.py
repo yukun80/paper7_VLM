@@ -18,20 +18,15 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
-import shutil
 
-import torch
-
-from qpsalm_seg.config import apply_config_overrides, load_config
-from qpsalm_seg.paths import (
-    resolve_project_path,
-    validate_output_replacement_safety,
+from qpsalm_seg.description.workflows.oof import (
+    OOFLaunchError,
+    run_predicted_region_export,
 )
-from qpsalm_seg.presets import PRESET_CHOICES, apply_preset
+from qpsalm_seg.presets import PRESET_CHOICES
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export fold-audited predicted regions.")
     parser.add_argument("--segmentation-config", required=True)
     parser.add_argument("--preset", choices=PRESET_CHOICES, default=None)
@@ -52,56 +47,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--overwrite-output", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    config = apply_preset(load_config(args.segmentation_config), args.preset)
-    config = apply_config_overrides(config, {
-        "vision_feature_cache": args.vision_feature_cache,
-        "train_index": args.train_index,
-        "val_index": args.val_index,
-        "modality_dropout": 0.0,
-        "train_hflip_prob": 0.0,
-        "train_vflip_prob": 0.0,
-    })
-    output = resolve_project_path(args.output_dir) or Path(args.output_dir)
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     try:
-        validate_output_replacement_safety(output, {
-            "checkpoint": args.checkpoint,
-            "source-index": args.source_index,
-            "vision-feature-cache": args.vision_feature_cache,
-            "train-index": args.train_index,
-            "val-index": args.val_index,
-            "prediction-index": args.prediction_index,
-            "fold-manifest": args.fold_manifest,
-        })
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-    if output.exists() and not output.is_dir():
-        raise SystemExit(f"predicted-region output-dir 不是目录: {output}")
-    if output.is_dir() and any(output.iterdir()) and not args.overwrite_output:
-        raise SystemExit(
-            "predicted-region output-dir 已非空；请改用新目录或显式 --overwrite-output"
+        report = run_predicted_region_export(
+            segmentation_config=args.segmentation_config,
+            preset=args.preset,
+            checkpoint=args.checkpoint,
+            source_index=args.source_index,
+            split=args.split,
+            vision_feature_cache=args.vision_feature_cache,
+            train_index=args.train_index,
+            val_index=args.val_index,
+            prediction_index=args.prediction_index,
+            fold_manifest=args.fold_manifest,
+            checkpoint_fold=args.checkpoint_fold,
+            threshold=args.threshold,
+            max_parents=args.max_parents,
+            device_name=args.device,
+            output_dir=args.output_dir,
+            overwrite_output=args.overwrite_output,
         )
-    if args.overwrite_output and output.exists():
-        shutil.rmtree(output)
-    from qpsalm_seg.description.predicted_regions import export_predicted_regions
-
-    report = export_predicted_regions(
-        segmentation_config=config,
-        checkpoint=args.checkpoint,
-        source_index=args.source_index,
-        split=args.split,
-        output_dir=output,
-        device=torch.device(args.device),
-        threshold=args.threshold,
-        fold_manifest=args.fold_manifest,
-        checkpoint_fold=args.checkpoint_fold,
-        prediction_index=args.prediction_index,
-        max_parents=args.max_parents,
-    )
+    except OOFLaunchError as exc:
+        raise SystemExit(str(exc)) from exc
     print(json.dumps(report, ensure_ascii=False))
 
 

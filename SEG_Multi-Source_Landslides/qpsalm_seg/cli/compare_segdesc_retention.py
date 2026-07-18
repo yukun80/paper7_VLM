@@ -22,40 +22,29 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from qpsalm_seg.description.common import write_json
-from qpsalm_seg.description.retention import (
-    aggregate_m7_retention_seed_gates,
-    validate_m7_retention_seed_gate,
+from qpsalm_seg.description.workflows.comparison import (
+    run_retention_seed_comparison,
 )
-from qpsalm_seg.paths import resolve_project_path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Aggregate three independent M7 full-val retention gates."
     )
     parser.add_argument("--retention-gate", action="append", required=True)
     parser.add_argument("--seed", action="append", type=int, required=True)
     parser.add_argument("--output", required=True)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    report = aggregate_m7_retention_seed_gates(
-        args.retention_gate,
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    report = run_retention_seed_comparison(
+        retention_gates=args.retention_gate,
         seeds=args.seed,
+        output=args.output,
     )
-    output = resolve_project_path(args.output) or Path(args.output)
-    candidate = output.with_name(f".{output.name}.candidate")
-    try:
-        write_json(candidate, report)
-        validate_m7_retention_seed_gate(candidate)
-        candidate.replace(output)
-    finally:
-        candidate.unlink(missing_ok=True)
     print(json.dumps(report, ensure_ascii=False, allow_nan=False))
     if not report["passed"]:
         raise SystemExit(2)

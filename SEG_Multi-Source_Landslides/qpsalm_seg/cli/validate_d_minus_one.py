@@ -16,41 +16,27 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from qpsalm_seg.description.d_minus_one import (
-    validate_d_minus_one_runs,
-    validate_d_minus_one_gate,
-    write_d_minus_one_gate,
+from qpsalm_seg.description.workflows.d_minus_one import (
+    validate_and_publish_d_minus_one,
 )
-from qpsalm_seg.paths import resolve_project_path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate the complete D-1 gate.")
     parser.add_argument("--zero-shot-dir", required=True)
     parser.add_argument("--overfit-dir", required=True)
     parser.add_argument("--output", required=True)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    report = validate_d_minus_one_runs(
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    report = validate_and_publish_d_minus_one(
         args.zero_shot_dir,
         args.overfit_dir,
+        args.output,
     )
-    output = resolve_project_path(args.output) or Path(args.output)
-    if report["errors"]:
-        write_d_minus_one_gate(output, report)
-    else:
-        candidate = output.with_name(f".{output.name}.candidate")
-        try:
-            write_d_minus_one_gate(candidate, report)
-            validate_d_minus_one_gate(candidate)
-            candidate.replace(output)
-        finally:
-            candidate.unlink(missing_ok=True)
     print(json.dumps(report, ensure_ascii=False, allow_nan=False))
     if report["errors"]:
         raise SystemExit(1)

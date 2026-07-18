@@ -36,44 +36,65 @@ from qpsalm_seg.engine.evaluator import (
 from qpsalm_seg.engine.checkpoint import CHECKPOINT_FORMAT as SEGMENTATION_CHECKPOINT_FORMAT
 from qpsalm_seg.schema import ActiveModalitySubset, ModalityBatch
 from qpsalm_seg.paths import validate_output_replacement_safety
-from qpsalm_seg.description.config import load_segdesc_config
-from qpsalm_seg.description.counterfactuals import counterfactual_region_masks
-from qpsalm_seg.description.data import (
-    BRIDGE_BUILDER_VERSION,
-    BRIDGE_ENGINEERING_AUDIT_PROTOCOL,
-    BRIDGE_EXPERT_ARTIFACT_PROTOCOL,
-    BRIDGE_EXPERT_REPLAY_PROTOCOL,
+from qpsalm_seg.description.protocols.config import load_segdesc_config
+from qpsalm_seg.description.evaluation.counterfactuals import counterfactual_region_masks
+from qpsalm_seg.description.data.datasets import (
     DescriptionTaskDataset,
-    DESCRIPTION_ENGINEERING_AUDIT_PROTOCOL,
-    FROZEN_GATE_COUNTERFACTUAL_MODES,
-    FROZEN_GATE_SCIENTIFIC_PROTOCOLS,
-    FROZEN_GATE_THRESHOLD_KEYS,
     REGION_INPUT_SOURCE_PROTOCOL,
-    REGION_TRAINING_DATA_PROTOCOL,
-    _caption_source_weights,
-    _stable_weighted_index,
+    caption_source_weights,
+    stable_weighted_index,
     require_engineering_bridge,
     require_engineering_description,
-    _validate_expert_rows,
     cross_parent_region_swap_candidates,
     end_to_end_region_support,
-    evaluation_region_source_population_sha256,
     filter_evaluation_region_source,
     filter_evaluation_source,
-    require_frozen_expert_bridge,
     same_parent_region_swap_candidates,
     select_d_minus_one_mixture,
     validate_predicted_index,
 )
-from qpsalm_seg.description.metrics import (
+from qpsalm_seg.description.data.engineering_contracts import (
+    BRIDGE_ENGINEERING_AUDIT_PROTOCOL,
+    DESCRIPTION_ENGINEERING_AUDIT_PROTOCOL,
+    REGION_TRAINING_DATA_PROTOCOL,
+)
+from qpsalm_seg.description.data.records import (
+    evaluation_region_source_population_sha256,
+    structured_text,
+)
+from qpsalm_seg.description.data.expert_contracts import (
+    BRIDGE_BUILDER_VERSION,
+    BRIDGE_EXPERT_ARTIFACT_PROTOCOL,
+    BRIDGE_EXPERT_REPLAY_PROTOCOL,
+    FROZEN_GATE_COUNTERFACTUAL_MODES,
+    FROZEN_GATE_SCIENTIFIC_PROTOCOLS,
+    FROZEN_GATE_THRESHOLD_KEYS,
+    require_frozen_expert_bridge,
+    validate_expert_rows,
+)
+from qpsalm_seg.description.data.artifact_readiness import (
+    ARTIFACT_READINESS_ACCEPTANCE_PROTOCOL,
+    ARTIFACT_READINESS_PROTOCOL,
+)
+from qpsalm_seg.description.evaluation.metrics import (
     DescriptionMetricAccumulator,
     structured_disagreement,
     unsupported_claim_counts,
 )
-import qpsalm_seg.description.output_protocol as output_protocol
-from qpsalm_seg.description.output_protocol import parse_description_output
-from qpsalm_seg.description.json_protocol import strict_json_loads
-from qpsalm_seg.description.predicted_regions import (
+import qpsalm_seg.description.protocols.output as output_protocol
+from qpsalm_seg.description.protocols.output import parse_description_output
+from qpsalm_seg.description.protocols.io import strict_json_loads
+from qpsalm_seg.description.protocols.gates import (
+    d_minus_one_gradient_gate_passed,
+    structured_generation_audits_current,
+)
+from qpsalm_seg.description.protocols.versions import (
+    DESCRIPTION_GRADIENT_GATE_PROTOCOL,
+    DESCRIPTION_SEQUENCE_PROTOCOL,
+    STRICT_RELOAD_PROBE_PROTOCOL,
+    STRUCTURED_GENERATION_PROTOCOL,
+)
+from qpsalm_seg.description.data.predicted_regions import (
     FIXED_PREDICTION_ARTIFACT_PROTOCOL,
     OOF_MERGE_PROTOCOL,
     PREDICTED_REGION_FORMAT,
@@ -82,63 +103,86 @@ from qpsalm_seg.description.predicted_regions import (
     revalidate_oof_merged_index,
     validate_oof_checkpoint_binding,
 )
-from qpsalm_seg.description.expert_factuality import (
+from qpsalm_seg.description.evaluation.expert_factuality import (
     EXPERT_FAMILIES,
     EXPERT_FACTUALITY_PROTOCOL,
     aggregate_expert_factuality,
     build_expert_review_template,
     revalidate_expert_factuality_report,
 )
-from qpsalm_seg.description.evaluator import (
+from qpsalm_seg.description.evaluation.contracts import (
     COUNTERFACTUAL_INPUT_AUDIT_PROTOCOL,
     DESCRIPTION_EVALUATION_PROTOCOL,
-    END_TO_END_TARGET_PROTOCOL,
     EVALUATION_CHECKPOINT_BINDING_PROTOCOL,
     EVALUATION_POPULATION_FIELDS,
+)
+from qpsalm_seg.description.evaluation.targets import (
+    END_TO_END_TARGET_PROTOCOL,
     EndToEndTargetResolver,
-    _same_image_retrieval,
-    build_evaluation_publication_audit,
+)
+from qpsalm_seg.description.evaluation.artifacts import (
     counterfactual_input_change_audit,
     evaluation_mask_artifact_inventory,
+    write_evaluation_mask_artifact,
+)
+from qpsalm_seg.description.evaluation.publication import (
+    build_evaluation_publication_audit,
     evaluation_population_sha256,
     revalidate_evaluation_publication,
     validate_evaluation_checkpoint_binding,
-    write_evaluation_mask_artifact,
 )
-from qpsalm_seg.description.target_audit import (
+from qpsalm_seg.description.evaluation.retrieval import (
+    same_image_retrieval as _same_image_retrieval,
+)
+from qpsalm_seg.description.data.source_binding import (
     build_segmentation_instruction_source_binding,
 )
-from qpsalm_seg.description.model import (
+from qpsalm_seg.description.modeling.model import (
     SegmentationGroundedDescriptionModel,
     alignment_positive_mask,
     multi_positive_alignment_loss,
 )
-from qpsalm_seg.description.runtime import (
+from qpsalm_seg.description.modeling.structured_generation import (
+    generate_schema_constrained_description,
+)
+from qpsalm_seg.description.training.runtime import (
     description_parameter_groups,
     description_trainable_parameter_manifest,
 )
-from qpsalm_seg.description.trainer import (
-    DESCRIPTION_TRAINING_PROGRESS_PROTOCOL,
-    _description_stream_binding,
-    _description_training_progress_payload,
-    _description_step_gradient_gate,
-    _next_description_stream_batch,
-    _restore_description_training_progress,
+from qpsalm_seg.description.training.engineering_gates import (
     build_d_minus_one_overfit_validation,
+    causal_label_audit,
+    description_step_gradient_gate as _description_step_gradient_gate,
 )
-from qpsalm_seg.description.backbone import (
+from qpsalm_seg.description.training.gradient_gates import (
+    DescriptionGradientGateTracker,
+)
+from qpsalm_seg.description.training.streams import (
+    DESCRIPTION_TRAINING_PROGRESS_PROTOCOL,
+    description_stream_binding as _description_stream_binding,
+    description_training_progress_payload as _description_training_progress_payload,
+    next_description_stream_batch as _next_description_stream_batch,
+    restore_description_training_progress as _restore_description_training_progress,
+)
+
+from qpsalm_seg.description.modeling.backbone import (
     DescriptionCacheBackboneEncoder,
+)
+from qpsalm_seg.description.protocols.region_geometry import (
+    REGION_SOURCE_CANVAS_MAPPING_PROTOCOL,
+    project_native_region_mask_to_cache,
     restore_region_mask_from_cache,
     transform_region_mask_to_cache,
 )
-from qpsalm_seg.description.vision_cache import (
+from qpsalm_seg.description.data.vision_cache import (
     DESCRIPTION_CACHE_BUILDER_VERSION,
     DESCRIPTION_CACHE_FORMAT,
     DESCRIPTION_CACHE_PROTOCOL,
     DescriptionVisionFeatureBank,
     description_cache_key,
 )
-from qpsalm_seg.description.common import (
+from qpsalm_seg.description.data.loaders import (
+    DMinusOneTaskPathBatchSampler,
     EpochShuffleBatchSampler,
     ParentGroupedRegionBatchSampler,
     append_jsonl,
@@ -147,10 +191,8 @@ from qpsalm_seg.description.common import (
     validate_predicted_training_indexes,
     write_json,
 )
-from qpsalm_seg.description.run_artifacts import (
+from qpsalm_seg.description.training.run_artifacts import (
     CHECKPOINT_RUN_COMPLETION_PROTOCOL,
-    DESCRIPTION_TRAINING_COMPLETION_PROTOCOL,
-    JOINT_TRAINING_COMPLETION_PROTOCOL,
     RESUME_RECONCILIATION_PROTOCOL,
     TERMINAL_CHECKPOINT_AUDIT_PROTOCOL,
     build_training_completion_report,
@@ -159,28 +201,36 @@ from qpsalm_seg.description.run_artifacts import (
     validate_checkpoint_run_completion,
     validate_terminal_checkpoint_provenance,
 )
-from qpsalm_seg.description.joint_trainer import (
+from qpsalm_seg.description.protocols.versions import (
+    DESCRIPTION_TRAINING_COMPLETION_PROTOCOL,
+    JOINT_TRAINING_COMPLETION_PROTOCOL,
+)
+from qpsalm_seg.description.training.joint_contracts import (
     JOINT_INITIALIZATION_PROTOCOL,
     JOINT_LOADER_SEED_OFFSETS,
     JOINT_LOADER_BINDING_PROTOCOL,
     JOINT_PROGRESS_PROTOCOL,
     JOINT_RUN_PROTOCOL,
-    _initial_joint_loader_states,
-    _joint_loader_binding,
-    _joint_progress_payload,
-    _next_joint_loader_batch,
+)
+from qpsalm_seg.description.training.joint_lifecycle import (
     build_joint_initialization_audit,
-    build_joint_optimizer,
-    joint_optimizer_manifest,
-    monitor_baseline_identity,
-    monitor_retention_gate,
+    joint_progress_payload as _joint_progress_payload,
     restore_joint_progress,
     revalidate_joint_initialization_audit,
     validate_joint_checkpoint_execution,
     validate_m7_source_checkpoint,
+)
+from qpsalm_seg.description.training.joint_runtime import (
+    build_joint_optimizer,
+    initial_joint_loader_states as _initial_joint_loader_states,
+    joint_loader_binding as _joint_loader_binding,
+    joint_optimizer_manifest,
+    monitor_baseline_identity,
+    monitor_retention_gate,
+    next_joint_loader_batch as _next_joint_loader_batch,
     validate_joint_task_gradients,
 )
-from qpsalm_seg.description.checkpoint import (
+from qpsalm_seg.description.training.checkpoint import (
     DESCRIPTION_STAGE_LINEAGE_PROTOCOL,
     FROZEN_QWEN_PREFIX,
     SEGDESC_CHECKPOINT_FORMAT,
@@ -190,7 +240,7 @@ from qpsalm_seg.description.checkpoint import (
     build_description_stage_lineage,
     capture_training_rng_state,
     description_protocol_assets_spec,
-    initialize_segdesc_checkpoint,
+    initialize_segdesc_checkpoint as _initialize_segdesc_checkpoint,
     inspect_segdesc_checkpoint,
     load_segdesc_checkpoint,
     restore_training_rng_state,
@@ -200,14 +250,22 @@ from qpsalm_seg.description.checkpoint import (
     validate_resume_run_config,
     verify_segdesc_checkpoint_reload,
 )
-from qpsalm_seg.description.d_minus_one import (
+
+
+def initialize_segdesc_checkpoint(*args, **kwargs):
+    """Exercise the explicit checkpoint/run-lifecycle dependency boundary."""
+    kwargs.setdefault(
+        "run_completion_validator", validate_checkpoint_run_completion
+    )
+    return _initialize_segdesc_checkpoint(*args, **kwargs)
+from qpsalm_seg.description.evaluation.d_minus_one import (
     D_MINUS_ONE_ACCEPTANCE_PROTOCOL,
     D_MINUS_ONE_GATE_PROTOCOL,
     validate_d_minus_one_gate,
     validate_d_minus_one_overfit_report,
     validate_d_minus_one_runs,
 )
-from qpsalm_seg.description.cycle_localization import (
+from qpsalm_seg.description.evaluation.cycle_localization import (
     CYCLE_LOCALIZATION_PROTOCOL,
     CYCLE_PROMPT_PROTOCOL,
     CycleLocalizationProvider,
@@ -215,35 +273,40 @@ from qpsalm_seg.description.cycle_localization import (
     cycle_region_iou,
     summarize_cycle_localization,
 )
-from qpsalm_seg.description.caption_metrics import (
+from qpsalm_seg.description.evaluation.caption_metrics import (
     _bertscore_model_audit,
     _metric_summary,
     caption_metric_population,
 )
-from qpsalm_seg.description.caption_human_review import (
+from qpsalm_seg.description.evaluation.caption_human_review import (
     aggregate_caption_human_reviews,
     build_caption_human_review_template,
 )
-from qpsalm_seg.description.zero_shot import (
+from qpsalm_seg.description.evaluation.zero_shot import (
     ZERO_SHOT_INPUT_PROTOCOL,
     ZERO_SHOT_PROTOCOL,
-    _input_audit,
+    build_zero_shot_input_audit,
+    build_zero_shot_model_identity,
 )
-from qpsalm_seg.description.oof import build_oof_fold_indexes, load_oof_manifest
-from qpsalm_seg.description.comparison import (
+from qpsalm_seg.description.data.oof import build_oof_fold_indexes, load_oof_manifest
+from qpsalm_seg.description.evaluation.comparison import (
     M4_BASELINE_REGION_ENCODERS,
     M4_SEED_GATE_PROTOCOL,
     M4_SUITE_GATE_PROTOCOL,
-    _m4_cross_seed_training_population_contract,
-    _counterfactual_gate,
-    _formal_seed_binding,
-    _rows,
     _validate_three_seed_artifact_uniqueness,
-    _validate_evaluation_checkpoint_provenance,
     _validate_paired_evaluation_reports,
     aggregate_m4_region_encoder_reports,
 )
-from qpsalm_seg.description.retention import (
+from qpsalm_seg.description.evaluation.formal_inputs import (
+    formal_seed_binding as _formal_seed_binding,
+    load_evaluation_rows as _rows,
+    m4_cross_seed_training_population_contract as _m4_cross_seed_training_population_contract,
+    validate_evaluation_checkpoint_provenance as _validate_evaluation_checkpoint_provenance,
+)
+from qpsalm_seg.description.evaluation.counterfactual_gate import (
+    counterfactual_gate as _counterfactual_gate,
+)
+from qpsalm_seg.description.evaluation.retention import (
     BASELINE_CHECKPOINT_REPLAY_PROTOCOL,
     M7_RETENTION_SEED_GATE_PROTOCOL,
     aggregate_m7_retention_seed_gates,
@@ -253,7 +316,7 @@ from qpsalm_seg.description.retention import (
     validate_m7_retention_gate,
     validate_m7_retention_seed_gate,
 )
-from qpsalm_seg.description.d4_curriculum import (
+from qpsalm_seg.description.evaluation.d4_curriculum import (
     D4_CURRICULUM_GATE_PROTOCOL,
     M4_SUITE_ACCEPTANCE_PROTOCOL,
     build_d4_curriculum_gate,
@@ -261,16 +324,344 @@ from qpsalm_seg.description.d4_curriculum import (
     validate_d4_curriculum_transition,
     validate_d4_final_acceptance_for_m7,
 )
-from qpsalm_seg.description.m6_acceptance import (
+from qpsalm_seg.description.evaluation.m6_acceptance import (
     M6_ACCEPTANCE_AUDIT_PROTOCOL,
     build_m6_acceptance_gate,
     validate_m6_acceptance_for_m7,
     validate_m6_acceptance_gate,
 )
-from qpsalm_seg.cli.eval_segdesc_retention import (
+from qpsalm_seg.description.evaluation.retention_build import (
     baseline_eval_binding,
     build_retention_gate,
 )
+
+
+CAUSAL_HISTORY_AUDIT = {
+    "causal_label_audit_passed": 1.0,
+    "causal_prefix_masked": 1.0,
+    "causal_target_contiguous": 1.0,
+    "causal_padding_masked": 1.0,
+    "causal_eos_supervised": 1.0,
+}
+
+
+def synthetic_description_gradient_gate() -> dict:
+    """Build the complete two-path D-1 gradient artifact used by fixtures."""
+
+    modules = {
+        name: {
+            "num_parameters": 1,
+            "num_with_grad": 0,
+            "num_nonzero": 0,
+            "norm_sum": 0.0,
+            "all_finite": True,
+        }
+        for name in (
+            "desc_adapter", "description_backbone", "mgrr",
+            "region_projection", "global_visual_projection", "alignment",
+        )
+    }
+
+    def path_report(path: str) -> dict:
+        nonzero = {"desc_adapter", "global_visual_projection"}
+        zero = {"alignment"}
+        if path == "region_description":
+            nonzero.update({
+                "description_backbone", "mgrr", "region_projection",
+            })
+        else:
+            zero.update({
+                "description_backbone", "mgrr", "region_projection",
+            })
+        observed_modules = json.loads(json.dumps(modules))
+        for name in nonzero:
+            observed_modules[name].update({
+                "num_with_grad": 1,
+                "num_nonzero": 1,
+                "norm_sum": 1.0,
+            })
+        checks = {
+            **{f"{name}_nonzero": True for name in nonzero},
+            **{f"{name}_zero": True for name in zero},
+            "all_trainable_gradients_finite": True,
+        }
+        return {
+            "protocol": DESCRIPTION_GRADIENT_GATE_PROTOCOL,
+            "run_stage": "overfit",
+            "stream_name": "main",
+            "stream_stage": "overfit",
+            "observed_task_paths": [path],
+            "required_nonzero": sorted(nonzero),
+            "required_zero": sorted(zero),
+            "modules": observed_modules,
+            "checks": checks,
+            "passed": True,
+        }
+
+    paths = ["global_caption", "region_description"]
+    return {
+        "protocol": DESCRIPTION_GRADIENT_GATE_PROTOCOL,
+        "run_stage": "overfit",
+        "required_streams": ["main"],
+        "checked_streams": ["main"],
+        "all_required_streams_checked": True,
+        "streams": {
+            "main": {
+                "required_task_paths": paths,
+                "observed_task_paths": paths,
+                "path_reports": {
+                    path: path_report(path) for path in paths
+                },
+                "passed": True,
+            },
+        },
+        "passed": True,
+    }
+
+
+def synthetic_d_minus_one_data_audit(
+    artifact_readiness_acceptance: dict,
+    *,
+    batch_size: int = 2,
+    grad_accum_steps: int = 4,
+) -> dict:
+    return {
+        "artifact_readiness_acceptance": artifact_readiness_acceptance,
+        "stream_loader_bindings": {
+            "main": {
+                "batch_sampler": {
+                    "class": DMinusOneTaskPathBatchSampler.__name__,
+                    "protocol": DMinusOneTaskPathBatchSampler.protocol,
+                    "batch_size": int(batch_size),
+                    "gradient_window_batches": int(grad_accum_steps),
+                    "drop_last": False,
+                },
+            },
+        },
+    }
+
+
+def synthetic_d_minus_one_generation_rows() -> list[dict]:
+    rows = []
+    for category in ("global", "box", "mask", "null"):
+        structured = category in {"mask", "null"}
+        raw = (
+            json.dumps(
+                valid_target("absent" if category == "null" else "present"),
+                separators=(",", ":"),
+            )
+            if structured else "synthetic caption"
+        )
+        row = {
+            "d_minus_one_category": category,
+            "structured_output": structured,
+            "use_region_tokens": category != "global",
+            "raw_generation": raw,
+        }
+        if structured:
+            parsed_raw = json.loads(raw)
+            row["generation_audit"] = {
+                "protocol": STRUCTURED_GENERATION_PROTOCOL,
+                "mode": "schema_constrained_raw_generation",
+                "raw_schema_valid": True,
+                "repair_used": False,
+                "forced_tokens": 1,
+                "model_selected_tokens": 1,
+                "total_tokens": 2,
+                "decoder_advance_calls": 2,
+                "max_new_tokens": 256,
+                "enum_choices": {
+                    "target_status": parsed_raw["target_status"],
+                    **{
+                        f"region.{name}": value
+                        for name, value in parsed_raw["region"].items()
+                    },
+                    **{
+                        f"evidence.{name}": parsed_raw["evidence"][name]
+                        for name in (
+                            "terrain_support", "sar_support",
+                            "deformation_support", "evidence_sufficiency",
+                        )
+                    },
+                },
+                "text_termination": {
+                    "evidence.surface_observation": "synthetic",
+                    "evidence.surrounding_context": "synthetic",
+                    "summary": "synthetic",
+                },
+                "raw_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                "token_stream_sha256": hashlib.sha256(
+                    raw.encode("utf-8")
+                ).hexdigest(),
+                "token_stream_matches_raw": True,
+            }
+        rows.append(row)
+    return rows
+
+
+SEGDESC_TEST_CONFIG = Path(
+    "SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml"
+)
+
+
+def synthetic_segdesc_config(**overrides: object) -> dict:
+    """Build complete current config-v2 metadata for synthetic checkpoints."""
+    values = dict(overrides)
+    stage = str(values.get("stage") or "bridge_auto")
+    if stage == "overfit":
+        values.setdefault("max_steps", 100)
+        values.setdefault("batch_size", 2)
+        values.setdefault("max_train_samples", 64)
+    if stage == "mmrs_caption":
+        values.setdefault(
+            "d_minus_one_gate", "outputs/synthetic/d_minus_one_gate.json"
+        )
+    if stage == "predicted_mask" or values.get("joint_region_stage") == "predicted_mask":
+        values.setdefault("predicted_index", "outputs/synthetic/predicted_train.jsonl")
+        values.setdefault("predicted_val_index", "outputs/synthetic/predicted_val.jsonl")
+    return load_segdesc_config(SEGDESC_TEST_CONFIG, values).to_dict()
+
+
+def synthetic_strict_reload_audit(
+    checkpoint: Path,
+    migration: dict,
+    *,
+    checkpoint_sha256: str,
+    step: int = 100,
+) -> dict:
+    """Build a complete stateful reload proof for report-validation tests."""
+
+    expected = {
+        "optimizer": "1" * 64,
+        "scheduler": "2" * 64,
+        "rng": "3" * 64,
+        "scaler": None,
+    }
+    return {
+        "protocol": STRICT_RELOAD_PROBE_PROTOCOL,
+        "passed": True,
+        "checkpoint": str(checkpoint.resolve()),
+        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_step": int(step),
+        "before_sha256": "a" * 64,
+        "corrupted_sha256": "b" * 64,
+        "restored_sha256": "a" * 64,
+        "optimizer_state_restored": True,
+        "scheduler_state_restored": True,
+        "rng_state_restored": True,
+        "grad_scaler_state_requested": False,
+        "grad_scaler_state_restored": True,
+        "state_probe": {
+            "expected_sha256": expected,
+            "before_sha256": dict(expected),
+            "corrupted_sha256": {
+                "optimizer": "4" * 64,
+                "scheduler": "5" * 64,
+                "rng": "6" * 64,
+                "scaler": None,
+            },
+            "restored_sha256": dict(expected),
+            "corrupted_fields": {
+                "optimizer": "param_groups[0].lr",
+                "scheduler": "last_epoch",
+                "rng": "python+numpy+torch_cpu+torch_cuda",
+                "scaler": None,
+            },
+        },
+        "segmentation_migration": migration,
+    }
+
+
+def write_synthetic_artifact_readiness(
+    root: Path,
+    *,
+    description: Path,
+    bridge: Path,
+    unified: Path,
+    cache: Path,
+) -> tuple[Path, dict]:
+    """Create the compact launch-time readiness contract used by fixtures."""
+    for path in (description, bridge, unified, cache):
+        path.mkdir(parents=True, exist_ok=True)
+    inputs = {
+        "description_benchmark": str(description.resolve(strict=False)),
+        "bridge_benchmark": str(bridge.resolve(strict=False)),
+        "unified_benchmark": str(unified.resolve(strict=False)),
+        "description_cache": str(cache.resolve(strict=False)),
+    }
+    report = {
+        "protocol": ARTIFACT_READINESS_PROTOCOL,
+        "mode": "small",
+        "status": "engineering-valid",
+        "ready": True,
+        "expert_truth_used": False,
+        "inputs": inputs,
+        "checks": {"synthetic_fixture": True},
+        "errors": [],
+        "cache": {},
+        "description": {},
+        "bridge": {"status": "awaiting_expert_review"},
+        "unified": {},
+        "frozen_expert_bridge": None,
+    }
+    report_path = root / "artifact_readiness_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    acceptance = {
+        "protocol": ARTIFACT_READINESS_ACCEPTANCE_PROTOCOL,
+        "status": "engineering-valid",
+        "report": str(report_path.resolve(strict=False)),
+        "report_sha256": hashlib.sha256(
+            report_path.read_bytes()
+        ).hexdigest(),
+        "mode": "small",
+        "inputs": inputs,
+        "bridge_status": "awaiting_expert_review",
+        "expert_truth_used": False,
+        "errors": [],
+    }
+    return report_path, acceptance
+
+
+def synthetic_segmentation_migration(root: Path) -> tuple[dict, dict]:
+    """Create one replayable segmentation lineage for checkpoint unit tests."""
+    source = root / ".synthetic_segmentation_checkpoint.pt"
+    if not source.is_file():
+        source.write_bytes(b"synthetic-segmentation-checkpoint-v1")
+    migration = {
+        "source_path": str(source.resolve(strict=False)),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "source_format": SEGMENTATION_CHECKPOINT_FORMAT,
+        "source_step": 6000,
+        "allowed_prefixes": list(SEGMENTATION_STATE_PREFIXES),
+    }
+    lineage = validate_segmentation_migration_lineage(
+        migration, {"segmentation_migration": migration}
+    )
+    return migration, lineage
+
+
+def save_synthetic_model_checkpoint(
+    path: Path,
+    model: nn.Module,
+    *,
+    step: int,
+    metadata: dict,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: object | None = None,
+) -> None:
+    """Save through the production contract with complete synthetic lineage."""
+    migration, lineage = synthetic_segmentation_migration(path.parent)
+    complete_metadata = copy.deepcopy(metadata)
+    complete_metadata.setdefault("segmentation_migration_lineage", lineage)
+    save_segdesc_checkpoint(
+        path,
+        model,
+        step=step,
+        segmentation_migration=migration,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        metadata=complete_metadata,
+    )
 
 
 def valid_target(status: str = "absent") -> dict:
@@ -356,38 +747,27 @@ def write_synthetic_region_input_source(
     region_id: str,
     region_source: str,
     mask: np.ndarray,
+    cache_record: dict,
 ) -> tuple[dict, Path]:
     source_dir = root / "source_masks"
     source_dir.mkdir(parents=True, exist_ok=True)
     path = source_dir / f"{hashlib.sha256(sample_id.encode()).hexdigest()}.npy"
     np.save(path, mask.astype(np.uint8), allow_pickle=False)
     shape = list(mask.shape)
+    _, source_mapping = project_native_region_mask_to_cache(
+        torch.from_numpy(mask.astype(np.float32, copy=False))[None],
+        dict(cache_record["views"][0]["render_transform"]),
+    )
     return {
         "protocol": REGION_INPUT_SOURCE_PROTOCOL,
         "sample_id": sample_id,
         "parent_sample_id": parent_sample_id,
         "region_id": region_id,
         "region_source": region_source,
-        "cache_lookup_key": description_cache_key(
-            "multisource_parent", parent_sample_id
-        ),
-        "cache_fingerprint": hashlib.sha256("|".join([
-            DESCRIPTION_CACHE_PROTOCOL,
-            description_cache_key("multisource_parent", parent_sample_id),
-            hashlib.sha256(b"synthetic-source").hexdigest(),
-            "synthetic-model-revision",
-            "synthetic-processor-revision",
-            hashlib.sha256(b"synthetic-view").hexdigest(),
-        ]).encode()).hexdigest(),
-        "render_transform": {
-            "source_h": shape[0],
-            "source_w": shape[1],
-            "resized_h": shape[0],
-            "resized_w": shape[1],
-            "pad_top": 0,
-            "pad_left": 0,
-            "size": shape[0],
-        },
+        "cache_lookup_key": str(cache_record["lookup_key"]),
+        "cache_fingerprint": str(cache_record["cache_fingerprint"]),
+        "render_transform": dict(cache_record["views"][0]["render_transform"]),
+        "source_to_render_mapping": source_mapping,
         "source_mask": {
             "kind": "binary_npy",
             "path": str(path),
@@ -540,6 +920,14 @@ def write_synthetic_segdesc_checkpoint(
 ) -> None:
     """Write the smallest current checkpoint whose metadata can be replayed."""
     architecture = checkpoint_metadata.setdefault("description_architecture_spec", {})
+    architecture.setdefault(
+        "description_sequence_protocol",
+        DESCRIPTION_SEQUENCE_PROTOCOL,
+    )
+    architecture.setdefault(
+        "structured_generation_protocol",
+        STRUCTURED_GENERATION_PROTOCOL,
+    )
     if "description_cache_artifact_binding" not in architecture:
         architecture["description_cache_artifact_binding"] = (
             write_synthetic_description_cache_binding(
@@ -569,7 +957,7 @@ def write_synthetic_segdesc_checkpoint(
         "required_state_keys": sorted(state),
         "frozen_qwen_prefix": FROZEN_QWEN_PREFIX,
         "adapter_names": ["default", "desc_adapter"],
-        "description_sequence_protocol": "qpsalm_description_causal_v4_stage_separated",
+        "description_sequence_protocol": DESCRIPTION_SEQUENCE_PROTOCOL,
         "description_protocol_assets": checkpoint_metadata[
             "description_protocol_assets"
         ],
@@ -1343,15 +1731,16 @@ def write_synthetic_d4_curriculum_gate(
                 "terminal_last"
                 if source_stage == "bridge_auto" else "validation_best"
             ),
-            "config": {
-                "seed": seed,
-                "predicted_mask_fraction": current_fraction,
-                "description_benchmark": (
+            "config": synthetic_segdesc_config(
+                stage=source_stage,
+                seed=seed,
+                predicted_mask_fraction=current_fraction,
+                description_benchmark=(
                     (d_minus_one_acceptance or {}).get(
                         "description_source", {}
                     ).get("benchmark_root")
                 ),
-            },
+            ),
             "region_data_audit": train_audit,
         },
     }
@@ -1449,6 +1838,12 @@ def write_synthetic_d4_curriculum_gate(
     })
     region_mask = np.zeros((4, 4), dtype=np.uint8)
     region_mask.reshape(-1)[:10] = 1
+    cache_dir = checkpoint_metadata["description_architecture_spec"][
+        "description_cache_artifact_binding"
+    ]["cache_dir"]
+    cache_record = DescriptionVisionFeatureBank(cache_dir).record(
+        "multisource_parent", "parent-1"
+    )
     region_source_binding, region_source_path = write_synthetic_region_input_source(
         evaluation,
         sample_id="sample-1",
@@ -1456,6 +1851,7 @@ def write_synthetic_d4_curriculum_gate(
         region_id=str(row["region_id"]),
         region_source=str(row["region_source"]),
         mask=region_mask,
+        cache_record=cache_record,
     )
     region_artifact = write_evaluation_mask_artifact(
         evaluation,
@@ -1704,7 +2100,7 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
     (description / "reports").mkdir()
     (description / "data/dev/rsicap").mkdir(parents=True)
     description_rows = []
-    for index in range(32):
+    for index in range(64):
         image_path = description / f"data/dev/rsicap/parent-{index}.png"
         image_path.write_bytes(f"synthetic-image-{index}".encode("utf-8"))
         description_rows.append({
@@ -1732,8 +2128,8 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
         "verified_perceptual_duplicate_cross_split_groups": 0,
         "errors": [],
     }), encoding="utf-8")
-    selected, input_audit = _input_audit(
-        description, "dev", max_samples=32, seed=42
+    selected, input_audit = build_zero_shot_input_audit(
+        description, "dev", max_samples=64, seed=42
     )
 
     zero_dir = root / "zero"
@@ -1750,26 +2146,20 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
     model_dir.mkdir()
     model_config = model_dir / "config.json"
     model_config.write_text("{}\n", encoding="utf-8")
-    metadata_hashes = {"config.json": sha(model_config)}
+    (model_dir / "model.safetensors").write_bytes(b"synthetic-qwen-weights")
     zero_report = {
         "protocol": ZERO_SHOT_PROTOCOL,
         "status": "engineering-valid",
         "errors": [],
         "checks": {"synthetic_complete": True},
-        "num_samples": 32,
+        "num_samples": 64,
         "caption_token_f1": 0.1,
         "statistics_seed": 42,
         "region_capability_claimed": False,
         "raw_generations": str(zero_raw),
         "raw_generations_sha256": sha(zero_raw),
         "input_audit": input_audit,
-        "model_audit": {
-            "model_dir": str(model_dir),
-            "metadata_file_sha256": metadata_hashes,
-            "metadata_snapshot_sha256": hashlib.sha256(json.dumps(
-                metadata_hashes, sort_keys=True, separators=(",", ":")
-            ).encode()).hexdigest(),
-        },
+        "model_audit": build_zero_shot_model_identity(model_dir),
     }
     (zero_dir / "eval_report.json").write_text(
         json.dumps(zero_report), encoding="utf-8"
@@ -1785,8 +2175,8 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
     bridge_validation = root / "bridge_validation.json"
     bridge_validation.write_text("{}\n", encoding="utf-8")
     sampling = {
-        "selected_samples": 32,
-        "category_counts": {"global": 8, "box": 8, "mask": 8, "null": 8},
+        "selected_samples": 64,
+        "category_counts": {"global": 16, "box": 16, "mask": 16, "null": 16},
         "num_native_source_sizes": 2,
         "expert_truth_used": False,
         "bridge_target_authority": "deterministic_rule_candidate_not_expert",
@@ -1802,6 +2192,9 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
         "bridge_index_sha256": sha(bridge_index),
         "bridge_validation_report": str(bridge_validation),
         "bridge_validation_report_sha256": sha(bridge_validation),
+        "category_region_token_policy": {
+            "global": False, "box": True, "mask": True, "null": True,
+        },
     }
     history = [
         {
@@ -1809,12 +2202,14 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
             "loss": 2.0,
             "peak_reserved_gib": 20.0,
             "device_type": "cuda",
+            **CAUSAL_HISTORY_AUDIT,
         },
         {
             "step": 100,
             "loss": 0.2,
             "peak_reserved_gib": 21.0,
             "device_type": "cuda",
+            **CAUSAL_HISTORY_AUDIT,
         },
     ]
     history_path = overfit_dir / "train_history.jsonl"
@@ -1822,10 +2217,7 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
         "".join(json.dumps(row) + "\n" for row in history),
         encoding="utf-8",
     )
-    generations = [
-        {"d_minus_one_category": name}
-        for name in ("global", "box", "mask", "null")
-    ]
+    generations = synthetic_d_minus_one_generation_rows()
     overfit_raw = overfit_dir / "raw_generations.jsonl"
     overfit_raw.write_text(
         "".join(json.dumps(row) + "\n" for row in generations),
@@ -1843,22 +2235,44 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
         json.dumps({"generation_metrics": metrics}), encoding="utf-8"
     )
     gradient_path = overfit_dir / "description_gradient_gate.json"
-    gradient_path.write_text(json.dumps({
-        "passed": True, "all_required_streams_checked": True,
-    }), encoding="utf-8")
+    gradient_gate = synthetic_description_gradient_gate()
+    gradient_path.write_text(json.dumps(gradient_gate), encoding="utf-8")
     manifest = {"groups": [{"parameter_names": [
         "controller.model.layer.lora_A.desc_adapter.weight",
         "controller.model.layer.lora_B.desc_adapter.weight",
     ]}]}
     manifest_path = overfit_dir / "trainable_parameter_manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    bridge_root = root / "bridge"
+    unified_root = root / "unified"
+    cache_root = root / "description-cache"
+    readiness_path, readiness_acceptance = (
+        write_synthetic_artifact_readiness(
+            root,
+            description=description,
+            bridge=bridge_root,
+            unified=unified_root,
+            cache=cache_root,
+        )
+    )
+    overfit_config = synthetic_segdesc_config(
+        stage="overfit",
+        seed=42,
+        batch_size=2,
+        max_steps=100,
+        description_benchmark=str(description),
+        bridge_benchmark=str(bridge_root),
+        unified_benchmark=str(unified_root),
+        description_vision_cache=str(cache_root),
+        artifact_readiness_report=str(readiness_path),
+        output_dir=str(overfit_dir),
+    )
     config_path = overfit_dir / "resolved_config.json"
-    config_path.write_text(json.dumps({
-        "stage": "overfit", "batch_size": 2, "max_steps": 100,
-    }), encoding="utf-8")
+    config_path.write_text(json.dumps(overfit_config), encoding="utf-8")
     summary_path = overfit_dir / "dataset_summary.json"
     summary_path.write_text(json.dumps({
         "d_minus_one_sampling_audit": sampling,
+        "artifact_readiness_acceptance": readiness_acceptance,
     }), encoding="utf-8")
     migration = {
         "source_path": str(segmentation),
@@ -1875,31 +2289,33 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
             "metadata": {
                 "stage": "overfit",
                 "checkpoint_role": "terminal_last",
+                "gradient_gate": gradient_gate,
                 "training_progress": {
                     "protocol": DESCRIPTION_TRAINING_PROGRESS_PROTOCOL,
                     "step": 100,
                 },
-                "config": {"seed": 42, "batch_size": 2, "max_steps": 100},
+                "config": overfit_config,
+                "data_audit": synthetic_d_minus_one_data_audit(
+                    readiness_acceptance
+                ),
             },
         },
         step=100,
     )
-    reload_audit = {
-        "protocol": "qpsalm_segdesc_strict_reload_probe_v1",
-        "passed": True,
-        "checkpoint": str(checkpoint.resolve()),
-        "checkpoint_sha256": sha(checkpoint),
-        "checkpoint_step": 100,
-        "before_sha256": "a" * 64,
-        "corrupted_sha256": "b" * 64,
-        "restored_sha256": "a" * 64,
-        "segmentation_migration": migration,
-    }
+    reload_audit = synthetic_strict_reload_audit(
+        checkpoint,
+        migration,
+        checkpoint_sha256=sha(checkpoint),
+    )
     overfit_report = build_d_minus_one_overfit_validation(
-        config=SimpleNamespace(batch_size=2, max_steps=100),
+        config=SimpleNamespace(
+            training=SimpleNamespace(
+                batch_size=2, grad_accum_steps=4, max_steps=100,
+            ),
+        ),
         sampling_audit=sampling,
         history_rows=history,
-        gradient_gate={"passed": True},
+        gradient_gate=gradient_gate,
         validation_report={"generation_metrics": metrics},
         generation_rows=generations,
         trainable_manifest=manifest,
@@ -1908,7 +2324,9 @@ def write_synthetic_d_minus_one_acceptance(root: Path) -> dict:
         device_type="cuda",
         segmentation_migration=migration,
         reload_audit=reload_audit,
+        artifact_readiness_acceptance=readiness_acceptance,
         source_files={
+            "artifact_readiness_report": readiness_path,
             "checkpoint": checkpoint,
             "dataset_summary": summary_path,
             "gradient_gate": gradient_path,
@@ -2281,6 +2699,14 @@ def write_synthetic_m6_acceptance(
                 "pad_left": 0,
                 "size": 4,
             },
+            "source_to_render_mapping": {
+                "protocol": REGION_SOURCE_CANVAS_MAPPING_PROTOCOL,
+                "source_hw": [4, 4],
+                "render_source_hw": [4, 4],
+                "interpolation": "nearest",
+                "extent_policy": "full_extent",
+                "resampled": False,
+            },
         },
     }) + "\n", encoding="utf-8")
     gt_report["cycle_localization"] = {
@@ -2545,11 +2971,11 @@ def synthetic_joint_execution_fields(
         "joint_run_protocol": JOINT_RUN_PROTOCOL,
         "joint_loader_bindings": bindings,
         "joint_progress": progress,
-        "config": {
-            "seed": int(seed),
-            "joint_task_pattern": list(pattern),
-            "grad_accum_steps": 1,
-        },
+        "config": synthetic_segdesc_config(
+            seed=int(seed),
+            joint_task_pattern=list(pattern),
+            grad_accum_steps=1,
+        ),
     }
 
 
@@ -2628,21 +3054,21 @@ def write_synthetic_retention_gate(
                 seed=seed,
                 population_variant=joint_population_variant,
             ),
-            "config": {
-                "seed": seed,
-                "description_benchmark": d_minus_one_acceptance[
+            "config": synthetic_segdesc_config(
+                seed=seed,
+                description_benchmark=d_minus_one_acceptance[
                     "description_source"
                 ]["benchmark_root"],
-                "joint_region_stage": "predicted_mask",
-                "predicted_mask_fraction": 0.75,
-                "d4_curriculum_sampling_seed": 42,
-                "d4_final_acceptance_gate": str(
+                joint_region_stage="predicted_mask",
+                predicted_mask_fraction=0.75,
+                d4_curriculum_sampling_seed=42,
+                d4_final_acceptance_gate=str(
                     m6_acceptance["d4_final_acceptance"]["gate"]
                 ),
-                "m6_acceptance_gate": str(m6_gate),
-                "output_dir": str(root),
-                "grad_accum_steps": 1,
-            },
+                m6_acceptance_gate=str(m6_gate),
+                output_dir=str(root),
+                grad_accum_steps=1,
+            ),
             "region_data_audit": region_data_audit,
             "d4_final_acceptance": d4_final_acceptance,
             "m6_acceptance": m6_acceptance,
@@ -2834,6 +3260,9 @@ class GenerationController:
 
 class GenerationProtocolHarness(SequenceProtocolHarness):
     generate_from_state = SegmentationGroundedDescriptionModel.generate_from_state
+    generate_from_state_with_audit = (
+        SegmentationGroundedDescriptionModel.generate_from_state_with_audit
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -3337,7 +3766,7 @@ class SegDescProtocolTest(unittest.TestCase):
             }
             for index in range(3)
         ] + [{"sample_id": "ucm_0", "source_dataset": "MMRS-UCM-Caption"}]
-        weights, audit = _caption_source_weights(
+        weights, audit = caption_source_weights(
             rows, stage="mmrs_caption", rsicap_mmrs_fraction=0.3
         )
         self.assertAlmostEqual(sum(weights[f"nwpu_{index}"] for index in range(3)), 2.0)
@@ -3347,7 +3776,7 @@ class SegDescProtocolTest(unittest.TestCase):
             {"sample_id": "rsicap_0", "source_dataset": "RSICap"},
             {"sample_id": "rsicap_1", "source_dataset": "RSICap"},
         ]
-        d1_weights, d1_audit = _caption_source_weights(
+        d1_weights, d1_audit = caption_source_weights(
             d1_rows, stage="rsicap_caption", rsicap_mmrs_fraction=0.3
         )
         self.assertAlmostEqual(
@@ -3359,7 +3788,7 @@ class SegDescProtocolTest(unittest.TestCase):
         self.assertEqual(d1_audit["group_total_mass"], {"mmrs": 0.3, "rsicap": 0.7})
         for epoch in range(5):
             self.assertEqual(
-                _stable_weighted_index(42, epoch, "sample", [0.0, 1.0]), 1
+                stable_weighted_index(42, epoch, "sample", [0.0, 1.0]), 1
             )
 
     def test_rsieval_evaluation_source_filter_is_explicit_and_test_only(self) -> None:
@@ -3390,7 +3819,9 @@ class SegDescProtocolTest(unittest.TestCase):
             "stage": "rsicap_caption",
             "evaluation_source_dataset": "RSIEval",
         })
-        self.assertEqual(config.evaluation_source_dataset, "RSIEval")
+        self.assertEqual(
+            config.evaluation.evaluation_source_dataset, "RSIEval"
+        )
         with self.assertRaisesRegex(ValueError, "rsicap_caption/RSIEval"):
             load_segdesc_config(source, {
                 "stage": "bridge_auto",
@@ -3444,12 +3875,16 @@ class SegDescProtocolTest(unittest.TestCase):
     def test_joint_optimizer_manifest_covers_exact_trainable_parameters(self) -> None:
         model = StageParameterHarness()
         config = SimpleNamespace(
-            joint_train_shared_segmentation_dense=False,
-            desc_adapter_lr_scale=0.2,
-            learning_rate=1.0e-4,
-            weight_decay=0.01,
-            warmup_steps=2,
-            max_steps=10,
+            joint=SimpleNamespace(
+                joint_train_shared_segmentation_dense=False,
+            ),
+            training=SimpleNamespace(
+                desc_adapter_lr_scale=0.2,
+                learning_rate=1.0e-4,
+                weight_decay=0.01,
+                warmup_steps=2,
+                max_steps=10,
+            ),
         )
         optimizer, _scheduler = build_joint_optimizer(model, config)
         manifest = joint_optimizer_manifest(model, optimizer)
@@ -3718,7 +4153,11 @@ class SegDescProtocolTest(unittest.TestCase):
             return {
                 "dataset": dataset,
                 "loader": loader,
-                "config": SimpleNamespace(seed=42, stage="mmrs_caption"),
+                "config": SimpleNamespace(
+                    training=SimpleNamespace(
+                        seed=42, stage="mmrs_caption"
+                    ),
+                ),
             }
 
         audit = {
@@ -3816,7 +4255,10 @@ class SegDescProtocolTest(unittest.TestCase):
                 "stage": "predicted_mask",
                 "checkpoint_role": "validation_best",
                 "region_data_audit": audit,
-                "config": {"seed": 42},
+                "config": synthetic_segdesc_config(
+                    stage="predicted_mask",
+                    seed=42,
+                ),
             }},
             region_stage="predicted_mask",
             current_data_audit=audit,
@@ -3831,7 +4273,10 @@ class SegDescProtocolTest(unittest.TestCase):
                 "checkpoint_role": "terminal_last",
                 "region_data_audit": audit,
                 "joint_run_protocol": JOINT_RUN_PROTOCOL,
-                "config": {"seed": 42},
+                "config": synthetic_segdesc_config(
+                    seed=42,
+                    joint_region_stage="predicted_mask",
+                ),
             }},
             region_stage="predicted_mask",
             current_data_audit=audit,
@@ -3845,7 +4290,9 @@ class SegDescProtocolTest(unittest.TestCase):
                     "stage": "predicted_mask",
                     "checkpoint_role": "validation_best",
                     "region_data_audit": audit,
-                    "config": {"seed": 123},
+                    "config": synthetic_segdesc_config(
+                        stage="predicted_mask", seed=123
+                    ),
                 }},
                 region_stage="predicted_mask",
                 current_data_audit=audit,
@@ -3988,7 +4435,18 @@ class SegDescProtocolTest(unittest.TestCase):
                     source_step=100,
                     require_m6_binding=True,
                 )
-            source.write_bytes(source.read_bytes() + b"source-drift")
+            payload = torch.load(
+                source, map_location="cpu", weights_only=False
+            )
+            payload["model_state"]["synthetic.weight"] += 1.0
+            torch.save(payload, source)
+            # 重新发布自洽的训练完成证据，使本反例只检验 D4/M6 来源绑定。
+            publish_synthetic_description_run_completion(
+                source,
+                stage="predicted_mask",
+                role="validation_best",
+                step=100,
+            )
             with self.assertRaisesRegex(RuntimeError, "D4/M6"):
                 revalidate_joint_initialization_audit(
                     audit,
@@ -4091,7 +4549,7 @@ class SegDescProtocolTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "canvas"):
             restore_region_mask_from_cache(torch.zeros(1, 4, 4), transform)
 
-    def test_global_caption_sequence_excludes_region_replay_tokens(self) -> None:
+    def test_output_format_and_region_routing_are_independent(self) -> None:
         model = SequenceProtocolHarness()
         backbone = SimpleNamespace(visual_evidence=SimpleNamespace(
             tokens=torch.ones(1, 2, 3),
@@ -4104,24 +4562,38 @@ class SegDescProtocolTest(unittest.TestCase):
             region_tokens=None,
         )
         global_sequence, _, _, global_lengths = model._build_sequences(
-            region_state, ["Describe the image."], None, [False]
+            region_state, ["Describe the image."], None, [False], [False]
         )
         region_sequence, _, _, region_lengths = model._build_sequences(
-            region_state, ["Describe the selected region."], None, [True]
+            # Box-alignment text remains free-form but must consume region tokens.
+            region_state, ["Describe the selected region."], None, [False], [True]
         )
         self.assertEqual(global_sequence.shape[1], 4)
         self.assertEqual(global_lengths, (4,))
         self.assertEqual(region_sequence.shape[1], 7)
         self.assertEqual(region_lengths, (7,))
 
+        missing_visual = SimpleNamespace(
+            backbone=SimpleNamespace(visual_evidence=None),
+            region_sequence_tokens=region_state.region_sequence_tokens,
+            region_sequence_mask=region_state.region_sequence_mask,
+            region_tokens=None,
+        )
+        with self.assertRaisesRegex(ValueError, "禁止回退"):
+            model._build_sequences(
+                missing_visual, ["Describe the image."], None, [False], [False]
+            )
+
     def test_description_trainable_modules_follow_curriculum_stage(self) -> None:
         def trainable(stage: str) -> set[str]:
             model = StageParameterHarness()
             config = SimpleNamespace(
-                stage=stage,
-                learning_rate=1.0e-4,
-                desc_adapter_lr_scale=0.2,
-                weight_decay=0.01,
+                training=SimpleNamespace(
+                    stage=stage,
+                    learning_rate=1.0e-4,
+                    desc_adapter_lr_scale=0.2,
+                    weight_decay=0.01,
+                ),
             )
             description_parameter_groups(model, config)
             return {name for name, value in model.named_parameters() if value.requires_grad}
@@ -4167,10 +4639,12 @@ class SegDescProtocolTest(unittest.TestCase):
     def test_d2_gradient_gate_keeps_active_desc_adapter_frozen(self) -> None:
         model = StageParameterHarness()
         config = SimpleNamespace(
-            stage="dior_alignment",
-            learning_rate=1.0e-4,
-            desc_adapter_lr_scale=0.2,
-            weight_decay=0.01,
+            training=SimpleNamespace(
+                stage="dior_alignment",
+                learning_rate=1.0e-4,
+                desc_adapter_lr_scale=0.2,
+                weight_decay=0.01,
+            ),
         )
         groups = description_parameter_groups(model, config)
         optimizer = torch.optim.SGD(groups)
@@ -4187,6 +4661,108 @@ class SegDescProtocolTest(unittest.TestCase):
         self.assertTrue(gate["passed"])
         self.assertEqual(gate["modules"]["desc_adapter"]["num_nonzero"], 0)
 
+    def test_d_minus_one_gradient_gate_follows_observed_task_paths(self) -> None:
+        def gate_for(
+            active_prefixes: tuple[str, ...],
+            task_paths: set[str],
+        ) -> dict:
+            model = StageParameterHarness()
+            config = SimpleNamespace(
+                training=SimpleNamespace(
+                    stage="overfit",
+                    learning_rate=1.0e-4,
+                    desc_adapter_lr_scale=0.2,
+                    weight_decay=0.01,
+                ),
+            )
+            groups = description_parameter_groups(model, config)
+            optimizer = torch.optim.SGD(groups)
+            for name, parameter in model.named_parameters():
+                parameter.grad = (
+                    torch.ones_like(parameter)
+                    if parameter.requires_grad
+                    and (
+                        any(name.startswith(prefix) for prefix in active_prefixes)
+                        or ".desc_adapter." in name
+                    )
+                    else None
+                )
+            return _description_step_gradient_gate(
+                model,
+                optimizer,
+                run_stage="overfit",
+                stream_name="main",
+                stream_stage="overfit",
+                observed_task_paths=task_paths,
+            )
+
+        global_gate = gate_for(
+            ("description_view_to_hidden.",), {"global_caption"}
+        )
+        self.assertTrue(global_gate["passed"])
+        self.assertEqual(
+            global_gate["modules"]["mgrr"]["num_nonzero"], 0
+        )
+        region_gate = gate_for(
+            (
+                "description_backbone.", "mgrr.", "region_to_hidden.",
+                "description_view_to_hidden.",
+            ),
+            {"region_description"},
+        )
+        self.assertTrue(region_gate["passed"])
+        self.assertGreater(
+            region_gate["modules"]["mgrr"]["num_nonzero"], 0
+        )
+        mixed_gate = gate_for(
+            (
+                "description_backbone.", "mgrr.", "region_to_hidden.",
+                "description_view_to_hidden.",
+            ),
+            {"global_caption", "region_description"},
+        )
+        self.assertTrue(mixed_gate["passed"])
+        with self.assertRaisesRegex(ValueError, "显式"):
+            gate_for(("description_view_to_hidden.",), set())
+
+    def test_d_minus_one_gradient_artifact_rejects_summary_only_forgery(self) -> None:
+        artifact = synthetic_description_gradient_gate()
+        self.assertTrue(d_minus_one_gradient_gate_passed(artifact))
+        tracker = DescriptionGradientGateTracker(
+            ["main"], run_stage="overfit"
+        )
+        tracker.restore_completed(artifact)
+        self.assertTrue(tracker.complete)
+        summary_only = {
+            "protocol": DESCRIPTION_GRADIENT_GATE_PROTOCOL,
+            "run_stage": "overfit",
+            "required_streams": ["main"],
+            "checked_streams": ["main"],
+            "all_required_streams_checked": True,
+            "streams": {"main": {"passed": True}},
+            "passed": True,
+        }
+        self.assertFalse(d_minus_one_gradient_gate_passed(summary_only))
+        missing_path = json.loads(json.dumps(artifact))
+        del missing_path["streams"]["main"]["path_reports"][
+            "region_description"
+        ]
+        self.assertFalse(d_minus_one_gradient_gate_passed(missing_path))
+        forged_module = json.loads(json.dumps(artifact))
+        forged_module["streams"]["main"]["path_reports"][
+            "region_description"
+        ]["modules"]["mgrr"]["num_nonzero"] = 0
+        self.assertFalse(d_minus_one_gradient_gate_passed(forged_module))
+        mixed_path = json.loads(json.dumps(artifact))
+        mixed_path["streams"]["main"]["path_reports"][
+            "global_caption"
+        ]["observed_task_paths"] = ["global_caption", "region_description"]
+        self.assertFalse(d_minus_one_gradient_gate_passed(mixed_path))
+        with self.assertRaisesRegex(RuntimeError, "gradient proof"):
+            DescriptionGradientGateTracker(
+                ["main"], run_stage="overfit"
+            ).restore_completed(forged_module)
+
     def test_global_caption_state_skips_region_replay(self) -> None:
         model = RegionBypassHarness()
         mask = torch.zeros(2, 1, 8, 8)
@@ -4196,7 +4772,7 @@ class SegDescProtocolTest(unittest.TestCase):
             mask,
             region_valid_mask=None,
             protocol="vision_only",
-            structured_outputs=[False, False],
+            region_token_enabled=[False, False],
         )
         self.assertEqual(state.region_tokens.shape, (2, 1, 2))
         self.assertTrue(bool(state.diagnostics["global_caption_region_replay_skipped"].all()))
@@ -4206,20 +4782,22 @@ class SegDescProtocolTest(unittest.TestCase):
                 mask,
                 region_valid_mask=None,
                 protocol="vision_only",
-                structured_outputs=[False, True],
+                region_token_enabled=[False, True],
             )
 
     def test_trainable_parameter_manifest_matches_optimizer_groups(self) -> None:
         model = StageParameterHarness()
         config = SimpleNamespace(
-            stage="mmrs_caption",
-            learning_rate=1.0e-4,
-            desc_adapter_lr_scale=0.2,
-            weight_decay=0.01,
+            training=SimpleNamespace(
+                stage="mmrs_caption",
+                learning_rate=1.0e-4,
+                desc_adapter_lr_scale=0.2,
+                weight_decay=0.01,
+            ),
         )
         groups = description_parameter_groups(model, config)
         manifest = description_trainable_parameter_manifest(
-            model, groups, stage=config.stage
+            model, groups, stage=config.training.stage
         )
         self.assertEqual(
             manifest["protocol"], "qpsalm_description_trainable_parameters_v1"
@@ -4270,7 +4848,7 @@ class SegDescProtocolTest(unittest.TestCase):
             failed_gate["status"] = "engineering-invalid"
             gate_path.write_text(json.dumps(failed_gate), encoding="utf-8")
             with patch(
-                "qpsalm_seg.description.m6_acceptance.build_m6_acceptance_gate",
+                "qpsalm_seg.description.evaluation.m6_acceptance.build_m6_acceptance_gate",
                 return_value=failed_gate,
             ):
                 replayed_path, replayed_gate = validate_m6_acceptance_gate(gate_path)
@@ -4304,7 +4882,7 @@ class SegDescProtocolTest(unittest.TestCase):
                 "configs/qpsalm_description_output_v1.schema.json"
             ]["sha256"] = "0" * 64
             with patch(
-                "qpsalm_seg.description.m6_acceptance.description_protocol_assets_spec",
+                "qpsalm_seg.description.evaluation.m6_acceptance.description_protocol_assets_spec",
                 return_value=drifted_assets,
             ):
                 with self.assertRaisesRegex(ValueError, "ontology/schema binding 已漂移"):
@@ -4634,12 +5212,14 @@ class SegDescProtocolTest(unittest.TestCase):
                 "metadata": {"stage": "joint",
                     "joint_initialization_audit": joint_initialization,
                     "segmentation_migration_lineage": {"passed": True},
-                    **joint_execution, "config": {
-                    "seed": 42,
-                    "joint_region_stage": "predicted_mask",
-                    "predicted_mask_fraction": 0.75,
-                    "grad_accum_steps": 1,
-                }},
+                    **joint_execution,
+                    "config": synthetic_segdesc_config(
+                        seed=42,
+                        joint_region_stage="predicted_mask",
+                        predicted_mask_fraction=0.75,
+                        grad_accum_steps=1,
+                    ),
+                },
                 "segmentation_migration": {"source_sha256": "seg-source"},
             },
             maximum_allowed_drop=0.01,
@@ -4672,11 +5252,13 @@ class SegDescProtocolTest(unittest.TestCase):
                 "metadata": {"stage": "joint",
                     "joint_initialization_audit": joint_initialization,
                     "segmentation_migration_lineage": {"passed": True},
-                    **joint_execution, "config": {
-                    "joint_region_stage": "predicted_mask",
-                    "predicted_mask_fraction": 0.75,
-                    "grad_accum_steps": 1,
-                }},
+                    **joint_execution,
+                    "config": synthetic_segdesc_config(
+                        joint_region_stage="predicted_mask",
+                        predicted_mask_fraction=0.75,
+                        grad_accum_steps=1,
+                    ),
+                },
                 "segmentation_migration": {"source_sha256": "seg-source"},
             },
             maximum_allowed_drop=0.01,
@@ -4700,11 +5282,13 @@ class SegDescProtocolTest(unittest.TestCase):
                 "metadata": {"stage": "joint",
                     "joint_initialization_audit": joint_initialization,
                     "segmentation_migration_lineage": {"passed": True},
-                    **joint_execution, "config": {
-                    "joint_region_stage": "predicted_mask",
-                    "predicted_mask_fraction": 0.75,
-                    "grad_accum_steps": 1,
-                }},
+                    **joint_execution,
+                    "config": synthetic_segdesc_config(
+                        joint_region_stage="predicted_mask",
+                        predicted_mask_fraction=0.75,
+                        grad_accum_steps=1,
+                    ),
+                },
                 "segmentation_migration": {"source_sha256": "different"},
             },
             maximum_allowed_drop=0.01,
@@ -4728,12 +5312,14 @@ class SegDescProtocolTest(unittest.TestCase):
                 "metadata": {"stage": "joint",
                     "joint_initialization_audit": joint_initialization,
                     "segmentation_migration_lineage": {"passed": True},
-                    **joint_execution, "config": {
-                    "seed": 123,
-                    "joint_region_stage": "predicted_mask",
-                    "predicted_mask_fraction": 0.75,
-                    "grad_accum_steps": 1,
-                }},
+                    **joint_execution,
+                    "config": synthetic_segdesc_config(
+                        seed=123,
+                        joint_region_stage="predicted_mask",
+                        predicted_mask_fraction=0.75,
+                        grad_accum_steps=1,
+                    ),
+                },
                 "segmentation_migration": {"source_sha256": "seg-source"},
             },
             maximum_allowed_drop=0.01,
@@ -4792,7 +5378,16 @@ class SegDescProtocolTest(unittest.TestCase):
             max_samples=10,
             checkpoint="joint.pt",
             checkpoint_step=0,
-            checkpoint_metadata={},
+            checkpoint_metadata={
+                "metadata": {
+                    "stage": "joint",
+                    "config": synthetic_segdesc_config(
+                        seed=42,
+                        joint_region_stage="predicted_mask",
+                        predicted_mask_fraction=0.75,
+                    ),
+                },
+            },
             maximum_allowed_drop=0.01,
             baseline_binding={},
         )
@@ -4845,7 +5440,8 @@ class SegDescProtocolTest(unittest.TestCase):
                 "configs/qpsalm_description_output_v1.schema.json"
             ]["sha256"] = "0" * 64
             with patch(
-                "qpsalm_seg.description.retention.description_protocol_assets_spec",
+                "qpsalm_seg.description.evaluation.retention_validation."
+                "description_protocol_assets_spec",
                 return_value=drifted_assets,
             ):
                 with self.assertRaisesRegex(ValueError, "ontology/schema binding 已漂移"):
@@ -5087,16 +5683,20 @@ class SegDescProtocolTest(unittest.TestCase):
             "description_source"
         ]["benchmark_root"]
         fixed_config = SimpleNamespace(
-            stage="predicted_mask",
-            evaluation_mode="fixed_prediction",
-            seed=42,
-            description_benchmark=description_benchmark,
+            training=SimpleNamespace(stage="predicted_mask", seed=42),
+            evaluation=SimpleNamespace(evaluation_mode="fixed_prediction"),
+            data=SimpleNamespace(description_benchmark=description_benchmark),
         )
         fixed = validate_evaluation_checkpoint_binding(
             fixed_config,
             {
                 "metadata": {
-                    "stage": "predicted_mask", "config": {"seed": 42},
+                    "stage": "predicted_mask",
+                    "config": synthetic_segdesc_config(
+                        stage="predicted_mask",
+                        seed=42,
+                        description_benchmark=description_benchmark,
+                    ),
                     "checkpoint_role": "validation_best",
                     "d_minus_one_acceptance": d_minus_one_acceptance,
                     "stage_lineage": predicted_lineage,
@@ -5109,14 +5709,20 @@ class SegDescProtocolTest(unittest.TestCase):
         self.assertTrue(fixed["fixed_prediction_segmentation_source_match"])
         end_to_end = validate_evaluation_checkpoint_binding(
             SimpleNamespace(
-                stage="bridge_expert",
-                evaluation_mode="end_to_end",
-                seed=42,
-                description_benchmark=description_benchmark,
+                training=SimpleNamespace(stage="bridge_expert", seed=42),
+                evaluation=SimpleNamespace(evaluation_mode="end_to_end"),
+                data=SimpleNamespace(
+                    description_benchmark=description_benchmark
+                ),
             ),
             {
                 "metadata": {
-                    "stage": "predicted_mask", "config": {"seed": 42},
+                    "stage": "predicted_mask",
+                    "config": synthetic_segdesc_config(
+                        stage="predicted_mask",
+                        seed=42,
+                        description_benchmark=description_benchmark,
+                    ),
                     "checkpoint_role": "validation_best",
                     "d_minus_one_acceptance": d_minus_one_acceptance,
                     "stage_lineage": predicted_lineage,
@@ -5131,7 +5737,11 @@ class SegDescProtocolTest(unittest.TestCase):
             "metadata": {
                 "stage": "predicted_mask",
                 "checkpoint_role": "terminal_last",
-                "config": {"seed": 42},
+                "config": synthetic_segdesc_config(
+                    stage="predicted_mask",
+                    seed=42,
+                    description_benchmark=description_benchmark,
+                ),
                 "d_minus_one_acceptance": d_minus_one_acceptance,
                 "stage_lineage": predicted_lineage,
             },
@@ -5149,7 +5759,12 @@ class SegDescProtocolTest(unittest.TestCase):
                 fixed_config,
                 {
                     "metadata": {
-                        "stage": "predicted_mask", "config": {"seed": 42},
+                        "stage": "predicted_mask",
+                        "config": synthetic_segdesc_config(
+                            stage="predicted_mask",
+                            seed=42,
+                            description_benchmark=description_benchmark,
+                        ),
                         "checkpoint_role": "validation_best",
                         "d_minus_one_acceptance": d_minus_one_acceptance,
                         "stage_lineage": predicted_lineage,
@@ -5164,7 +5779,13 @@ class SegDescProtocolTest(unittest.TestCase):
                 fixed_config,
                 {
                     "metadata": {
-                        "stage": "bridge_expert", "config": {"seed": 42},
+                        "stage": "bridge_expert",
+                        "checkpoint_role": "validation_best",
+                        "config": synthetic_segdesc_config(
+                            stage="bridge_expert",
+                            seed=42,
+                            description_benchmark=description_benchmark,
+                        ),
                         "checkpoint_role": "validation_best",
                         "d_minus_one_acceptance": d_minus_one_acceptance,
                         "stage_lineage": bridge_lineage,
@@ -5179,7 +5800,12 @@ class SegDescProtocolTest(unittest.TestCase):
                 fixed_config,
                 {
                     "metadata": {
-                        "stage": "predicted_mask", "config": {"seed": 123},
+                        "stage": "predicted_mask",
+                        "config": synthetic_segdesc_config(
+                            stage="predicted_mask",
+                            seed=123,
+                            description_benchmark=description_benchmark,
+                        ),
                         "checkpoint_role": "validation_best",
                         "d_minus_one_acceptance": d_minus_one_acceptance,
                         "stage_lineage": predicted_lineage,
@@ -5232,6 +5858,7 @@ class SegDescProtocolTest(unittest.TestCase):
             ["Caption the image.", "Describe the region."],
             ["global target", "structured target"],
             [False, True],
+            [False, True],
         )
         self.assertEqual(lengths, (7, 9))
         self.assertIsNotNone(labels)
@@ -5243,6 +5870,27 @@ class SegDescProtocolTest(unittest.TestCase):
         self.assertTrue(bool(attention[0, :7].all()))
         self.assertFalse(bool(attention[0, 7:].any()))
         self.assertTrue(bool(attention[1].all()))
+        audit_output = SimpleNamespace(
+            labels=labels,
+            logits=torch.zeros(2, 9, 4),
+            sequence_lengths=lengths,
+        )
+        audit = causal_label_audit(audit_output, eos_token_id=3)
+        self.assertTrue(audit["passed"])
+        self.assertTrue(all(audit["checks"].values()))
+
+        forged = labels.clone()
+        forged[0, 0] = 1
+        forged_audit = causal_label_audit(
+            SimpleNamespace(
+                labels=forged,
+                logits=torch.zeros(2, 9, 4),
+                sequence_lengths=lengths,
+            ),
+            eos_token_id=3,
+        )
+        self.assertFalse(forged_audit["passed"])
+        self.assertFalse(forged_audit["checks"]["prefix_masked"])
 
     def test_cycle_localization_uses_raw_text_and_explicit_empty_iou(self) -> None:
         batch = ModalityBatch(
@@ -5406,7 +6054,7 @@ class SegDescProtocolTest(unittest.TestCase):
             "region_protocol": "vision_only",
             "cycle_localization_samples": 8,
         })
-        self.assertEqual(config.cycle_localization_samples, 8)
+        self.assertEqual(config.evaluation.cycle_localization_samples, 8)
         with self.assertRaisesRegex(ValueError, "frozen expert Bridge"):
             load_segdesc_config(path, {
                 "stage": "bridge_auto",
@@ -5418,7 +6066,7 @@ class SegDescProtocolTest(unittest.TestCase):
     def test_d_minus_one_sampling_uses_real_four_way_inputs(self) -> None:
         description_rows = []
         bridge_rows = []
-        for index in range(12):
+        for index in range(20):
             description_rows.extend([
                 {
                     "sample_id": f"global-{index}",
@@ -5456,30 +6104,30 @@ class SegDescProtocolTest(unittest.TestCase):
                 },
             ])
         selected, audit = select_d_minus_one_mixture(
-            description_rows, bridge_rows, count=32, seed=42
+            description_rows, bridge_rows, count=64, seed=42
         )
-        self.assertEqual(len(selected), 32)
+        self.assertEqual(len(selected), 64)
         self.assertEqual(
             [row["_d_minus_one_category"] for row in selected[:4]],
             ["global", "box", "mask", "null"],
         )
         self.assertEqual(
             audit["category_counts"],
-            {"global": 8, "box": 8, "mask": 8, "null": 8},
+            {"global": 16, "box": 16, "mask": 16, "null": 16},
         )
         self.assertGreaterEqual(audit["num_native_source_sizes"], 2)
         self.assertFalse(audit["expert_truth_used"])
         repeated, repeated_audit = select_d_minus_one_mixture(
-            description_rows, bridge_rows, count=32, seed=42
+            description_rows, bridge_rows, count=64, seed=42
         )
         self.assertEqual(
             [row.get("sample_id") or row.get("bridge_record_id") for row in selected],
             [row.get("sample_id") or row.get("bridge_record_id") for row in repeated],
         )
         self.assertEqual(audit, repeated_audit)
-        with self.assertRaisesRegex(ValueError, "32-64"):
+        with self.assertRaisesRegex(ValueError, "固定要求 64"):
             select_d_minus_one_mixture(
-                description_rows, bridge_rows, count=16, seed=42
+                description_rows, bridge_rows, count=32, seed=42
             )
 
     def test_d_minus_one_overfit_report_never_claims_zero_shot_complete(self) -> None:
@@ -5490,7 +6138,21 @@ class SegDescProtocolTest(unittest.TestCase):
             segmentation_checkpoint.write_bytes(b"synthetic-segmentation")
             raw_generations = root / "raw_generations.jsonl"
             raw_generations.write_text("{}\n", encoding="utf-8")
+            description_root = root / "description"
+            bridge_root = root / "bridge"
+            unified_root = root / "unified"
+            cache_root = root / "description-cache"
+            readiness_path, readiness_acceptance = (
+                write_synthetic_artifact_readiness(
+                    root,
+                    description=description_root,
+                    bridge=bridge_root,
+                    unified=unified_root,
+                    cache=cache_root,
+                )
+            )
             source_files = {
+                "artifact_readiness_report": readiness_path,
                 "checkpoint": checkpoint,
                 "dataset_summary": root / "dataset_summary.json",
                 "gradient_gate": root / "description_gradient_gate.json",
@@ -5501,7 +6163,11 @@ class SegDescProtocolTest(unittest.TestCase):
                 "validation_report": root / "eval_report.json",
             }
             for name, path in source_files.items():
-                if name not in {"checkpoint", "raw_generations"}:
+                if name not in {
+                    "artifact_readiness_report",
+                    "checkpoint",
+                    "raw_generations",
+                }:
                     path.write_text("{}\n", encoding="utf-8")
 
             def sha(path: Path) -> str:
@@ -5516,6 +6182,18 @@ class SegDescProtocolTest(unittest.TestCase):
                     "controller.", "sane.", "qmef.", "pmrd.",
                 ],
             }
+            overfit_config = synthetic_segdesc_config(
+                stage="overfit",
+                seed=42,
+                batch_size=2,
+                max_steps=100,
+                description_benchmark=str(description_root),
+                bridge_benchmark=str(bridge_root),
+                unified_benchmark=str(unified_root),
+                description_vision_cache=str(cache_root),
+                artifact_readiness_report=str(readiness_path),
+                output_dir=str(root),
+            )
             write_synthetic_segdesc_checkpoint(
                 checkpoint,
                 {
@@ -5526,19 +6204,27 @@ class SegDescProtocolTest(unittest.TestCase):
                     "metadata": {
                         "stage": "overfit",
                         "checkpoint_role": "terminal_last",
-                        "config": {
-                            "seed": 42, "batch_size": 2, "max_steps": 100,
-                        },
+                        "gradient_gate": (
+                            synthetic_description_gradient_gate()
+                        ),
+                        "config": overfit_config,
+                        "data_audit": synthetic_d_minus_one_data_audit(
+                            readiness_acceptance
+                        ),
                     },
                 },
                 step=100,
             )
 
-            config = SimpleNamespace(batch_size=2, max_steps=100)
+            config = SimpleNamespace(
+                training=SimpleNamespace(
+                    batch_size=2, grad_accum_steps=4, max_steps=100,
+                ),
+            )
             sampling = {
-                "selected_samples": 32,
+                "selected_samples": 64,
                 "category_counts": {
-                    "global": 8, "box": 8, "mask": 8, "null": 8,
+                    "global": 16, "box": 16, "mask": 16, "null": 16,
                 },
                 "num_native_source_sizes": 3,
                 "expert_truth_used": False,
@@ -5552,6 +6238,12 @@ class SegDescProtocolTest(unittest.TestCase):
                     "landslide_bridge_m2_v7_expert_review_replay_bound"
                 ),
                 "bridge_status": "awaiting_expert_review",
+                "category_region_token_policy": {
+                    "global": False,
+                    "box": True,
+                    "mask": True,
+                    "null": True,
+                },
                 "description_index_sha256": "a" * 64,
                 "description_validation_report_sha256": "b" * 64,
                 "bridge_index_sha256": "c" * 64,
@@ -5561,10 +6253,20 @@ class SegDescProtocolTest(unittest.TestCase):
                 config=config,
                 sampling_audit=sampling,
                 history_rows=[
-                    {"loss": 2.0, "peak_reserved_gib": 20.0, "device_type": "cuda"},
-                    {"loss": 0.2, "peak_reserved_gib": 21.0, "device_type": "cuda"},
+                    {
+                        "loss": 2.0,
+                        "peak_reserved_gib": 20.0,
+                        "device_type": "cuda",
+                        **CAUSAL_HISTORY_AUDIT,
+                    },
+                    {
+                        "loss": 0.2,
+                        "peak_reserved_gib": 21.0,
+                        "device_type": "cuda",
+                        **CAUSAL_HISTORY_AUDIT,
+                    },
                 ],
-                gradient_gate={"passed": True},
+                gradient_gate=synthetic_description_gradient_gate(),
                 validation_report={"generation_metrics": {
                     "num_caption": 16,
                     "num_structured": 16,
@@ -5572,10 +6274,7 @@ class SegDescProtocolTest(unittest.TestCase):
                     "raw_schema_valid_rate": 0.25,
                     "summary_nonempty_rate": 0.5,
                 }},
-                generation_rows=[
-                    {"d_minus_one_category": name}
-                    for name in ("global", "box", "mask", "null")
-                ],
+                generation_rows=synthetic_d_minus_one_generation_rows(),
                 trainable_manifest={"groups": [{"parameter_names": [
                     "controller.model.layer.lora_A.desc_adapter.weight",
                     "controller.model.layer.lora_B.desc_adapter.weight",
@@ -5584,23 +6283,19 @@ class SegDescProtocolTest(unittest.TestCase):
                 checkpoint_step=100,
                 device_type="cuda",
                 segmentation_migration=migration,
-                reload_audit={
-                    "protocol": "qpsalm_segdesc_strict_reload_probe_v1",
-                    "passed": True,
-                    "checkpoint": str(checkpoint.resolve()),
-                    "checkpoint_sha256": sha(checkpoint),
-                    "checkpoint_step": 100,
-                    "before_sha256": "a" * 64,
-                    "corrupted_sha256": "b" * 64,
-                    "restored_sha256": "a" * 64,
-                    "segmentation_migration": migration,
-                },
+                reload_audit=synthetic_strict_reload_audit(
+                    checkpoint,
+                    migration,
+                    checkpoint_sha256=sha(checkpoint),
+                ),
+                artifact_readiness_acceptance=readiness_acceptance,
                 source_files=source_files,
             )
             self.assertEqual(
                 set(report["source_bindings"]),
                 {
                     "checkpoint", "dataset_summary", "description_ontology",
+                    "artifact_readiness_report",
                     "description_output_schema", "description_record_schema",
                     "gradient_gate", "raw_generations", "resolved_config",
                     "train_history", "trainable_manifest", "validation_report",
@@ -5648,7 +6343,7 @@ class SegDescProtocolTest(unittest.TestCase):
                 return hashlib.sha256(path.read_bytes()).hexdigest()
 
             rows = []
-            for index in range(40):
+            for index in range(72):
                 image_path = benchmark / f"data/dev/rsicap/parent-{index}.png"
                 image_path.write_bytes(
                     f"synthetic-image-{index}".encode("utf-8")
@@ -5677,11 +6372,11 @@ class SegDescProtocolTest(unittest.TestCase):
                 "verified_perceptual_duplicate_cross_split_groups": 0,
                 "errors": [],
             }), encoding="utf-8")
-            selected, input_audit = _input_audit(
-                benchmark, "dev", max_samples=32, seed=42
+            selected, input_audit = build_zero_shot_input_audit(
+                benchmark, "dev", max_samples=64, seed=42
             )
-            self.assertEqual(len(selected), 32)
-            self.assertEqual(input_audit["selected_samples"], 32)
+            self.assertEqual(len(selected), 64)
+            self.assertEqual(input_audit["selected_samples"], 64)
             validation_hash = __import__("hashlib").sha256(
                 validation_path.read_bytes()
             ).hexdigest()
@@ -5692,7 +6387,9 @@ class SegDescProtocolTest(unittest.TestCase):
             original_image = selected_image.read_bytes()
             selected_image.write_bytes(b"late-image-mutation")
             with self.assertRaisesRegex(RuntimeError, "image SHA"):
-                _input_audit(benchmark, "dev", max_samples=32, seed=42)
+                build_zero_shot_input_audit(
+                    benchmark, "dev", max_samples=64, seed=42
+                )
             selected_image.write_bytes(original_image)
 
             zero_dir = root / "zero"
@@ -5717,27 +6414,22 @@ class SegDescProtocolTest(unittest.TestCase):
             model_dir.mkdir()
             model_config = model_dir / "config.json"
             model_config.write_text("{}\n", encoding="utf-8")
-            metadata_hashes = {"config.json": sha(model_config)}
-            metadata_snapshot = hashlib.sha256(json.dumps(
-                metadata_hashes, sort_keys=True, separators=(",", ":")
-            ).encode()).hexdigest()
+            (model_dir / "model.safetensors").write_bytes(
+                b"synthetic-qwen-weights"
+            )
             (zero_dir / "eval_report.json").write_text(json.dumps({
                 "protocol": ZERO_SHOT_PROTOCOL,
                 "status": "engineering-valid",
                 "errors": [],
                 "checks": {"synthetic_complete": True},
-                "num_samples": 32,
+                "num_samples": 64,
                 "caption_token_f1": 0.1,
                 "statistics_seed": 42,
                 "region_capability_claimed": False,
                 "raw_generations": str(zero_raw),
                 "raw_generations_sha256": sha(zero_raw),
                 "input_audit": input_audit,
-                "model_audit": {
-                    "model_dir": str(model_dir),
-                    "metadata_file_sha256": metadata_hashes,
-                    "metadata_snapshot_sha256": metadata_snapshot,
-                },
+                "model_audit": build_zero_shot_model_identity(model_dir),
             }), encoding="utf-8")
 
             segmentation_checkpoint = root / "segmentation.pt"
@@ -5745,9 +6437,9 @@ class SegDescProtocolTest(unittest.TestCase):
             bridge_index.write_text("{}\n", encoding="utf-8")
             bridge_validation.write_text("{}", encoding="utf-8")
             sampling = {
-                "selected_samples": 32,
+                "selected_samples": 64,
                 "category_counts": {
-                    "global": 8, "box": 8, "mask": 8, "null": 8,
+                    "global": 16, "box": 16, "mask": 16, "null": 16,
                 },
                 "num_native_source_sizes": 2,
                 "expert_truth_used": False,
@@ -5770,6 +6462,12 @@ class SegDescProtocolTest(unittest.TestCase):
                 "bridge_index": str(bridge_index),
                 "bridge_index_sha256": sha(bridge_index),
                 "bridge_status": "awaiting_expert_review",
+                "category_region_token_policy": {
+                    "global": False,
+                    "box": True,
+                    "mask": True,
+                    "null": True,
+                },
             }
             history_rows = [
                 {
@@ -5777,22 +6475,21 @@ class SegDescProtocolTest(unittest.TestCase):
                     "loss": 2.0,
                     "peak_reserved_gib": 20.0,
                     "device_type": "cuda",
+                    **CAUSAL_HISTORY_AUDIT,
                 },
                 {
                     "step": 100,
                     "loss": 0.2,
                     "peak_reserved_gib": 21.0,
                     "device_type": "cuda",
+                    **CAUSAL_HISTORY_AUDIT,
                 },
             ]
             (overfit_dir / "train_history.jsonl").write_text(
                 "".join(json.dumps(row) + "\n" for row in history_rows),
                 encoding="utf-8",
             )
-            generation_rows = [
-                {"d_minus_one_category": name}
-                for name in ("global", "box", "mask", "null")
-            ]
+            generation_rows = synthetic_d_minus_one_generation_rows()
             overfit_raw.write_text(
                 "".join(json.dumps(row) + "\n" for row in generation_rows),
                 encoding="utf-8",
@@ -5807,10 +6504,10 @@ class SegDescProtocolTest(unittest.TestCase):
             (overfit_dir / "eval_report.json").write_text(json.dumps({
                 "generation_metrics": generation_metrics,
             }), encoding="utf-8")
-            (overfit_dir / "description_gradient_gate.json").write_text(json.dumps({
-                "passed": True,
-                "all_required_streams_checked": True,
-            }), encoding="utf-8")
+            gradient_gate = synthetic_description_gradient_gate()
+            (overfit_dir / "description_gradient_gate.json").write_text(
+                json.dumps(gradient_gate), encoding="utf-8"
+            )
             manifest = {"groups": [{"parameter_names": [
                 "controller.model.layer.lora_A.desc_adapter.weight",
                 "controller.model.layer.lora_B.desc_adapter.weight",
@@ -5818,11 +6515,37 @@ class SegDescProtocolTest(unittest.TestCase):
             (overfit_dir / "trainable_parameter_manifest.json").write_text(
                 json.dumps(manifest), encoding="utf-8"
             )
-            (overfit_dir / "resolved_config.json").write_text(json.dumps({
-                "stage": "overfit", "batch_size": 2, "max_steps": 100,
-            }), encoding="utf-8")
+            description_root = root / "description"
+            bridge_root = root / "bridge"
+            unified_root = root / "unified"
+            cache_root = root / "description-cache"
+            readiness_path, readiness_acceptance = (
+                write_synthetic_artifact_readiness(
+                    root,
+                    description=description_root,
+                    bridge=bridge_root,
+                    unified=unified_root,
+                    cache=cache_root,
+                )
+            )
+            overfit_config = synthetic_segdesc_config(
+                stage="overfit",
+                seed=42,
+                batch_size=2,
+                max_steps=100,
+                description_benchmark=str(description_root),
+                bridge_benchmark=str(bridge_root),
+                unified_benchmark=str(unified_root),
+                description_vision_cache=str(cache_root),
+                artifact_readiness_report=str(readiness_path),
+                output_dir=str(overfit_dir),
+            )
+            (overfit_dir / "resolved_config.json").write_text(
+                json.dumps(overfit_config), encoding="utf-8"
+            )
             (overfit_dir / "dataset_summary.json").write_text(json.dumps({
                 "d_minus_one_sampling_audit": sampling,
+                "artifact_readiness_acceptance": readiness_acceptance,
             }), encoding="utf-8")
             migration = {
                 "source_path": str(segmentation_checkpoint),
@@ -5843,29 +6566,26 @@ class SegDescProtocolTest(unittest.TestCase):
                     "metadata": {
                         "stage": "overfit",
                         "checkpoint_role": "terminal_last",
+                        "gradient_gate": gradient_gate,
                         "training_progress": {
                             "protocol": DESCRIPTION_TRAINING_PROGRESS_PROTOCOL,
                             "step": 100,
                         },
-                        "config": {
-                            "seed": 42, "batch_size": 2, "max_steps": 100,
-                        },
+                        "config": overfit_config,
+                        "data_audit": synthetic_d_minus_one_data_audit(
+                            readiness_acceptance
+                        ),
                     },
                 },
                 step=100,
             )
-            reload_audit = {
-                "protocol": "qpsalm_segdesc_strict_reload_probe_v1",
-                "passed": True,
-                "checkpoint": str(checkpoint.resolve()),
-                "checkpoint_sha256": sha(checkpoint),
-                "checkpoint_step": 100,
-                "before_sha256": "a" * 64,
-                "corrupted_sha256": "b" * 64,
-                "restored_sha256": "a" * 64,
-                "segmentation_migration": migration,
-            }
+            reload_audit = synthetic_strict_reload_audit(
+                checkpoint,
+                migration,
+                checkpoint_sha256=sha(checkpoint),
+            )
             source_files = {
+                "artifact_readiness_report": readiness_path,
                 "checkpoint": checkpoint,
                 "dataset_summary": overfit_dir / "dataset_summary.json",
                 "gradient_gate": overfit_dir / "description_gradient_gate.json",
@@ -5878,10 +6598,16 @@ class SegDescProtocolTest(unittest.TestCase):
                 "validation_report": overfit_dir / "eval_report.json",
             }
             report = build_d_minus_one_overfit_validation(
-                config=SimpleNamespace(batch_size=2, max_steps=100),
+                config=SimpleNamespace(
+                    training=SimpleNamespace(
+                        batch_size=2,
+                        grad_accum_steps=4,
+                        max_steps=100,
+                    ),
+                ),
                 sampling_audit=sampling,
                 history_rows=history_rows,
-                gradient_gate={"passed": True},
+                gradient_gate=gradient_gate,
                 validation_report={"generation_metrics": generation_metrics},
                 generation_rows=generation_rows,
                 trainable_manifest=manifest,
@@ -5890,8 +6616,32 @@ class SegDescProtocolTest(unittest.TestCase):
                 device_type="cuda",
                 segmentation_migration=migration,
                 reload_audit=reload_audit,
+                artifact_readiness_acceptance=readiness_acceptance,
                 source_files=source_files,
             )
+            history_path = overfit_dir / "train_history.jsonl"
+            original_history = history_path.read_bytes()
+            forged_history = [dict(row) for row in history_rows]
+            forged_history[-1]["causal_eos_supervised"] = 0.0
+            history_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in forged_history),
+                encoding="utf-8",
+            )
+            forged_report = json.loads(json.dumps(report))
+            forged_report["source_bindings"]["train_history"]["sha256"] = sha(
+                history_path
+            )
+            forged_validation = validate_d_minus_one_overfit_report(
+                forged_report
+            )
+            self.assertEqual(
+                forged_validation["status"], "engineering-invalid"
+            )
+            self.assertIn(
+                "causal_label_history_revalidated",
+                forged_validation["errors"],
+            )
+            history_path.write_bytes(original_history)
             overfit_report = overfit_dir / "d_minus_one_overfit_validation.json"
             overfit_report.write_text(json.dumps(report), encoding="utf-8")
             progress_path = overfit_dir / "training_progress_latest.json"
@@ -5984,6 +6734,30 @@ class SegDescProtocolTest(unittest.TestCase):
                     gate_path,
                     expected_description_benchmark=other_benchmark,
                 )
+            readiness_original = readiness_path.read_bytes()
+            readiness_payload = json.loads(
+                readiness_original.decode("utf-8")
+            )
+            readiness_payload["checks"]["synthetic_fixture"] = False
+            readiness_path.write_text(
+                json.dumps(readiness_payload), encoding="utf-8"
+            )
+            readiness_drifted = validate_d_minus_one_overfit_report(report)
+            self.assertIn(
+                "artifact_readiness_revalidated",
+                readiness_drifted["errors"],
+            )
+            readiness_path.write_bytes(readiness_original)
+            model_weight = model_dir / "model.safetensors"
+            original_model_weight = model_weight.read_bytes()
+            model_weight.write_bytes(b"drifted-qwen-weights")
+            model_drifted = validate_d_minus_one_runs(
+                zero_dir, overfit_dir
+            )
+            self.assertIn(
+                "zero_shot_engineering_valid", model_drifted["errors"]
+            )
+            model_weight.write_bytes(original_model_weight)
             cache_binding = report["observations"][
                 "checkpoint_payload_provenance"
             ]["checkpoint_metadata"]["description_architecture_spec"][
@@ -6008,6 +6782,8 @@ class SegDescProtocolTest(unittest.TestCase):
             torch.ones(1, 1, 8, 8),
             "Describe the region.",
             max_new_tokens=5,
+            structured_output=False,
+            use_region_tokens=True,
         )
         self.assertEqual(text, "4 5")
         self.assertEqual(model.controller.adapter_calls, ["desc_adapter"])
@@ -6021,6 +6797,130 @@ class SegDescProtocolTest(unittest.TestCase):
             [call["attention_length"] for call in calls],
             [4, 5, 6],
         )
+
+    def test_schema_constrained_generation_is_raw_valid_without_repair(self) -> None:
+        class CharacterTokenizer:
+            eos_token_id = 0
+            all_special_ids = [0]
+
+            def __call__(
+                self, text: str, *, add_special_tokens: bool
+            ) -> dict:
+                del self
+                del add_special_tokens
+                return {"input_ids": [ord(character) for character in text]}
+
+            def decode(
+                self,
+                token_ids: list[int],
+                *,
+                skip_special_tokens: bool,
+                clean_up_tokenization_spaces: bool = False,
+            ) -> str:
+                del self, skip_special_tokens, clean_up_tokenization_spaces
+                return "".join(chr(value) for value in token_ids if value)
+
+        payload = {
+            "schema_version": "qpsalm_description_output_v1",
+            "target_status": "present",
+            "region": {
+                "location": "center",
+                "size_class": "small",
+                "shape": "irregular",
+                "elongation": "moderate",
+                "compactness": "moderate",
+                "fragmentation": "single",
+            },
+            "evidence": {
+                "surface_observation": "bright slope",
+                "terrain_support": "supports",
+                "sar_support": "unavailable",
+                "deformation_support": "unavailable",
+                "surrounding_context": "green slope",
+                "evidence_sufficiency": "partial",
+            },
+            "summary": "A small irregular region is present.",
+        }
+        expected = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        )
+        training_target = structured_text({
+            "bridge_record_id": "synthetic-structured-order",
+            "target_status": "present",
+            "candidate": {
+                "structured_output": payload,
+                "summary": payload["summary"],
+            },
+        }, expert=False)
+        self.assertEqual(training_target, expected)
+
+        class ScriptedSession:
+            def __init__(self, script: str) -> None:
+                self.script = script
+                self.position = 0
+
+            def logits(self) -> torch.Tensor:
+                values = torch.full((128,), -1000.0)
+                token = (
+                    ord(self.script[self.position])
+                    if self.position < len(self.script) else 0
+                )
+                values[token] = 1000.0
+                return values
+
+            def advance(self, token_ids: int | tuple[int, ...]) -> torch.Tensor:
+                values = (
+                    (token_ids,) if isinstance(token_ids, int) else token_ids
+                )
+                for token_id in values:
+                    self.assert_next(token_id)
+                    self.position += 1
+                return self.logits()
+
+            def assert_next(self, token_id: int) -> None:
+                expected_token = ord(self.script[self.position])
+                if token_id != expected_token:
+                    raise AssertionError(
+                        f"position={self.position} expected={expected_token} "
+                        f"observed={token_id}"
+                    )
+
+        session = ScriptedSession(expected)
+        result = generate_schema_constrained_description(
+            CharacterTokenizer(),
+            session.logits(),
+            session.advance,
+            max_new_tokens=1024,
+        )
+        self.assertEqual(result.text, expected)
+        self.assertEqual(session.position, len(expected))
+        self.assertTrue(parse_description_output(result.text).schema_valid)
+        self.assertEqual(
+            result.audit["protocol"], STRUCTURED_GENERATION_PROTOCOL
+        )
+        self.assertTrue(result.audit["raw_schema_valid"])
+        self.assertFalse(result.audit["repair_used"])
+        self.assertTrue(result.audit["token_stream_matches_raw"])
+        self.assertEqual(
+            result.audit["token_stream_sha256"],
+            result.audit["raw_sha256"],
+        )
+        self.assertGreater(result.audit["model_selected_tokens"], 0)
+        self.assertLess(
+            result.audit["decoder_advance_calls"],
+            result.audit["total_tokens"],
+        )
+        row = {
+            "structured_output": True,
+            "raw_generation": result.text,
+            "generation_audit": result.audit,
+        }
+        self.assertTrue(structured_generation_audits_current([row]))
+        row["generation_audit"]["enum_choices"]["target_status"] = "absent"
+        self.assertFalse(structured_generation_audits_current([row]))
+        row["generation_audit"]["enum_choices"]["target_status"] = "present"
+        row["raw_generation"] += " "
+        self.assertFalse(structured_generation_audits_current([row]))
 
     def test_invalid_raw_json_scores_zero_even_when_repair_is_valid(self) -> None:
         target = json.dumps(valid_target())
@@ -6074,6 +6974,7 @@ class SegDescProtocolTest(unittest.TestCase):
             root = Path(temporary)
             report_path = root / "report.json"
             history_path = root / "history.jsonl"
+            partial_history_path = root / "partial_history.jsonl"
             write_json(report_path, {"value": 1.0})
             append_jsonl(history_path, {"step": 1, "loss": 0.5})
             original_report = report_path.read_bytes()
@@ -6083,6 +6984,14 @@ class SegDescProtocolTest(unittest.TestCase):
                 write_json(report_path, {"value": float("nan")})
             with self.assertRaises(ValueError):
                 append_jsonl(history_path, {"step": 2, "loss": float("inf")})
+            partial_history_path.write_text(
+                '{"step":1}', encoding="utf-8"
+            )
+            partial_before = partial_history_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "非完整 JSONL"):
+                append_jsonl(
+                    partial_history_path, {"step": 2, "loss": 0.25}
+                )
             with self.assertRaisesRegex(
                 json.JSONDecodeError, "non-standard JSON numeric constant"
             ):
@@ -6090,6 +6999,9 @@ class SegDescProtocolTest(unittest.TestCase):
 
             self.assertEqual(report_path.read_bytes(), original_report)
             self.assertEqual(history_path.read_bytes(), original_history)
+            self.assertEqual(
+                partial_history_path.read_bytes(), partial_before
+            )
             self.assertFalse(report_path.with_suffix(".json.tmp").exists())
 
     def test_absent_output_rejects_region_attributes_in_both_schema_validators(self) -> None:
@@ -6294,9 +7206,12 @@ class SegDescProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             numpy = __import__("numpy")
+            donor = numpy.eye(4, dtype=numpy.uint8)
             donor_path = root / "donor.npy"
-            numpy.save(donor_path, numpy.eye(4, dtype=numpy.uint8), allow_pickle=False)
-            donor_hash = __import__("hashlib").sha256(donor_path.read_bytes()).hexdigest()
+            numpy.save(donor_path, donor, allow_pickle=False)
+            donor_hash = __import__("hashlib").sha256(
+                numpy.ascontiguousarray(donor).tobytes()
+            ).hexdigest()
 
             class FakeBank:
                 @staticmethod
@@ -6338,6 +7253,104 @@ class SegDescProtocolTest(unittest.TestCase):
             self.assertIsNotNone(cross)
             self.assertEqual(same[1]["alternate_sample_id"], "same")
             self.assertEqual(cross[1]["donor_parent_sample_id"], "p2")
+
+    def test_bridge_region_mask_uses_semantic_digest_not_npy_file_sha256(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            numpy = __import__("numpy")
+            mask = numpy.eye(4, dtype=numpy.uint8)
+            mask_path = root / "bridge-mask.npy"
+            numpy.save(mask_path, mask, allow_pickle=False)
+            hashlib_module = __import__("hashlib")
+            semantic_hash = hashlib_module.sha256(
+                numpy.ascontiguousarray(mask).tobytes()
+            ).hexdigest()
+            file_hash = hashlib_module.sha256(mask_path.read_bytes()).hexdigest()
+            self.assertNotEqual(semantic_hash, file_hash)
+
+            class FakeBank:
+                @staticmethod
+                def record(_component: str, _parent: str) -> dict:
+                    return {"views": [{"render_transform": {
+                        "source_h": 4, "source_w": 4,
+                        "resized_h": 4, "resized_w": 4,
+                        "pad_top": 0, "pad_left": 0, "size": 4,
+                    }}]}
+
+            row = {
+                "bridge_record_id": "bridge-1",
+                "parent_sample_id": "parent-1",
+                "region_id": "component-1",
+                "region_source": "pseudo_instance_component",
+                "region_mask": {
+                    "path": str(mask_path),
+                    "sha256": semantic_hash,
+                    "shape": [4, 4],
+                },
+            }
+            dataset = DescriptionTaskDataset.__new__(DescriptionTaskDataset)
+            dataset.stage = "bridge_auto"
+            dataset.vision_bank = FakeBank()
+            dataset._verified_mask_hashes = {}
+            projected, binding = dataset._bridge_region_mask_and_binding(row)
+            self.assertEqual(tuple(projected.shape), (1, 4, 4))
+            self.assertEqual(binding["source_mask"]["file_sha256"], file_hash)
+            self.assertFalse(binding["source_to_render_mapping"]["resampled"])
+
+            forged = copy.deepcopy(row)
+            forged["region_mask"]["sha256"] = file_hash
+            with self.assertRaisesRegex(ValueError, "binary_content_sha256"):
+                dataset._bridge_region_mask_and_binding(forged)
+
+    def test_bridge_region_mask_retargets_native_canvas_before_cache_render(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mask = np.zeros((8, 16), dtype=np.uint8)
+            mask[:, 4:12] = 1
+            mask_path = root / "native-mask.npy"
+            np.save(mask_path, mask, allow_pickle=False)
+            semantic_hash = hashlib.sha256(
+                np.ascontiguousarray(mask).tobytes()
+            ).hexdigest()
+
+            class FakeBank:
+                @staticmethod
+                def record(_component: str, _parent: str) -> dict:
+                    return {"views": [{"render_transform": {
+                        "source_h": 2, "source_w": 4,
+                        "resized_h": 2, "resized_w": 4,
+                        "pad_top": 1, "pad_left": 0, "size": 4,
+                    }}]}
+
+            row = {
+                "bridge_record_id": "bridge-native",
+                "parent_sample_id": "parent-native",
+                "region_id": "component-native",
+                "region_source": "pseudo_instance_component",
+                "region_mask": {
+                    "path": str(mask_path),
+                    "sha256": semantic_hash,
+                    "shape": [8, 16],
+                },
+            }
+            dataset = DescriptionTaskDataset.__new__(DescriptionTaskDataset)
+            dataset.stage = "bridge_auto"
+            dataset.vision_bank = FakeBank()
+            dataset._verified_mask_hashes = {}
+            projected, binding = dataset._bridge_region_mask_and_binding(row)
+            self.assertEqual(tuple(projected.shape), (1, 4, 4))
+            self.assertEqual(int(projected.sum()), 4)
+            self.assertEqual(
+                binding["source_to_render_mapping"]["source_hw"], [8, 16]
+            )
+            self.assertEqual(
+                binding["source_to_render_mapping"]["render_source_hw"], [2, 4]
+            )
+            self.assertTrue(binding["source_to_render_mapping"]["resampled"])
 
     def test_expert_data_requires_current_frozen_bridge_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6570,11 +7583,11 @@ class SegDescProtocolTest(unittest.TestCase):
                 "summary": "Reviewed target.",
             },
         }
-        _validate_expert_rows([row], stage="bridge_expert", split="train")
+        validate_expert_rows([row], stage="bridge_expert", split="train")
         missing = dict(row)
         missing.pop("expert_target")
         with self.assertRaisesRegex(ValueError, "人工审核 target"):
-            _validate_expert_rows([missing], stage="bridge_expert", split="train")
+            validate_expert_rows([missing], stage="bridge_expert", split="train")
 
         predicted = {
             **row,
@@ -6583,9 +7596,9 @@ class SegDescProtocolTest(unittest.TestCase):
             "prediction_provenance": {"out_of_fold_verified": False},
         }
         with self.assertRaisesRegex(ValueError, "OOF"):
-            _validate_expert_rows([predicted], stage="predicted_mask", split="train")
+            validate_expert_rows([predicted], stage="predicted_mask", split="train")
         predicted["prediction_provenance"]["out_of_fold_verified"] = True
-        _validate_expert_rows([predicted], stage="predicted_mask", split="train")
+        validate_expert_rows([predicted], stage="predicted_mask", split="train")
 
         dataset = DescriptionTaskDataset.__new__(DescriptionTaskDataset)
         dataset.stage = "predicted_mask"
@@ -6713,7 +7726,7 @@ class SegDescProtocolTest(unittest.TestCase):
             stale_mask.unlink()
             incomplete = root / "report.json.part"
             incomplete.write_bytes(b"incomplete-publication")
-            with self.assertRaisesRegex(ValueError, "\.part"):
+            with self.assertRaisesRegex(ValueError, r"\.part"):
                 validate_predicted_index(
                     index_path, split="val", expert_gate_audit=gate_audit
                 )
@@ -6942,7 +7955,11 @@ class SegDescProtocolTest(unittest.TestCase):
                 "checkpoint_metadata": {
                     "description_protocol_assets": description_protocol_assets_spec(),
                     "metadata": {
-                        "stage": "bridge_expert", "config": {"seed": 42},
+                        "stage": "bridge_expert",
+                        "checkpoint_role": "validation_best",
+                        "config": synthetic_segdesc_config(
+                            stage="bridge_expert", seed=42
+                        ),
                     },
                     "segmentation_migration": migration,
                 },
@@ -6951,6 +7968,8 @@ class SegDescProtocolTest(unittest.TestCase):
                 "checkpoint_binding": {
                     "protocol": EVALUATION_CHECKPOINT_BINDING_PROTOCOL,
                     "checkpoint_stage": "bridge_expert",
+                    "checkpoint_role": "validation_best",
+                    "expected_checkpoint_role": "validation_best",
                     "evaluation_data_stage": "bridge_expert",
                     "evaluation_mode": "gt_mask",
                     "saved_segmentation_migration": migration,
@@ -6964,6 +7983,14 @@ class SegDescProtocolTest(unittest.TestCase):
                 checkpoint,
                 report["checkpoint_metadata"],
                 step=17,
+            )
+            report["checkpoint_binding"]["run_completion"] = (
+                publish_synthetic_description_run_completion(
+                    checkpoint,
+                    stage="bridge_expert",
+                    role="validation_best",
+                    step=17,
+                )
             )
             report["checkpoint_sha256"] = hashlib.sha256(
                 checkpoint.read_bytes()
@@ -7289,12 +8316,13 @@ class SegDescProtocolTest(unittest.TestCase):
                     "description_protocol_assets": description_protocol_assets_spec(),
                     "metadata": {
                         "stage": "bridge_expert",
-                        "config": {
-                            "seed": 42,
-                            "region_encoder": encoder,
-                            "output_dir": f"outputs/{encoder}",
-                            "learning_rate": 1.0e-4,
-                        },
+                        "config": synthetic_segdesc_config(
+                            stage="bridge_expert",
+                            seed=42,
+                            region_encoder=encoder,
+                            output_dir=f"outputs/{encoder}",
+                            learning_rate=1.0e-4,
+                        ),
                         "data_audit": data_audit,
                         "region_data_audit": region_data_audit,
                         "stage_lineage": lineage,
@@ -7345,7 +8373,9 @@ class SegDescProtocolTest(unittest.TestCase):
         )
         self.assertNotEqual(seed_42_contract, drift_contract)
         drift = json.loads(json.dumps(candidate))
-        drift["checkpoint_metadata"]["metadata"]["config"]["learning_rate"] = 2.0e-4
+        drift["checkpoint_metadata"]["metadata"]["config"]["training"][
+            "learning_rate"
+        ] = 2.0e-4
         with self.assertRaisesRegex(ValueError, "训练配置"):
             _validate_paired_evaluation_reports(
                 baseline,
@@ -7355,7 +8385,12 @@ class SegDescProtocolTest(unittest.TestCase):
             )
         drift = json.loads(json.dumps(candidate))
         lineage = drift["checkpoint_metadata"]["metadata"]["stage_lineage"]
-        lineage["entries"][1]["checkpoint_sha256"] = "e" * 64
+        entry = lineage["entries"][1]
+        entry["checkpoint_sha256"] = "e" * 64
+        entry["run_completion"]["selected_checkpoint"]["sha256"] = "e" * 64
+        entry["run_completion_sha256"] = canonical_sha(
+            entry["run_completion"]
+        )
         lineage["lineage_sha256"] = canonical_sha(lineage["entries"])
         with self.assertRaisesRegex(ValueError, "D1 upstream"):
             _validate_paired_evaluation_reports(
@@ -7426,7 +8461,9 @@ class SegDescProtocolTest(unittest.TestCase):
             "checkpoint_sha256": "a" * 64,
             "checkpoint_metadata": {
                 "description_protocol_assets": description_protocol_assets_spec(),
-                "metadata": {"config": {"seed": 42}},
+                "metadata": {
+                    "config": synthetic_segdesc_config(seed=42)
+                },
             },
             "checkpoint_binding": {
                 "checkpoint_training_seed": 42,
@@ -7807,7 +8844,7 @@ class SegDescProtocolTest(unittest.TestCase):
             stale_mask.unlink()
             incomplete = fold_predictions[0].parent / "report.json.part"
             incomplete.write_bytes(b"incomplete-fold-publication")
-            with self.assertRaisesRegex(ValueError, "\.part"):
+            with self.assertRaisesRegex(ValueError, r"\.part"):
                 revalidate_oof_merged_index(merged_path)
             incomplete.unlink()
             checkpoint_to_mutate = root / "seg_fold_0.pt"
@@ -7845,7 +8882,7 @@ class SegDescProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path("SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml")
             payload = __import__("yaml").safe_load(source.read_text(encoding="utf-8"))
-            payload["region_encoder"] = "union_bbox"
+            payload["model"]["region_encoder"] = "union_bbox"
             path = Path(directory) / "invalid.yaml"
             path.write_text(__import__("yaml").safe_dump(payload), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "region_encoder"):
@@ -7864,7 +8901,13 @@ class SegDescProtocolTest(unittest.TestCase):
                 ("learning_rate", float("nan")),
                 ("segmentation_retention_max_drop", float("inf")),
             ):
-                invalid = {**payload, name: value}
+                invalid = json.loads(json.dumps(payload))
+                section = (
+                    "training"
+                    if name == "learning_rate"
+                    else "joint"
+                )
+                invalid[section][name] = value
                 path.write_text(
                     __import__("yaml").safe_dump(invalid), encoding="utf-8"
                 )
@@ -7881,19 +8924,24 @@ class SegDescProtocolTest(unittest.TestCase):
             payload = __import__("yaml").safe_load(
                 source.read_text(encoding="utf-8")
             )
-            payload.update({"stage": "mmrs_caption", "d_minus_one_gate": None})
+            payload["training"].update({
+                "stage": "mmrs_caption",
+                "d_minus_one_gate": None,
+            })
             path = Path(directory) / "d0.yaml"
             path.write_text(
                 __import__("yaml").safe_dump(payload), encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "d_minus_one_gate"):
                 load_segdesc_config(path)
-            payload["d_minus_one_gate"] = "outputs/d_minus_one_gate.json"
+            payload["training"]["d_minus_one_gate"] = (
+                "outputs/d_minus_one_gate.json"
+            )
             path.write_text(
                 __import__("yaml").safe_dump(payload), encoding="utf-8"
             )
             self.assertEqual(
-                load_segdesc_config(path).d_minus_one_gate,
+                load_segdesc_config(path).training.d_minus_one_gate,
                 "outputs/d_minus_one_gate.json",
             )
 
@@ -7901,8 +8949,8 @@ class SegDescProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path("SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml")
             payload = __import__("yaml").safe_load(source.read_text(encoding="utf-8"))
-            payload.update({
-                "stage": "predicted_mask",
+            payload["training"]["stage"] = "predicted_mask"
+            payload["data"].update({
                 "predicted_index": "outputs/synthetic_predicted.jsonl",
                 "predicted_mask_fraction": 0.4,
             })
@@ -7910,9 +8958,11 @@ class SegDescProtocolTest(unittest.TestCase):
             path.write_text(__import__("yaml").safe_dump(payload), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "curriculum tier"):
                 load_segdesc_config(path)
-            payload["predicted_mask_fraction"] = 0.5
+            payload["data"]["predicted_mask_fraction"] = 0.5
             path.write_text(__import__("yaml").safe_dump(payload), encoding="utf-8")
-            self.assertEqual(load_segdesc_config(path).predicted_mask_fraction, 0.5)
+            self.assertEqual(
+                load_segdesc_config(path).data.predicted_mask_fraction, 0.5
+            )
 
     def test_d4_training_separates_oof_train_and_fixed_val_indexes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7922,8 +8972,10 @@ class SegDescProtocolTest(unittest.TestCase):
             train_index.write_text("{}\n", encoding="utf-8")
             val_index.write_text("{}\n", encoding="utf-8")
             config = SimpleNamespace(
-                predicted_index=str(train_index),
-                predicted_val_index=str(val_index),
+                data=SimpleNamespace(
+                    predicted_index=str(train_index),
+                    predicted_val_index=str(val_index),
+                ),
             )
             audit = validate_predicted_training_indexes(
                 config, stage="predicted_mask"
@@ -7940,15 +8992,20 @@ class SegDescProtocolTest(unittest.TestCase):
             )
 
             missing_val = SimpleNamespace(
-                predicted_index=str(train_index), predicted_val_index=None,
+                data=SimpleNamespace(
+                    predicted_index=str(train_index),
+                    predicted_val_index=None,
+                ),
             )
             with self.assertRaisesRegex(ValueError, "fixed val"):
                 validate_predicted_training_indexes(
                     missing_val, stage="predicted_mask"
                 )
             same = SimpleNamespace(
-                predicted_index=str(train_index),
-                predicted_val_index=str(train_index),
+                data=SimpleNamespace(
+                    predicted_index=str(train_index),
+                    predicted_val_index=str(train_index),
+                ),
             )
             with self.assertRaisesRegex(ValueError, "不同产物"):
                 validate_predicted_training_indexes(same, stage="predicted_mask")
@@ -8301,15 +9358,18 @@ class SegDescProtocolTest(unittest.TestCase):
             checkpoint = Path(directory) / "d4_25.pt"
             source = FakeSegDescCheckpointModel("mgrr")
             target = FakeSegDescCheckpointModel("mgrr")
-            save_segdesc_checkpoint(
+            save_synthetic_model_checkpoint(
                 checkpoint,
                 source,
                 step=25,
-                segmentation_migration={"source_sha256": "a" * 64},
                 metadata={
                     "stage": "predicted_mask",
                     "checkpoint_role": "validation_best",
-                    "config": {"seed": 42, "predicted_mask_fraction": 0.25},
+                    "config": synthetic_segdesc_config(
+                        stage="predicted_mask",
+                        seed=42,
+                        predicted_mask_fraction=0.25,
+                    ),
                 },
             )
             publish_synthetic_description_run_completion(
@@ -8348,9 +9408,9 @@ class SegDescProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path("SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml")
             payload = __import__("yaml").safe_load(source.read_text(encoding="utf-8"))
-            payload.update({
-                "stage": "bridge_expert",
-                "evaluation_mode": "fixed_prediction",
+            payload["training"]["stage"] = "bridge_expert"
+            payload["evaluation"]["evaluation_mode"] = "fixed_prediction"
+            payload["data"].update({
                 "predicted_index": "outputs/synthetic_predicted.jsonl",
             })
             path = Path(directory) / "invalid_fixed_stage.yaml"
@@ -8362,7 +9422,7 @@ class SegDescProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path("SEG_Multi-Source_Landslides/configs/qpsalm_segdesc_small.yaml")
             payload = __import__("yaml").safe_load(source.read_text(encoding="utf-8"))
-            payload.pop("joint_task_pattern", None)
+            payload["joint"].pop("joint_task_pattern", None)
             path = Path(directory) / "default_joint_pattern.yaml"
             path.write_text(__import__("yaml").safe_dump(payload), encoding="utf-8")
             config = load_segdesc_config(path)
@@ -8379,11 +9439,15 @@ class SegDescProtocolTest(unittest.TestCase):
             target_region_before = {
                 key: value.detach().clone() for key, value in target.mgrr.state_dict().items()
             }
-            save_segdesc_checkpoint(
+            save_synthetic_model_checkpoint(
                 path,
                 source,
                 step=7,
-                segmentation_migration={"source": "synthetic"},
+                metadata={
+                    "stage": "overfit",
+                    "checkpoint_role": "terminal_last",
+                    "config": synthetic_segdesc_config(stage="overfit"),
+                },
             )
             step, report = initialize_segdesc_checkpoint(path, target)
             self.assertEqual(step, 7)
@@ -8398,13 +9462,15 @@ class SegDescProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "d0.pt"
             source = FakeSegDescCheckpointModel("mgrr")
-            save_segdesc_checkpoint(
+            save_synthetic_model_checkpoint(
                 path,
                 source,
                 step=5,
-                segmentation_migration={"source": "synthetic"},
                 metadata={
-                    "stage": "mmrs_caption", "config": {"seed": 42},
+                    "stage": "mmrs_caption",
+                    "config": synthetic_segdesc_config(
+                        stage="mmrs_caption", seed=42
+                    ),
                     "checkpoint_role": "validation_best",
                     "d_minus_one_acceptance": {
                         "protocol": D_MINUS_ONE_ACCEPTANCE_PROTOCOL,
@@ -8469,15 +9535,26 @@ class SegDescProtocolTest(unittest.TestCase):
                 checkpoint = root / f"d3a_{label}.pt"
                 metadata = {
                     "stage": "bridge_auto",
-                    "config": {"seed": 42},
+                    "config": synthetic_segdesc_config(
+                        stage="bridge_auto", seed=42
+                    ),
                 }
-                if role is not None:
-                    metadata["checkpoint_role"] = role
-                save_segdesc_checkpoint(
+                if role is None:
+                    with self.assertRaisesRegex(
+                        RuntimeError, "metadata.checkpoint_role"
+                    ):
+                        save_synthetic_model_checkpoint(
+                            checkpoint,
+                            FakeSegDescCheckpointModel("mgrr"),
+                            step=100,
+                            metadata=metadata,
+                        )
+                    continue
+                metadata["checkpoint_role"] = role
+                save_synthetic_model_checkpoint(
                     checkpoint,
                     FakeSegDescCheckpointModel("mgrr"),
                     step=100,
-                    segmentation_migration={"source": "synthetic"},
                     metadata=metadata,
                 )
                 if role == "terminal_last":
@@ -8506,15 +9583,15 @@ class SegDescProtocolTest(unittest.TestCase):
                         )
 
     def test_resume_requires_exact_saved_run_config(self) -> None:
-        config = {
-            "stage": "bridge_auto",
-            "max_steps": 100,
-            "grad_accum_steps": 4,
-            "joint_task_pattern": [
+        config = synthetic_segdesc_config(
+            stage="bridge_auto",
+            max_steps=100,
+            grad_accum_steps=4,
+            joint_task_pattern=[
                 "segmentation", "global_caption",
                 "segmentation", "region_description",
             ],
-        }
+        )
         audit = validate_resume_run_config(
             {"metadata": {"config": dict(config)}}, config
         )
@@ -8522,9 +9599,15 @@ class SegDescProtocolTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "max_steps"):
             validate_resume_run_config(
                 {"metadata": {"config": dict(config)}},
-                {**config, "max_steps": 200},
+                {
+                    **config,
+                    "training": {
+                        **config["training"],
+                        "max_steps": 200,
+                    },
+                },
             )
-        with self.assertRaisesRegex(RuntimeError, "缺少完整 config"):
+        with self.assertRaisesRegex(RuntimeError, "完整 composed config"):
             validate_resume_run_config({"metadata": {}}, config)
 
     def test_checkpoint_reload_restores_weights_and_resume_state_strictly(self) -> None:
@@ -8536,14 +9619,17 @@ class SegDescProtocolTest(unittest.TestCase):
             source_optimizer = torch.optim.SGD(source.parameters(), lr=0.1)
             source_scheduler = torch.optim.lr_scheduler.StepLR(source_optimizer, step_size=1)
             complete = root / "complete.pt"
-            save_segdesc_checkpoint(
+            save_synthetic_model_checkpoint(
                 complete,
                 source,
                 step=11,
-                segmentation_migration={"source": "synthetic"},
                 optimizer=source_optimizer,
                 scheduler=source_scheduler,
-                metadata={"stage": "overfit"},
+                metadata={
+                    "stage": "overfit",
+                    "checkpoint_role": "terminal_last",
+                    "config": synthetic_segdesc_config(stage="overfit"),
+                },
             )
             probe_step, reload_audit = verify_segdesc_checkpoint_reload(
                 complete,
@@ -8563,6 +9649,25 @@ class SegDescProtocolTest(unittest.TestCase):
                 reload_audit["corrupted_sha256"],
                 reload_audit["restored_sha256"],
             )
+            self.assertEqual(
+                reload_audit["protocol"], STRICT_RELOAD_PROBE_PROTOCOL
+            )
+            self.assertTrue(reload_audit["optimizer_state_restored"])
+            self.assertTrue(reload_audit["scheduler_state_restored"])
+            self.assertTrue(reload_audit["rng_state_restored"])
+            self.assertTrue(reload_audit["grad_scaler_state_restored"])
+            state_probe = reload_audit["state_probe"]
+            self.assertEqual(
+                state_probe["expected_sha256"], state_probe["before_sha256"]
+            )
+            self.assertEqual(
+                state_probe["expected_sha256"], state_probe["restored_sha256"]
+            )
+            for role in ("optimizer", "scheduler", "rng"):
+                self.assertNotEqual(
+                    state_probe["expected_sha256"][role],
+                    state_probe["corrupted_sha256"][role],
+                )
             target = FakeSegDescCheckpointModel("mgrr")
             target_optimizer = torch.optim.SGD(target.parameters(), lr=0.1)
             target_scheduler = torch.optim.lr_scheduler.StepLR(target_optimizer, step_size=1)
@@ -8577,11 +9682,15 @@ class SegDescProtocolTest(unittest.TestCase):
                 self.assertTrue(torch.equal(value, target.state_dict()[key]))
 
             weights_only = root / "weights_only.pt"
-            save_segdesc_checkpoint(
+            save_synthetic_model_checkpoint(
                 weights_only,
                 source,
                 step=12,
-                segmentation_migration={"source": "synthetic"},
+                metadata={
+                    "stage": "overfit",
+                    "checkpoint_role": "terminal_last",
+                    "config": synthetic_segdesc_config(stage="overfit"),
+                },
             )
             missing_target = FakeSegDescCheckpointModel("mgrr")
             with self.assertRaisesRegex(RuntimeError, "optimizer_state"):
@@ -8609,29 +9718,112 @@ class SegDescProtocolTest(unittest.TestCase):
                     stale_schema, FakeSegDescCheckpointModel("mgrr")
                 )
 
+    def test_checkpoint_reload_hashes_scalar_adamw_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = FakeSegDescCheckpointModel("mgrr")
+            optimizer = torch.optim.AdamW(model.parameters(), lr=1.0e-3)
+            scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lr_lambda=lambda _step: 1.0
+            )
+            loss = sum(
+                parameter.float().square().sum()
+                for parameter in model.parameters()
+            )
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            scalar_states = [
+                value
+                for state in optimizer.state.values()
+                for value in state.values()
+                if isinstance(value, torch.Tensor) and value.ndim == 0
+            ]
+            self.assertTrue(scalar_states)
+
+            checkpoint = root / "adamw_scalar_state.pt"
+            save_synthetic_model_checkpoint(
+                checkpoint,
+                model,
+                step=1,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                metadata={
+                    "stage": "overfit",
+                    "checkpoint_role": "terminal_last",
+                    "config": synthetic_segdesc_config(stage="overfit"),
+                },
+            )
+            step, audit = verify_segdesc_checkpoint_reload(
+                checkpoint,
+                model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=None,
+                expected_stage="overfit",
+            )
+            self.assertEqual(step, 1)
+            self.assertTrue(audit["passed"])
+            self.assertTrue(audit["optimizer_state_restored"])
+
     def test_checkpoint_metadata_rejects_nonfinite_before_publication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             invalid = root / "invalid.pt"
             model = FakeSegDescCheckpointModel("mgrr")
-            with self.assertRaisesRegex(RuntimeError, "finite.*JSON-compatible"):
+            migration, _lineage = synthetic_segmentation_migration(root)
+            with self.assertRaisesRegex(
+                RuntimeError, "segmentation_migration_lineage"
+            ):
                 save_segdesc_checkpoint(
+                    root / "missing_migration_lineage.pt",
+                    model,
+                    step=1,
+                    segmentation_migration=migration,
+                    metadata={
+                        "stage": "overfit",
+                        "checkpoint_role": "terminal_last",
+                        "config": synthetic_segdesc_config(stage="overfit"),
+                    },
+                )
+            with self.assertRaisesRegex(RuntimeError, "config_v2"):
+                save_synthetic_model_checkpoint(
+                    root / "flat_config.pt",
+                    model,
+                    step=1,
+                    metadata={
+                        "stage": "overfit",
+                        "checkpoint_role": "terminal_last",
+                        "config": {"stage": "overfit", "seed": 42},
+                    },
+                )
+            with self.assertRaisesRegex(RuntimeError, "finite.*JSON-compatible"):
+                save_synthetic_model_checkpoint(
                     invalid,
                     model,
                     step=1,
-                    segmentation_migration={"source": "synthetic"},
-                    metadata={"stage": "overfit", "best_score": float("nan")},
+                    metadata={
+                        "stage": "overfit",
+                        "checkpoint_role": "terminal_last",
+                        "config": synthetic_segdesc_config(stage="overfit"),
+                        "best_score": float("nan"),
+                    },
                 )
             self.assertFalse(invalid.exists())
             self.assertEqual(list(root.glob(".invalid.pt.*.tmp")), [])
 
             valid = root / "valid.pt"
-            save_segdesc_checkpoint(
+            save_synthetic_model_checkpoint(
                 valid,
                 model,
                 step=1,
-                segmentation_migration={"source": "synthetic"},
-                metadata={"stage": "overfit", "best_score": None},
+                metadata={
+                    "stage": "overfit",
+                    "checkpoint_role": "terminal_last",
+                    "config": synthetic_segdesc_config(stage="overfit"),
+                    "best_score": None,
+                },
             )
             payload = torch.load(valid, map_location="cpu", weights_only=False)
             payload["metadata"]["best_score"] = float("inf")
@@ -8653,14 +9845,17 @@ class SegDescProtocolTest(unittest.TestCase):
             random.seed(401)
             np.random.seed(402)
             torch.manual_seed(403)
-            save_segdesc_checkpoint(
+            save_synthetic_model_checkpoint(
                 path,
                 source,
                 step=4,
-                segmentation_migration={"source": "synthetic"},
                 optimizer=source_optimizer,
                 scheduler=source_scheduler,
-                metadata={"stage": "joint"},
+                metadata={
+                    "stage": "joint",
+                    "checkpoint_role": "terminal_last",
+                    "config": synthetic_segdesc_config(seed=401),
+                },
             )
             expected = (
                 random.random(),
@@ -8727,7 +9922,11 @@ class SegDescProtocolTest(unittest.TestCase):
                 segmentation_migration=migration,
                 metadata={
                     "stage": "bridge_expert",
-                    "config": {"seed": 42},
+                    "checkpoint_role": "validation_best",
+                    "json_roundtrip_probe": ("left", "right"),
+                    "config": synthetic_segdesc_config(
+                        stage="bridge_expert", seed=42
+                    ),
                     "segmentation_migration_lineage": migration_lineage,
                 },
             )
@@ -8741,7 +9940,52 @@ class SegDescProtocolTest(unittest.TestCase):
                 provenance["checkpoint_metadata"]["metadata"]["stage"],
                 "bridge_expert",
             )
+            self.assertEqual(
+                provenance["checkpoint_metadata"]["metadata"][
+                    "json_roundtrip_probe"
+                ],
+                ["left", "right"],
+            )
             self.assertGreater(provenance["model_state_keys"], 0)
+            run_completion = publish_synthetic_description_run_completion(
+                checkpoint,
+                stage="bridge_expert",
+                role="terminal_last",
+                step=23,
+            )
+            self.assertTrue(run_completion["passed"])
+            completion = strict_json_loads(
+                (root / "training_report.json").read_text(encoding="utf-8")
+            )
+            terminal_metadata = completion["terminal_checkpoint_audit"][
+                "checkpoint_provenance"
+            ]["checkpoint_metadata"]["metadata"]
+            self.assertEqual(
+                terminal_metadata["json_roundtrip_probe"],
+                ["left", "right"],
+            )
+            payload = torch.load(
+                checkpoint, map_location="cpu", weights_only=False
+            )
+            stale_sequence = copy.deepcopy(payload)
+            stale_sequence["description_architecture_spec"].pop(
+                "description_sequence_protocol"
+            )
+            legacy_sequence = root / "legacy_sequence_architecture.pt"
+            torch.save(stale_sequence, legacy_sequence)
+            with self.assertRaisesRegex(
+                RuntimeError, "architecture description sequence protocol"
+            ):
+                inspect_segdesc_checkpoint(legacy_sequence)
+            payload["description_architecture_spec"].pop(
+                "structured_generation_protocol"
+            )
+            legacy = root / "legacy_unconstrained_generation.pt"
+            torch.save(payload, legacy)
+            with self.assertRaisesRegex(
+                RuntimeError, "structured generation protocol"
+            ):
+                inspect_segdesc_checkpoint(legacy)
 
     def test_formal_checkpoint_provenance_replays_bound_description_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8767,7 +10011,9 @@ class SegDescProtocolTest(unittest.TestCase):
                 "metadata": {
                     "stage": "bridge_expert",
                     "checkpoint_role": "validation_best",
-                    "config": {"seed": 42},
+                    "config": synthetic_segdesc_config(
+                        stage="bridge_expert", seed=42
+                    ),
                     "segmentation_migration_lineage": migration_lineage,
                 },
             }

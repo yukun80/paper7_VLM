@@ -312,7 +312,8 @@ Description Vision Cache: task_neutral_parent_visual_features_v1
 MGRR:                    qpsalm_mgrr_v2_multiscale_grid_replay
 M4 seed gate:            qpsalm_description_seed_gate_v12_strict_json_finite
 M4 suite gate:           qpsalm_m4_region_encoder_suite_v8_strict_json_finite
-Description sequence:    qpsalm_description_causal_v4_stage_separated
+Description sequence:    qpsalm_description_causal_v5_stage_separated_schema_ordered
+Structured generation:   qpsalm_description_structured_generation_v2_token_stream_bound
 SegDesc checkpoint:      qpsalm_segdesc_v1
 Region data binding:     qpsalm_region_training_data_binding_v2_cache_candidate_bound
 Checkpoint provenance:  qpsalm_segdesc_checkpoint_provenance_v3_segmentation_lineage_bound

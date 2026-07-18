@@ -57,6 +57,7 @@ qpsalm-demo-description = "qpsalm_seg.cli.demo_description:main"
 qpsalm-score-expert-factuality = "qpsalm_seg.cli.score_expert_factuality:main"
 qpsalm-score-caption-metrics = "qpsalm_seg.cli.score_caption_metrics:main"
 qpsalm-score-caption-human-review = "qpsalm_seg.cli.score_caption_human_review:main"
+qpsalm-segdesc = "qpsalm_seg.cli.segdesc:main"
 
 [project.optional-dependencies]
 caption-eval = [

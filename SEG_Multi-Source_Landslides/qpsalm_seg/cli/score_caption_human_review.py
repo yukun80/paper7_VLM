@@ -16,18 +16,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from qpsalm_seg.description.caption_human_review import (
-    aggregate_caption_human_reviews,
-    build_caption_human_review_template,
-    write_caption_review_jsonl,
+from qpsalm_seg.description.workflows.review import (
+    ReviewLaunchError,
+    run_caption_human_review,
 )
-from qpsalm_seg.description.common import write_json
-from qpsalm_seg.paths import resolve_project_path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build or aggregate blind RSIEval caption human reviews."
     )
@@ -38,39 +34,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--write-template", action="store_true")
     parser.add_argument("--output", required=True)
     parser.add_argument("--overwrite-output", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    output = resolve_project_path(args.output) or Path(args.output)
-    if output.exists() and not args.overwrite_output:
-        raise SystemExit("caption human review output 已存在；请改路径或显式覆盖")
-    if args.write_template:
-        if args.review:
-            raise ValueError("--write-template 与 --review 不能同时使用")
-        rows = build_caption_human_review_template(args.eval_dir)
-        write_caption_review_jsonl(output, rows)
-        print(json.dumps({
-            "template": str(output),
-            "num_samples": len(rows),
-            "reference_target_hidden": True,
-        }, ensure_ascii=False))
-        return
-    if len(args.review) < max(2, int(args.minimum_reviewers)):
-        raise ValueError("正式 caption human review 至少提供两份独立审核文件")
-    report = aggregate_caption_human_reviews(
-        args.eval_dir,
-        args.review,
-        seed=args.seed,
-        minimum_reviewers=args.minimum_reviewers,
-    )
-    write_json(output, report)
-    print(json.dumps({
-        "report": str(output),
-        "num_parents": report["num_parents"],
-        "metrics": report["metrics"],
-    }, ensure_ascii=False))
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    try:
+        report = run_caption_human_review(
+            eval_dir=args.eval_dir,
+            reviews=args.review,
+            minimum_reviewers=args.minimum_reviewers,
+            seed=args.seed,
+            write_template=args.write_template,
+            output=args.output,
+            overwrite_output=args.overwrite_output,
+        )
+    except ReviewLaunchError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not args.write_template:
+        report = {
+            "report": args.output,
+            "num_parents": report["num_parents"],
+            "metrics": report["metrics"],
+        }
+    print(json.dumps(report, ensure_ascii=False))
 
 
 if __name__ == "__main__":

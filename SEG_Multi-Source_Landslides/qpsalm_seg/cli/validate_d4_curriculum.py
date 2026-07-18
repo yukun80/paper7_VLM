@@ -20,17 +20,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from qpsalm_seg.description.common import write_json
-from qpsalm_seg.description.d4_curriculum import (
-    build_d4_curriculum_gate,
-    validate_d4_curriculum_gate,
+from qpsalm_seg.description.workflows.gates import (
+    run_d4_curriculum_gate,
 )
-from qpsalm_seg.paths import resolve_project_path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate one D4 curriculum tier.")
     parser.add_argument("--eval-dir", required=True)
     parser.add_argument("--expert-report", required=True)
@@ -50,12 +46,12 @@ def parse_args() -> argparse.Namespace:
     destination.add_argument("--final-m7", action="store_true")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--output", required=True)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    report = build_d4_curriculum_gate(
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    report = run_d4_curriculum_gate(
         evaluation_dir=args.eval_dir,
         expert_report=args.expert_report,
         bridge_benchmark=args.bridge_benchmark,
@@ -63,15 +59,8 @@ def main() -> None:
         next_fraction=None if args.final_m7 else args.next_fraction,
         seed=args.seed,
         m4_suite_gate=args.m4_suite_gate,
+        output=args.output,
     )
-    output = resolve_project_path(args.output) or Path(args.output)
-    candidate = output.with_name(f".{output.name}.candidate")
-    try:
-        write_json(candidate, report)
-        validate_d4_curriculum_gate(candidate)
-        candidate.replace(output)
-    finally:
-        candidate.unlink(missing_ok=True)
     print(json.dumps(report, ensure_ascii=False, allow_nan=False))
     if not report["passed"]:
         raise SystemExit(2)

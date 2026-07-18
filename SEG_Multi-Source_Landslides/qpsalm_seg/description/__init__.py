@@ -1,235 +1,44 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Segmentation-grounded region description modules."""
+"""Small lazy public surface for segmentation-grounded description.
 
-from .vision_cache import (
-    DESCRIPTION_CACHE_ARTIFACT_BINDING_PROTOCOL,
-    DESCRIPTION_CACHE_ARTIFACT_REVALIDATION_PROTOCOL,
-    DESCRIPTION_CACHE_BUILDER_VERSION,
-    DESCRIPTION_CACHE_FORMAT,
-    DESCRIPTION_CACHE_PROTOCOL,
-    DESCRIPTION_CACHE_SHARD_REPLAY_PROTOCOL,
-    DESCRIPTION_CACHE_VALIDATION_PROTOCOL,
-    DescriptionVisionFeatureBank,
-    description_cache_key,
-    revalidate_description_cache_artifact,
-)
-from .mgrr import MultiGranularityRegionReplay, rasterize_region_geometry
-from .region_baselines import SingleVectorRegionPooling
-from .model import (
-    DESCRIPTION_ADAPTER_NAME,
-    DESCRIPTION_SEQUENCE_PROTOCOL,
-    DescriptionForwardOutput,
-    SegmentationGroundedDescriptionModel,
-    SegmentThenDescribeOutput,
-)
-from .output_protocol import ParsedDescription, deterministic_repair, parse_description_output
-from .checkpoint import (
-    SEGDESC_CHECKPOINT_FORMAT,
-    SEGDESC_CHECKPOINT_PROVENANCE_PROTOCOL,
-    SEGMENTATION_MIGRATION_LINEAGE_PROTOCOL,
-    initialize_segdesc_checkpoint,
-    inspect_segdesc_checkpoint,
-    load_segdesc_checkpoint,
-    migrate_segmentation_checkpoint,
-    save_segdesc_checkpoint,
-    validate_segmentation_migration_lineage,
-)
-from .backbone import (
-    DescriptionCacheBackboneEncoder,
-    region_mask_for_modality_view,
-    restore_region_mask_from_cache,
-    retarget_region_mask_between_cache_views,
-    transform_region_mask_to_cache,
-)
-from .data import (
-    BRIDGE_ENGINEERING_AUDIT_PROTOCOL,
-    DESCRIPTION_ENGINEERING_AUDIT_PROTOCOL,
-    REGION_TRAINING_DATA_PROTOCOL,
-    DescriptionTaskDataset,
-    collate_description,
-    require_engineering_bridge,
-    require_engineering_description,
-)
-from .config import (
-    DESCRIPTION_EVAL_MODES,
-    DESCRIPTION_STAGES,
-    SegDescConfig,
-    load_segdesc_config,
-)
-from .runtime import (
-    build_description_optimizer,
-    build_segdesc_model,
-    description_parameter_groups,
-    description_trainable_parameter_manifest,
-)
-from .metrics import DescriptionMetricAccumulator, retrieval_metrics
-from .counterfactuals import COUNTERFACTUAL_MODES
-from .cycle_localization import (
-    CYCLE_LOCALIZATION_PROTOCOL,
-    CycleLocalizationProvider,
-    cycle_prompt_batch,
-    cycle_region_iou,
-)
-from .expert_factuality import (
-    EXPERT_FACTUALITY_PROTOCOL,
-    aggregate_expert_factuality,
-    build_expert_review_template,
-    revalidate_expert_factuality_report,
-)
-from .oof import (
-    OOF_FOLD_FORMAT,
-    OOF_PARTITION_REPLAY_PROTOCOL,
-    build_oof_fold_indexes,
-    load_oof_manifest,
-    oof_manifest_artifact_binding,
-)
-from .caption_metrics import (
-    CAPTION_METRICS_PROTOCOL,
-    caption_metric_population,
-    score_caption_metrics,
-)
-from .caption_human_review import (
-    CAPTION_HUMAN_REPORT_PROTOCOL,
-    CAPTION_HUMAN_REVIEW_PROTOCOL,
-    aggregate_caption_human_reviews,
-    build_caption_human_review_template,
-)
-from .retention import (
-    BASELINE_CHECKPOINT_REPLAY_PROTOCOL,
-    M7_RETENTION_SEED_GATE_PROTOCOL,
-    RETENTION_EVAL_BINDING_PROTOCOL,
-    RETENTION_GATE_PROTOCOL,
-    aggregate_m7_retention_seed_gates,
-    bind_joint_evaluation_report,
-    build_baseline_checkpoint_replay_audit,
-    segmentation_metric_input_population,
-    validate_m7_retention_gate,
-    validate_m7_retention_seed_gate,
-)
-from .d4_curriculum import (
-    D4_CURRICULUM_GATE_PROTOCOL,
-    D4_CURRICULUM_TRANSITIONS,
-    D4_FINAL_FRACTION,
-    build_d4_curriculum_gate,
-    revalidate_saved_d4_final_acceptance,
-    validate_d4_curriculum_gate,
-    validate_d4_curriculum_transition,
-    validate_d4_final_acceptance_for_m7,
-)
-from .m6_acceptance import (
-    M6_ACCEPTANCE_AUDIT_PROTOCOL,
-    M6_ACCEPTANCE_GATE_PROTOCOL,
-    build_m6_acceptance_gate,
-    revalidate_saved_m6_acceptance,
-    validate_m6_acceptance_for_m7,
-    validate_m6_acceptance_gate,
-)
-from .target_audit import (
-    SEGMENTATION_INSTRUCTION_SOURCE_PROTOCOL,
-    build_segmentation_instruction_source_binding,
-    revalidate_segmentation_instruction_source_binding,
-)
+Importing a low-level submodule must not initialize MGRR, Qwen, training or evaluation.
+The stable convenience names below are therefore resolved only when requested.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+
+_PUBLIC_EXPORTS = {
+    "MultisourceBackboneState": (
+        "qpsalm_seg.schema", "MultisourceBackboneState",
+    ),
+    "SegmentationState": ("qpsalm_seg.schema", "SegmentationState"),
+    "RegionEvidenceState": ("qpsalm_seg.schema", "RegionEvidenceState"),
+    "MultiGranularityRegionReplay": (".modeling.mgrr", "MultiGranularityRegionReplay"),
+    "SingleVectorRegionPooling": (".modeling.region_baselines", "SingleVectorRegionPooling"),
+    "rasterize_region_geometry": (".modeling.mgrr", "rasterize_region_geometry"),
+    "retarget_region_mask_between_cache_views": (
+        ".protocols.region_geometry",
+        "retarget_region_mask_between_cache_views",
+    ),
+    "transform_region_mask_to_cache": (
+        ".protocols.region_geometry",
+        "transform_region_mask_to_cache",
+    ),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _PUBLIC_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute = target
+    value = getattr(import_module(module_name, __name__), attribute)
+    globals()[name] = value
+    return value
 
 __all__ = [
-    "DESCRIPTION_CACHE_ARTIFACT_BINDING_PROTOCOL",
-    "DESCRIPTION_CACHE_ARTIFACT_REVALIDATION_PROTOCOL",
-    "DESCRIPTION_CACHE_BUILDER_VERSION",
-    "DESCRIPTION_CACHE_FORMAT",
-    "DESCRIPTION_CACHE_PROTOCOL",
-    "DESCRIPTION_CACHE_SHARD_REPLAY_PROTOCOL",
-    "DESCRIPTION_CACHE_VALIDATION_PROTOCOL",
-    "DescriptionVisionFeatureBank",
-    "description_cache_key",
-    "revalidate_description_cache_artifact",
-    "MultiGranularityRegionReplay",
-    "rasterize_region_geometry",
-    "SingleVectorRegionPooling",
-    "DESCRIPTION_ADAPTER_NAME",
-    "DESCRIPTION_SEQUENCE_PROTOCOL",
-    "DescriptionForwardOutput",
-    "SegmentationGroundedDescriptionModel",
-    "SegmentThenDescribeOutput",
-    "ParsedDescription",
-    "deterministic_repair",
-    "parse_description_output",
-    "SEGDESC_CHECKPOINT_FORMAT",
-    "SEGDESC_CHECKPOINT_PROVENANCE_PROTOCOL",
-    "SEGMENTATION_MIGRATION_LINEAGE_PROTOCOL",
-    "initialize_segdesc_checkpoint",
-    "inspect_segdesc_checkpoint",
-    "load_segdesc_checkpoint",
-    "migrate_segmentation_checkpoint",
-    "save_segdesc_checkpoint",
-    "validate_segmentation_migration_lineage",
-    "DescriptionCacheBackboneEncoder",
-    "region_mask_for_modality_view",
-    "restore_region_mask_from_cache",
-    "retarget_region_mask_between_cache_views",
-    "transform_region_mask_to_cache",
-    "BRIDGE_ENGINEERING_AUDIT_PROTOCOL",
-    "DESCRIPTION_ENGINEERING_AUDIT_PROTOCOL",
-    "REGION_TRAINING_DATA_PROTOCOL",
-    "DescriptionTaskDataset",
-    "collate_description",
-    "require_engineering_bridge",
-    "require_engineering_description",
-    "DESCRIPTION_STAGES",
-    "DESCRIPTION_EVAL_MODES",
-    "SegDescConfig",
-    "load_segdesc_config",
-    "build_description_optimizer",
-    "build_segdesc_model",
-    "description_parameter_groups",
-    "description_trainable_parameter_manifest",
-    "DescriptionMetricAccumulator",
-    "retrieval_metrics",
-    "COUNTERFACTUAL_MODES",
-    "CYCLE_LOCALIZATION_PROTOCOL",
-    "CycleLocalizationProvider",
-    "cycle_prompt_batch",
-    "cycle_region_iou",
-    "aggregate_expert_factuality",
-    "build_expert_review_template",
-    "EXPERT_FACTUALITY_PROTOCOL",
-    "revalidate_expert_factuality_report",
-    "OOF_FOLD_FORMAT",
-    "OOF_PARTITION_REPLAY_PROTOCOL",
-    "build_oof_fold_indexes",
-    "load_oof_manifest",
-    "oof_manifest_artifact_binding",
-    "CAPTION_METRICS_PROTOCOL",
-    "caption_metric_population",
-    "score_caption_metrics",
-    "CAPTION_HUMAN_REPORT_PROTOCOL",
-    "CAPTION_HUMAN_REVIEW_PROTOCOL",
-    "aggregate_caption_human_reviews",
-    "build_caption_human_review_template",
-    "BASELINE_CHECKPOINT_REPLAY_PROTOCOL",
-    "M7_RETENTION_SEED_GATE_PROTOCOL",
-    "RETENTION_EVAL_BINDING_PROTOCOL",
-    "RETENTION_GATE_PROTOCOL",
-    "aggregate_m7_retention_seed_gates",
-    "bind_joint_evaluation_report",
-    "build_baseline_checkpoint_replay_audit",
-    "segmentation_metric_input_population",
-    "validate_m7_retention_gate",
-    "validate_m7_retention_seed_gate",
-    "D4_CURRICULUM_GATE_PROTOCOL",
-    "D4_CURRICULUM_TRANSITIONS",
-    "D4_FINAL_FRACTION",
-    "build_d4_curriculum_gate",
-    "revalidate_saved_d4_final_acceptance",
-    "validate_d4_curriculum_gate",
-    "validate_d4_curriculum_transition",
-    "validate_d4_final_acceptance_for_m7",
-    "M6_ACCEPTANCE_AUDIT_PROTOCOL",
-    "M6_ACCEPTANCE_GATE_PROTOCOL",
-    "SEGMENTATION_INSTRUCTION_SOURCE_PROTOCOL",
-    "build_m6_acceptance_gate",
-    "build_segmentation_instruction_source_binding",
-    "revalidate_saved_m6_acceptance",
-    "revalidate_segmentation_instruction_source_binding",
-    "validate_m6_acceptance_for_m7",
-    "validate_m6_acceptance_gate",
+    *_PUBLIC_EXPORTS,
 ]

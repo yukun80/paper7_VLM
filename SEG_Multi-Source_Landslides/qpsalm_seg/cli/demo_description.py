@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import argparse
 
-from qpsalm_seg.description.config import DESCRIPTION_STAGES, load_segdesc_config
+from qpsalm_seg.description.protocols.config import (
+    DESCRIPTION_STAGES,
+    load_segdesc_config,
+)
+from qpsalm_seg.description.workflows.demo import run_description_demo
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,14 +71,13 @@ def main() -> None:
         "region_protocol": args.region_protocol,
         "region_encoder": args.region_encoder,
     })
-    from qpsalm_seg.description.demo import DescriptionDemoSession, build_demo
-
-    session = DescriptionDemoSession(config, args.checkpoint, args.split, args.device)
-    app = build_demo(session)
-    app.queue(default_concurrency_limit=1).launch(
-        server_name=args.host,
-        server_port=args.port,
-        share=False,
+    run_description_demo(
+        config,
+        checkpoint=args.checkpoint,
+        split=args.split,
+        device_name=args.device,
+        host=args.host,
+        port=args.port,
     )
 
 

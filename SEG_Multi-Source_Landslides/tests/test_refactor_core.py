@@ -59,8 +59,8 @@ from qpsalm_seg.description import (
     retarget_region_mask_between_cache_views,
     transform_region_mask_to_cache,
 )
-import qpsalm_seg.description.mgrr as mgrr_module
-from qpsalm_seg.description.counterfactuals import counterfactual_backbone
+import qpsalm_seg.description.modeling.mgrr as mgrr_module
+from qpsalm_seg.description.evaluation.counterfactuals import counterfactual_backbone
 from qpsalm_seg.matching import assign_proposals
 from qpsalm_seg.metrics import batch_binary_metric_tensors, batch_binary_metrics
 from qpsalm_seg.models import MultiSourceQwenPSALMSeg

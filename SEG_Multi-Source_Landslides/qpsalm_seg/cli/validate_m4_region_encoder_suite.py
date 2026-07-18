@@ -20,18 +20,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from qpsalm_seg.description.common import write_json
-from qpsalm_seg.description.comparison import (
-    M4_BASELINE_REGION_ENCODERS,
-    build_m4_region_encoder_suite,
-    validate_m4_region_encoder_suite_gate,
+from qpsalm_seg.description.workflows.gates import (
+    run_m4_suite_gate,
 )
-from qpsalm_seg.paths import resolve_project_path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate all five M4 region-encoder baseline gates."
     )
@@ -42,40 +37,12 @@ def parse_args() -> argparse.Namespace:
         metavar="ENCODER=PATH",
     )
     parser.add_argument("--output", required=True)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def _gate_map(values: list[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for value in values:
-        encoder, separator, path = value.partition("=")
-        if not separator or not encoder or not path:
-            raise ValueError(f"--gate 必须是 ENCODER=PATH: {value!r}")
-        if encoder not in M4_BASELINE_REGION_ENCODERS:
-            raise ValueError(f"未知 M4 baseline encoder: {encoder!r}")
-        if encoder in result:
-            raise ValueError(f"M4 baseline gate 重复: {encoder}")
-        result[encoder] = path
-    if set(result) != M4_BASELINE_REGION_ENCODERS:
-        raise ValueError(
-            "M4 suite gate 集合不完整: "
-            f"expected={sorted(M4_BASELINE_REGION_ENCODERS)} "
-            f"observed={sorted(result)}"
-        )
-    return result
-
-
-def main() -> None:
-    args = parse_args()
-    report = build_m4_region_encoder_suite(_gate_map(args.gate))
-    output = resolve_project_path(args.output) or Path(args.output)
-    candidate = output.with_name(f".{output.name}.candidate")
-    try:
-        write_json(candidate, report)
-        validate_m4_region_encoder_suite_gate(candidate)
-        candidate.replace(output)
-    finally:
-        candidate.unlink(missing_ok=True)
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    report = run_m4_suite_gate(args.gate, output=args.output)
     print(json.dumps(report, ensure_ascii=False, allow_nan=False))
     if report["passed"] is not True:
         raise SystemExit(2)

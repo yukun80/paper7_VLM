@@ -24,7 +24,7 @@ from typing import Any
 
 from qpsalm_seg.paths import resolve_project_path
 from qpsalm_seg.schema import MODALITY_FAMILIES
-from qpsalm_seg.description.json_protocol import strict_json_loads
+from qpsalm_seg.description.protocols.io import strict_json_loads
 
 
 REPORT_FORMAT = "qpsalm_ablation_evidence_v1"

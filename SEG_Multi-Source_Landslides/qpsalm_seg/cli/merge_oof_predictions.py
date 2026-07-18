@@ -21,22 +21,22 @@ from __future__ import annotations
 import argparse
 import json
 
-from qpsalm_seg.description.predicted_regions import merge_oof_predictions
+from qpsalm_seg.description.workflows.oof import run_oof_merge
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Merge and replay-audit train OOF predictions"
     )
     parser.add_argument("--fold-manifest", required=True)
     parser.add_argument("--input", action="append", required=True)
     parser.add_argument("--output", required=True)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
-    report = merge_oof_predictions(
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    report = run_oof_merge(
         fold_manifest=args.fold_manifest,
         input_indexes=list(args.input),
         output=args.output,
