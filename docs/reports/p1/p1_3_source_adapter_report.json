@@ -5,7 +5,7 @@
   "status": "engineering_passed",
   "date": "2026-07-20",
   "implementation_commit": "de64ddf33474d59e796831d1f2b6d7b0abd09e46",
-  "documentation_commit": null,
+  "documentation_commit": "273a4a03294338a7e4a382b89f2bab1b0361dff2",
   "objective": "Account for all nine configured sources, introduce a unique fail-closed SourceAdapter boundary, and emit only strict audit-only sample candidates for unambiguous sampled layouts.",
   "authority_conflicts": [],
   "contracts": {
@@ -157,6 +157,21 @@
       "command": "git diff --check",
       "exit_code": 0,
       "result": "passed before implementation commit"
+    },
+    {
+      "command": "final complete P1 unittest regression after documentation commit",
+      "exit_code": 0,
+      "result": "37/37 passed"
+    },
+    {
+      "command": "conda run -n qwen3vl env PYTHONPATH=src python -B -m compileall -q src/sami_gsd tests/p1",
+      "exit_code": 0,
+      "result": "source and P1 tests compiled"
+    },
+    {
+      "command": "P1.3 JSON, repeat-hash and 36-entry deletion-manifest assertions",
+      "exit_code": 0,
+      "result": "valid; all deletion approvals and deleted commits remain null"
     }
   ],
   "acceptance": {

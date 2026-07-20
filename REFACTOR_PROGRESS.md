@@ -7,7 +7,7 @@
 - completed_subtask: `P1.3` (`engineering_passed`)
 - current_branch: `refactor/sami-groundsegdesc`
 - p1_3_implementation_commit: `de64ddf33474d59e796831d1f2b6d7b0abd09e46`
-- p1_3_handoff_commit: pending local documentation commit
+- p1_3_handoff_commit: `273a4a03294338a7e4a382b89f2bab1b0361dff2`
 - p1_2_implementation_commit: `ac4be61e6fd994408934885095563311b9e43ebe`
 - p1_2_handoff_commit: `5ad6af944199e99c9815f3d1df5b1d62565767ba`
 - p1_1_implementation_commit: `898f5b83820760ca86d1d488fc4cee0e8fa5cc9e`
@@ -15,7 +15,7 @@
 - p0_acceptance_commit: `52c93b3a77635c82eb591850e758d3333482d4b1`
 - baseline_tag: verified `pre-sami-rewrite-2026-07-20` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
 - baseline_branch: verified `baseline/sane-qmef-pmrd-mgrr` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
-- dirty_worktree: documentation update in progress; verify after final cursor commit
+- dirty_worktree: no after the P1.3 final progress-cursor commit; verify live status before P1.4
 - task_spec_version: SHA-256 `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b`
 - active_adr: `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`)
 
@@ -90,6 +90,10 @@ into strict raw records and audit-only canonical candidates without a legacy fal
 | two in-memory SHA passes over 11 blocked-source sample files | 0 | all sample bytes equal |
 | `git diff --check` before implementation commit | 0 | passed |
 | local implementation commit | 0 | `de64ddf33474d59e796831d1f2b6d7b0abd09e46`; no push |
+| local documentation/handoff commit | 0 | `273a4a03294338a7e4a382b89f2bab1b0361dff2`; no push |
+| final complete P1 unittest regression | 0 | 37/37 passed after documentation commit |
+| `python -B -m compileall -q src/sami_gsd tests/p1` in `qwen3vl` | 0 | source and P1 tests compiled |
+| P1.3 JSON/hash/deletion-manifest assertions | 0 | both reports valid; 36 entries remain unapproved and undeleted |
 
 ## Tests
 
@@ -119,6 +123,7 @@ into strict raw records and audit-only canonical candidates without a legacy fal
 - live structure audit: `docs/audits/p1_source_structure_audit.json`
 - P1.3 report: `docs/reports/p1/p1_3_source_adapter_report.json`
 - implementation commit: `de64ddf33474d59e796831d1f2b6d7b0abd09e46`
+- documentation/handoff commit: `273a4a03294338a7e4a382b89f2bab1b0361dff2`
 - live adapter aggregate SHA-256: `3335535bc7e8fc3ba337511081dc5acd9d83129859095f46d4c017116a9eaf5a`
 - blocked sample file-set aggregate SHA-256: `9d11988bce7b4436e405a1302f386537385c62a2707dcd9e36cbb17b5c6f615d`
 - canonical Small benchmark: not built
