@@ -7,13 +7,13 @@
 - completed_subtask: `P1.2` (`engineering_passed`)
 - current_branch: `refactor/sami-groundsegdesc`
 - p1_2_implementation_commit: `ac4be61e6fd994408934885095563311b9e43ebe`
-- p1_2_handoff_commit: pending local documentation commit
+- p1_2_handoff_commit: `5ad6af944199e99c9815f3d1df5b1d62565767ba`
 - p1_1_implementation_commit: `898f5b83820760ca86d1d488fc4cee0e8fa5cc9e`
 - p1_1_handoff_commit: `eb7b5feabeb6b2209195ed4e42beb893ee3a2a9f`
 - p0_acceptance_commit: `52c93b3a77635c82eb591850e758d3333482d4b1`
 - baseline_tag: verified `pre-sami-rewrite-2026-07-20` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
 - baseline_branch: verified `baseline/sane-qmef-pmrd-mgrr` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
-- dirty_worktree: P1.2 documentation pending; no unrelated user changes observed
+- dirty_worktree: no after the P1.2 final progress-cursor commit; verify live status before P1.3
 - task_spec_version: SHA-256 `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b`
 - active_adr: `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`)
 
