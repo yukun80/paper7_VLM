@@ -25,6 +25,7 @@
     "reference_canvas": {"$ref": "#/$defs/referenceCanvas"},
     "modalities": {
       "type": "array",
+      "minItems": 1,
       "items": {"$ref": "#/$defs/modality"}
     },
     "annotations": {"$ref": "#/$defs/annotations"},
@@ -83,13 +84,87 @@
         "operation": {"enum": ["identity", "crop", "resize", "pad", "affine", "reproject"]},
         "input_hw": {"$ref": "#/$defs/positiveHw"},
         "output_hw": {"$ref": "#/$defs/positiveHw"},
-        "interpolation": {"enum": ["nearest", "bilinear", "bicubic", "area", "not_applicable"]},
+        "interpolation": {"enum": ["image_bilinear_mask_valid_nearest", "not_applicable"]},
         "invertible": {"type": "boolean"},
         "parameters": {
           "type": "object",
           "additionalProperties": {"$ref": "#/$defs/jsonScalar"}
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"operation": {"const": "identity"}}},
+          "then": {
+            "properties": {
+              "interpolation": {"const": "not_applicable"},
+              "invertible": {"const": true},
+              "parameters": {"maxProperties": 0}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"operation": {"const": "crop"}}},
+          "then": {
+            "properties": {
+              "interpolation": {"const": "not_applicable"},
+              "invertible": {"const": true},
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["top", "left", "height", "width"],
+                "properties": {
+                  "top": {"type": "integer", "minimum": 0},
+                  "left": {"type": "integer", "minimum": 0},
+                  "height": {"type": "integer", "minimum": 1},
+                  "width": {"type": "integer", "minimum": 1}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"operation": {"const": "resize"}}},
+          "then": {
+            "properties": {
+              "interpolation": {"const": "image_bilinear_mask_valid_nearest"},
+              "invertible": {"const": true},
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["coordinate_mapping", "raster_sampling", "raster_border_mode"],
+                "properties": {
+                  "coordinate_mapping": {"const": "pixel_edges"},
+                  "raster_sampling": {"const": "half_pixel_centers"},
+                  "raster_border_mode": {"const": "clamp"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"operation": {"const": "pad"}}},
+          "then": {
+            "properties": {
+              "interpolation": {"const": "not_applicable"},
+              "invertible": {"const": true},
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["top", "bottom", "left", "right", "image_fill", "mask_fill", "valid_fill"],
+                "properties": {
+                  "top": {"type": "integer", "minimum": 0},
+                  "bottom": {"type": "integer", "minimum": 0},
+                  "left": {"type": "integer", "minimum": 0},
+                  "right": {"type": "integer", "minimum": 0},
+                  "image_fill": {"const": 0},
+                  "mask_fill": {"const": 0},
+                  "valid_fill": {"const": 0}
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "sourceIdentity": {
       "type": "object",
@@ -126,6 +201,7 @@
         "valid_mask_path": {"$ref": "#/$defs/portablePath"},
         "transform_chain": {
           "type": "array",
+          "minItems": 1,
           "items": {"$ref": "#/$defs/transformStep"}
         },
         "inverse_transform_available": {"type": "boolean"},
@@ -202,7 +278,7 @@
     "transformChainOrNull": {
       "oneOf": [
         {"type": "null"},
-        {"type": "array", "items": {"$ref": "#/$defs/transformStep"}}
+        {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/transformStep"}}
       ]
     },
     "modality": {
@@ -271,7 +347,62 @@
           "type": "object",
           "additionalProperties": {"$ref": "#/$defs/sha256"}
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"availability_status": {"const": "missing"}}},
+          "then": {
+            "properties": {
+              "valid_coverage": {"const": 0},
+              "native_asset_path": {"type": "null"},
+              "aligned_asset_path": {"type": "null"},
+              "valid_mask_path": {"type": "null"},
+              "source_to_reference_transform": {"type": "null"},
+              "reference_to_source_transform": {"type": "null"},
+              "alignment_status": {"const": "unavailable"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"availability_status": {"enum": ["present_zero_valid", "present_partial_valid", "present_valid"]}}},
+          "then": {
+            "properties": {
+              "native_asset_path": {"$ref": "#/$defs/portablePath"},
+              "valid_mask_path": {"$ref": "#/$defs/portablePath"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"availability_status": {"const": "present_zero_valid"}}},
+          "then": {"properties": {"valid_coverage": {"const": 0}}}
+        },
+        {
+          "if": {"properties": {"availability_status": {"const": "present_partial_valid"}}},
+          "then": {"properties": {"valid_coverage": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}}}
+        },
+        {
+          "if": {"properties": {"availability_status": {"const": "present_valid"}}},
+          "then": {"properties": {"valid_coverage": {"const": 1}}}
+        },
+        {
+          "if": {"properties": {"alignment_status": {"enum": ["reference", "aligned"]}}},
+          "then": {
+            "properties": {
+              "source_to_reference_transform": {"type": "array", "minItems": 1},
+              "reference_to_source_transform": {"type": "array", "minItems": 1}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"alignment_status": {"enum": ["global_only", "unavailable"]}}},
+          "then": {
+            "properties": {
+              "source_to_reference_transform": {"type": "null"},
+              "reference_to_source_transform": {"type": "null"}
+            }
+          }
+        }
+      ]
     },
     "referringRegion": {
       "type": "object",

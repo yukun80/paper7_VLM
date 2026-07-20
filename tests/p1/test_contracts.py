@@ -115,6 +115,27 @@ class ContractTests(unittest.TestCase):
         result = CanonicalParentV3.model_validate(zero_valid)
         self.assertEqual(result.modalities[0].availability_status, "present_zero_valid")
 
+    def test_global_only_support_cannot_expose_pixel_transforms(self) -> None:
+        """Unregistered support may remain global but cannot claim pixel evidence."""
+
+        global_only = deepcopy(canonical_parent_payload())
+        modality = deepcopy(global_only["modalities"][0])
+        modality["modality_id"] = "sar-global-only"
+        modality["family"] = "sar"
+        modality["alignment_status"] = "global_only"
+        modality["source_to_reference_transform"] = None
+        modality["reference_to_source_transform"] = None
+        global_only["modalities"].append(modality)
+        result = CanonicalParentV3.model_validate(global_only)
+        self.assertEqual(result.modalities[1].alignment_status, "global_only")
+
+        leaking_transform = deepcopy(global_only)
+        leaking_transform["modalities"][1]["source_to_reference_transform"] = [
+            canonical_parent_payload()["reference_canvas"]["transform_chain"][0]
+        ]
+        with self.assertRaisesRegex(ValidationError, "must not expose pixel-level transforms"):
+            CanonicalParentV3.model_validate(leaking_transform)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,14 +65,104 @@ class ArtifactRef(StrictModel):
 
 
 class TransformStep(StrictModel):
-    """One recorded spatial transform between two ``(height, width)`` grids."""
+    """One recorded spatial transform between two ``(height, width)`` grids.
+
+    ``invertible`` refers to coordinates inside the retained valid-content
+    footprint.  Crop and pad are therefore coordinate-invertible for retained
+    pixels even though discarded/padded raster content cannot be reconstructed.
+    """
 
     operation: Literal["identity", "crop", "resize", "pad", "affine", "reproject"]
     input_hw: tuple[PositiveInt, PositiveInt]
     output_hw: tuple[PositiveInt, PositiveInt]
-    interpolation: Literal["nearest", "bilinear", "bicubic", "area", "not_applicable"]
+    interpolation: Literal["image_bilinear_mask_valid_nearest", "not_applicable"]
     invertible: bool
     parameters: dict[str, JsonScalar] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_p1_spatial_operation(self) -> Self:
+        """Validate the exact auditable contract for P1 crop/resize/pad steps."""
+
+        input_h, input_w = self.input_hw
+        parameters = self.parameters
+        if self.operation == "identity":
+            if self.input_hw != self.output_hw or parameters:
+                raise ValueError("identity requires equal grids and empty parameters")
+            if self.interpolation != "not_applicable" or not self.invertible:
+                raise ValueError("identity must be invertible and use no interpolation")
+        elif self.operation == "crop":
+            expected = {"top", "left", "height", "width"}
+            if set(parameters) != expected:
+                raise ValueError("crop parameters must be exactly top, left, height and width")
+            top = _required_non_negative_int(parameters, "top")
+            left = _required_non_negative_int(parameters, "left")
+            height = _required_positive_int(parameters, "height")
+            width = _required_positive_int(parameters, "width")
+            if (height, width) != self.output_hw:
+                raise ValueError("crop height/width must equal output_hw")
+            if top + height > input_h or left + width > input_w:
+                raise ValueError("crop exceeds input grid")
+            if self.interpolation != "not_applicable" or not self.invertible:
+                raise ValueError("crop coordinates must be invertible and use no interpolation")
+        elif self.operation == "resize":
+            expected_parameters = {
+                "coordinate_mapping": "pixel_edges",
+                "raster_sampling": "half_pixel_centers",
+                "raster_border_mode": "clamp",
+            }
+            if parameters != expected_parameters:
+                raise ValueError("resize must record pixel-edge coordinates and half-pixel-center sampling")
+            if self.input_hw == self.output_hw:
+                raise ValueError("same-size resize must be recorded as identity")
+            if self.interpolation != "image_bilinear_mask_valid_nearest" or not self.invertible:
+                raise ValueError("resize must use the frozen image/mask/valid interpolation policy")
+        elif self.operation == "pad":
+            expected = {"top", "bottom", "left", "right", "image_fill", "mask_fill", "valid_fill"}
+            if set(parameters) != expected:
+                raise ValueError("pad parameters must record offsets and image/mask/valid fill values")
+            top = _required_non_negative_int(parameters, "top")
+            bottom = _required_non_negative_int(parameters, "bottom")
+            left = _required_non_negative_int(parameters, "left")
+            right = _required_non_negative_int(parameters, "right")
+            if not any((top, bottom, left, right)):
+                raise ValueError("zero-width pad must be recorded as identity")
+            if (input_h + top + bottom, input_w + left + right) != self.output_hw:
+                raise ValueError("pad offsets do not produce output_hw")
+            for name in ("image_fill", "mask_fill", "valid_fill"):
+                if parameters[name] not in (0, 0.0, False):
+                    raise ValueError(f"{name} must be zero so padding cannot become evidence")
+            if self.interpolation != "not_applicable" or not self.invertible:
+                raise ValueError("pad coordinates must be invertible on valid content and use no interpolation")
+        return self
+
+
+def _required_non_negative_int(parameters: dict[str, JsonScalar], name: str) -> int:
+    """Read a non-negative integer transform parameter without bool coercion."""
+
+    value = parameters[name]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _required_positive_int(parameters: dict[str, JsonScalar], name: str) -> int:
+    """Read a positive integer transform parameter without bool coercion."""
+
+    value = _required_non_negative_int(parameters, name)
+    if value == 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def validate_transform_sequence(steps: tuple[TransformStep, ...]) -> tuple[TransformStep, ...]:
+    """Reject empty or spatially discontinuous transform sequences."""
+
+    if not steps:
+        raise ValueError("transform chain must contain at least one recorded step")
+    for previous, following in zip(steps, steps[1:], strict=False):
+        if previous.output_hw != following.input_hw:
+            raise ValueError("transform chain contains a discontinuous grid transition")
+    return steps
 
 
 class SourceIdentity(StrictModel):
@@ -103,10 +193,14 @@ class ReferenceCanvas(StrictModel):
 
     @model_validator(mode="after")
     def inverse_flag_matches_chain(self) -> Self:
-        """Reject a claimed inverse when any recorded step is irreversible."""
+        """Bind endpoints, continuity and inverse availability to the chain."""
 
-        if self.inverse_transform_available and any(not step.invertible for step in self.transform_chain):
-            raise ValueError("inverse_transform_available conflicts with an irreversible step")
+        steps = validate_transform_sequence(self.transform_chain)
+        if steps[0].input_hw != self.original_hw or steps[-1].output_hw != self.canvas_hw:
+            raise ValueError("reference transform chain endpoints must match original_hw and canvas_hw")
+        derived_inverse = all(step.invertible for step in steps)
+        if self.inverse_transform_available != derived_inverse:
+            raise ValueError("inverse_transform_available must equal the chain's coordinate inverse availability")
         return self
 
 
@@ -212,6 +306,11 @@ class ModalityRecord(StrictModel):
                 path is not None for path in (self.native_asset_path, self.aligned_asset_path, self.valid_mask_path)
             ):
                 raise ValueError("missing modality must have zero coverage and no asset paths")
+            if self.alignment_status != "unavailable" or any(
+                chain is not None
+                for chain in (self.source_to_reference_transform, self.reference_to_source_transform)
+            ):
+                raise ValueError("missing modality must be spatially unavailable with no transform")
             return self
         if self.native_asset_path is None or self.valid_mask_path is None:
             raise ValueError("present modality requires native asset and valid-mask paths")
@@ -221,6 +320,15 @@ class ModalityRecord(StrictModel):
             raise ValueError("present_partial_valid requires coverage strictly between zero and one")
         if status == "present_valid" and self.valid_coverage != 1.0:
             raise ValueError("present_valid requires full valid coverage")
+        transforms = (self.source_to_reference_transform, self.reference_to_source_transform)
+        if self.alignment_status in {"reference", "aligned"}:
+            if any(chain is None for chain in transforms):
+                raise ValueError("reference/aligned modality requires transforms in both directions")
+            for chain in transforms:
+                assert chain is not None
+                validate_transform_sequence(chain)
+        elif any(chain is not None for chain in transforms):
+            raise ValueError("global_only/unavailable modality must not expose pixel-level transforms")
         return self
 
 
@@ -324,13 +432,18 @@ class CanonicalParentV3(StrictModel):
 
     @model_validator(mode="after")
     def modality_ids_are_unique_and_reference_exists(self) -> Self:
-        """Bind the reference canvas to exactly one declared modality."""
+        """Bind the reference canvas to exactly one declared reference view."""
 
         modality_ids = [modality.modality_id for modality in self.modalities]
         if len(modality_ids) != len(set(modality_ids)):
             raise ValueError("modality_id values must be unique within a parent")
         if self.reference_canvas.reference_modality_id not in modality_ids:
             raise ValueError("reference_modality_id must name a declared modality")
+        reference_modalities = [modality for modality in self.modalities if modality.alignment_status == "reference"]
+        if len(reference_modalities) != 1:
+            raise ValueError("canonical parent must declare exactly one reference-aligned modality")
+        if reference_modalities[0].modality_id != self.reference_canvas.reference_modality_id:
+            raise ValueError("reference_modality_id must name the reference-aligned modality")
         return self
 
 
