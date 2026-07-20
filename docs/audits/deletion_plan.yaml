@@ -18,6 +18,12 @@ phase_evidence:
     physical_deletions: []
     entry_approvals_changed: 0
     deleted_commits_changed: 0
+  p1_2:
+    status: engineering_passed
+    report: docs/reports/p1/p1_2_spatial_report.json
+    physical_deletions: []
+    entry_approvals_changed: 0
+    deleted_commits_changed: 0
 global_preconditions:
   - replacement_accepted
   - baseline_tag_verified

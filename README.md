@@ -2,14 +2,14 @@
 
 当前主线是经 ADR-0001 接受的 **SAMI-GroundSegDesc greenfield rewrite**。科学问题固定为：使用
 同一区域、单时相或同期的多源遥感观测，在一个 reference canvas 上分割滑坡，并生成只受当前有效
-模态支持的区域描述。P1 正在实施 Canonical Benchmark v3；P1.1 只提供严格合同、配置、只读数据
-审计与许可证门禁，尚未构建 Small benchmark。
+模态支持的区域描述。P1 正在实施 Canonical Benchmark v3；P1.1 的严格合同/只读审计和 P1.2 的
+reference-canvas/空间原语均已工程通过，但尚未构建真实 Small benchmark。
 
 本文件后部的 Multi-Source Qwen-PSALM-Seg/Benchmark v2 命令暂时保留为只读 legacy baseline
 运行记录，不属于 greenfield runtime。新代码不读取旧 benchmark、cache、config 或 checkpoint；
 旧资产仅通过已验证的 baseline tag/branch 和 deletion manifest 分阶段保留。
 
-## Greenfield P1.1：合同与只读数据审计
+## Greenfield P1.1–P1.2：合同、只读审计与空间原语
 
 从仓库根目录安装当前包与测试依赖：
 
@@ -18,7 +18,7 @@ conda activate qwen3vl
 python -m pip install -e '.[test]'
 ```
 
-当前唯一 CLI 是 `sami-gsd`。P1.1 只开放 `data audit`：
+当前唯一 CLI 是 `sami-gsd`。P1.1 开放的命令仍只有 `data audit`；P1.2 不增加第二个 CLI：
 
 ```bash
 sami-gsd data audit --help
@@ -48,8 +48,17 @@ sami-gsd data audit \
 `audit_manifest.json`，拒绝覆盖已有输出目录。配置中的九个 source 当前全部
 `allowed_for_training=false`；未知或未审核许可证不能进入 training-eligible index。
 
-P1.1 不执行 reference-canvas 物化、split、duplicate grouping、task expansion 或语言子集构建，
-也不物理删除任何旧文件。这些工作分别属于后续明确授权的 P1 子任务与 deletion manifest 门禁。
+P1.2 冻结以下空间边界：reference 依次选 official/human 原生 mask 栅格、完整覆盖且 GSD 最细的
+registered mask 栅格、或唯一语言图像；候选顺序不影响结果。内部 box 永远使用 reference pixel
+半开区间，仅在 Qwen grounding 序列化边界转换为 `[0,1000]` 整数。`TransformStep` 记录
+pixel-edge 坐标、half-pixel-center sampling 和 clamp border；image 固定 bilinear，mask/valid
+固定 nearest。crop/resize/pad 的 coordinate inverse 只对 retained valid-content footprint 承诺，
+padding 与 nodata 始终从有效 target 中排除。无可靠双向变换的 support 只能是 `global_only`，不得
+暴露 pixel-level transform。
+
+P1.2 仍不执行 source-specific materialization、真实 Small/Full build、split、duplicate grouping、
+task expansion 或语言子集构建，也不物理删除任何旧文件。工程证据见
+`docs/reports/p1/p1_2_spatial_report.json`；后续工作仍需新的明确 P1 子任务授权。
 
 ## Legacy baseline 目录约定
 
