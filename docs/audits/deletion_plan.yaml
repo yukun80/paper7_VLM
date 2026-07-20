@@ -11,6 +11,13 @@ baseline_tag_verified: true
 baseline_branch_verified: true
 human_manifest_approval: "project owner approved gated, phase-by-phase deletion on 2026-07-20; each entry still requires a later named approval"
 deletions_executed_in_p0: false
+phase_evidence:
+  p1_1:
+    status: engineering_passed
+    report: docs/reports/p1/p1_1_contract_report.json
+    physical_deletions: []
+    entry_approvals_changed: 0
+    deleted_commits_changed: 0
 global_preconditions:
   - replacement_accepted
   - baseline_tag_verified

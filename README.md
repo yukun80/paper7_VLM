@@ -1,10 +1,57 @@
-# Multi-Source Qwen-PSALM-Seg
+# SAMI-GroundSegDesc
 
-本仓库构建多源遥感滑坡 instruction-segmentation benchmark，并实现面向单时相或同期多源证据的
-**SANE -> QMEF -> PMRD** 研究模型。当前主协议为 benchmark v2；v1 benchmark、旧 checkpoint、
-text cache v1 和 visual cache v2 均不兼容。
+当前主线是经 ADR-0001 接受的 **SAMI-GroundSegDesc greenfield rewrite**。科学问题固定为：使用
+同一区域、单时相或同期的多源遥感观测，在一个 reference canvas 上分割滑坡，并生成只受当前有效
+模态支持的区域描述。P1 正在实施 Canonical Benchmark v3；P1.1 只提供严格合同、配置、只读数据
+审计与许可证门禁，尚未构建 Small benchmark。
 
-## 目录约定
+本文件后部的 Multi-Source Qwen-PSALM-Seg/Benchmark v2 命令暂时保留为只读 legacy baseline
+运行记录，不属于 greenfield runtime。新代码不读取旧 benchmark、cache、config 或 checkpoint；
+旧资产仅通过已验证的 baseline tag/branch 和 deletion manifest 分阶段保留。
+
+## Greenfield P1.1：合同与只读数据审计
+
+从仓库根目录安装当前包与测试依赖：
+
+```bash
+conda activate qwen3vl
+python -m pip install -e '.[test]'
+```
+
+当前唯一 CLI 是 `sami-gsd`。P1.1 只开放 `data audit`：
+
+```bash
+sami-gsd data audit --help
+```
+
+运行不依赖 `pytest` 的 CPU/synthetic 验收：
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests/p1 -v
+```
+
+安装 test extra 后，也可通过同一测试目录运行：
+
+```bash
+PYTHONPATH=src python -m pytest -q tests/p1
+```
+
+手动执行 Small raw-source 审计（会递归读取并计算所有可见文件的 SHA-256，可能耗时）：
+
+```bash
+sami-gsd data audit \
+  --config configs/benchmark_v3_small.yaml \
+  --output-dir ../benchmark/sami_landslide_v3/p1_1_audit_small
+```
+
+该命令只读 raw data，输出 `inventory.json`、`source_registry.yaml`、`license_report.json` 和
+`audit_manifest.json`，拒绝覆盖已有输出目录。配置中的九个 source 当前全部
+`allowed_for_training=false`；未知或未审核许可证不能进入 training-eligible index。
+
+P1.1 不执行 reference-canvas 物化、split、duplicate grouping、task expansion 或语言子集构建，
+也不物理删除任何旧文件。这些工作分别属于后续明确授权的 P1 子任务与 deletion manifest 门禁。
+
+## Legacy baseline 目录约定
 
 默认从 `paper7_VLM` 根目录运行命令，并使用同级大数据目录：
 

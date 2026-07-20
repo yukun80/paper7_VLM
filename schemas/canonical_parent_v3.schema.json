@@ -1,0 +1,379 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sami-groundsegdesc.local/schemas/canonical_parent_v3.schema.json",
+  "title": "SAMI Canonical Parent v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "parent_id",
+    "source",
+    "split",
+    "reference_canvas",
+    "modalities",
+    "annotations",
+    "provenance",
+    "license",
+    "hashes",
+    "annotation_status"
+  ],
+  "properties": {
+    "schema_version": {"const": "sami_canonical_parent_v3"},
+    "parent_id": {"type": "string", "minLength": 1},
+    "source": {"$ref": "#/$defs/sourceIdentity"},
+    "split": {"enum": ["train", "val", "test", "audit"]},
+    "reference_canvas": {"$ref": "#/$defs/referenceCanvas"},
+    "modalities": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/modality"}
+    },
+    "annotations": {"$ref": "#/$defs/annotations"},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "license": {"$ref": "#/$defs/license"},
+    "hashes": {"$ref": "#/$defs/hashes"},
+    "annotation_status": {"enum": ["unlabeled", "auto", "silver", "gold"]}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "portablePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\).+$"
+    },
+    "positiveHw": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "integer", "minimum": 1},
+        {"type": "integer", "minimum": 1}
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/portablePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "halfOpenBox": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 1},
+        {"type": "integer", "minimum": 1}
+      ],
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "jsonScalar": {
+      "type": ["string", "integer", "number", "boolean", "null"]
+    },
+    "transformStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "input_hw", "output_hw", "interpolation", "invertible", "parameters"],
+      "properties": {
+        "operation": {"enum": ["identity", "crop", "resize", "pad", "affine", "reproject"]},
+        "input_hw": {"$ref": "#/$defs/positiveHw"},
+        "output_hw": {"$ref": "#/$defs/positiveHw"},
+        "interpolation": {"enum": ["nearest", "bilinear", "bicubic", "area", "not_applicable"]},
+        "invertible": {"type": "boolean"},
+        "parameters": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/jsonScalar"}
+        }
+      }
+    },
+    "sourceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset", "record_id", "scene_id", "event_id", "region_id", "source_group_id"],
+      "properties": {
+        "dataset": {"type": "string", "minLength": 1},
+        "record_id": {"type": "string", "minLength": 1},
+        "scene_id": {"type": ["string", "null"]},
+        "event_id": {"type": ["string", "null"]},
+        "region_id": {"type": ["string", "null"]},
+        "source_group_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "referenceCanvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference_modality_id",
+        "coordinate_space",
+        "original_hw",
+        "canvas_hw",
+        "valid_mask_path",
+        "transform_chain",
+        "inverse_transform_available",
+        "crs",
+        "geotransform"
+      ],
+      "properties": {
+        "reference_modality_id": {"type": "string", "minLength": 1},
+        "coordinate_space": {"const": "reference_pixel_half_open"},
+        "original_hw": {"$ref": "#/$defs/positiveHw"},
+        "canvas_hw": {"$ref": "#/$defs/positiveHw"},
+        "valid_mask_path": {"$ref": "#/$defs/portablePath"},
+        "transform_chain": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/transformStep"}
+        },
+        "inverse_transform_available": {"type": "boolean"},
+        "crs": {"type": ["string", "null"]},
+        "geotransform": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "array",
+              "items": {"type": "number"},
+              "minItems": 6,
+              "maxItems": 6
+            }
+          ]
+        }
+      }
+    },
+    "bandMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "wavelength_nm", "polarization", "units"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "wavelength_nm": {
+          "oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]
+        },
+        "polarization": {"type": ["string", "null"]},
+        "units": {"type": ["string", "null"]}
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "parameters", "statistics_source"],
+      "properties": {
+        "method": {"enum": ["none", "min_max", "z_score", "percentile_clip", "log_scale", "source_defined", "unknown"]},
+        "parameters": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/jsonScalar"}
+        },
+        "statistics_source": {"type": ["string", "null"]}
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "flags", "notes"],
+      "properties": {
+        "status": {"enum": ["unknown", "usable", "degraded", "rejected"]},
+        "flags": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": ["string", "null"]}
+      }
+    },
+    "renderPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "channels", "clip_percentiles"],
+      "properties": {
+        "mode": {"enum": ["rgb", "band_composite", "grayscale", "pseudocolor", "normalized_scalar"]},
+        "channels": {"type": "array", "items": {"type": "string"}},
+        "clip_percentiles": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "array",
+              "items": {"type": "number", "minimum": 0, "maximum": 100},
+              "minItems": 2,
+              "maxItems": 2
+            }
+          ]
+        }
+      }
+    },
+    "transformChainOrNull": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "array", "items": {"$ref": "#/$defs/transformStep"}}
+      ]
+    },
+    "modality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "modality_id",
+        "family",
+        "sensor",
+        "product_type",
+        "band_names",
+        "band_metadata",
+        "orbit",
+        "acquisition_time",
+        "time_range",
+        "native_gsd_m",
+        "aligned_gsd_m",
+        "units",
+        "signed",
+        "sign_convention",
+        "normalization",
+        "quality",
+        "availability_status",
+        "valid_coverage",
+        "native_asset_path",
+        "aligned_asset_path",
+        "valid_mask_path",
+        "source_to_reference_transform",
+        "reference_to_source_transform",
+        "alignment_status",
+        "render_policy",
+        "hashes"
+      ],
+      "properties": {
+        "modality_id": {"type": "string", "minLength": 1},
+        "family": {"enum": ["optical", "multispectral", "sar", "dem", "slope", "insar", "deformation", "other"]},
+        "sensor": {"type": "string", "minLength": 1},
+        "product_type": {"type": "string", "minLength": 1},
+        "band_names": {"type": "array", "items": {"type": "string"}},
+        "band_metadata": {"type": "array", "items": {"$ref": "#/$defs/bandMetadata"}},
+        "orbit": {"type": ["string", "null"]},
+        "acquisition_time": {"type": ["string", "null"]},
+        "time_range": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2}
+          ]
+        },
+        "native_gsd_m": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
+        "aligned_gsd_m": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
+        "units": {"type": ["string", "null"]},
+        "signed": {"type": ["boolean", "null"]},
+        "sign_convention": {"type": ["string", "null"]},
+        "normalization": {"$ref": "#/$defs/normalization"},
+        "quality": {"$ref": "#/$defs/quality"},
+        "availability_status": {"enum": ["missing", "present_zero_valid", "present_partial_valid", "present_valid"]},
+        "valid_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "native_asset_path": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/portablePath"}]},
+        "aligned_asset_path": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/portablePath"}]},
+        "valid_mask_path": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/portablePath"}]},
+        "source_to_reference_transform": {"$ref": "#/$defs/transformChainOrNull"},
+        "reference_to_source_transform": {"$ref": "#/$defs/transformChainOrNull"},
+        "alignment_status": {"enum": ["reference", "aligned", "global_only", "unavailable"]},
+        "render_policy": {"$ref": "#/$defs/renderPolicy"},
+        "hashes": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "referringRegion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["region_id", "expression", "mask_ref", "bbox_half_open"],
+      "properties": {
+        "region_id": {"type": "string", "minLength": 1},
+        "expression": {"type": "string", "minLength": 1},
+        "mask_ref": {"$ref": "#/$defs/artifactRef"},
+        "bbox_half_open": {"$ref": "#/$defs/halfOpenBox"}
+      }
+    },
+    "annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["global_landslide_mask", "global_target_status", "referring_regions", "no_target_eligibility", "region_fact_refs"],
+      "properties": {
+        "global_landslide_mask": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/artifactRef"}]},
+        "global_target_status": {"enum": ["positive", "no_target", "unknown"]},
+        "referring_regions": {"type": "array", "items": {"$ref": "#/$defs/referringRegion"}},
+        "no_target_eligibility": {"type": "boolean"},
+        "region_fact_refs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_registry_key", "source_paths", "source_record_sha256", "scanner_version", "derivation_steps"],
+      "properties": {
+        "source_registry_key": {"type": "string", "minLength": 1},
+        "source_paths": {"type": "array", "items": {"$ref": "#/$defs/portablePath"}},
+        "source_record_sha256": {"$ref": "#/$defs/sha256"},
+        "scanner_version": {"type": "string", "minLength": 1},
+        "derivation_steps": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_key",
+        "license_status",
+        "license_name",
+        "license_url_or_document",
+        "allowed_for_training",
+        "allowed_for_evaluation",
+        "allowed_for_redistribution",
+        "academic_only",
+        "attribution",
+        "reviewed_by",
+        "review_date"
+      ],
+      "properties": {
+        "source_key": {"type": "string", "minLength": 1},
+        "license_status": {"enum": ["verified", "restricted", "unknown"]},
+        "license_name": {"type": "string", "minLength": 1},
+        "license_url_or_document": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^https://"},
+            {"$ref": "#/$defs/portablePath"}
+          ]
+        },
+        "allowed_for_training": {"type": "boolean"},
+        "allowed_for_evaluation": {"type": "boolean"},
+        "allowed_for_redistribution": {"type": "boolean"},
+        "academic_only": {"type": "boolean"},
+        "attribution": {"type": "string", "minLength": 1},
+        "reviewed_by": {"type": ["string", "null"]},
+        "review_date": {"type": ["string", "null"], "format": "date"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"license_status": {"const": "unknown"}}},
+          "then": {"properties": {"allowed_for_training": {"const": false}}}
+        },
+        {
+          "if": {"properties": {"license_name": {"const": "unknown"}}},
+          "then": {"properties": {"allowed_for_training": {"const": false}}}
+        },
+        {
+          "if": {"properties": {"allowed_for_training": {"const": true}}},
+          "then": {
+            "properties": {
+              "reviewed_by": {"type": "string", "minLength": 1},
+              "review_date": {"type": "string", "format": "date"}
+            }
+          }
+        }
+      ]
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_record_sha256", "assets"],
+      "properties": {
+        "source_record_sha256": {"$ref": "#/$defs/sha256"},
+        "assets": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  }
+}

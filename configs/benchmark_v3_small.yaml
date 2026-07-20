@@ -1,0 +1,171 @@
+schema_version: sami_benchmark_audit_config_v3
+benchmark_name: SAMI Landslide Grounded Benchmark v3
+mode: small
+seed: 42
+benchmark_relative_path: sami_landslide_v3/small
+datasets_root:
+  env: PAPER7_DATASETS_ROOT
+  relative_to: repository_parent
+  default: datasets
+benchmark_root:
+  env: PAPER7_BENCHMARK_ROOT
+  relative_to: repository_parent
+  default: benchmark
+audit:
+  hash_algorithm: sha256
+  include_hidden: false
+  follow_symlinks: false
+sources:
+  - source_key: gdcld
+    display_name: GDCLD
+    local_path: GDCLD
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: gdcld
+      license_status: unknown
+      license_name: unknown
+      license_url_or_document: null
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: false
+      attribution: Pending source and license review; no use authorized.
+      reviewed_by: null
+      review_date: null
+  - source_key: lmhld
+    display_name: LMHLD
+    local_path: LMHLD
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: lmhld
+      license_status: unknown
+      license_name: unknown
+      license_url_or_document: null
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: false
+      attribution: Pending source and license review; no use authorized.
+      reviewed_by: null
+      review_date: null
+  - source_key: sen12_landslides
+    display_name: Sen12Landslides
+    local_path: Sen12Landslides
+    enabled: true
+    allowed_task_roles: [inventory, t1, t2]
+    license:
+      source_key: sen12_landslides
+      license_status: verified
+      license_name: CC-BY-4.0
+      license_url_or_document: datasets/Sen12Landslides/README.md
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: false
+      attribution: Preserve dataset, Sentinel, Copernicus and DEM attribution; human eligibility approval remains pending.
+      reviewed_by: P0 engineering audit
+      review_date: 2026-07-20
+  - source_key: landslide4sense
+    display_name: Landslide4Sense
+    local_path: landslide4sense
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: landslide4sense
+      license_status: unknown
+      license_name: unknown
+      license_url_or_document: null
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: false
+      attribution: Pending official dataset terms; no use authorized.
+      reviewed_by: null
+      review_date: null
+  - source_key: multimodal_landslide
+    display_name: multimodal-landslide-dataset
+    local_path: multimodal-landslide-dataset
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: multimodal_landslide
+      license_status: unknown
+      license_name: unknown
+      license_url_or_document: null
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: false
+      attribution: Pending source and license review; no use authorized.
+      reviewed_by: null
+      review_date: null
+  - source_key: landslidebench_agent
+    display_name: LandslideBench_agent derived assets
+    local_path: LandslideBench_agent
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: landslidebench_agent
+      license_status: unknown
+      license_name: unknown-derived
+      license_url_or_document: null
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: false
+      attribution: Derived asset provenance must be traced to an authorized raw source; no use authorized.
+      reviewed_by: null
+      review_date: null
+  - source_key: mmrs_1m
+    display_name: MMRS-1M aggregate
+    local_path: MMRS-1M
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: mmrs_1m
+      license_status: unknown
+      license_name: per-component-review-required
+      license_url_or_document: null
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: false
+      attribution: Aggregate terms do not replace component image and annotation licenses; no use authorized.
+      reviewed_by: null
+      review_date: null
+  - source_key: rsgpt
+    display_name: RSGPT RSICap and RSIEval
+    local_path: RSGPT
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: rsgpt
+      license_status: restricted
+      license_name: academic-only-DOTA-derived
+      license_url_or_document: https://github.com/Lavender105/RSGPT
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: true
+      attribution: DOTA-derived imagery is academic-only and commercial use is prohibited; explicit owner approval remains pending.
+      reviewed_by: P0 engineering audit
+      review_date: 2026-07-20
+  - source_key: disasterm3
+    display_name: DisasterM3
+    local_path: DisasterM3
+    enabled: true
+    allowed_task_roles: [inventory]
+    license:
+      source_key: disasterm3
+      license_status: restricted
+      license_name: CC-BY-NC-SA-4.0
+      license_url_or_document: datasets/DisasterM3/README.md
+      allowed_for_training: false
+      allowed_for_evaluation: false
+      allowed_for_redistribution: false
+      academic_only: true
+      attribution: Dataset is noncommercial and outside the frozen model-input scope; inventory only.
+      reviewed_by: P0 engineering audit
+      review_date: 2026-07-20

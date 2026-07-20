@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sami-groundsegdesc.local/schemas/task_view_v3.schema.json",
+  "title": "SAMI Task View v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "parent_id",
+    "task_type",
+    "instruction",
+    "target_status",
+    "region_geometry",
+    "target_mask_ref",
+    "target_box_ref",
+    "answer_ref",
+    "annotation_origin",
+    "weight"
+  ],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "parent_id": {"type": "string", "minLength": 1},
+    "task_type": {"enum": ["t1_global", "t2_referring", "t3_gt_region", "t4_predicted_region"]},
+    "instruction": {"type": "string", "minLength": 1},
+    "target_status": {"enum": ["positive", "no_target", "unknown"]},
+    "region_geometry": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/regionGeometry"}]},
+    "target_mask_ref": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/artifactRef"}]},
+    "target_box_ref": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/halfOpenBox"}]},
+    "answer_ref": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/artifactRef"}]},
+    "annotation_origin": {
+      "enum": ["official", "human", "expert", "pseudo", "oof_prediction", "online_prediction", "derived_no_target"]
+    },
+    "weight": {"type": "number", "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"task_type": {"enum": ["t2_referring", "t3_gt_region", "t4_predicted_region"]}}},
+      "then": {"properties": {"region_geometry": {"$ref": "#/$defs/regionGeometry"}}}
+    },
+    {
+      "if": {"properties": {"target_status": {"const": "positive"}}},
+      "then": {"properties": {"target_mask_ref": {"$ref": "#/$defs/artifactRef"}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "portablePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\).+$"
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/portablePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "halfOpenBox": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 1},
+        {"type": "integer", "minimum": 1}
+      ],
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "regionGeometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinate_space", "region_id", "bbox_half_open"],
+      "properties": {
+        "coordinate_space": {"const": "reference_pixel_half_open"},
+        "region_id": {"type": ["string", "null"]},
+        "bbox_half_open": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/halfOpenBox"}]}
+      }
+    }
+  }
+}
