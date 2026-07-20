@@ -2,14 +2,15 @@
 
 当前主线是经 ADR-0001 接受的 **SAMI-GroundSegDesc greenfield rewrite**。科学问题固定为：使用
 同一区域、单时相或同期的多源遥感观测，在一个 reference canvas 上分割滑坡，并生成只受当前有效
-模态支持的区域描述。P1 正在实施 Canonical Benchmark v3；P1.1 的严格合同/只读审计和 P1.2 的
-reference-canvas/空间原语均已工程通过，但尚未构建真实 Small benchmark。
+模态支持的区域描述。P1 正在实施 Canonical Benchmark v3；P1.1 的严格合同/只读审计、P1.2 的
+reference-canvas/空间原语和 P1.3 的九源有界结构审计/SourceAdapter boundary 均已工程通过，
+但尚未构建真实 Small benchmark。
 
 本文件后部的 Multi-Source Qwen-PSALM-Seg/Benchmark v2 命令暂时保留为只读 legacy baseline
 运行记录，不属于 greenfield runtime。新代码不读取旧 benchmark、cache、config 或 checkpoint；
 旧资产仅通过已验证的 baseline tag/branch 和 deletion manifest 分阶段保留。
 
-## Greenfield P1.1–P1.2：合同、只读审计与空间原语
+## Greenfield P1.1–P1.3：合同、空间原语与 SourceAdapter 审计边界
 
 从仓库根目录安装当前包与测试依赖：
 
@@ -56,9 +57,22 @@ pixel-edge 坐标、half-pixel-center sampling 和 clamp border；image 固定 b
 padding 与 nodata 始终从有效 target 中排除。无可靠双向变换的 support 只能是 `global_only`，不得
 暴露 pixel-level transform。
 
-P1.2 仍不执行 source-specific materialization、真实 Small/Full build、split、duplicate grouping、
-task expansion 或语言子集构建，也不物理删除任何旧文件。工程证据见
-`docs/reports/p1/p1_2_spatial_report.json`；后续工作仍需新的明确 P1 子任务授权。
+P1.2 的空间原语工程证据见 `docs/reports/p1/p1_2_spatial_report.json`。
+
+P1.3 以固定样例上限只读核查九个配置 source，并建立唯一、无 generic/legacy fallback 的
+`SourceAdapter` registry。当前可为 GDCLD 已确认 PNG patch、LMHLD NPY virtual row、
+LandslideBench 派生 image/mask 对、MMRS 五个 caption 子集加 DIOR-RSVG、RSGPT
+RSICap/RSIEval 生成严格 audit candidate；所有 candidate 固定为 `split=audit`、
+`training_eligible=false`。Sen12 的 15-step 时间选择、Landslide4Sense 的 HDF5/权威 band
+metadata、多模态数据的 GeoTIFF/valid/nodata 与 InSAR 单位/sign，以及 DisasterM3 的 pre/post
+任务均显式关闭，不调用旧 reader 猜测。
+
+两次真实有界审计得到相同 aggregate SHA-256
+`3335535bc7e8fc3ba337511081dc5acd9d83129859095f46d4c017116a9eaf5a`，九源全部 present，
+5 个 source sampled、4 个 source blocked、`errors=[]`；被采样 raw bytes 在投影后复算未变。
+完整证据见 `docs/audits/p1_source_structure_audit.json` 和
+`docs/reports/p1/p1_3_source_adapter_report.json`。这不是许可证批准、Canonical Parent
+materialization、Small build 或 P1 acceptance；当前仍不能生成 training-eligible index。
 
 ## Legacy baseline 目录约定
 

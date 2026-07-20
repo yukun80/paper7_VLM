@@ -1,0 +1,342 @@
+{
+  "schema_version": "sami_p1_3_live_source_structure_audit_v1",
+  "audit_date": "2026-07-20",
+  "phase": "P1.3",
+  "scope": {
+    "mode": "sample_bounded_read_only",
+    "configured_source_count": 9,
+    "sample_limit_per_implemented_source": 8,
+    "recursive_full_hashing_performed": false,
+    "full_small_or_full_build_performed": false,
+    "raw_write_operations": 0,
+    "machine_absolute_paths_published": false,
+    "legacy_reader_use": "structural_cross_check_only; not imported by greenfield runtime"
+  },
+  "registry": {
+    "protocol": "sami_source_adapter_p1_3_v1",
+    "configured_keys_match_registry_exactly": true,
+    "unique_source_keys": true,
+    "generic_fallback_present": false,
+    "implemented_source_count": 5,
+    "blocked_source_count": 4
+  },
+  "live_sample_run": {
+    "aggregate_sha256_first": "3335535bc7e8fc3ba337511081dc5acd9d83129859095f46d4c017116a9eaf5a",
+    "aggregate_sha256_second": "3335535bc7e8fc3ba337511081dc5acd9d83129859095f46d4c017116a9eaf5a",
+    "repeat_hash_stable": true,
+    "sampled_source_count": 5,
+    "blocked_source_count": 4,
+    "missing_source_count": 0,
+    "errors": []
+  },
+  "sources": [
+    {
+      "source_key": "gdcld",
+      "status": "present_sampled_partial_structure",
+      "logical_root": "datasets/GDCLD",
+      "sample_evidence": [
+        "datasets/GDCLD/train_data/00000_t.tif",
+        "datasets/GDCLD/train_label/00000_t.tif",
+        "datasets/GDCLD/test_data/Lushan/Lushan_1.tif",
+        "datasets/GDCLD/test_label/Lushan/Lushan_1.tif"
+      ],
+      "structure_observations": [
+        "train_data/train_label and val_data/val_label use same-basename patch pairing",
+        "patch files with .tif suffix contain mixed PNG and TIFF byte containers",
+        "sample PNG pair is 1024x1024 with RGB image and single-channel mask",
+        "test is organized as named large-scene image/mask directories",
+        "sample Lushan test image is 13365x14745 while its mask is 13366x14746 and their geotransforms differ"
+      ],
+      "grouping_clues": [
+        "patch basename is a record-pair key",
+        "test region directory is a scene clue",
+        "original parent scene for train/val patches is not encoded"
+      ],
+      "modality_clues": ["optical RGB for confirmed PNG patches"],
+      "mask_or_reference_clues": ["same-basename mask is native only for confirmed equal-grid patches"],
+      "adapter_status": "implemented_audit_subset_png_patches_only",
+      "sample_count": 8,
+      "sample_aggregate_sha256": "c64e487490e4e0bf674479339bb510679446115a0ff34173e2352657142a495c",
+      "license_status": "unknown",
+      "training_eligible": false,
+      "blockers": [
+        "license_status_unknown",
+        "mixed_png_tiff_patch_container_partial_implementation",
+        "original_scene_identity_unresolved",
+        "test_scene_image_mask_grid_mismatch"
+      ]
+    },
+    {
+      "source_key": "lmhld",
+      "status": "present_sampled_partial_structure",
+      "logical_root": "datasets/LMHLD",
+      "sample_evidence": [
+        "datasets/LMHLD/LMHLD_dataset_different_patch_sizes/Emilia-Romagna_Italy_32/train_images.npy",
+        "datasets/LMHLD/LMHLD_dataset_different_patch_sizes/Emilia-Romagna_Italy_32/train_labels.npy"
+      ],
+      "structure_observations": [
+        "different-patch-size layout contains seven named region directories",
+        "comparison layout contains same-patch-size train/val/test NPY arrays",
+        "sample image array is float32 NCHW [4150,4,32,32]",
+        "sample label array is float32 NCHW [4150,1,32,32] with observed first-row range 0..1",
+        "first-axis index is an unambiguous virtual image/mask pair"
+      ],
+      "grouping_clues": [
+        "region directory and split are explicit",
+        "first-axis array index identifies a virtual patch",
+        "original large-scene identity and cross-layout duplication are unresolved"
+      ],
+      "modality_clues": ["four-band optical-like tensor; band identities are not locally documented"],
+      "mask_or_reference_clues": ["image and label virtual rows have the same native H/W"],
+      "adapter_status": "implemented_audit_virtual_rows_different_patch_sizes",
+      "sample_count": 7,
+      "sample_aggregate_sha256": "1b8518f09279f6a6ea3771fb2404cda58b34c140567c773c7ad867173f562966",
+      "license_status": "unknown",
+      "training_eligible": false,
+      "blockers": [
+        "license_status_unknown",
+        "band_semantics_unresolved",
+        "original_scene_grouping_unresolved",
+        "cross_layout_duplicate_policy_unresolved"
+      ]
+    },
+    {
+      "source_key": "sen12_landslides",
+      "status": "present_blocked",
+      "logical_root": "datasets/Sen12Landslides",
+      "sample_evidence": [
+        "datasets/Sen12Landslides/s2/chimanimani_s2_101.nc",
+        "datasets/Sen12Landslides/s1asc/chimanimani_s1asc_101.nc",
+        "datasets/Sen12Landslides/s1dsc/chimanimani_s1dsc_101.nc",
+        "datasets/Sen12Landslides/README.md"
+      ],
+      "structure_observations": [
+        "three sibling collections s2/s1asc/s1dsc pair by event token and sample number",
+        "sample grids share 128x128, EPSG:32736 and the same 10 m GeoTransform",
+        "each sampled file contains 15 time steps, DEM and MASK; S2 contains B02-B12/B8A/SCL and SAR contains VV/VH",
+        "sample annotated attribute is False in all three files",
+        "event_date/pre_post_dates metadata exist but are empty in the sampled files"
+      ],
+      "grouping_clues": ["event name plus sample number", "S2/ASC/DSC pairing key"],
+      "modality_clues": ["Sentinel-2 multispectral", "Sentinel-1 ascending/descending SAR", "DEM"],
+      "mask_or_reference_clues": ["MASK is present on the same grid but sampled supervision flag is false"],
+      "adapter_status": "blocked_no_candidate_extraction",
+      "sample_count": 0,
+      "license_status": "verified_cc_by_4_0_but_human_training_approval_pending",
+      "training_eligible": false,
+      "blockers": [
+        "fifteen_step_temporal_slice_policy_unresolved",
+        "sample_annotated_false",
+        "single_or_contemporaneous_time_selection_not_proven",
+        "human_training_eligibility_approval_pending"
+      ]
+    },
+    {
+      "source_key": "landslide4sense",
+      "status": "present_blocked",
+      "logical_root": "datasets/landslide4sense",
+      "sample_evidence": [
+        "datasets/landslide4sense/TrainData/img/image_1.h5",
+        "datasets/landslide4sense/TrainData/mask/mask_1.h5"
+      ],
+      "structure_observations": [
+        "local tree contains TrainData/img and TrainData/mask only",
+        "same numeric suffix pairs image_1.h5 with mask_1.h5",
+        "sample HDF5 dataset img is float64 [128,128,14]",
+        "sample HDF5 dataset mask is uint8 [128,128] with observed range 0..1",
+        "no local README or license file was found"
+      ],
+      "grouping_clues": ["numeric suffix is a patch-pair key", "original scene/event is absent"],
+      "modality_clues": ["14 source channels; exact band identities are not asserted from bytes alone"],
+      "mask_or_reference_clues": ["same-H/W HDF5 image/mask pair"],
+      "adapter_status": "blocked_no_candidate_extraction",
+      "sample_count": 0,
+      "license_status": "unknown",
+      "training_eligible": false,
+      "blockers": [
+        "official_source_license_unresolved",
+        "hdf5_metadata_reader_not_declared_in_greenfield_runtime",
+        "band_semantics_require_authoritative_source_evidence",
+        "original_scene_grouping_unresolved"
+      ]
+    },
+    {
+      "source_key": "multimodal_landslide",
+      "status": "present_blocked",
+      "logical_root": "datasets/multimodal-landslide-dataset",
+      "sample_evidence": [
+        "datasets/multimodal-landslide-dataset/multimodal-landslide-dataset/rgb/Loess_000001.tif",
+        "datasets/multimodal-landslide-dataset/multimodal-landslide-dataset/dem/Loess_000001.tif",
+        "datasets/multimodal-landslide-dataset/multimodal-landslide-dataset/insar_vel/Loess_000001.tif",
+        "datasets/multimodal-landslide-dataset/multimodal-landslide-dataset/label/Loess_000001.tif"
+      ],
+      "structure_observations": [
+        "inner dataset root has rgb/dem/insar_vel/label and explicit train.txt/val.txt",
+        "same stem forms a four-asset record",
+        "sample assets are all 128x128 EPSG:4326 on matching transforms",
+        "sample RGB has three int16 bands, DEM is float32, InSAR-like asset is uint16, label is uint8",
+        "nodata values are present but InSAR units and sign convention are absent"
+      ],
+      "grouping_clues": ["Loess/SiC/XiZ prefix", "same stem", "explicit split lists"],
+      "modality_clues": ["three-band optical-like raster", "DEM", "insar_vel filename clue"],
+      "mask_or_reference_clues": ["label shares H/W, CRS and transform with all sampled modalities"],
+      "adapter_status": "blocked_no_candidate_extraction",
+      "sample_count": 0,
+      "license_status": "unknown",
+      "training_eligible": false,
+      "blockers": [
+        "official_source_license_unresolved",
+        "geotiff_metadata_reader_not_declared_in_greenfield_runtime",
+        "insar_units_and_sign_convention_unresolved",
+        "valid_nodata_policy_not_yet_projected"
+      ]
+    },
+    {
+      "source_key": "landslidebench_agent",
+      "status": "present_sampled_derived_only",
+      "logical_root": "datasets/LandslideBench_agent",
+      "sample_evidence": [
+        "datasets/LandslideBench_agent/qwen3vl_landslide_train.jsonl",
+        "datasets/LandslideBench_agent/images/debris flow25432_Level_16.png",
+        "datasets/LandslideBench_agent/mask/debris flow25432_Level_16.png"
+      ],
+      "structure_observations": [
+        "train/val/test Qwen-style JSONL rows reference one PNG image",
+        "same-basename PNG mask exists in mask directory",
+        "filenames encode apparent class text, numeric ID and web zoom level",
+        "assistant prose contains causal and physical claims that are not accepted as source truth",
+        "directory has no local README/license/provenance registry"
+      ],
+      "grouping_clues": ["JSONL line", "image basename", "Level suffix removed as provisional multi-zoom group"],
+      "modality_clues": ["derived optical RGB PNG"],
+      "mask_or_reference_clues": ["same-basename derived mask"],
+      "adapter_status": "implemented_audit_derived_pairs",
+      "sample_count": 8,
+      "sample_aggregate_sha256": "d26d491a3f7f014ebc343c101706db467ea11dc0c65108e153d463f5b37f2319",
+      "license_status": "unknown_derived",
+      "training_eligible": false,
+      "blockers": [
+        "derived_source_provenance_unresolved",
+        "license_status_unknown",
+        "multi_zoom_grouping_unverified",
+        "generated_text_not_ground_truth"
+      ]
+    },
+    {
+      "source_key": "mmrs_1m",
+      "status": "present_sampled_selected_subsets",
+      "logical_root": "datasets/MMRS-1M",
+      "sample_evidence": [
+        "datasets/MMRS-1M/json/caption/caption_nwpu.json",
+        "datasets/MMRS-1M/json/caption/caption_rsicd.json",
+        "datasets/MMRS-1M/json/caption/caption_rsitmd.json",
+        "datasets/MMRS-1M/json/caption/caption_syndney.json",
+        "datasets/MMRS-1M/json/caption/caption_ucm.json",
+        "datasets/MMRS-1M/json/RSVG/rsvg_trainval.json"
+      ],
+      "structure_observations": [
+        "five frozen caption indexes each bind data/caption/... image paths to conversation answers",
+        "local data/ prefix resolves to the source-root caption/ path",
+        "DIOR-RSVG first record binds normalized xyxy to a short region phrase",
+        "json/total.json and unrelated VQA/classification/detection directories are present but excluded",
+        "aggregate root has no license file and component terms remain separate"
+      ],
+      "grouping_clues": ["exact image path is the provisional language parent key"],
+      "modality_clues": ["single optical display image"],
+      "mask_or_reference_clues": ["original image is reference", "DIOR supplies box/phrase but no mask"],
+      "adapter_status": "implemented_audit_five_caption_plus_dior_first_records",
+      "sample_count": 6,
+      "sample_aggregate_sha256": "9ad311a5285f4f804b46bc77942d523a06ae30658d442a07b6ecd751cf1912c4",
+      "license_status": "per_component_review_required",
+      "training_eligible": false,
+      "blockers": ["component_license_unresolved", "human_source_eligibility_approval_pending"]
+    },
+    {
+      "source_key": "rsgpt",
+      "status": "present_sampled_restricted",
+      "logical_root": "datasets/RSGPT",
+      "sample_evidence": [
+        "datasets/RSGPT/dataset/RSICap/captions.json",
+        "datasets/RSGPT/dataset/RSICap/images/P0378_0001.png",
+        "datasets/RSGPT/dataset/RSIEval/annotations.json",
+        "datasets/RSGPT/dataset/RSIEval/images/P1384_0054.png"
+      ],
+      "structure_observations": [
+        "RSICap top-level annotations bind filename to detailed text output",
+        "RSIEval top-level annotations bind filename to caption and QA pairs",
+        "both components use local images directories",
+        "RSIEval is permanently test-only under the frozen protocol"
+      ],
+      "grouping_clues": ["component plus exact filename"],
+      "modality_clues": ["single optical display image"],
+      "mask_or_reference_clues": ["original image is reference; no segmentation mask"],
+      "adapter_status": "implemented_audit_rsicap_and_rsieval_first_records",
+      "sample_count": 2,
+      "sample_aggregate_sha256": "6af743fc77ce11579e60d71c65834677198d7c3bb1b68d845b4b7937d1ed3698",
+      "license_status": "restricted_academic_only",
+      "training_eligible": false,
+      "blockers": [
+        "restricted_license_requires_human_approval",
+        "redistribution_not_approved",
+        "rsieval_permanent_test_only"
+      ]
+    },
+    {
+      "source_key": "disasterm3",
+      "status": "present_inventory_only_excluded",
+      "logical_root": "datasets/DisasterM3",
+      "sample_evidence": [
+        "datasets/DisasterM3/README.md",
+        "datasets/DisasterM3/DisasterM3_Bench/benchmark_release.json"
+      ],
+      "structure_observations": [
+        "benchmark records bind pre_image_path and post_image_path",
+        "tasks ask about disaster damage/change and may pair post optical or SAR",
+        "instruct tree contains pre/post image archives, box images and masks",
+        "local README declares CC-BY-NC-SA-4.0/noncommercial terms"
+      ],
+      "grouping_clues": ["disaster event and pre/post pair"],
+      "modality_clues": ["pre/post optical and SAR"],
+      "mask_or_reference_clues": ["not evaluated because the source task violates the frozen single-time scope"],
+      "adapter_status": "blocked_inventory_only",
+      "sample_count": 0,
+      "license_status": "restricted_noncommercial",
+      "training_eligible": false,
+      "blockers": [
+        "pre_post_change_task_excluded_by_frozen_scope",
+        "inventory_only_no_canonical_candidate"
+      ]
+    }
+  ],
+  "raw_immutability": {
+    "implemented_adapter_sources_rehashed_after_projection": true,
+    "implemented_adapter_sources_unchanged": [
+      "gdcld",
+      "landslidebench_agent",
+      "lmhld",
+      "mmrs_1m",
+      "rsgpt"
+    ],
+    "blocked_sample_file_count_rehashed_twice": 11,
+    "blocked_sample_files_equal": true,
+    "blocked_sample_file_set_aggregate_sha256": "9d11988bce7b4436e405a1302f386537385c62a2707dcd9e36cbb17b5c6f615d"
+  },
+  "implementation_decision": {
+    "canonical_parent_v3_materialization_authorized": false,
+    "training_index_authorized": false,
+    "full_small_build_authorized": false,
+    "next_required_work": [
+      "resolve source licenses and named human eligibility decisions",
+      "freeze source grouping for GDCLD/LMHLD/Landslide4Sense",
+      "select a single/contemporaneous Sen12 slice without pre/post reasoning",
+      "declare reviewed raster metadata dependencies and valid/nodata extraction",
+      "resolve multimodal InSAR units and sign convention"
+    ]
+  },
+  "errors": [],
+  "warnings": [
+    "Five adapters emit audit-only candidates, never training records.",
+    "Four sources remain deliberately blocked rather than using legacy-reader fallback.",
+    "No source license was promoted during P1.3."
+  ]
+}

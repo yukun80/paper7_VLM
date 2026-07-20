@@ -1,0 +1,198 @@
+{
+  "schema_version": "sami_p1_subtask_report_v1",
+  "phase": "P1",
+  "subtask": "P1.3",
+  "status": "engineering_passed",
+  "date": "2026-07-20",
+  "implementation_commit": "de64ddf33474d59e796831d1f2b6d7b0abd09e46",
+  "documentation_commit": null,
+  "objective": "Account for all nine configured sources, introduce a unique fail-closed SourceAdapter boundary, and emit only strict audit-only sample candidates for unambiguous sampled layouts.",
+  "authority_conflicts": [],
+  "contracts": {
+    "raw_record": "sami_raw_source_record_v1",
+    "canonical_candidate": "sami_canonical_parent_candidate_v1",
+    "sample_projection": "sami_source_sample_projection_v1",
+    "adapter": "sami_source_adapter_p1_3_v1",
+    "live_audit": "sami_source_sample_audit_p1_3_v1",
+    "split": "audit",
+    "training_eligible": false,
+    "generic_or_legacy_fallback": false
+  },
+  "live_source_audit": {
+    "audit_path": "docs/audits/p1_source_structure_audit.json",
+    "configured_source_count": 9,
+    "present_source_count": 9,
+    "implemented_source_count": 5,
+    "sampled_source_count": 5,
+    "blocked_source_count": 4,
+    "missing_source_count": 0,
+    "sample_limit_per_implemented_source": 8,
+    "aggregate_sha256_first": "3335535bc7e8fc3ba337511081dc5acd9d83129859095f46d4c017116a9eaf5a",
+    "aggregate_sha256_second": "3335535bc7e8fc3ba337511081dc5acd9d83129859095f46d4c017116a9eaf5a",
+    "repeat_hash_stable": true,
+    "errors": []
+  },
+  "implemented_sources": [
+    {
+      "source_key": "gdcld",
+      "scope": "confirmed PNG-signature train patch/image-mask pairs only",
+      "sample_count": 8,
+      "raw_bytes_unchanged": true,
+      "aggregate_sha256": "c64e487490e4e0bf674479339bb510679446115a0ff34173e2352657142a495c"
+    },
+    {
+      "source_key": "landslidebench_agent",
+      "scope": "derived JSONL/image/mask pairs; generated prose is never accepted as truth",
+      "sample_count": 8,
+      "raw_bytes_unchanged": true,
+      "aggregate_sha256": "d26d491a3f7f014ebc343c101706db467ea11dc0c65108e153d463f5b37f2319"
+    },
+    {
+      "source_key": "lmhld",
+      "scope": "first virtual NPY row per different-patch-size region",
+      "sample_count": 7,
+      "raw_bytes_unchanged": true,
+      "aggregate_sha256": "1b8518f09279f6a6ea3771fb2404cda58b34c140567c773c7ad867173f562966"
+    },
+    {
+      "source_key": "mmrs_1m",
+      "scope": "first record from five frozen caption indexes and DIOR-RSVG",
+      "sample_count": 6,
+      "raw_bytes_unchanged": true,
+      "aggregate_sha256": "9ad311a5285f4f804b46bc77942d523a06ae30658d442a07b6ecd751cf1912c4"
+    },
+    {
+      "source_key": "rsgpt",
+      "scope": "first RSICap and permanent-test RSIEval records",
+      "sample_count": 2,
+      "raw_bytes_unchanged": true,
+      "aggregate_sha256": "6af743fc77ce11579e60d71c65834677198d7c3bb1b68d845b4b7937d1ed3698"
+    }
+  ],
+  "blocked_sources": [
+    {
+      "source_key": "sen12_landslides",
+      "reasons": [
+        "fifteen_step_temporal_slice_policy_unresolved",
+        "sample_annotated_false",
+        "single_or_contemporaneous_time_selection_not_proven"
+      ]
+    },
+    {
+      "source_key": "landslide4sense",
+      "reasons": [
+        "official_source_license_unresolved",
+        "hdf5_metadata_reader_not_declared_in_greenfield_runtime",
+        "band_semantics_require_authoritative_source_evidence"
+      ]
+    },
+    {
+      "source_key": "multimodal_landslide",
+      "reasons": [
+        "official_source_license_unresolved",
+        "geotiff_metadata_reader_not_declared_in_greenfield_runtime",
+        "insar_units_and_sign_convention_unresolved"
+      ]
+    },
+    {
+      "source_key": "disasterm3",
+      "reasons": [
+        "pre_post_change_task_excluded_by_frozen_scope",
+        "inventory_only_no_canonical_candidate"
+      ]
+    }
+  ],
+  "raw_immutability": {
+    "implemented_source_assets_rehashed_after_projection": true,
+    "implemented_source_assets_unchanged": true,
+    "blocked_sample_file_count_rehashed_twice": 11,
+    "blocked_sample_files_unchanged": true,
+    "blocked_sample_file_set_aggregate_sha256": "9d11988bce7b4436e405a1302f386537385c62a2707dcd9e36cbb17b5c6f615d",
+    "raw_write_operations": 0
+  },
+  "tests": {
+    "framework": "unittest",
+    "command": "conda run -n qwen3vl env PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v",
+    "total": 37,
+    "passed": 37,
+    "failed": 0,
+    "errors": 0,
+    "exit_code": 0,
+    "covered": [
+      "registry exact nine-key coverage",
+      "duplicate registration rejection",
+      "unknown source has no fallback",
+      "strict audit-only contracts reject training promotion",
+      "signature-based PNG and header-only NPY parsing",
+      "five implemented synthetic source layouts",
+      "four explicit blocked sources",
+      "raw byte equality",
+      "portable logical paths",
+      "repeat aggregate hash stability",
+      "all P1.1 and P1.2 regressions"
+    ]
+  },
+  "commands": [
+    {
+      "command": "PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v",
+      "exit_code": 1,
+      "result": "base Python 3.13 collection failed because project dependencies PyYAML/jsonschema are absent; no test body ran"
+    },
+    {
+      "command": "conda run -n qwen3vl env PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v",
+      "exit_code": 0,
+      "result": "37/37 passed"
+    },
+    {
+      "command": "two independent sample-bounded live source audits with limit_per_source=8",
+      "exit_code": 0,
+      "result": "identical aggregate SHA-256 and errors=[]"
+    },
+    {
+      "command": "two in-memory SHA-256 passes over 11 explicitly selected blocked-source sample files",
+      "exit_code": 0,
+      "result": "all equal"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "passed before implementation commit"
+    }
+  ],
+  "acceptance": {
+    "all_nine_sources_accounted": true,
+    "registry_deterministic_and_unique": true,
+    "strict_sample_records_validate": true,
+    "raw_bytes_unchanged": true,
+    "no_machine_absolute_paths_published": true,
+    "ambiguous_sources_fail_closed": true,
+    "implemented_paths_errors_empty": true,
+    "repeat_aggregate_hash_stable": true,
+    "license_promotions": 0,
+    "physical_deletions": 0,
+    "p1_complete": false
+  },
+  "not_run": [
+    "recursive full raw-source hash",
+    "real Small or Full benchmark build",
+    "bulk materialization",
+    "split or duplicate clustering",
+    "task or language-view expansion",
+    "P2 model/CUDA/training/evaluation",
+    "formal training",
+    "paid API",
+    "expert review/merge",
+    "push"
+  ],
+  "blockers": [
+    "No data source is human-approved for training.",
+    "Four source structures need a frozen temporal/metadata/dependency or scope decision before candidate extraction.",
+    "GDCLD and LMHLD parent-group semantics remain insufficient for leakage-safe split.",
+    "P1 still lacks materialization, group split, duplicate clustering, task/language views, validation and summary."
+  ],
+  "errors": [],
+  "warnings": [
+    "P1.3 engineering_passed does not accept P1 or authorize a Small benchmark build.",
+    "Adapter implementability does not imply license eligibility."
+  ]
+}
