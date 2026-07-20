@@ -3,16 +3,16 @@
 ## Current status
 
 - phase: P0
-- phase_status: blocked
+- phase_status: human_accepted
 - current_branch: `master`
-- current_commit: `0c53624dd93159f78acd6d39a579b100d7e3255f`
-- baseline_tag: not created; proposed `pre-sami-rewrite-2026-07-20`
-- baseline_branch: not created; proposed `baseline/sane-qmef-pmrd-mgrr`
-- dirty_worktree: yes; P0 has added only the seven authorized documentation outputs and they are not committed
-- task_spec_version: live `docs/REFACTOR_TASK_SPEC.md` at commit `0c53624dd93159f78acd6d39a579b100d7e3255f`
-- active_adr: `docs/adr/ADR-0001-greenfield-rewrite.md` (`proposed`)
+- current_commit: `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`
+- baseline_tag: verified `pre-sami-rewrite-2026-07-20` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
+- baseline_branch: verified `baseline/sane-qmef-pmrd-mgrr` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
+- dirty_worktree: yes; P0 acceptance/license evidence is awaiting the authorized local acceptance commit
+- task_spec_version: SHA-256 `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b` at current commit `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`
+- active_adr: `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`)
 
-`blocked` means P0 engineering documentation is prepared but P0 acceptance still requires written human approval of ADR-0001 and creation/verification of the baseline tag and branch. P1 is not authorized.
+`human_accepted` means the owner approved ADR-0001, the legacy baseline, Apache-2.0 for greenfield project code, gated phase-by-phase deletion, and the P1.1 implementation scope. The root license does not authorize datasets, weights, legacy code, or third-party assets. P1.1 performs no physical deletion.
 
 ## Objective
 
@@ -82,6 +82,8 @@ The audit used read-only inspection except for creating the authorized documenta
 | standard-library deletion-target coverage replay against `git ls-files` | 2026-07-20 / time not instrumented | 0 | 36 targets cover all 242 tracked paths under the audited legacy roots; 0 missing and 0 nonexistent targets |
 | `rg -n '[[:blank:]]+$' ...` | 2026-07-20 / time not instrumented | 1 | expected no-match exit; no trailing whitespace found in P0 outputs |
 | `git diff --check` | 2026-07-20 / time not instrumented | 0 | tracked diff whitespace check passed; new P0 files separately covered by the trailing-whitespace scan |
+| user: `conda run -n qwen3vl python -c "... yaml.safe_load(...); ..."` | 2026-07-20 / user-reported | 0 | full PyYAML parse succeeded with `deletion manifest valid: 36` |
+| user Git synchronization | 2026-07-20 / verified from repository | 0 | P0 outputs committed and pushed as `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`; worktree was clean before this evidence update |
 
 ## Tests
 
@@ -89,7 +91,7 @@ The audit used read-only inspection except for creating the authorized documenta
 |---|---|---|
 | JSON syntax for `repo_inventory.json` | passed | `python3 -m json.tool`, exit 0 |
 | Inventory path/hash replay | passed | 16 current files reopened and SHA-256 matched, exit 0 |
-| YAML structure for `deletion_plan.yaml` | passed with parser limitation | 36-entry standard-library structural assertion passed; full PyYAML parse was not available in the default shell |
+| YAML syntax and structure for `deletion_plan.yaml` | passed | user-provided `qwen3vl` PyYAML parse succeeded with 36 entries and all approval/deletion fields null; prior structural assertions also passed |
 | Deletion-manifest tracked-path coverage | passed | 242/242 legacy tracked paths covered; zero missing and zero nonexistent current targets; this is coverage evidence, not approval |
 | New-file trailing whitespace scan | passed | `rg` found no matches; exit 1 is the expected no-match status |
 | `git diff --check` | passed | exit 0; tracked diff only because P0 outputs are untracked |
@@ -114,35 +116,28 @@ The audit used read-only inspection except for creating the authorized documenta
 
 ## Blockers
 
-- ADR-0001 has no written human approval.
-- The proposed baseline tag and branch do not exist and have not been verified.
-- The root project license/NOTICE is undecided, so publication is blocked.
-- Most raw-source licenses are unresolved; every source remains non-training-eligible until P1 closes its exact registry entry.
+- Most raw-source licenses are unresolved; every source remains non-training-eligible until P1 closes an exact registry entry.
 - The benchmark root is empty, so preserved legacy reports cannot currently be replayed against their bound inputs.
-- The default shell has neither PyYAML nor Ruby, so a full third-party YAML parse was not run; the manifest passed focused structural assertions and must be parsed in the user-managed environment before human acceptance.
+- Weight and benchmark publication remain blocked by asset-specific terms even though the greenfield root code license is accepted.
 
 ## Human action required
 
-- Review and approve or reject `docs/adr/ADR-0001-greenfield-rewrite.md` in writing.
-- Confirm `0c53624dd93159f78acd6d39a579b100d7e3255f` as the intended legacy baseline.
-- Create and verify the proposed tag/branch, then decide where the P0 documentation commit belongs.
-- Choose the root project license and later approve source-by-source data-use decisions.
-- Parse `docs/audits/deletion_plan.yaml` in the user-managed environment before final P0 acceptance; do not install dependencies into the default shell for this audit.
-- Do not authorize P1 until the ADR and backup gate are complete.
+- No additional P0 decision is required.
+- Later, approve or reject source-by-source restricted/unknown data only after P1 produces exact evidence; no approval is inferred now.
 
 ## Next exact command
 
 ```bash
-git status --short --branch
+git switch -c refactor/sami-groundsegdesc
 ```
 
-After reviewing the P0 documents and approving ADR-0001, the owner may run the exact backup commands recorded in the ADR and P0 handoff.
+Run only after the authorized local P0 acceptance commit is clean; Codex will perform and verify it in this task.
 
 ## Next phase scope
 
-- P1 is intentionally blocked.
-- After P0 becomes `human_accepted`, a new user task must explicitly set `CURRENT_PHASE = P1` and its subtask/allowed paths.
-- P1 will implement Canonical Benchmark v3 from raw sources with fail-closed licenses and no old benchmark/cache/config/checkpoint dependency.
+- P1.1 is authorized: create the greenfield package/CLI, canonical contracts/schemas/configs, and deterministic read-only source audit with fail-closed licenses.
+- P1 remains `in_progress`; P1.2 and later work require a separate task confirmation.
+- P1.1 may add replacements but must physically delete zero legacy files.
 
 ## Known technical debt
 

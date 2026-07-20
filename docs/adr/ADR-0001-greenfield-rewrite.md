@@ -1,10 +1,10 @@
 # ADR-0001: Adopt the incompatible SAMI-GroundSegDesc greenfield rewrite
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-20
 - Owners: project maintainer
 - Phase: P0
-- Commit: pending P0 documentation commit; proposed baseline is `0c53624dd93159f78acd6d39a579b100d7e3255f`
+- Commit: P0 documentation base `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`; this accepted decision is recorded by the local P0 acceptance commit
 
 ## Context
 
@@ -26,7 +26,7 @@ The historical reports and checkpoints remain valuable for provenance and fair c
 
 ## Decision
 
-After human acceptance of this ADR and verification of the baseline tag/branch, the active development branch will implement an incompatible greenfield system named **SAMI-GroundSegDesc**.
+The project owner accepted this ADR on 2026-07-20 and the baseline tag/branch were verified. The active development branch will implement an incompatible greenfield system named **SAMI-GroundSegDesc**.
 
 The new main line has exactly three top-level model modules:
 
@@ -92,29 +92,29 @@ The implementation boundaries are frozen as follows:
 
 ## Backup and branch plan
 
-The following commands are proposed and have **not** been run:
+The following local backup references were created and verified on 2026-07-20; they were not pushed by Codex:
 
 ```bash
-git tag -a pre-sami-rewrite-2026-07-20 0c53624dd93159f78acd6d39a579b100d7e3255f
+git tag -a pre-sami-rewrite-2026-07-20 0c53624dd93159f78acd6d39a579b100d7e3255f -m "Freeze pre-SAMI greenfield legacy baseline"
 git branch baseline/sane-qmef-pmrd-mgrr 0c53624dd93159f78acd6d39a579b100d7e3255f
 git switch -c refactor/sami-groundsegdesc
 ```
 
-Before execution, the owner must confirm that `0c53624dd93159f78acd6d39a579b100d7e3255f` is the intended legacy baseline and decide whether the P0 documents should first be committed on `master` or directly on the new refactor branch. Codex will not push automatically.
+The annotated tag and baseline branch both resolve to the owner-approved legacy SHA `0c53624dd93159f78acd6d39a579b100d7e3255f`. The refactor branch is created from the local P0 acceptance commit after it is written. Codex does not push these references automatically.
 
 ## Rollback
 
-- tag/branch: proposed tag `pre-sami-rewrite-2026-07-20`; proposed branch `baseline/sane-qmef-pmrd-mgrr`; neither exists until the owner runs and verifies the commands.
+- tag/branch: verified tag `pre-sami-rewrite-2026-07-20` and branch `baseline/sane-qmef-pmrd-mgrr`, both resolving to `0c53624dd93159f78acd6d39a579b100d7e3255f`.
 - trigger: frozen scientific scope changes; required source licenses cannot be obtained; G0 yields no viable 24 GiB candidate; replacement gates fail; deletion occurred without complete manifest approval; or greenfield work must be abandoned.
 - procedure: stop mutation, preserve the failing refactor commit and reports, verify the baseline tag resolves to the approved SHA, switch to the baseline branch in a clean worktree, and restore any large accepted artifact only from its separately verified read-only path. Never use destructive reset or overwrite raw/accepted assets.
 
 ## Human approval
 
-- approver:
-- date:
-- approved baseline SHA:
-- baseline tag verified:
-- baseline branch verified:
-- root license decision:
-- restricted-data decision:
-- notes:
+- approver: project owner (written confirmation in the active task)
+- date: 2026-07-20
+- approved baseline SHA: `0c53624dd93159f78acd6d39a579b100d7e3255f`
+- baseline tag verified: `pre-sami-rewrite-2026-07-20` -> approved baseline SHA
+- baseline branch verified: `baseline/sane-qmef-pmrd-mgrr` -> approved baseline SHA
+- root license decision: Apache License 2.0 for greenfield project code and project-authored documentation; see root `LICENSE` and `NOTICE`
+- restricted-data decision: not granted; every data/model/third-party asset remains separately licensed and fail-closed
+- notes: Deletion is authorized only phase by phase through `docs/audits/deletion_plan.yaml`. P1.1 performs no physical deletion, and every entry-level `approved_by` and `deleted_commit` remains null.

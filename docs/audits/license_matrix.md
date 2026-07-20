@@ -2,7 +2,7 @@
 
 - Audit date: 2026-07-20
 - Purpose: record evidence and hard eligibility gates for code, weights, datasets, and publication.
-- This is an engineering provenance audit, not legal advice. The project owner must approve the root license and restricted-data use.
+- This is an engineering provenance audit, not legal advice. The project owner approved Apache-2.0 for greenfield project code; restricted-data use remains a separate decision.
 - No row marked `unknown`, `unverified`, or `human decision pending` is training-eligible.
 
 ## Evidence policy
@@ -17,7 +17,7 @@
 
 | Asset | Evidence | Status | Allowed now | Required action |
 |---|---|---|---|---|
-| SAMI-GroundSegDesc repository code | No root `LICENSE`, `NOTICE`, or `COPYING` exists at audited HEAD | `human decision pending` | Local private refactor and audit only | Owner chooses the root license and required notices before any code or weight publication. P0 does not choose it. |
+| SAMI-GroundSegDesc greenfield repository code and documentation | Root `LICENSE` and `NOTICE`, accepted by the project owner on 2026-07-20 | Apache-2.0 | Greenfield implementation and documentation may be distributed under Apache-2.0 | This decision does not license legacy code, datasets, model weights, checkpoints, generated benchmark content, or third-party assets; retain applicable notices and close each asset separately. |
 | Legacy repository code | Git history only; no root license found | `unlicensed for redistribution` | Preserve locally and rewrite greenfield code | Do not publish or copy legacy code outside this repository without owner/legal review. |
 
 ## Upstream code and model weights
@@ -73,16 +73,15 @@ DIOR-RSVG is eligible only for region alignment after its image and expression t
 - Apache-2.0 and MIT components can generally be combined when their attribution and notice obligations are preserved, but P0 does not make a legal compatibility ruling for the final distribution.
 - Model code, model weights, datasets, output annotations, and generated benchmark packages require separate provenance records.
 - Optional baselines must be isolated so their dependencies and licenses do not silently become requirements of the main Qwen stack.
-- A future root `NOTICE` must identify every copied or materially adapted upstream file. Pure paper-derived reimplementation still requires scientific citation.
-- No greenfield code, weights, or benchmark package may be published until the owner has selected the root license and accepted the data-usage decisions.
+- The root `NOTICE` must be updated before distribution whenever a copied or materially adapted upstream file is introduced. Pure paper-derived reimplementation still requires scientific citation.
+- The Apache-2.0 project license does not authorize publication of weights or benchmark packages until their data, base-model, and third-party terms are accepted separately.
 
 ## Open human decisions
 
-1. Select the root project license and whether distribution will be research-only or generally reusable.
-2. Decide whether academic-only RSGPT/DOTA material may be used and whether resulting artifacts may be redistributed.
-3. Approve source-by-source data eligibility after P1 produces exact license records.
-4. Decide whether any trained weights can be published after reconciling all training-source and base-model terms.
+1. Decide whether academic-only RSGPT/DOTA material may be used and whether resulting artifacts may be redistributed.
+2. Approve source-by-source data eligibility after P1 produces exact license records.
+3. Decide whether any trained weights can be published after reconciling all training-source and base-model terms.
 
 ## P0 license gate result
 
-`blocked for publication and training-index eligibility`. Local auditing and greenfield implementation may continue after ADR/baseline approval, but P1 must fail closed: `license_status=unknown` must never appear in a training-eligible index.
+`root code license accepted; data and weight publication remain blocked`. P1 must fail closed: `license_status=unknown` must never appear in a training-eligible index, and Apache-2.0 for greenfield code must not be presented as permission for legacy or third-party assets.

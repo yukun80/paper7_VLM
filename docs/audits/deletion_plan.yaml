@@ -2,14 +2,14 @@ version: sami_deletion_manifest_v1
 generated_at: "2026-07-20"
 phase: P0
 baseline_commit_candidate: 0c53624dd93159f78acd6d39a579b100d7e3255f
-baseline_tag: null
-baseline_branch: null
+baseline_tag: pre-sami-rewrite-2026-07-20
+baseline_branch: baseline/sane-qmef-pmrd-mgrr
 proposed_baseline_tag: pre-sami-rewrite-2026-07-20
 proposed_baseline_branch: baseline/sane-qmef-pmrd-mgrr
 proposed_refactor_branch: refactor/sami-groundsegdesc
-baseline_tag_verified: false
-baseline_branch_verified: false
-human_manifest_approval: null
+baseline_tag_verified: true
+baseline_branch_verified: true
+human_manifest_approval: "project owner approved gated, phase-by-phase deletion on 2026-07-20; each entry still requires a later named approval"
 deletions_executed_in_p0: false
 global_preconditions:
   - replacement_accepted
