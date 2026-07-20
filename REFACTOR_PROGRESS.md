@@ -2,54 +2,70 @@
 
 ## Current status
 
-- phase: P0
-- phase_status: human_accepted
-- current_branch: `master`
-- current_commit: `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`
+- phase: P1
+- phase_status: `in_progress`
+- completed_subtask: `P1.1` (`engineering_passed`)
+- current_branch: `refactor/sami-groundsegdesc`
+- implementation_commit: `898f5b83820760ca86d1d488fc4cee0e8fa5cc9e`
+- p0_acceptance_commit: `52c93b3a77635c82eb591850e758d3333482d4b1`
 - baseline_tag: verified `pre-sami-rewrite-2026-07-20` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
 - baseline_branch: verified `baseline/sane-qmef-pmrd-mgrr` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
-- dirty_worktree: yes; P0 acceptance/license evidence is awaiting the authorized local acceptance commit
-- task_spec_version: SHA-256 `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b` at current commit `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`
+- dirty_worktree: yes; this progress update and `docs/handoffs/P1.md` await the P1.1 handoff commit
+- task_spec_version: SHA-256 `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b`
 - active_adr: `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`)
 
-`human_accepted` means the owner approved ADR-0001, the legacy baseline, Apache-2.0 for greenfield project code, gated phase-by-phase deletion, and the P1.1 implementation scope. The root license does not authorize datasets, weights, legacy code, or third-party assets. P1.1 performs no physical deletion.
+P1 remains `in_progress`: P1.1 introduced the greenfield contracts and read-only audit, but no real
+Small benchmark exists. P1.2 and later P1 subtasks require a new explicit confirmation. P1.1
+performed zero physical deletions.
 
 ## Objective
 
-Audit the live repository, adjacent raw data, licenses, legacy code/config/CLI/tests, preserved artifacts, and deletion gates; freeze the proposed SAMI-GroundSegDesc greenfield decision without changing or deleting implementation code.
+Establish the Canonical Benchmark v3 package boundary, strict parent/task contracts, portable and
+fail-closed source/license audit, deterministic strict artifacts, and a single `sami-gsd` CLI before
+any source-specific materialization or model implementation.
 
-## Scope for this session
+## Scope for P1.1
 
 ### Allowed
 
-- `docs/audits/**`
-- `docs/adr/**`
-- `docs/handoffs/P0.md`
-- `REFACTOR_PROGRESS.md`
+- root `pyproject.toml` and the single `sami-gsd` CLI under `src/sami_gsd/`
+- `canonical_parent_v3` and `task_view_v3` schemas and Python contracts
+- Small/Full audit configs and `scene_region_ontology_v2.yaml`
+- read-only raw scanner, fail-closed license registry and atomic audit artifacts
+- CPU/synthetic tests, P1.1 report, README, progress, handoff and deletion-gate evidence
 
 ### Explicitly excluded
 
-- Any source, schema, config, test, script, README, or AGENTS change outside the allowed paths.
-- Any deletion.
-- P1 Benchmark v3 implementation.
-- Benchmark builders, validators, tests, smoke runs, CUDA/environment probes, training, evaluation, paid APIs, expert review/merge, or full benchmark construction.
-- Tag, branch, commit, or push without human approval.
+- real Small/Full benchmark construction or source mutation
+- reference-canvas materialization and transform engine (P1.2)
+- split, duplicates, task expansion and language-subset materialization
+- any P2 model/training/evaluation/CUDA work
+- old runtime compatibility, physical legacy deletion, push, paid API or expert action
 
 ## Changes
 
 ### Files added
 
-- `docs/audits/repo_inventory.json`
-- `docs/audits/reuse_matrix.md`
-- `docs/audits/license_matrix.md`
-- `docs/audits/deletion_plan.yaml`
-- `docs/adr/ADR-0001-greenfield-rewrite.md`
-- `REFACTOR_PROGRESS.md`
-- `docs/handoffs/P0.md`
+- `pyproject.toml`
+- `configs/benchmark_v3_small.yaml`
+- `configs/benchmark_v3_full.yaml`
+- `configs/scene_region_ontology_v2.yaml`
+- `schemas/canonical_parent_v3.schema.json`
+- `schemas/task_view_v3.schema.json`
+- `src/sami_gsd/__init__.py`
+- `src/sami_gsd/cli.py`
+- `src/sami_gsd/contracts/{__init__.py,canonical.py,config.py}`
+- `src/sami_gsd/data/{__init__.py,audit.py}`
+- `src/sami_gsd/utilities/{__init__.py,artifacts.py}`
+- `tests/p1/{__init__.py,conftest.py,test_audit.py,test_configs.py,test_contracts.py}`
+- `docs/reports/p1/p1_1_contract_report.json`
+- `docs/handoffs/P1.md`
 
 ### Files modified
 
-- None; every P0 output was absent at audit start.
+- `README.md`
+- `docs/audits/deletion_plan.yaml`
+- `REFACTOR_PROGRESS.md`
 
 ### Files deleted
 
@@ -57,92 +73,89 @@ Audit the live repository, adjacent raw data, licenses, legacy code/config/CLI/t
 
 ## Commands executed
 
-The audit used read-only inspection except for creating the authorized documentation directories/files.
-
-| command | start/end | exit code | result artifact |
-|---|---|---:|---|
-| `git status --short --branch` | 2026-07-20 / time not instrumented | 0 | clean `master...origin/master` at audit start |
-| `git rev-parse HEAD` | 2026-07-20 / time not instrumented | 0 | `0c53624dd93159f78acd6d39a579b100d7e3255f` |
-| `git ls-files | wc -l` | 2026-07-20 / time not instrumented | 0 | 268 tracked baseline files |
-| `git ls-files -z | sort -z | xargs -0 sha256sum | sha256sum` | 2026-07-20 / time not instrumented | 0 | `d835fa1b52feb0da825fa92f1c44eb7815e1036f6f900f0f15ea5b10ff9f399c` |
-| `git status --short --ignored` | 2026-07-20 / time not instrumented | 0 | relevant ignored outputs, weights, logs, PDFs, and bytecode inventoried |
-| `rg --files` and focused `rg -n` scans over package/scripts/configs/tests/docs | 2026-07-20 / time not instrumented | 0 | class/function/CLI/config/test/deletion inventory |
-| `find external -maxdepth 2 ...` guarded by directory existence | 2026-07-20 / time not instrumented | 0 | `external/` absent |
-| `find /home/yukun80/codes/benchmark ...` | 2026-07-20 / time not instrumented | 0 | benchmark root exists and is empty |
-| per-source `find ... -type f | wc -l` and `du -sh` under `/home/yukun80/codes/datasets` | 2026-07-20 / time not instrumented | 0 | nine local source visibility counts/sizes |
-| top-level raw-source layout scan and local license-document `sha256sum` | 2026-07-20 / time not instrumented | 0 | nine source roots bound; Sen12Landslides and DisasterM3 license evidence hashes recorded |
-| focused `sha256sum` over preserved reports, manifests, checkpoints, and local model cards/configs | 2026-07-20 / time not instrumented | 0 | hashes recorded in `repo_inventory.json` |
-| read-only official upstream license-page audit | 2026-07-20 / time not instrumented | 0 | evidence links recorded in `license_matrix.md` |
-| `mkdir -p docs/audits docs/adr docs/handoffs` | 2026-07-20 / time not instrumented | 0 | authorized P0 document directories |
-| `python3 -m json.tool docs/audits/repo_inventory.json` | 2026-07-20 / time not instrumented | 0 | inventory JSON syntax valid |
-| `python3 -c "... import yaml ..."` | 2026-07-20 / time not instrumented | 1 | default shell lacks PyYAML; no dependency was installed |
-| `ruby -e 'require "yaml"; ...'` | 2026-07-20 / time not instrumented | 127 | Ruby is absent; no dependency was installed |
-| standard-library structural assertions over `deletion_plan.yaml` | 2026-07-20 / time not instrumented | 0 | 36 entries; required fields present; approvals/deleted commits null; even indentation; no tabs |
-| standard-library inventory binding verifier | 2026-07-20 / time not instrumented | 0 | all 16 recorded report/checkpoint/model-card/config paths exist and match SHA-256 |
-| standard-library deletion-target coverage replay against `git ls-files` | 2026-07-20 / time not instrumented | 0 | 36 targets cover all 242 tracked paths under the audited legacy roots; 0 missing and 0 nonexistent targets |
-| `rg -n '[[:blank:]]+$' ...` | 2026-07-20 / time not instrumented | 1 | expected no-match exit; no trailing whitespace found in P0 outputs |
-| `git diff --check` | 2026-07-20 / time not instrumented | 0 | tracked diff whitespace check passed; new P0 files separately covered by the trailing-whitespace scan |
-| user: `conda run -n qwen3vl python -c "... yaml.safe_load(...); ..."` | 2026-07-20 / user-reported | 0 | full PyYAML parse succeeded with `deletion manifest valid: 36` |
-| user Git synchronization | 2026-07-20 / verified from repository | 0 | P0 outputs committed and pushed as `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`; worktree was clean before this evidence update |
+| command | exit code | result |
+|---|---:|---|
+| `git status --short --branch`; HEAD/ref checks | 0 | clean accepted P0 at `52c93b3...`; verified both baseline refs |
+| `git switch -c refactor/sami-groundsegdesc` | 0 | new local refactor branch; no push |
+| `conda run -n qwen3vl env PYTHONPATH=src python -m pytest -q tests/p1` | 1 | collection did not start because `pytest` is absent from `qwen3vl` |
+| Pydantic/jsonschema/PyYAML import/version probe | 0 | Pydantic 2.11.3, jsonschema 4.26.0, PyYAML 6.0.2 |
+| `conda run -n qwen3vl env PYTHONPATH=src python -m unittest discover -s tests/p1 -v` | 0 | final run: 15/15 passed |
+| `conda run -n qwen3vl env PYTHONPATH=src python -m sami_gsd.cli data audit --help` | 0 | P1.1 CLI help passed |
+| `python -m json.tool` for both schemas and the P1.1 report | 0 | strict JSON syntax passed |
+| two independent `sami_gsd.cli data audit` synthetic runs | 0 | identical aggregate SHA-256 `523757400620d814aa32e289a867124b83758f24134be2a95c06af103d39e491` |
+| runtime legacy/prohibited-task/machine-path scans and single-CLI assertion | 0 | no forbidden runtime matches; only `sami-gsd` is declared |
+| P1.1 report hash replay and deletion-manifest PyYAML assertions | 0 | report bindings matched; 36 entries remain unapproved/undeleted |
+| `git diff --check` | 0 | passed before implementation commit |
+| local implementation commit | 0 | `898f5b83820760ca86d1d488fc4cee0e8fa5cc9e`; no push |
 
 ## Tests
 
-| test | status | evidence |
+| contract/gate | status | evidence |
 |---|---|---|
-| JSON syntax for `repo_inventory.json` | passed | `python3 -m json.tool`, exit 0 |
-| Inventory path/hash replay | passed | 16 current files reopened and SHA-256 matched, exit 0 |
-| YAML syntax and structure for `deletion_plan.yaml` | passed | user-provided `qwen3vl` PyYAML parse succeeded with 36 entries and all approval/deletion fields null; prior structural assertions also passed |
-| Deletion-manifest tracked-path coverage | passed | 242/242 legacy tracked paths covered; zero missing and zero nonexistent current targets; this is coverage evidence, not approval |
-| New-file trailing whitespace scan | passed | `rg` found no matches; exit 1 is the expected no-match status |
-| `git diff --check` | passed | exit 0; tracked diff only because P0 outputs are untracked |
-| Unit/integration/smoke/model tests | not run by policy | P0 is documentation-only and AGENTS delegates program execution to the user |
+| JSON Schema draft-2020-12 validation | passed | canonical parent and task fixtures validate; extras and training-eligible unknown are rejected |
+| Pydantic strict contracts | passed | extra fields, invalid half-open boxes, invalid reference modality and nonportable paths rejected |
+| missing versus zero-valid state | passed | state/coverage/asset invariants enforced |
+| source license fail-closed | passed | unknown/unreviewed training eligibility rejected at config validation |
+| read-only source scan | passed | source bytes identical before/after synthetic runs |
+| stable ordering and repeat hash | passed | independent CLI runs produced the same aggregate SHA-256 |
+| atomic/no-overwrite/finite JSON | passed | `.part` absent, existing targets rejected, NaN rejected |
+| symlink boundary | passed | symlinked source root rejected; nested links are never followed |
+| live configs/ontology/single CLI | passed | two nine-source configs fail closed; 25 ontology fields complete; one console script |
+| pytest collection | environment warning | `pytest` is declared in test extras but not installed in the current environment |
 
 ## Smoke / micro-overfit
 
-- config: not applicable
-- device: not probed
-- steps: 0
+- config: synthetic audit fixture only
+- device: CPU
+- steps: not applicable
 - peak_vram: not measured
-- result: not run; outside P0 scope
+- result: no model exists in P1.1; GPU smoke and micro-overfit were not run
 
 ## Data and artifact bindings
 
-- benchmark: `/home/yukun80/codes/benchmark` exists but has zero entries; no live v3 benchmark exists
-- manifest_sha256: legacy report/manifest hashes are listed individually in `docs/audits/repo_inventory.json`; no v3 manifest exists
-- config_sha256: no v3 config exists; local upstream model config hashes are recorded in the inventory
-- checkpoint: preserved legacy segmentation, D-1, and D0 checkpoints only
-- checkpoint_sha256: `9ec3c766e6ec9d9475c3128e615e69f8b8e0d7ed376d86d1ed74b31c744f65e2`, `c6f1db5bd97b4c96ec171066012ad201b1bc782ff084daa834ed5d1ed55c6246`, `4d88bc2aa26a583c0b6d02b2eb8a4d23229873a3d7cd4129e1e68c5db6c121ce`, `8ffd1c342ff471687d01e2c5167ff3a0aa74690078432cd6cdc2cd7f1601585f`
-- interpretation: preserved legacy bytes only; not a v3 initialization or scientific-success claim
+- report: `docs/reports/p1/p1_1_contract_report.json`
+- implementation aggregate SHA-256: `a77514764930dd9ff07c297eff98812998b70b17a944e433cd9f6e49b7c73470`
+- synthetic audit aggregate SHA-256: `523757400620d814aa32e289a867124b83758f24134be2a95c06af103d39e491`
+- real raw source audit: not run
+- canonical Small benchmark: not built
+- training-eligible sources in committed configs: 0/9
+- checkpoint/config for model training: not applicable
 
 ## Blockers
 
-- Most raw-source licenses are unresolved; every source remains non-training-eligible until P1 closes an exact registry entry.
-- The benchmark root is empty, so preserved legacy reports cannot currently be replayed against their bound inputs.
-- Weight and benchmark publication remain blocked by asset-specific terms even though the greenfield root code license is accepted.
+- P1.2 is not yet authorized; no reference-canvas assets or transforms may be materialized.
+- Source-specific training/evaluation eligibility remains closed pending exact license evidence and human decisions.
+- `pytest` is absent from `qwen3vl`; the full unittest-compatible suite passed without installing dependencies.
+- P1 acceptance remains blocked on the remaining materializer, transform, split, duplicate, task, language, validator and summary subtasks.
 
 ## Human action required
 
-- No additional P0 decision is required.
-- Later, approve or reject source-by-source restricted/unknown data only after P1 produces exact evidence; no approval is inferred now.
+- Review and confirm or revise the proposed P1.2 scope in the P1 handoff/final response.
+- Do not approve a raw source for training merely because it appears in the audit inventory.
+- No P1.1 deletion or push action is required.
 
 ## Next exact command
 
+For optional reproduction after installing the declared test extra:
+
 ```bash
-git switch -c refactor/sami-groundsegdesc
+conda run -n qwen3vl env PYTHONPATH=src python -m pytest -q tests/p1
 ```
 
-Run only after the authorized local P0 acceptance commit is clean; Codex will perform and verify it in this task.
+The next implementation command is the proposed P1.2 confirmation bundle in `docs/handoffs/P1.md`;
+it must be accepted before editing P1.2 files.
 
 ## Next phase scope
 
-- P1.1 is authorized: create the greenfield package/CLI, canonical contracts/schemas/configs, and deterministic read-only source audit with fail-closed licenses.
-- P1 remains `in_progress`; P1.2 and later work require a separate task confirmation.
-- P1.1 may add replacements but must physically delete zero legacy files.
+- proposed subtask: P1.2 reference-canvas and spatial transform primitives
+- implement deterministic reference selection, crop/resize/pad `TransformChain`, inverse metadata,
+  nearest-only mask/valid propagation, and half-open/Qwen-1000 bbox boundary conversion
+- use synthetic fixtures only; do not build the real benchmark
+- do not implement split, duplicates, task expansion, language subsets, P2 code or deletion
 
 ## Known technical debt
 
-- No root license or notice.
-- No root `pyproject.toml`, `src/sami_gsd/`, v3 schemas/configs, or `sami-gsd` CLI yet; these are future-phase work, not P0 omissions.
-- Local raw source licenses and component provenance are incomplete.
-- Legacy report inputs are absent from the adjacent benchmark root.
-- Legacy code/config/CLI/tests/docs remain intentionally present until their manifest gates open.
+- Static schemas and Pydantic contracts are strict, but parent/task JSONL materializers do not exist yet.
+- The scanner hashes every visible file and has no incremental cache by design; a real full audit may be expensive.
+- `benchmark_root` is validated for future builders but the P1.1 audit uses its explicit `--output-dir` only.
+- Source registry rows remain conservative templates, not final legal determinations.

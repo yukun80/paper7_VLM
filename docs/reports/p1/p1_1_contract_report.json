@@ -6,6 +6,7 @@
   "date": "2026-07-20",
   "branch": "refactor/sami-groundsegdesc",
   "p0_acceptance_commit": "52c93b3a77635c82eb591850e758d3333482d4b1",
+  "implementation_commit": "898f5b83820760ca86d1d488fc4cee0e8fa5cc9e",
   "authority": {
     "task_spec_sha256": "ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b",
     "accepted_adr": "docs/adr/ADR-0001-greenfield-rewrite.md",
