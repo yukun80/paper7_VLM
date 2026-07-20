@@ -1,5 +1,29 @@
 # Repository Agent Guide
 
+## SAMI-GroundSegDesc Greenfield Refactor
+
+The active greenfield refactor is governed by:
+
+1. `docs/REFACTOR_TASK_SPEC.md`
+2. `docs/CODEX_REFACTOR_PROMPT.md`
+3. `REFACTOR_PROGRESS.md`
+4. the latest applicable file under `docs/handoffs/`
+5. accepted decisions under `docs/adr/`
+
+For every refactor task:
+
+- Read the two governing documents before planning or modifying files.
+- Execute only the phase and subtask explicitly named in the user task.
+- Do not advance to the next phase automatically.
+- Do not treat legacy SANE/QMEF/PMRD/MGRR code as the new architecture.
+- Do not introduce compatibility shims for legacy benchmarks, caches, configs, or class names.
+- Do not delete legacy code until the corresponding deletion gate is accepted.
+- Do not start long GPU training, paid API calls, full benchmark construction, or expert-review actions.
+- Update `REFACTOR_PROGRESS.md` and write a phase handoff before declaring completion.
+- Report actual commands, exit codes, tests, changed files, unresolved blockers, and required human actions.
+
+The current phase and subtask are supplied by the user task. Direct task instructions do not authorize work outside that scope.
+
 ## 1. Repository Mission
 
 This repository is no longer the old GeoHazard-HalluGround/Qwen-LLaVA export project.
