@@ -4,9 +4,10 @@
 
 - phase: P1
 - phase_status: `blocked_on_human_data_license_gate`
-- completed_internal_checkpoint: complete P1 engineering pipeline through synthetic Small acceptance (`engineering_passed`)
+- completed_internal_checkpoint: complete P1 engineering pipeline including canonical language-parent closure and synthetic Small acceptance (`engineering_passed`)
 - active_internal_work_package: real Small license preflight and canonical build
 - current_branch: `refactor/sami-groundsegdesc`
+- p1_language_parent_commit: `487b309d7b99f120367e2cf5b137c3e4b92f2e98`
 - p1_continuous_engineering_commit: `c83c11a833f8fec12c8dbc46fbc54ee0fdff7c2c`
 - p1_human_license_gate_docs_commit: `430a9cc70f3ae23256a43e4d4ea6eb8ef79c825d`
 - p1_3_implementation_commit: `de64ddf33474d59e796831d1f2b6d7b0abd09e46`
@@ -33,13 +34,16 @@ internal checkpoint stop and not P1 completion.
 
 ## Current continuous-P1 evidence
 
-- complete focused regression: 52/52 passed in `qwen3vl`;
+- complete focused regression: 54/54 passed in `qwen3vl`;
 - live bounded registry audit: 9 present, 7 sampled, 2 blocked, 14 audit candidates, 0 eligible,
   `errors=[]`;
 - repeated live aggregate SHA-256:
   `4e2edbe2549313db49bb8e97144f0d6f2429d2aa0dadaddcdb1977f4f44c54fc`;
 - synthetic end-to-end Small: two independent builds have identical aggregate hashes; independent
   validator replay has `errors=[]`, cross-split verified duplicates 0 and training-eligible unknown 0;
+- licensed-language synthetic build: exact-image rows share one visual parent, RSIEval forces its
+  verified duplicate component to test, canonical training rows use only `assets/...`, DIOR remains
+  box/short phrase and creates no maskless T2; independent replay has `errors=[]`;
 - real preflight: `SourceLoadingError: no training-eligible spatial source; approve exact source
   license evidence before a formal Small build`;
 - status report: `docs/reports/p1/p1_continuous_engineering_status.json`.
@@ -53,50 +57,41 @@ T1--T4 expansion, the frozen description subset, validation, deterministic rebui
 Small acceptance. Internal checkpoints are recorded in `docs/worklogs/P1_CONTINUATION.md` and do
 not interrupt execution.
 
-## Scope for P1.3
+## Continuous P1 scope
 
 ### Allowed
 
-- bounded reads of raw directory metadata, annotation/index samples and minimal sample assets
-- old source readers only as structural cross-check evidence
-- strict raw source, canonical candidate and projection contracts
-- source adapter protocol/registry and deterministic sample extraction
-- fail-closed license, temporal, grouping, raster metadata and scope blockers
-- synthetic CPU and bounded live read-only integration tests
-- P1.3 audit/report, README, progress, handoff and deletion-gate evidence
+- complete P1 contracts, raw-source readers, materialization, split, duplicates, tasks and language subset
+- synthetic CPU integration, independent validation replay and deterministic rebuild checks
+- bounded live read-only source inspection and fail-closed real-build preflight
+- README, P1 progress/worklog/report and deletion-gate evidence
 
 ### Explicitly excluded
 
-- full recursive source hashing or full Small/Full benchmark construction
-- bulk asset materialization or raw-source mutation
 - source license approval
-- group split, duplicate clustering, task expansion or language-subset build
+- real Small/Full construction before the exact source license gate is approved
 - P2 model/training/evaluation/CUDA work
 - compatibility shims, physical deletion, push, paid API or expert action
 
 ## Changes
 
-### Files added
+### Files added by the latest internal work package
 
-- `src/sami_gsd/contracts/sources.py`
-- `src/sami_gsd/data/adapters/__init__.py`
-- `src/sami_gsd/data/adapters/base.py`
-- `src/sami_gsd/data/adapters/formats.py`
-- `src/sami_gsd/data/adapters/implemented.py`
-- `src/sami_gsd/data/adapters/registry.py`
-- `src/sami_gsd/data/adapters/audit.py`
-- `tests/p1/test_source_adapters.py`
-- `docs/audits/p1_source_structure_audit.json`
-- `docs/reports/p1/p1_3_source_adapter_report.json`
+- `schemas/canonical_description_v1.schema.json`
+- `tests/p1/test_language_canonical_build.py`
 
-### Files modified
+### Files modified by the latest internal work package
 
 - `src/sami_gsd/contracts/__init__.py`
-- `src/sami_gsd/data/__init__.py`
+- `src/sami_gsd/contracts/language.py`
+- `src/sami_gsd/data/materialize.py`
+- `src/sami_gsd/data/builder.py`
+- `src/sami_gsd/data/validation.py`
+- `src/sami_gsd/cli.py`
 - `README.md`
-- `docs/audits/deletion_plan.yaml`
-- `docs/handoffs/P1.md`
 - `REFACTOR_PROGRESS.md`
+- `docs/worklogs/P1_CONTINUATION.md`
+- `docs/reports/p1/p1_continuous_engineering_status.json`
 
 ### Files deleted
 
@@ -106,18 +101,14 @@ not interrupt execution.
 
 | command | exit code | result |
 |---|---:|---|
-| authority/current-state/legacy-reader reads and bounded raw tree probes | 0 | no governing conflict; nine sources inspected read-only |
-| bounded `file`, HDF5/NPY/NetCDF/GeoTIFF/JSON sample metadata probes | 0 | live structure evidence recorded without raw writes |
-| base `PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v` | 1 | wrong base Python 3.13 lacked PyYAML/jsonschema; test bodies did not run |
-| `conda run -n qwen3vl env PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v` | 0 | final run 37/37 passed |
-| two live `audit_source_samples(..., limit_per_source=8)` runs | 0 | identical aggregate SHA-256; 5 sampled, 4 blocked, `errors=[]` |
-| two in-memory SHA passes over 11 blocked-source sample files | 0 | all sample bytes equal |
-| `git diff --check` before implementation commit | 0 | passed |
-| local implementation commit | 0 | `de64ddf33474d59e796831d1f2b6d7b0abd09e46`; no push |
-| local documentation/handoff commit | 0 | `273a4a03294338a7e4a382b89f2bab1b0361dff2`; no push |
-| final complete P1 unittest regression | 0 | 37/37 passed after documentation commit |
-| `python -B -m compileall -q src/sami_gsd tests/p1` in `qwen3vl` | 0 | source and P1 tests compiled |
-| P1.3 JSON/hash/deletion-manifest assertions | 0 | both reports valid; 36 entries remain unapproved and undeleted |
+| complete governing-document and current-state reread | 0 | no ADR/spec conflict; P1 and license stop remain authoritative |
+| focused canonical-language build tests | 0 | 2/2 passed after implementation |
+| `conda run -n qwen3vl env PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v` | 0 | final run 54/54 passed |
+| `conda run -n qwen3vl env PYTHONPATH=src python -B -m compileall -q src/sami_gsd tests/p1` | 0 | source and P1 tests compiled |
+| Draft 2020-12 check of `canonical_description_v1.schema.json` | 0 | schema valid |
+| deletion-manifest assertion | 0 | 36 entries remain unapproved and undeleted |
+| `git diff --check` | 0 | passed before local implementation commit |
+| local canonical-language implementation commit | 0 | `487b309d7b99f120367e2cf5b137c3e4b92f2e98`; no push |
 
 ## Tests
 
@@ -132,7 +123,11 @@ not interrupt execution.
 | raw immutability | passed | synthetic bytes exact; live sampled assets rehashed unchanged |
 | path portability | passed | published artifacts contain logical `datasets/...` paths only |
 | repeat hash | passed | exact live aggregate repeated |
-| complete P1 regression | passed | 37/37 tests |
+| canonical language parent | passed | one exact visual parent, benchmark-internal runtime refs, full answer provenance |
+| RSIEval test isolation | passed | verified duplicate connected component is forced to test |
+| DIOR role isolation | passed | reference box/short phrase only; no fabricated T2 mask |
+| denied language source | passed | audit row retained without raw decode or materialization |
+| complete P1 regression | passed | 54/54 tests |
 
 ## Smoke / micro-overfit
 
@@ -146,8 +141,8 @@ not interrupt execution.
 
 - live structure audit: `docs/audits/p1_source_structure_audit.json`
 - P1.3 report: `docs/reports/p1/p1_3_source_adapter_report.json`
-- implementation commit: `de64ddf33474d59e796831d1f2b6d7b0abd09e46`
-- documentation/handoff commit: `273a4a03294338a7e4a382b89f2bab1b0361dff2`
+- continuous engineering base: `c83c11a833f8fec12c8dbc46fbc54ee0fdff7c2c`
+- canonical language-parent implementation: `487b309d7b99f120367e2cf5b137c3e4b92f2e98`
 - live adapter aggregate SHA-256: `3335535bc7e8fc3ba337511081dc5acd9d83129859095f46d4c017116a9eaf5a`
 - blocked sample file-set aggregate SHA-256: `9d11988bce7b4436e405a1302f386537385c62a2707dcd9e36cbb17b5c6f615d`
 - canonical Small benchmark: not built
@@ -182,9 +177,9 @@ formal P1 handoff remain unset until two real Small builds and all P1 gates pass
 
 ## Known technical debt
 
-- Live audit adapters intentionally remain sample-bounded; formal materialization is currently connected only
+- Live audit adapters intentionally remain sample-bounded; formal spatial materialization is currently connected
   to the resolved Sen12 source loader.
-- Training-language image materialization remains fail-closed; selected MMRS/RSGPT records are audit-only while
-  their component licenses are unapproved.
+- Canonical language materialization is implemented, but live MMRS/RSGPT rows correctly remain audit-only while
+  their component licenses and allowed task roles are unapproved.
 - Unknown/group-ambiguous candidates remain audit-only and cannot enter training.
 - P1 acceptance remains blocked by the human data-license decision and the resulting real Small construction.

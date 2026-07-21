@@ -1,11 +1,12 @@
 {
-  "schema_version": "sami_p1_continuous_engineering_status_v1",
+  "schema_version": "sami_p1_continuous_engineering_status_v2",
   "phase": "P1",
   "status": "blocked_before_real_small_by_human_data_license_gate",
   "formal_completion": false,
   "commits": {
     "engineering": "c83c11a833f8fec12c8dbc46fbc54ee0fdff7c2c",
-    "license_gate_docs": "430a9cc70f3ae23256a43e4d4ea6eb8ef79c825d"
+    "license_gate_docs": "430a9cc70f3ae23256a43e4d4ea6eb8ef79c825d",
+    "canonical_language_parent": "487b309d7b99f120367e2cf5b137c3e4b92f2e98"
   },
   "engineering": {
     "canonical_schema": "implemented",
@@ -17,7 +18,10 @@
     "parent_group_split": "implemented",
     "exact_perceptual_duplicates": "implemented",
     "t1_t4_expansion": "implemented",
-    "description_source_subset": "implemented_audit_only_until_component_licenses",
+    "description_source_subset": "implemented_with_audit_only_live_rows_until_component_licenses",
+    "canonical_language_parent": "implemented_and_synthetically_replayed",
+    "canonical_description_index": "benchmark_asset_bound_with_answer_provenance",
+    "rsieval_duplicate_test_priority": "implemented",
     "validator": "implemented",
     "deterministic_hash": "implemented",
     "summary": "implemented",
@@ -25,7 +29,7 @@
   },
   "tests": {
     "command": "conda run -n qwen3vl env PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v",
-    "passed": 52,
+    "passed": 54,
     "failed": 0,
     "exit_code": 0
   },
@@ -47,6 +51,21 @@
     "validation_replay_errors": [],
     "verified_duplicate_cross_split_count": 0,
     "training_eligible_unknown_count": 0
+  },
+  "synthetic_language_small": {
+    "independent_builds": 2,
+    "reversed_input_order": true,
+    "aggregate_hash_equal": true,
+    "output_hashes_equal": true,
+    "validation_replay_errors": [],
+    "source_record_count": 5,
+    "canonical_language_parent_count": 3,
+    "canonical_description_record_count": 5,
+    "exact_image_rows_share_parent": true,
+    "rsieval_verified_duplicate_cluster_split": "test",
+    "training_indexes_use_benchmark_assets_only": true,
+    "dior_maskless_t2_created": false,
+    "denied_language_raw_decode_started": false
   },
   "real_small_preflight": {
     "exit_code": 0,
