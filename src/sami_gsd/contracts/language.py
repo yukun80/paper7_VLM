@@ -7,9 +7,12 @@ from typing import Annotated, Literal, Self
 from pydantic import Field, field_validator, model_validator
 
 from sami_gsd.contracts.canonical import (
+    ArtifactRef,
+    HalfOpenBox,
     LicenseRecord,
     Sha256,
     StrictModel,
+    validate_half_open_box,
     validate_portable_path,
 )
 
@@ -77,4 +80,70 @@ class DescriptionSourceRecord(StrictModel):
         return self
 
 
-__all__ = ["DescriptionSourceRecord", "LanguageAnswer", "LanguageImageRef"]
+class CanonicalLanguageAnswer(StrictModel):
+    """One model target with source-record and immutable index provenance."""
+
+    source_answer_id: Annotated[str, Field(min_length=1)]
+    text: Annotated[str, Field(min_length=1)]
+    annotation_origin: Literal["source_caption", "source_expression"]
+    source_index_sha256: Sha256
+
+
+class CanonicalDescriptionRecord(StrictModel):
+    """One language target bound only to materialized Benchmark assets.
+
+    Raw ``datasets/...`` paths remain in :class:`DescriptionSourceRecord` for
+    audit. This runtime-facing row retains hashes and IDs but has no raw path
+    dependency.
+    """
+
+    schema_version: Literal["sami_canonical_description_v1"]
+    record_id: Annotated[str, Field(min_length=1)]
+    parent_id: Annotated[str, Field(min_length=1)]
+    source_key: Literal["mmrs_1m", "rsgpt"]
+    component: Literal["rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval"]
+    role: Literal["global_caption", "region_short_phrase"]
+    split_policy: Literal["train_candidate", "permanent_test_only"]
+    split: Literal["train", "val", "test"]
+    image_ref: ArtifactRef
+    valid_mask_ref: ArtifactRef
+    source_image_sha256: Sha256
+    source_record_sha256: Sha256
+    answers: tuple[CanonicalLanguageAnswer, ...]
+    region_box_half_open: HalfOpenBox | None
+    training_eligible: bool
+
+    @field_validator("region_box_half_open")
+    @classmethod
+    def optional_region_box_is_half_open(cls, value: HalfOpenBox | None) -> HalfOpenBox | None:
+        """Validate a present DIOR box in reference-pixel coordinates."""
+
+        return None if value is None else validate_half_open_box(value)
+
+    @model_validator(mode="after")
+    def canonical_role_and_split_are_closed(self) -> Self:
+        """Reject detailed-DIOR drift and permanent-test leakage."""
+
+        if not self.answers:
+            raise ValueError("canonical description record requires at least one answer")
+        is_region = self.role == "region_short_phrase"
+        if is_region != (self.component == "dior_rsvg"):
+            raise ValueError("DIOR-RSVG is the sole canonical region-short-phrase component")
+        if is_region != (self.region_box_half_open is not None):
+            raise ValueError("canonical region-short-phrase rows require one reference box")
+        if self.component == "rsieval" and self.split_policy != "permanent_test_only":
+            raise ValueError("canonical RSIEval rows must remain permanent test-only")
+        if self.split_policy == "permanent_test_only" and self.split != "test":
+            raise ValueError("permanent-test language rows must be assigned to test")
+        if self.training_eligible and self.split_policy == "permanent_test_only":
+            raise ValueError("permanent-test language rows cannot be training eligible")
+        return self
+
+
+__all__ = [
+    "CanonicalDescriptionRecord",
+    "CanonicalLanguageAnswer",
+    "DescriptionSourceRecord",
+    "LanguageAnswer",
+    "LanguageImageRef",
+]

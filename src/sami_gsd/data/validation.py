@@ -9,12 +9,13 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
-from sami_gsd.contracts.canonical import CanonicalParentV3, TaskViewV3
-from sami_gsd.contracts.language import DescriptionSourceRecord
+from sami_gsd.contracts.canonical import CanonicalParentV3, LicenseRecord, TaskViewV3
+from sami_gsd.contracts.language import CanonicalDescriptionRecord, DescriptionSourceRecord
+from sami_gsd.data.transforms import forward_box, quantize_covering_box
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
-VALIDATION_VERSION = "sami_benchmark_validation_v1"
+VALIDATION_VERSION = "sami_benchmark_validation_v2_language_parent_replay"
 
 
 def _strict_json(text: str) -> Any:
@@ -71,7 +72,11 @@ def validate_benchmark_payload(
         "manifests/duplicate_clusters.jsonl",
         "manifests/evaluation_conditions.json",
         "manifests/description_source_subset.jsonl",
-        "manifests/description_train_eligible.jsonl",
+        "descriptions/all.jsonl",
+        "descriptions/train.jsonl",
+        "descriptions/val.jsonl",
+        "descriptions/test.jsonl",
+        "descriptions/train_eligible.jsonl",
         "parents/all.jsonl",
         "parents/train.jsonl",
         "parents/val.jsonl",
@@ -91,6 +96,7 @@ def validate_benchmark_payload(
             "validator_version": VALIDATION_VERSION,
             "parent_count": 0,
             "task_count": 0,
+            "canonical_description_count": 0,
             "verified_duplicate_cross_split_count": 0,
             "training_eligible_unknown_count": 0,
             "errors": sorted(errors),
@@ -101,8 +107,12 @@ def validate_benchmark_payload(
 
     parent_schema = _strict_json((schemas_root / "canonical_parent_v3.schema.json").read_text(encoding="utf-8"))
     task_schema = _strict_json((schemas_root / "task_view_v3.schema.json").read_text(encoding="utf-8"))
+    description_schema = _strict_json(
+        (schemas_root / "canonical_description_v1.schema.json").read_text(encoding="utf-8")
+    )
     parent_validator = Draft202012Validator(parent_schema)
     task_validator = Draft202012Validator(task_schema)
+    description_validator = Draft202012Validator(description_schema)
 
     raw_parents = _read_jsonl(benchmark_root / "parents/all.jsonl")
     parents: list[CanonicalParentV3] = []
@@ -207,6 +217,23 @@ def validate_benchmark_payload(
 
     registry = yaml.safe_load((benchmark_root / "manifests/source_registry.yaml").read_text(encoding="utf-8"))
     entries = registry.get("entries", []) if isinstance(registry, dict) else []
+    registry_licenses: dict[str, LicenseRecord] = {}
+    registry_roles: dict[str, set[str]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            errors.append("invalid_source_registry_entry")
+            continue
+        try:
+            source_key = str(entry.get("source_key"))
+            registry_licenses[source_key] = LicenseRecord.model_validate(
+                {name: entry.get(name) for name in LicenseRecord.model_fields}
+            )
+            allowed_roles = entry.get("allowed_task_roles")
+            if not isinstance(allowed_roles, list) or not all(isinstance(role, str) for role in allowed_roles):
+                raise ValueError("allowed_task_roles must be a string array")
+            registry_roles[source_key] = set(allowed_roles)
+        except Exception as error:
+            errors.append(f"invalid_source_registry_license:{entry.get('source_key', 'unknown')}:{error}")
     violations = [
         entry.get("source_key", "unknown")
         for entry in entries
@@ -221,27 +248,168 @@ def validate_benchmark_payload(
     errors.extend(f"training_eligible_unknown:{key}" for key in violations)
 
     description_rows = _read_jsonl(benchmark_root / "manifests/description_source_subset.jsonl")
-    train_description_rows = _read_jsonl(benchmark_root / "manifests/description_train_eligible.jsonl")
     descriptions: list[DescriptionSourceRecord] = []
     for index, payload in enumerate(description_rows):
         try:
-            descriptions.append(DescriptionSourceRecord.model_validate(payload))
+            description = DescriptionSourceRecord.model_validate(payload)
+            descriptions.append(description)
+            if registry_licenses.get(description.source_key) != description.license:
+                errors.append(f"description_source_license_mismatch:{description.record_id}")
+            should_materialize = description.training_eligible or (
+                description.split_policy == "permanent_test_only"
+                and description.license.allowed_for_evaluation
+            )
+            role = "language_region" if description.role == "region_short_phrase" else "language_global"
+            if should_materialize and role not in registry_roles.get(description.source_key, set()):
+                errors.append(f"description_source_role_not_allowed:{description.record_id}")
+            if should_materialize and (
+                description.license.license_status == "unknown"
+                or description.license.license_name.lower() == "unknown"
+                or description.license.reviewed_by is None
+                or description.license.review_date is None
+            ):
+                errors.append(f"description_source_license_unreviewed:{description.record_id}")
         except Exception as error:
             errors.append(f"invalid_description_source:{index}:{error}")
+
+    canonical_description_rows = _read_jsonl(benchmark_root / "descriptions/all.jsonl")
+    canonical_descriptions: list[CanonicalDescriptionRecord] = []
+    for index, payload in enumerate(canonical_description_rows):
+        try:
+            description_validator.validate(payload)
+            canonical_descriptions.append(CanonicalDescriptionRecord.model_validate(payload))
+        except Exception as error:
+            errors.append(f"invalid_canonical_description:{index}:{error}")
+        image_path = payload.get("image_ref", {}).get("path") if isinstance(payload.get("image_ref"), dict) else None
+        valid_path = (
+            payload.get("valid_mask_ref", {}).get("path")
+            if isinstance(payload.get("valid_mask_ref"), dict)
+            else None
+        )
+        if any(isinstance(path, str) and path.startswith("datasets/") for path in (image_path, valid_path)):
+            errors.append(f"canonical_description_raw_path_dependency:{index}")
+    canonical_ids = [record.record_id for record in canonical_descriptions]
+    if len(canonical_ids) != len(set(canonical_ids)):
+        errors.append("duplicate_canonical_description_id")
+    source_by_id = {record.record_id: record for record in descriptions}
+    expected_materialized_ids = {
+        record.record_id
+        for record in descriptions
+        if record.training_eligible
+        or (record.split_policy == "permanent_test_only" and record.license.allowed_for_evaluation)
+    }
+    if set(canonical_ids) != expected_materialized_ids:
+        errors.append("canonical_description_materialization_projection_mismatch")
+    for record in canonical_descriptions:
+        source = source_by_id.get(record.record_id)
+        parent = parent_by_id.get(record.parent_id)
+        if source is None:
+            errors.append(f"canonical_description_source_missing:{record.record_id}")
+            continue
+        if parent is None:
+            errors.append(f"canonical_description_parent_missing:{record.record_id}")
+            continue
+        modality = next(
+            (
+                item
+                for item in parent.modalities
+                if item.modality_id == parent.reference_canvas.reference_modality_id
+            ),
+            None,
+        )
+        if modality is None or modality.aligned_asset_path is None or modality.valid_mask_path is None:
+            errors.append(f"canonical_description_parent_assets_missing:{record.record_id}")
+            continue
+        expected_answers = [
+            {
+                "source_answer_id": answer.answer_id,
+                "text": answer.text,
+                "annotation_origin": answer.annotation_origin,
+                "source_index_sha256": answer.index_sha256,
+            }
+            for answer in source.answers
+        ]
+        if [answer.model_dump(mode="json") for answer in record.answers] != expected_answers:
+            errors.append(f"canonical_description_answer_projection_mismatch:{record.record_id}")
+        if (
+            record.source_key != source.source_key
+            or record.component != source.component
+            or record.role != source.role
+            or record.split_policy != source.split_policy
+            or record.training_eligible != source.training_eligible
+            or record.source_image_sha256 != source.image.sha256
+            or record.source_record_sha256
+            != sha256_bytes(canonical_json_bytes(source.model_dump(mode="json")))
+        ):
+            errors.append(f"canonical_description_source_projection_mismatch:{record.record_id}")
+        if record.split != parent.split or parent.source.dataset != source.source_key:
+            errors.append(f"canonical_description_parent_split_or_source_mismatch:{record.record_id}")
+        if parent.annotations.global_landslide_mask is not None or parent.annotations.global_target_status != "unknown":
+            errors.append(f"language_parent_fabricated_spatial_target:{record.parent_id}")
+        if (
+            record.image_ref.path != modality.aligned_asset_path
+            or record.image_ref.sha256 != modality.hashes.get("aligned")
+            or record.valid_mask_ref.path != modality.valid_mask_path
+            or record.valid_mask_ref.sha256 != modality.hashes.get("valid")
+        ):
+            errors.append(f"canonical_description_asset_binding_mismatch:{record.record_id}")
+        for reference in (record.image_ref, record.valid_mask_ref):
+            physical = benchmark_root / reference.path
+            if not physical.is_file() or sha256_file(physical) != reference.sha256:
+                errors.append(f"canonical_description_asset_hash_mismatch:{record.record_id}:{reference.path}")
+        expected_box = None
+        if source.normalized_box_xyxy is not None:
+            original_h, original_w = parent.reference_canvas.original_hw
+            source_box = (
+                source.normalized_box_xyxy[0] * original_w,
+                source.normalized_box_xyxy[1] * original_h,
+                source.normalized_box_xyxy[2] * original_w,
+                source.normalized_box_xyxy[3] * original_h,
+            )
+            expected_box = quantize_covering_box(
+                forward_box(source_box, parent.reference_canvas.transform_chain),
+                parent.reference_canvas.canvas_hw,
+            )
+        if record.region_box_half_open != expected_box:
+            errors.append(f"canonical_description_box_projection_mismatch:{record.record_id}")
+
+    for split in ("train", "val", "test"):
+        rows = _read_jsonl(benchmark_root / f"descriptions/{split}.jsonl")
+        expected = [
+            record.model_dump(mode="json")
+            for record in canonical_descriptions
+            if record.split == split
+        ]
+        if rows != expected:
+            errors.append(f"canonical_description_split_projection_mismatch:{split}")
+    train_description_rows = _read_jsonl(benchmark_root / "descriptions/train_eligible.jsonl")
     expected_train = [
         record.model_dump(mode="json")
-        for record in descriptions
-        if record.training_eligible and record.split_policy != "permanent_test_only"
+        for record in canonical_descriptions
+        if record.training_eligible and record.split == "train"
     ]
     if train_description_rows != expected_train:
         errors.append("description_train_projection_mismatch")
-    if train_description_rows:
-        errors.append("training_description_assets_not_materialized_as_canonical_parents")
+
+    description_by_parent: dict[str, list[CanonicalDescriptionRecord]] = {}
+    for record in canonical_descriptions:
+        description_by_parent.setdefault(record.parent_id, []).append(record)
+    for row in duplicate_rows:
+        members = row.get("parent_ids", [])
+        if any(
+            record.component == "rsieval"
+            for parent_id in members
+            for record in description_by_parent.get(parent_id, [])
+        ) and any(parent_by_id[parent_id].split != "test" for parent_id in members if parent_id in parent_by_id):
+            errors.append(f"rsieval_duplicate_cluster_not_test:{row.get('cluster_id', 'unknown')}")
 
     if not parents:
         errors.append("small_has_no_canonical_parents")
-    if not any(parent.license.allowed_for_training for parent in parents):
-        errors.append("small_has_no_training_eligible_parent")
+    if not any(
+        parent.license.allowed_for_training and parent.annotations.global_landslide_mask is not None
+        for parent in parents
+    ):
+        errors.append("small_has_no_training_eligible_spatial_parent")
     for task_type in ("t3_gt_region", "t4_predicted_region"):
         if not any(task.task_type == task_type for task in tasks):
             warnings.append(f"task_view_empty_until_bound_inputs:{task_type}")
@@ -251,6 +419,7 @@ def validate_benchmark_payload(
         "validator_version": VALIDATION_VERSION,
         "parent_count": len(parents),
         "task_count": len(tasks),
+        "canonical_description_count": len(canonical_descriptions),
         "verified_duplicate_cross_split_count": cross_split,
         "training_eligible_unknown_count": len(violations),
         "errors": sorted(set(errors)),

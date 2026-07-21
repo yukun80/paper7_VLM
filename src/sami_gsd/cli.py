@@ -86,6 +86,7 @@ def _run_data_build(arguments: argparse.Namespace) -> int:
         description_records=description_records,
         output_dir=benchmark_root / config.benchmark_relative_path,
         schemas_root=_repository_root() / "schemas",
+        datasets_root=datasets_root,
     )
     print(json.dumps(manifest, allow_nan=False, ensure_ascii=False, sort_keys=True))
     return 0

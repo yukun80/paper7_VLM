@@ -6,9 +6,11 @@
 
 P1 的 schema、只读扫描、reference canvas、可逆 transform、HDF5/NetCDF/GeoTIFF 元数据、原子
 materialization、valid/padding/nodata、parent group split、SHA/dHash/RGB64-MAE duplicate、T1--T4、
-冻结 description subset、validator、summary 和 repeat-hash 工程链路均已实现。合成 Small 两次完整
-构建 byte-stable，独立 validation replay 为 `errors=[]`；真实 Small 仍被数据许可证人工门禁阻止，
-不得把合成工程验收报告成 P1 正式完成。
+冻结 description subset、canonical language parent、validator、summary 和 repeat-hash 工程链路均已
+实现。获批语言图片按 `source_key + exact image SHA` 只物化一次；caption/DIOR short phrase 绑定
+同一 parent，RSIEval 的永久 test 身份沿 verified duplicate connected component 传播。合成 Small
+两次完整构建 byte-stable，独立 validation replay 为 `errors=[]`；真实 Small 仍被数据许可证人工
+门禁阻止，不得把合成工程验收报告成 P1 正式完成。
 
 本文件后部的 Multi-Source Qwen-PSALM-Seg/Benchmark v2 命令暂时保留为只读 legacy baseline
 运行记录，不属于 greenfield runtime。新代码不读取旧 benchmark、cache、config 或 checkpoint；
@@ -54,8 +56,8 @@ sami-gsd data audit \
 
 真实 Small 正式构建命令如下，但当前不得运行：配置中的九个 source 仍全部
 `allowed_for_training=false`，命令会在 raw decode 和任何输出写入前 fail closed。项目 owner 必须先
-逐 source 填写受审 license evidence、`reviewed_by`、`review_date` 和允许的 task role；不得仅把布尔值
-改为 true。
+逐 source 填写受审 license evidence、`reviewed_by`、`review_date` 和允许的 task role；空间源需显式
+允许 `t1`/`t2`，语言源需分别允许 `language_global`/`language_region`。不得仅把布尔值改为 true。
 
 ```bash
 sami-gsd data build --config configs/benchmark_v3_small.yaml
@@ -88,6 +90,10 @@ sampled、2 个 blocked、14 个 audit candidate、0 个 materialization-eligibl
 混合 PNG/TIFF、Landslide4Sense HDF5 和 multimodal GeoTIFF 现有显式元数据投影；InSAR 无 units/sign
 时仍禁止定量解释。MMRS 只读五个 caption component 与 DIOR short phrase，RSGPT 只读 RSICap 和
 永久 test-only RSIEval；`total.json`、classification、detection、VQA、infrared 和无关 SAR 均不读。
+未获批语言行只保留在 `manifests/description_source_subset.jsonl`，不会解码或复制 raw image；获批行
+进入 `descriptions/{all,train,val,test,train_eligible}.jsonl`，其中运行时 image/valid 引用只指向
+Benchmark 内 `assets/...`，原始 `datasets/...` 路径仅留在审计 provenance。DIOR box 被转换为
+reference-pixel half-open 坐标，但没有 mask 时不会伪造 T2 监督。
 连续工程状态见 `docs/reports/p1/p1_continuous_engineering_status.json`。这不是许可证批准、真实
 Small build 或 P1 acceptance。
 

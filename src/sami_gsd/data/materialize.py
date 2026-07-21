@@ -30,6 +30,8 @@ from sami_gsd.contracts.canonical import (
     SourceIdentity,
     TransformStep,
 )
+from sami_gsd.contracts.language import DescriptionSourceRecord
+from sami_gsd.data.adapters.formats import read_image_header
 from sami_gsd.data.transforms import (
     build_transform_chain,
     crop_step,
@@ -41,7 +43,7 @@ from sami_gsd.data.transforms import (
 from sami_gsd.utilities.artifacts import atomic_write_bytes, canonical_json_bytes, sha256_bytes
 
 
-MATERIALIZER_VERSION = "sami_canonical_materializer_v1"
+MATERIALIZER_VERSION = "sami_canonical_materializer_v2_spatial_and_language_parents"
 
 
 class MaterializationError(ValueError):
@@ -109,6 +111,25 @@ class MaterializedParent:
     valid_pixel_count: int
     excluded_pixel_count: int
     positive_valid_pixel_count: int
+
+
+@dataclass(frozen=True)
+class LanguageParentInput:
+    """Exact-image language records resolved to one canonical visual parent."""
+
+    parent_id: str
+    records: tuple[DescriptionSourceRecord, ...]
+    raw_image_path: Path
+
+
+@dataclass(frozen=True)
+class MaterializedLanguageParent:
+    """One unlabeled canonical image parent shared by language targets."""
+
+    parent: CanonicalParentV3
+    source_record_ids: tuple[str, ...]
+    valid_pixel_count: int
+    excluded_pixel_count: int
 
 
 def _numpy() -> Any:
@@ -326,6 +347,207 @@ def _write_array(root: Path, logical_path: str, array: Any) -> ArtifactRef:
     content = _npy_bytes(array)
     atomic_write_bytes(root / logical_path, content)
     return ArtifactRef(path=logical_path, sha256=sha256_bytes(content))
+
+
+def _decode_language_rgb(path: Path, *, expected_hw: tuple[int, int]) -> tuple[Any, Any, str, bytes]:
+    """Decode one signature-checked PNG/JPEG without applying hidden geometry."""
+
+    np = _numpy()
+    try:
+        from PIL import Image
+    except ImportError as error:  # pragma: no cover - minimal installs
+        raise MaterializationError("language materialization requires the sami-groundsegdesc[data] extra") from error
+    header = read_image_header(path)
+    raw_bytes = path.read_bytes()
+    suffix = "png" if header.container == "png" else "jpg"
+    with Image.open(io.BytesIO(raw_bytes)) as image:
+        image.load()
+        if (image.height, image.width) != expected_hw or expected_hw != (header.height, header.width):
+            raise MaterializationError("language image grid differs from its frozen source record")
+        has_transparency = "A" in image.getbands() or "transparency" in image.info
+        if has_transparency:
+            rgba = np.asarray(image.convert("RGBA"), dtype="u1")
+            rgb = rgba[..., :3]
+            valid = (rgba[..., 3] > 0).astype("u1")
+        else:
+            rgb = np.asarray(image.convert("RGB"), dtype="u1")
+            valid = np.ones(expected_hw, dtype="u1")
+    if not valid.any():
+        raise MaterializationError("language reference image has zero valid coverage")
+    return rgb, valid, suffix, raw_bytes
+
+
+def materialize_language_parent(
+    source: LanguageParentInput,
+    *,
+    benchmark_root: Path,
+    canvas_hw: tuple[int, int],
+) -> MaterializedLanguageParent:
+    """Materialize one exact-image language parent without fabricating masks.
+
+    Caption and region-phrase targets are published separately after the
+    duplicate-connected parent split is frozen. This parent therefore remains
+    spatially unlabeled and cannot create T1/T2 supervision by itself.
+    """
+
+    records = tuple(sorted(source.records, key=lambda item: item.record_id))
+    if not records or len({record.record_id for record in records}) != len(records):
+        raise MaterializationError("language parent requires non-empty unique source records")
+    first = records[0]
+    if any(record.source_key != first.source_key for record in records):
+        raise MaterializationError("one language parent cannot combine source-license keys")
+    if any(record.image.sha256 != first.image.sha256 or record.image.native_hw != first.image.native_hw for record in records):
+        raise MaterializationError("language parent records must bind one exact source image")
+    if any(record.license != first.license for record in records):
+        raise MaterializationError("language parent records carry conflicting license snapshots")
+    if any(record.training_eligible for record in records) and not first.license.allowed_for_training:
+        raise MaterializationError("training language parent requires an approved training license")
+    if any(record.split_policy == "permanent_test_only" for record in records) and not first.license.allowed_for_evaluation:
+        raise MaterializationError("permanent-test language parent requires approved evaluation use")
+
+    rgb, native_valid, suffix, raw_bytes = _decode_language_rgb(
+        source.raw_image_path,
+        expected_hw=first.image.native_hw,
+    )
+    if sha256_bytes(raw_bytes) != first.image.sha256:
+        raise MaterializationError("language image bytes changed after subset selection")
+    native, valid = _validate_arrays(rgb, native_valid, modality_id="reference_image")
+    original_hw = tuple(int(value) for value in native.shape[:2])
+    chain = build_fit_pad_transform(original_hw, canvas_hw)
+    inverse_chain = invert_fit_pad_transform(chain)
+    aligned = _apply_image(native, chain)
+    aligned_valid = _apply_binary(valid, chain)
+    aligned[aligned_valid == 0] = 0.0
+    parent_directory = f"assets/{source.parent_id}"
+    native_path = f"{parent_directory}/reference_image.native.{suffix}"
+    atomic_write_bytes(benchmark_root / native_path, raw_bytes)
+    native_ref = ArtifactRef(path=native_path, sha256=first.image.sha256)
+    aligned_ref = _write_array(
+        benchmark_root,
+        f"{parent_directory}/reference_image.aligned.npy",
+        aligned,
+    )
+    valid_ref = _write_array(
+        benchmark_root,
+        f"{parent_directory}/reference_image.valid.npy",
+        aligned_valid,
+    )
+    valid_count = int(aligned_valid.sum())
+    total_count = int(aligned_valid.size)
+    coverage = float(valid_count / total_count)
+    availability = "present_valid" if coverage == 1.0 else "present_partial_valid"
+    source_record_sha256 = sha256_bytes(
+        canonical_json_bytes([record.model_dump(mode="json") for record in records])
+    )
+    source_paths = tuple(
+        sorted(
+            {record.image.logical_path for record in records}
+            | {answer.index_logical_path for record in records for answer in record.answers}
+        )
+    )
+    modality = ModalityRecord(
+        modality_id="reference_image",
+        family="optical",
+        sensor="source-rendered-optical",
+        product_type="rendered-remote-sensing-rgb",
+        band_names=("R", "G", "B"),
+        band_metadata=tuple(
+            BandMetadata(name=name, wavelength_nm=None, polarization=None, units=None)
+            for name in ("R", "G", "B")
+        ),
+        orbit=None,
+        acquisition_time=None,
+        time_range=None,
+        native_gsd_m=None,
+        aligned_gsd_m=None,
+        units=None,
+        signed=False,
+        sign_convention=None,
+        normalization=NormalizationRecord(method="none", parameters={}, statistics_source=None),
+        quality=QualityRecord(
+            status="usable",
+            flags=() if coverage == 1.0 else ("transparent_pixels_excluded",),
+            notes=None,
+        ),
+        availability_status=availability,
+        valid_coverage=coverage,
+        native_asset_path=native_ref.path,
+        aligned_asset_path=aligned_ref.path,
+        valid_mask_path=valid_ref.path,
+        source_to_reference_transform=chain,
+        reference_to_source_transform=inverse_chain,
+        alignment_status="reference",
+        render_policy=RenderPolicy(mode="rgb", channels=("R", "G", "B"), clip_percentiles=None),
+        hashes={
+            "source": first.image.sha256,
+            "native": native_ref.sha256,
+            "aligned": aligned_ref.sha256,
+            "valid": valid_ref.sha256,
+        },
+    )
+    parent = CanonicalParentV3(
+        schema_version="sami_canonical_parent_v3",
+        parent_id=source.parent_id,
+        source=SourceIdentity(
+            dataset=first.source_key,
+            record_id=f"language-image/{first.image.sha256}",
+            scene_id=None,
+            event_id=None,
+            region_id=None,
+            source_group_id=f"language/{first.source_key}/{first.image.sha256}",
+        ),
+        split="audit",
+        reference_canvas=ReferenceCanvas(
+            reference_modality_id="reference_image",
+            coordinate_space="reference_pixel_half_open",
+            original_hw=original_hw,
+            canvas_hw=canvas_hw,
+            valid_mask_path=valid_ref.path,
+            transform_chain=chain,
+            inverse_transform_available=True,
+            crs=None,
+            geotransform=None,
+        ),
+        modalities=(modality,),
+        annotations=AnnotationRecord(
+            global_landslide_mask=None,
+            global_mask_origin=None,
+            global_target_status="unknown",
+            referring_regions=(),
+            no_target_eligibility=False,
+            region_fact_refs=(),
+        ),
+        provenance=ProvenanceRecord(
+            source_registry_key=first.source_key,
+            source_paths=source_paths,
+            source_record_sha256=source_record_sha256,
+            scanner_version=MATERIALIZER_VERSION,
+            derivation_steps=(
+                "decode_selected_png_or_jpeg_without_geometry_inference",
+                "convert_source_render_to_rgb",
+                "fit_inside_reference_canvas",
+                "bilinear_image_nearest_valid",
+                "zero_padding_excluded",
+            ),
+        ),
+        license=first.license,
+        hashes=HashRecord(
+            source_record_sha256=source_record_sha256,
+            assets={
+                "reference_image.native": native_ref.sha256,
+                "reference_image.aligned": aligned_ref.sha256,
+                "reference_image.valid": valid_ref.sha256,
+            },
+        ),
+        annotation_status="unlabeled",
+    )
+    canonical_json_bytes(parent.model_dump(mode="json"))
+    return MaterializedLanguageParent(
+        parent=parent,
+        source_record_ids=tuple(record.record_id for record in records),
+        valid_pixel_count=valid_count,
+        excluded_pixel_count=total_count - valid_count,
+    )
 
 
 def _bbox_from_mask(mask: Any) -> tuple[int, int, int, int]:
@@ -579,14 +801,17 @@ def materialize_spatial_parent(
 
 
 __all__ = [
+    "LanguageParentInput",
     "MATERIALIZER_VERSION",
     "MaterializationError",
+    "MaterializedLanguageParent",
     "MaterializedParent",
     "SourceModalityInput",
     "SourceReferringInput",
     "SpatialParentInput",
     "build_fit_pad_transform",
     "invert_fit_pad_transform",
+    "materialize_language_parent",
     "materialize_spatial_parent",
     "transform_geotransform",
 ]
