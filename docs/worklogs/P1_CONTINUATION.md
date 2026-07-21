@@ -5,6 +5,7 @@
 - Formal phase: `P1`
 - Status: `engineering_accepted`
 - Completion date: 2026-07-21
+- Completion implementation/report commit: `ea066c90b0f31b67f8fe759c4e2beacdfc7e6e89`
 - Formal report: `docs/reports/p1/p1_completion_report.json`
 - Formal handoff: `docs/handoffs/P1.md`
 - No physical legacy deletion; no push.

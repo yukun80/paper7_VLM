@@ -4,7 +4,7 @@
 - Date: 2026-07-21
 - Owners: project maintainer
 - Phase: P1
-- Commit: pending P1 completion commit
+- Commit: `ea066c90b0f31b67f8fe759c4e2beacdfc7e6e89`
 - Supersedes: the raw-data license/authorization gate clauses of ADR-0001 only
 
 ## Context
