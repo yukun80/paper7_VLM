@@ -3,8 +3,9 @@
 ## Current status
 
 - phase: P1
-- phase_status: `in_progress`
-- completed_subtask: `P1.3` (`engineering_passed`)
+- phase_status: `blocked_on_human_data_license_gate`
+- completed_internal_checkpoint: complete P1 engineering pipeline through synthetic Small acceptance (`engineering_passed`)
+- active_internal_work_package: real Small license preflight and canonical build
 - current_branch: `refactor/sami-groundsegdesc`
 - p1_3_implementation_commit: `de64ddf33474d59e796831d1f2b6d7b0abd09e46`
 - p1_3_handoff_commit: `273a4a03294338a7e4a382b89f2bab1b0361dff2`
@@ -15,19 +16,40 @@
 - p0_acceptance_commit: `52c93b3a77635c82eb591850e758d3333482d4b1`
 - baseline_tag: verified `pre-sami-rewrite-2026-07-20` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
 - baseline_branch: verified `baseline/sane-qmef-pmrd-mgrr` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
-- dirty_worktree: no after the P1.3 final progress-cursor commit; verify live status before P1.4
+- dirty_worktree_at_resume: no at `88b75098bbd5ffa37507bc8dfec0215af713348b`
 - task_spec_version: SHA-256 `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b`
 - active_adr: `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`)
 
-P1 remains `in_progress`. P1.3 accounts for all nine configured sources and freezes an audit-only
-SourceAdapter boundary, but it does not approve any source license, materialize Canonical Parent v3,
-or build the Small benchmark.
+P1 remains the only formal execution unit. Internal labels previously written as P1.1--P1.3 are
+implementation checkpoints only: they are not phases, acceptance points, handoffs or reasons to
+wait for another user task. All planned engineering work packages now have implementations and focused
+tests, including an atomic synthetic Small build whose independent replay has `errors=[]`. The real
+Small benchmark was not built: all nine live source registry rows remain
+`allowed_for_training=false`, so the formal build preflight stops before raw decode or output writes.
+This is the explicit `license unknown for requested training source` human stop condition, not an
+internal checkpoint stop and not P1 completion.
 
-## Objective
+## Current continuous-P1 evidence
 
-Perform a sample-bounded, read-only live structure audit for all configured sources; introduce one
-deterministic, duplicate-free SourceAdapter registry; and project only unambiguous sampled layouts
-into strict raw records and audit-only canonical candidates without a legacy fallback.
+- complete focused regression: 52/52 passed in `qwen3vl`;
+- live bounded registry audit: 9 present, 7 sampled, 2 blocked, 14 audit candidates, 0 eligible,
+  `errors=[]`;
+- repeated live aggregate SHA-256:
+  `4e2edbe2549313db49bb8e97144f0d6f2429d2aa0dadaddcdb1977f4f44c54fc`;
+- synthetic end-to-end Small: two independent builds have identical aggregate hashes; independent
+  validator replay has `errors=[]`, cross-split verified duplicates 0 and training-eligible unknown 0;
+- real preflight: `SourceLoadingError: no training-eligible spatial source; approve exact source
+  license evidence before a formal Small build`;
+- status report: `docs/reports/p1/p1_continuous_engineering_status.json`.
+- exact human decision form: `docs/audits/p1_human_data_license_decision_request.md`.
+
+## Active objective
+
+Continue the frozen P1 sequence from the completed bounded source audit through source metadata and
+grouping closure, materialization, valid-mask propagation, parent split, duplicate clustering,
+T1--T4 expansion, the frozen description subset, validation, deterministic rebuild hashing and
+Small acceptance. Internal checkpoints are recorded in `docs/worklogs/P1_CONTINUATION.md` and do
+not interrupt execution.
 
 ## Scope for P1.3
 
@@ -131,44 +153,36 @@ into strict raw records and audit-only canonical candidates without a legacy fal
 
 ## Blockers
 
-- All nine source licenses remain `allowed_for_training=false`; Codex made no eligibility decision.
-- Sen12 needs a single/contemporaneous time-selection and supervision policy consistent with the frozen scope.
-- Landslide4Sense and multimodal sources need reviewed raster metadata dependencies, valid/nodata projection,
-  authoritative band/physical-field evidence, and license closure.
-- GDCLD/LMHLD need leakage-safe original scene/source-group identities; GDCLD mixed TIFF coverage is incomplete.
-- P1 still lacks materialization, group split, duplicates, task/language views, validator, summary and real Small acceptance.
+- All nine live source licenses remain `allowed_for_training=false`; Codex made no eligibility decision.
+- Sen12 engineering is now resolved to annotated S2/ASC/DSC triplets and one event-nearest acquisition per
+  modality within a 30-day window, with no paired change input. Human approval of its CC-BY-4.0 plus
+  Sentinel/Copernicus/DEM obligations is still required before training use.
+- MMRS components and restricted RSGPT remain audit-only until separate component/owner decisions.
+- GDCLD, LMHLD, Landslide4Sense and derived LandslideBench also retain grouping/provenance and/or license blockers.
+- P1 lacks only a licensed real Small build, its second deterministic build, and final real acceptance reports.
 
-## Human action required
+## Human gate required before execution can continue
 
-- Confirm or revise the P1.4 bundle in `docs/handoffs/P1.md`.
-- Provide or approve exact source license evidence before any training-eligible record is permitted.
+- Approve exact source-by-source license evidence and permitted task roles before any training-eligible record.
+- The narrowest ready path is an explicit owner decision on Sen12Landslides research training/evaluation and
+  redistribution policy, including required Sentinel, Copernicus and DEM attribution.
 - Do not treat audit candidate availability as data-use authorization.
 - No deletion or push action is required.
 
-## Next exact command
-
-Optional reproduction of the completed P1.3 regression:
+## Resume command after the human license decision is recorded
 
 ```bash
-conda run -n qwen3vl env PYTHONPATH=src python -B -m unittest discover -s tests/p1 -v
+sami-gsd data build --config configs/benchmark_v3_small.yaml
 ```
 
-The next code change requires confirmation of the P1.4 bundle in `docs/handoffs/P1.md`.
-
-## Next phase scope
-
-- proposed subtask: P1.4 remaining spatial-source metadata adapters and canonical dry-run materializer
-- close or explicitly block temporal/raster/grouping contracts for GDCLD, LMHLD, Sen12,
-  Landslide4Sense and multimodal sources
-- materialize only into temporary/synthetic or audit-only dry-run targets; no accepted Small overwrite
-- prepare exact human license decision records; never self-approve training eligibility
-- do not split, deduplicate, expand tasks, start P2 or delete legacy paths
+Do not run it against the unchanged registry: it is expected to fail closed. The next formal phase and
+formal P1 handoff remain unset until two real Small builds and all P1 gates pass.
 
 ## Known technical debt
 
-- The current source adapters intentionally cover only sampled, unambiguous layout subsets.
-- JPEG/PNG and NPY metadata readers are dependency-free; HDF5/NetCDF/GeoTIFF readers need an explicit
-  greenfield dependency decision and equivalence tests.
-- GDCLD TIFF scenes and mixed train containers are not materialized.
-- Candidate records are not Canonical Parent v3 and cannot enter training.
-- P1 acceptance remains blocked by human data-license decisions and later construction stages.
+- Live audit adapters intentionally remain sample-bounded; formal materialization is currently connected only
+  to the resolved Sen12 source loader.
+- Training-language image materialization remains fail-closed; selected MMRS/RSGPT records are audit-only while
+  their component licenses are unapproved.
+- Unknown/group-ambiguous candidates remain audit-only and cannot enter training.
+- P1 acceptance remains blocked by the human data-license decision and the resulting real Small construction.
