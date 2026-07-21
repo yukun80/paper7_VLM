@@ -4,7 +4,7 @@
   "status": "engineering_accepted",
   "completion_date": "2026-07-21",
   "branch": "refactor/sami-groundsegdesc",
-  "implementation_report_commit": "pending_local_commit",
+  "implementation_report_commit": "12cf7123060574766f681f8a987f962ae74990dd",
   "push_performed": false,
   "inputs": {
     "benchmark_relative_path": "sami_landslide_v3/small",

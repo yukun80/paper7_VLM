@@ -6,7 +6,7 @@
 - phase_status: `engineering_accepted`
 - phase_completion_date: `2026-07-21`
 - current_branch: `refactor/sami-groundsegdesc`
-- completion_implementation_report_commit: `pending_local_commit`
+- completion_implementation_report_commit: `12cf7123060574766f681f8a987f962ae74990dd`
 - push_performed: `false`
 - active_adrs:
   - `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`, raw-data clauses amended)
