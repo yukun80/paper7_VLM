@@ -7,6 +7,8 @@
 - completed_internal_checkpoint: complete P1 engineering pipeline through synthetic Small acceptance (`engineering_passed`)
 - active_internal_work_package: real Small license preflight and canonical build
 - current_branch: `refactor/sami-groundsegdesc`
+- p1_continuous_engineering_commit: `c83c11a833f8fec12c8dbc46fbc54ee0fdff7c2c`
+- p1_human_license_gate_docs_commit: `430a9cc70f3ae23256a43e4d4ea6eb8ef79c825d`
 - p1_3_implementation_commit: `de64ddf33474d59e796831d1f2b6d7b0abd09e46`
 - p1_3_handoff_commit: `273a4a03294338a7e4a382b89f2bab1b0361dff2`
 - p1_2_implementation_commit: `ac4be61e6fd994408934885095563311b9e43ebe`
@@ -16,7 +18,7 @@
 - p0_acceptance_commit: `52c93b3a77635c82eb591850e758d3333482d4b1`
 - baseline_tag: verified `pre-sami-rewrite-2026-07-20` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
 - baseline_branch: verified `baseline/sane-qmef-pmrd-mgrr` -> `0c53624dd93159f78acd6d39a579b100d7e3255f`
-- dirty_worktree_at_resume: no at `88b75098bbd5ffa37507bc8dfec0215af713348b`
+- dirty_worktree_after_gate_docs_commit: no at `430a9cc70f3ae23256a43e4d4ea6eb8ef79c825d`
 - task_spec_version: SHA-256 `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b`
 - active_adr: `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`)
 

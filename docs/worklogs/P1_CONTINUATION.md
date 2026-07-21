@@ -14,6 +14,8 @@
 - Branch: `refactor/sami-groundsegdesc`
 - Resume HEAD: `88b75098bbd5ffa37507bc8dfec0215af713348b`
 - Worktree at resume: clean
+- Continuous engineering commit: `c83c11a833f8fec12c8dbc46fbc54ee0fdff7c2c`
+- Human license-gate documentation commit: `430a9cc70f3ae23256a43e4d4ea6eb8ef79c825d`
 - Governing task-spec SHA-256:
   `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b`
 - P1.3-named historical report (internal checkpoint only):
