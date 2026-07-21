@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sami-groundsegdesc.local/schemas/canonical_description_v2.schema.json",
-  "title": "SAMI Canonical Description v2 Component-License-Bound",
+  "$id": "https://sami-groundsegdesc.local/schemas/canonical_description_v3.schema.json",
+  "title": "SAMI Canonical Description v3 Provenance-Bound",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,8 +10,7 @@
     "parent_id",
     "source_key",
     "component",
-    "component_license_key",
-    "component_license_sha256",
+    "component_key",
     "role",
     "split_policy",
     "split",
@@ -21,19 +20,18 @@
     "source_record_sha256",
     "answers",
     "region_box_half_open",
-    "training_eligible"
+    "is_train_candidate"
   ],
   "properties": {
-    "schema_version": {"const": "sami_canonical_description_v2_component_license_bound"},
+    "schema_version": {"const": "sami_canonical_description_v3_provenance_bound"},
     "record_id": {"type": "string", "minLength": 1},
     "parent_id": {"type": "string", "minLength": 1},
     "source_key": {"enum": ["mmrs_1m", "rsgpt"]},
     "component": {"enum": ["rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval"]},
-    "component_license_key": {
+    "component_key": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$"
     },
-    "component_license_sha256": {"$ref": "#/$defs/sha256"},
     "role": {"enum": ["global_caption", "region_short_phrase"]},
     "split_policy": {"enum": ["train_candidate", "permanent_test_only"]},
     "split": {"enum": ["train", "val", "test"]},
@@ -49,7 +47,7 @@
     "region_box_half_open": {
       "oneOf": [{"type": "null"}, {"$ref": "#/$defs/halfOpenBox"}]
     },
-    "training_eligible": {"type": "boolean"}
+    "is_train_candidate": {"type": "boolean"}
   },
   "allOf": [
     {
@@ -72,9 +70,13 @@
       "then": {
         "properties": {
           "split": {"const": "test"},
-          "training_eligible": {"const": false}
+          "is_train_candidate": {"const": false}
         }
       }
+    },
+    {
+      "if": {"properties": {"split_policy": {"const": "train_candidate"}}},
+      "then": {"properties": {"is_train_candidate": {"const": true}}}
     }
   ],
   "$defs": {

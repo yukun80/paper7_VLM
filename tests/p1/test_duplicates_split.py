@@ -14,6 +14,7 @@ from sami_gsd.contracts.config import DuplicateSettings, SplitSettings
 from sami_gsd.data.duplicates import build_duplicate_analysis
 from sami_gsd.data.materialize import materialize_spatial_parent
 from sami_gsd.data.split import SplitAssignmentError, apply_parent_splits, assign_parent_splits
+from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes
 from tests.p1.test_materialization import spatial_input
 
 
@@ -130,6 +131,54 @@ class DuplicateAndSplitTests(unittest.TestCase):
                     seed=42,
                     forced_splits={"a-parent": "train", "b-parent": "test"},
                 )
+
+    def test_coverage_rebalance_populates_all_splits_without_breaking_groups(self) -> None:
+        """A missing hash bucket moves whole unforced components deterministically."""
+
+        split_settings = SplitSettings(train=0.7, val=0.15, test=0.15)
+        parent_ids: list[str] = []
+        candidate_index = 0
+        while len(parent_ids) < 6:
+            parent_id = f"coverage-{candidate_index}"
+            fraction = int(
+                sha256_bytes(canonical_json_bytes({"seed": 42, "members": (parent_id,)}))[:16],
+                16,
+            ) / float(16**16)
+            if fraction < split_settings.train:
+                parent_ids.append(parent_id)
+            candidate_index += 1
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parents = tuple(
+                materialize_spatial_parent(
+                    parent_variant(parent_id, group_id=f"group-{parent_id}"),
+                    benchmark_root=root,
+                    canvas_hw=(8, 8),
+                ).parent
+                for parent_id in parent_ids
+            )
+            clusters = {parent.parent_id: f"unique-{parent.parent_id}" for parent in parents}
+            coverage = tuple(parent.parent_id for parent in parents)
+            assignment = assign_parent_splits(
+                parents,
+                duplicate_clusters=clusters,
+                settings=split_settings,
+                seed=42,
+                coverage_parent_ids=coverage,
+            )
+            repeated = assign_parent_splits(
+                tuple(reversed(parents)),
+                duplicate_clusters=clusters,
+                settings=split_settings,
+                seed=42,
+                coverage_parent_ids=tuple(reversed(coverage)),
+            )
+            self.assertEqual(set(assignment.parent_to_split.values()), {"train", "val", "test"})
+            self.assertTrue(any(
+                component["assignment_reason"] == "seeded_component_hash_coverage_rebalance"
+                for component in assignment.components
+            ))
+            self.assertEqual(assignment.aggregate_sha256, repeated.aggregate_sha256)
 
 
 if __name__ == "__main__":

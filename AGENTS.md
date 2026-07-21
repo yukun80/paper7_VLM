@@ -19,10 +19,25 @@ For every refactor task:
 - Do not introduce compatibility shims for legacy benchmarks, caches, configs, or class names.
 - Do not delete legacy code until the corresponding deletion gate is accepted.
 - Do not start long GPU training, paid API calls, full benchmark construction, or expert-review actions.
+- Within an explicitly authorized complete phase, internal work packages are not user approval points; continue
+  through them until phase acceptance or a documented human stop condition.
 - Update `REFACTOR_PROGRESS.md` and write a phase handoff before declaring completion.
 - Report actual commands, exit codes, tests, changed files, unresolved blockers, and required human actions.
 
 The current phase and subtask are supplied by the user task. Direct task instructions do not authorize work outside that scope.
+
+### Raw-data governance boundary
+
+- Canonical Benchmark builders perform technical/scientific validation, not legal review.
+- Local raw data supplied by the project owner enter P1 based on readability, parseability, research scope,
+  required supervision, reliable parent/group identity, split isolation, coordinates, valid regions and duplicate checks.
+- Do not query, infer or compare raw-data licenses in P0-P7. Do not add runtime permission fields, source approval
+  requests, component authorization tables or license-based validation/build gates.
+- Source/component metadata is limited to non-gating scientific provenance: `source_key`, `source_name`,
+  `source_root`, `source_document`, `citation_key`, `upstream_url`, and `provenance_notes`.
+- A future public release of raw images, materialized benchmarks or derived data packages requires a separate
+  human publication/release review; it is not a P0-P7 construction blocker.
+- This boundary does not remove code/dependency LICENSE and NOTICE obligations.
 
 ## 1. Repository Mission
 

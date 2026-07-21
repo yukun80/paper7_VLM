@@ -12,21 +12,9 @@ baseline_branch_verified: true
 human_manifest_approval: "project owner approved gated, phase-by-phase deletion on 2026-07-20; each entry still requires a later named approval"
 deletions_executed_in_p0: false
 phase_evidence:
-  p1_1:
-    status: engineering_passed
-    report: docs/reports/p1/p1_1_contract_report.json
-    physical_deletions: []
-    entry_approvals_changed: 0
-    deleted_commits_changed: 0
-  p1_2:
-    status: engineering_passed
-    report: docs/reports/p1/p1_2_spatial_report.json
-    physical_deletions: []
-    entry_approvals_changed: 0
-    deleted_commits_changed: 0
-  p1_3:
-    status: engineering_passed
-    report: docs/reports/p1/p1_3_source_adapter_report.json
+  p1:
+    status: engineering_accepted
+    report: docs/reports/p1/p1_completion_report.json
     physical_deletions: []
     entry_approvals_changed: 0
     deleted_commits_changed: 0
@@ -291,7 +279,7 @@ entries:
     replacement: P1 canonical language-subset scan/dedup/split/materialization
     delete_after:
       - p1_language_subset_accepted
-      - p1_license_report_has_no_training_eligible_unknown
+      - p1_provenance_report_replay_accepted
       - baseline_tag_verified
       - baseline_branch_verified
     references_checked: false

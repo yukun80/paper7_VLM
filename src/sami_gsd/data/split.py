@@ -10,7 +10,7 @@ from sami_gsd.contracts.config import SplitSettings
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes
 
 
-SPLIT_PROTOCOL_VERSION = "sami_parent_group_split_v1_union_constraints"
+SPLIT_PROTOCOL_VERSION = "sami_parent_group_split_v2_union_constraints_coverage_rebalanced"
 SplitName = Literal["train", "val", "test"]
 
 
@@ -24,6 +24,7 @@ class SplitAssignment:
 
     parent_to_split: dict[str, SplitName]
     components: tuple[dict[str, object], ...]
+    coverage_parent_ids: tuple[str, ...]
     aggregate_sha256: str
 
 
@@ -81,8 +82,9 @@ def assign_parent_splits(
     settings: SplitSettings,
     seed: int,
     forced_splits: dict[str, SplitName] | None = None,
+    coverage_parent_ids: tuple[str, ...] | None = None,
 ) -> SplitAssignment:
-    """Union group/scene/event/region/duplicate constraints, then split components."""
+    """Union constraints, hash components, then deterministically guarantee coverage."""
 
     ordered = tuple(sorted(parents, key=lambda item: item.parent_id))
     parent_ids = tuple(parent.parent_id for parent in ordered)
@@ -93,6 +95,9 @@ def assign_parent_splits(
     forced = forced_splits or {}
     if not set(forced).issubset(parent_ids):
         raise SplitAssignmentError("forced split mapping contains an unknown parent")
+    coverage = tuple(sorted(set(coverage_parent_ids or ())))
+    if not set(coverage).issubset(parent_ids):
+        raise SplitAssignmentError("coverage parent set contains an unknown parent")
 
     union = _UnionFind(parent_ids)
     first_by_key: dict[str, str] = {}
@@ -109,8 +114,7 @@ def assign_parent_splits(
     members_by_root: dict[str, list[str]] = {}
     for parent_id in parent_ids:
         members_by_root.setdefault(union.find(parent_id), []).append(parent_id)
-    mapping: dict[str, SplitName] = {}
-    components: list[dict[str, object]] = []
+    states: list[dict[str, object]] = []
     for members_list in sorted(members_by_root.values(), key=lambda values: tuple(sorted(values))):
         members = tuple(sorted(members_list))
         forced_values = {forced[parent_id] for parent_id in members if parent_id in forced}
@@ -131,26 +135,102 @@ def assign_parent_splits(
             else:
                 split = "test"
             assignment_reason = "seeded_component_hash"
+        states.append(
+            {
+                "component_id": f"group-{sha256_bytes(canonical_json_bytes(list(members)))[:20]}",
+                "members": members,
+                "constraint_keys": sorted({key for parent_id in members for key in keys_by_parent[parent_id]}),
+                "split": split,
+                "assignment_reason": assignment_reason,
+                "forced": bool(forced_values),
+                "coverage_count": sum(parent_id in coverage for parent_id in members),
+            }
+        )
+
+    required_splits: tuple[SplitName, ...] = tuple(
+        name
+        for name, ratio in (("train", settings.train), ("val", settings.val), ("test", settings.test))
+        if ratio > 0
+    )
+    coverage_states = [state for state in states if int(state["coverage_count"]) > 0]
+    require_coverage = len(coverage) >= len(required_splits)
+    if require_coverage and len(coverage_states) < len(required_splits):
+        raise SplitAssignmentError("connected coverage groups cannot populate every requested split")
+    target_ratios: dict[SplitName, float] = {
+        "train": settings.train,
+        "val": settings.val,
+        "test": settings.test,
+    }
+    while require_coverage:
+        covered = {state["split"] for state in coverage_states}
+        missing = next((name for name in required_splits if name not in covered), None)
+        if missing is None:
+            break
+        component_counts = {
+            name: sum(state["split"] == name for state in coverage_states)
+            for name in required_splits
+        }
+        parent_counts = {
+            name: sum(
+                int(state["coverage_count"])
+                for state in coverage_states
+                if state["split"] == name
+            )
+            for name in required_splits
+        }
+        candidates: list[tuple[float, str, dict[str, object]]] = []
+        for state in coverage_states:
+            donor = state["split"]
+            if state["forced"] or donor == missing or component_counts[donor] <= 1:
+                continue
+            moved = int(state["coverage_count"])
+            projected = dict(parent_counts)
+            projected[donor] -= moved
+            projected[missing] += moved
+            total = float(sum(projected.values()))
+            score = sum(
+                ((projected[name] / total) - target_ratios[name]) ** 2
+                for name in required_splits
+            )
+            tie = sha256_bytes(
+                canonical_json_bytes(
+                    {"seed": seed, "missing": missing, "members": state["members"]}
+                )
+            )
+            candidates.append((score, tie, state))
+        if not candidates:
+            raise SplitAssignmentError("forced coverage groups cannot populate every requested split")
+        selected = min(candidates, key=lambda item: (item[0], item[1]))[2]
+        selected["split"] = missing
+        selected["assignment_reason"] = "seeded_component_hash_coverage_rebalance"
+
+    mapping: dict[str, SplitName] = {}
+    components: list[dict[str, object]] = []
+    for state in states:
+        members = tuple(state["members"])
+        split = state["split"]
         for parent_id in members:
             mapping[parent_id] = split
         components.append(
             {
-                "component_id": f"group-{sha256_bytes(canonical_json_bytes(list(members)))[:20]}",
+                "component_id": state["component_id"],
                 "parent_ids": list(members),
-                "constraint_keys": sorted({key for parent_id in members for key in keys_by_parent[parent_id]}),
+                "constraint_keys": state["constraint_keys"],
                 "split": split,
-                "assignment_reason": assignment_reason,
+                "assignment_reason": state["assignment_reason"],
             }
         )
     payload = {
         "protocol": SPLIT_PROTOCOL_VERSION,
         "seed": seed,
         "settings": settings.model_dump(mode="json"),
+        "coverage_parent_ids": list(coverage),
         "components": components,
     }
     return SplitAssignment(
         parent_to_split=dict(sorted(mapping.items())),
         components=tuple(components),
+        coverage_parent_ids=coverage,
         aggregate_sha256=sha256_bytes(canonical_json_bytes(payload)),
     )
 

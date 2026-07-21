@@ -15,6 +15,7 @@ from sami_gsd.data.adapters.implemented import (
     MMRSAdapter,
     MultimodalLandslideAdapter,
     RSGPTAdapter,
+    Sen12Adapter,
 )
 
 
@@ -93,12 +94,7 @@ def build_source_adapter_registry() -> SourceAdapterRegistry:
     for adapter in (
         GDCLDAdapter(),
         LMHLDAdapter(),
-        _blocked(
-            "sen12_landslides",
-            "fifteen_step_temporal_slice_policy_unresolved",
-            "sample_annotated_false",
-            "pre_post_metadata_present_but_frozen_task_is_single_time",
-        ),
+        Sen12Adapter(),
         Landslide4SenseAdapter(),
         MultimodalLandslideAdapter(),
         LandslideBenchAdapter(),

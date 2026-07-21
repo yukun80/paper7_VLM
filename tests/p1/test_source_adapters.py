@@ -114,6 +114,39 @@ def write_netcdf(path: Path) -> None:
         variable.setncattr("annotated", "false")
 
 
+def write_sen12_record(path: Path, *, satellite: str) -> None:
+    """Write one source-like annotated Sen12 record for the resolved audit adapter."""
+
+    import netCDF4
+    import numpy as np
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with netCDF4.Dataset(path, mode="w") as dataset:
+        dataset.createDimension("time", 3)
+        dataset.createDimension("x", 4)
+        dataset.createDimension("y", 3)
+        time = dataset.createVariable("time", "i4", ("time",))
+        time[:] = [0, 9, 30]
+        time.units = "days since 2020-01-01"
+        time.calendar = "proleptic_gregorian"
+        spatial_ref = dataset.createVariable("spatial_ref", "i8")
+        spatial_ref.GeoTransform = "100.0 10.0 0.0 200.0 0.0 -10.0"
+        dataset.annotated = "True"
+        dataset.event_date = "2020-01-10"
+        dataset.crs = "EPSG:32632"
+        names = (
+            "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12", "SCL"
+        ) if satellite == "s2" else ("VV", "VH")
+        for name in names:
+            variable = dataset.createVariable(name, "f4", ("time", "x", "y"))
+            variable[:] = 4
+        dataset.createVariable("DEM", "f4", ("time", "x", "y"))[:] = 100
+        mask = dataset.createVariable("MASK", "u1", ("time", "x", "y"))
+        values = np.zeros((3, 4, 3), dtype=np.uint8)
+        values[:, 2:, 1:] = 1
+        mask[:] = values
+
+
 def build_live_layout_fixture(root: Path) -> Path:
     """Create the five implemented layouts plus four explicit blocked roots."""
 
@@ -150,7 +183,9 @@ def build_live_layout_fixture(root: Path) -> Path:
     write_geotiff(multimodal / "insar_vel/Loess_000001.tif", channels=1, dtype="uint16", nodata=65535)
     write_geotiff(multimodal / "label/Loess_000001.tif", channels=1, dtype="uint8", nodata=255)
 
-    write_netcdf(datasets / "Sen12Landslides/s2/fixture.nc")
+    write_sen12_record(datasets / "Sen12Landslides/s2/event_s2_1.nc", satellite="s2")
+    write_sen12_record(datasets / "Sen12Landslides/s1asc/event_s1asc_1.nc", satellite="s1")
+    write_sen12_record(datasets / "Sen12Landslides/s1dsc/event_s1dsc_1.nc", satellite="s1")
 
     landslidebench = datasets / "LandslideBench_agent"
     write_png(landslidebench / "images/debris1_Level_16.png")
@@ -253,8 +288,8 @@ class SourceRegistryTests(unittest.TestCase):
         registry = build_source_adapter_registry()
         config = load_audit_config(REPOSITORY_ROOT / "configs/benchmark_v3_small.yaml")
         self.assertEqual(registry.keys(), tuple(sorted(source.source_key for source in config.sources)))
-        self.assertEqual(sum(item.implementation_status == "implemented" for item in registry.descriptors()), 7)
-        self.assertEqual(sum(item.implementation_status == "blocked" for item in registry.descriptors()), 2)
+        self.assertEqual(sum(item.implementation_status == "implemented" for item in registry.descriptors()), 8)
+        self.assertEqual(sum(item.implementation_status == "blocked" for item in registry.descriptors()), 1)
         with self.assertRaisesRegex(KeyError, "no source adapter"):
             registry.get("legacy_fallback")
 
@@ -272,7 +307,7 @@ class SourceAuditIntegrationTests(unittest.TestCase):
     """Exercise deterministic extraction, fail-closed blockers and raw immutability."""
 
     def test_all_nine_sources_are_accounted_and_repeat_hash_is_stable(self) -> None:
-        """Five sampled sources plus four blockers produce no extraction errors."""
+        """Eight sampled sources plus the scope-excluded source produce no extraction errors."""
 
         with tempfile.TemporaryDirectory() as directory:
             datasets = build_live_layout_fixture(Path(directory))
@@ -285,20 +320,20 @@ class SourceAuditIntegrationTests(unittest.TestCase):
             self.assertEqual(before, after)
             self.assertEqual(first["aggregate_sha256"], second["aggregate_sha256"])
             self.assertEqual(first["source_count"], 9)
-            self.assertEqual(first["implemented_source_count"], 7)
-            self.assertEqual(first["sampled_source_count"], 7)
-            self.assertEqual(first["blocked_source_count"], 2)
+            self.assertEqual(first["implemented_source_count"], 8)
+            self.assertEqual(first["sampled_source_count"], 8)
+            self.assertEqual(first["blocked_source_count"], 1)
             self.assertEqual(first["missing_source_count"], 0)
             self.assertEqual(first["errors"], [])
             sampled = [source for source in first["sources"] if source["status"] == "sampled"]
             self.assertTrue(all(source["raw_bytes_unchanged"] for source in sampled))
-            self.assertTrue(all(source["training_eligible"] is False for source in first["sources"]))
+            self.assertGreater(first["canonical_dry_run"]["materialization_eligible_count"], 0)
             self.assertTrue(
                 all(not Path(source["logical_root"]).is_absolute() for source in first["sources"])
             )
 
-    def test_candidate_contract_rejects_training_promotion(self) -> None:
-        """P1.3 projections cannot be edited into training records."""
+    def test_candidate_contract_rejects_removed_permission_fields(self) -> None:
+        """Audit candidates reject removed approval-era compatibility fields."""
 
         with tempfile.TemporaryDirectory() as directory:
             datasets = build_live_layout_fixture(Path(directory))

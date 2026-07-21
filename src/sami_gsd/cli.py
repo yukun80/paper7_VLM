@@ -68,7 +68,7 @@ def _runtime_roots(arguments: argparse.Namespace) -> tuple[BenchmarkAuditConfig,
 
 
 def _run_data_build(arguments: argparse.Namespace) -> int:
-    """Build a new P1 benchmark only after source/license preflight passes."""
+    """Build a new P1 benchmark after technical source preflight passes."""
 
     config, datasets_root, benchmark_root = _runtime_roots(arguments)
     parent_inputs = load_resolved_spatial_parents(config, datasets_root=datasets_root)
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     top_level = parser.add_subparsers(dest="command", required=True)
 
-    data_parser = top_level.add_parser("data", help="raw-source and license operations")
+    data_parser = top_level.add_parser("data", help="raw-source and benchmark operations")
     data_commands = data_parser.add_subparsers(dest="data_command", required=True)
     audit_parser = data_commands.add_parser("audit", help="read-only deterministic raw-source audit")
     audit_parser.add_argument("--config", type=Path, required=True, help="Benchmark v3 audit YAML")

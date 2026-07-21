@@ -18,20 +18,27 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 class ConfigTests(unittest.TestCase):
     """Validate live source configs and frozen ontology fields."""
 
-    def test_live_audit_configs_are_strict_and_fail_closed(self) -> None:
-        """Both modes bind nine sources without training eligibility."""
+    def test_live_audit_configs_use_minimal_provenance(self) -> None:
+        """Both modes bind nine technical sources and eight component rows."""
 
         for mode in ("small", "full"):
             with self.subTest(mode=mode):
                 config = load_audit_config(REPOSITORY_ROOT / "configs" / f"benchmark_v3_{mode}.yaml")
                 self.assertEqual(config.mode, mode)
                 self.assertEqual(len(config.sources), 9)
-                self.assertTrue(all(not source.license.allowed_for_training for source in config.sources))
                 self.assertTrue(
                     all(
-                        not source.license.allowed_for_training
+                        tuple(source.provenance.model_dump())
+                        == (
+                            "source_key",
+                            "source_name",
+                            "source_root",
+                            "source_document",
+                            "citation_key",
+                            "upstream_url",
+                            "provenance_notes",
+                        )
                         for source in config.sources
-                        if source.license.license_status == "unknown"
                     )
                 )
                 components = {
@@ -52,27 +59,17 @@ class ConfigTests(unittest.TestCase):
                         "rsgpt:rsieval",
                     ),
                 )
-                self.assertTrue(all(not component.license.allowed_for_training for component in components.values()))
+                self.assertTrue(all(component.provenance.source_key == key for key, component in components.items()))
 
-    def test_aggregate_language_license_cannot_authorize_components(self) -> None:
-        """A shared raw container must never override per-component decisions."""
+    def test_runtime_permission_fields_are_rejected(self) -> None:
+        """Removed approval fields cannot re-enter the strict source config."""
 
         payload = yaml.safe_load(
             (REPOSITORY_ROOT / "configs/benchmark_v3_small.yaml").read_text(encoding="utf-8")
         )
         mmrs = next(source for source in payload["sources"] if source["source_key"] == "mmrs_1m")
-        mmrs["license"].update(
-            {
-                "license_status": "verified",
-                "license_name": "synthetic-approved",
-                "license_url_or_document": "licenses/mmrs.txt",
-                "allowed_for_training": True,
-                "allowed_for_evaluation": True,
-                "reviewed_by": "test-suite",
-                "review_date": "2026-07-21",
-            }
-        )
-        with self.assertRaisesRegex(ValidationError, "cannot authorize component use"):
+        mmrs["allowed_for_training"] = True
+        with self.assertRaisesRegex(ValidationError, "Extra inputs are not permitted"):
             BenchmarkAuditConfig.model_validate(payload)
 
     def test_scene_region_ontology_declares_every_required_policy(self) -> None:

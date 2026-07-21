@@ -11,14 +11,14 @@ from pathlib import Path
 from sami_gsd.contracts.config import BenchmarkAuditConfig, load_audit_config
 from sami_gsd.data.builder import build_canonical_benchmark
 from sami_gsd.data.validation import validate_benchmark_payload, validate_published_benchmark
-from tests.p1.test_materialization import approved_license, spatial_input
+from tests.p1.test_materialization import spatial_input
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def synthetic_build_config() -> BenchmarkAuditConfig:
-    """Replace live sources with one reviewed synthetic test source."""
+    """Replace live sources with one synthetic technical source."""
 
     payload = load_audit_config(REPOSITORY_ROOT / "configs/benchmark_v3_small.yaml").model_dump(mode="json")
     payload["build"]["materialization"]["canvas_hw"] = [8, 8]
@@ -26,11 +26,17 @@ def synthetic_build_config() -> BenchmarkAuditConfig:
     payload["sources"] = [
         {
             "source_key": "synthetic",
-            "display_name": "Synthetic test source",
-            "local_path": "synthetic",
             "enabled": True,
-            "allowed_task_roles": ["inventory", "t1", "t2"],
-            "license": approved_license().model_dump(mode="json"),
+            "task_roles": ["inventory", "t1", "t2"],
+            "provenance": {
+                "source_key": "synthetic",
+                "source_name": "Synthetic test source",
+                "source_root": "datasets/synthetic",
+                "source_document": None,
+                "citation_key": "synthetic",
+                "upstream_url": None,
+                "provenance_notes": "synthetic local research fixture",
+            },
         }
     ]
     return BenchmarkAuditConfig.model_validate(payload)
@@ -80,7 +86,7 @@ class BuilderValidationTests(unittest.TestCase):
             replay = validate_published_benchmark(first_root, schemas_root=REPOSITORY_ROOT / "schemas")
             self.assertEqual(replay["errors"], [])
             self.assertEqual(replay["verified_duplicate_cross_split_count"], 0)
-            self.assertEqual(replay["training_eligible_unknown_count"], 0)
+            self.assertEqual(replay["provenance_binding_error_count"], 0)
             self.assertEqual(list(first_root.rglob("*.part-*")), [])
 
             with self.assertRaisesRegex(FileExistsError, "refusing to overwrite"):

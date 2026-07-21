@@ -25,9 +25,11 @@ from sami_gsd.data.adapters.formats import (
     read_geotiff_header,
     read_hdf5_dataset_header,
     read_image_header,
+    read_netcdf_variable_header,
     read_npy_header,
 )
 from sami_gsd.data.reference_canvas import select_reference_canvas
+from sami_gsd.data.source_loaders.sen12 import Sen12LoadingError, load_sen12_parents
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
@@ -38,18 +40,7 @@ def _logical(source: SourceConfig, relative: Path | str) -> str:
     """Build one portable dataset-rooted path from a source-relative path."""
 
     relative_text = Path(relative).as_posix()
-    return f"datasets/{source.local_path}/{relative_text}"
-
-
-def _license_blockers(source: SourceConfig) -> tuple[str, ...]:
-    """Expose the exact fail-closed reason without changing the license record."""
-
-    blockers = ["license_not_approved_for_training"]
-    if source.license.license_status == "unknown":
-        blockers.append("license_status_unknown")
-    elif source.license.license_status == "restricted":
-        blockers.append("restricted_license_requires_human_approval")
-    return tuple(blockers)
+    return f"{source.provenance.source_root}/{relative_text}"
 
 
 def _image_asset(
@@ -196,6 +187,43 @@ def _hdf5_asset(
         metadata_evidence=("hdf5_dataset_header", "hdf5_dataset_attributes"),
         metadata_attributes=header.attributes,
     )
+
+
+def _netcdf_asset(
+    source_root: Path,
+    source: SourceConfig,
+    relative: Path,
+    *,
+    internal_key: str,
+    asset_id: str,
+    role: Literal["reference_image", "support_image", "mask"],
+    band_name: str,
+) -> RawAssetEvidence:
+    """Bind one source NetCDF variable after the formal loader resolves its record."""
+
+    path = source_root / relative
+    header = read_netcdf_variable_header(path, internal_key=internal_key)
+    if len(header.shape) != 3:
+        raise SourceAdapterError("Sen12 variables must use a three-dimensional time/x/y grid")
+    return RawAssetEvidence(
+        asset_id=asset_id,
+        role=role,
+        logical_path=_logical(source, relative),
+        container="netcdf",
+        internal_key=internal_key,
+        sample_index=None,
+        byte_size=path.stat().st_size,
+        sha256=sha256_file(path),
+        array_shape=header.shape,
+        native_hw=(header.shape[2], header.shape[1]),
+        channel_count=1,
+        dtype=header.dtype,
+        band_names=(band_name,),
+        metadata_evidence=("netcdf_variable_header", "formal_single_time_loader"),
+        metadata_attributes=header.attributes,
+    )
+
+
 def _index_asset(
     source_root: Path,
     source: SourceConfig,
@@ -283,12 +311,10 @@ def _projection(
         source_group_id=source_group_id,
         source_declared_split=source_declared_split,
         split="audit",
-        training_eligible=False,
         record_type=record_type,
         assets=assets,
         grouping_evidence=grouping_evidence,
         ambiguity_flags=ambiguity_flags,
-        license=source.license,
         asset_set_sha256=fingerprint,
     )
     decision = _reference_decision(
@@ -304,14 +330,12 @@ def _projection(
         record_id=record_id,
         source_group_id=source_group_id,
         split="audit",
-        training_eligible=False,
         task_roles=task_roles,
         reference_decision=decision,
         modalities=(modality, *support_modalities),
         annotations=annotation,
-        license=source.license,
         raw_asset_set_sha256=fingerprint,
-        materialization_status="audit_only",
+        materialization_status="blocked" if blockers else "ready",
         blockers=tuple(sorted(set(blockers))),
     )
     digest_payload = {
@@ -347,6 +371,131 @@ def _optical_modality(asset: RawAssetEvidence, *, product_type: str = "source_im
         alignment_evidence=("same_native_grid_as_reference",),
         valid_status="unresolved",
     )
+
+
+class Sen12Adapter:
+    """Audit the same event-balanced annotated records used by the formal loader."""
+
+    descriptor = AdapterDescriptor(
+        source_key="sen12_landslides",
+        adapter_version=ADAPTER_VERSION,
+        implementation_status="implemented",
+        supported_record_types=("spatial_mask",),
+        blockers=(),
+    )
+
+    def extract_samples(
+        self,
+        source_root: Path,
+        source_config: SourceConfig,
+        *,
+        limit: int,
+    ) -> tuple[SourceSampleProjection, ...]:
+        """Decode bounded formal parents and project their exact NetCDF evidence."""
+
+        try:
+            parents = load_sen12_parents(source_config, source_root=source_root, limit=limit)
+        except Sen12LoadingError as error:
+            raise SourceAdapterError(str(error)) from error
+        projections: list[SourceSampleProjection] = []
+        for parent in parents:
+            event, sample = parent.source.record_id.split("/", maxsplit=1)
+            s2_relative = Path("s2") / f"{event}_s2_{sample}.nc"
+            asc_relative = Path("s1asc") / f"{event}_s1asc_{sample}.nc"
+            dsc_relative = Path("s1dsc") / f"{event}_s1dsc_{sample}.nc"
+            assets = (
+                _netcdf_asset(
+                    source_root,
+                    source_config,
+                    s2_relative,
+                    internal_key="B02",
+                    asset_id="s2_reference",
+                    role="reference_image",
+                    band_name="B02",
+                ),
+                _netcdf_asset(
+                    source_root,
+                    source_config,
+                    asc_relative,
+                    internal_key="VV",
+                    asset_id="s1_ascending",
+                    role="support_image",
+                    band_name="VV",
+                ),
+                _netcdf_asset(
+                    source_root,
+                    source_config,
+                    dsc_relative,
+                    internal_key="VV",
+                    asset_id="s1_descending",
+                    role="support_image",
+                    band_name="VV",
+                ),
+                _netcdf_asset(
+                    source_root,
+                    source_config,
+                    s2_relative,
+                    internal_key="DEM",
+                    asset_id="dem",
+                    role="support_image",
+                    band_name="DEM",
+                ),
+                _netcdf_asset(
+                    source_root,
+                    source_config,
+                    s2_relative,
+                    internal_key="MASK",
+                    asset_id="mask",
+                    role="mask",
+                    band_name="mask",
+                ),
+            )
+
+            candidates: list[ModalityCandidate] = []
+            asset_ids = ("s2_reference", "s1_ascending", "s1_descending", "dem")
+            for index, (modality, asset_id) in enumerate(zip(parent.modalities, asset_ids, strict=True)):
+                candidates.append(
+                    ModalityCandidate(
+                        modality_id=modality.modality_id,
+                        family=modality.family,
+                        sensor=modality.sensor,
+                        product_type=modality.product_type,
+                        band_names=modality.band_names,
+                        native_asset_id=asset_id,
+                        native_hw=tuple(int(value) for value in modality.array.shape[:2]),
+                        native_gsd_m=modality.native_gsd_m,
+                        units=modality.units,
+                        signed=modality.signed,
+                        sign_convention=modality.sign_convention,
+                        alignment_status="reference" if index == 0 else "aligned",
+                        alignment_evidence=("formal_loader_exact_shared_grid",),
+                        valid_status="explicit_valid_mask",
+                    )
+                )
+            projections.append(
+                _projection(
+                    source=source_config,
+                    record_id=parent.source.record_id,
+                    source_group_id=parent.source.source_group_id,
+                    source_declared_split=None,
+                    record_type="spatial_mask",
+                    assets=assets,
+                    modality=candidates[0],
+                    support_modalities=tuple(candidates[1:]),
+                    annotation=AnnotationCandidate(
+                        global_mask_asset_id="mask",
+                        target_status="unknown",
+                        normalized_box_xyxy=None,
+                        phrase=None,
+                        annotation_origin="official",
+                    ),
+                    task_roles=("t1",),
+                    grouping_evidence=("event_token", "sample_number", "paired_s2_s1asc_s1dsc"),
+                    ambiguity_flags=(),
+                    blockers=(),
+                )
+            )
+        return tuple(projections)
 
 
 class GDCLDAdapter:
@@ -409,8 +558,7 @@ class GDCLDAdapter:
                     task_roles=("t1",),
                     grouping_evidence=("same_basename_image_mask_pair",),
                     ambiguity_flags=("original_scene_identity_unresolved",),
-                    blockers=_license_blockers(source_config)
-                    + ("original_scene_identity_unresolved",),
+                    blockers=("original_scene_identity_unresolved",),
                 )
             )
         return tuple(projections)
@@ -502,8 +650,7 @@ class Landslide4SenseAdapter:
                     task_roles=("t1",),
                     grouping_evidence=("same_numeric_suffix_hdf5_pair",),
                     ambiguity_flags=("band_semantics_unresolved", "original_scene_grouping_unresolved"),
-                    blockers=_license_blockers(source_config)
-                    + ("band_semantics_unresolved", "original_scene_grouping_unresolved"),
+                    blockers=("band_semantics_unresolved", "original_scene_grouping_unresolved"),
                 )
             )
         return tuple(projections)
@@ -668,8 +815,7 @@ class MultimodalLandslideAdapter:
                     task_roles=("t1",),
                     grouping_evidence=("explicit_split_list", "same_stem_multimodal_record", "region_prefix"),
                     ambiguity_flags=("insar_units_and_sign_convention_unresolved",),
-                    blockers=_license_blockers(source_config)
-                    + ("insar_units_and_sign_convention_unresolved",),
+                    blockers=("insar_units_and_sign_convention_unresolved",),
                 )
             )
         return tuple(projections)
@@ -775,8 +921,7 @@ class LMHLDAdapter:
                     task_roles=("t1",),
                     grouping_evidence=("same_region_split_first_axis_index",),
                     ambiguity_flags=("original_scene_identity_unresolved", "band_semantics_unresolved"),
-                    blockers=_license_blockers(source_config)
-                    + ("original_scene_identity_unresolved", "band_semantics_unresolved"),
+                    blockers=("original_scene_identity_unresolved", "band_semantics_unresolved"),
                 )
             )
         return tuple(projections)
@@ -854,8 +999,7 @@ class LandslideBenchAdapter:
                         task_roles=("t1",),
                         grouping_evidence=("jsonl_image_reference", "same_basename_mask", "zoom_suffix_removed"),
                         ambiguity_flags=("derived_source_provenance_unresolved", "multi_zoom_grouping_unverified"),
-                        blockers=_license_blockers(source_config)
-                        + ("derived_source_provenance_unresolved", "multi_zoom_grouping_unverified"),
+                        blockers=("derived_source_provenance_unresolved", "multi_zoom_grouping_unverified"),
                     )
                 )
         return tuple(projections)
@@ -878,7 +1022,7 @@ class MMRSAdapter:
         adapter_version=ADAPTER_VERSION,
         implementation_status="implemented",
         supported_record_types=("global_language", "region_language"),
-        blockers=("component_licenses_unresolved",),
+        blockers=(),
     )
     _caption_indexes = (
         Path("json/caption/caption_nwpu.json"),
@@ -925,7 +1069,6 @@ class MMRSAdapter:
                 phrase = phrase_value
             component = index_relative.stem.removeprefix("caption_")
             record_id = f"{component}/{image_relative.as_posix()}"
-            blockers = _license_blockers(source_config) + ("component_license_unresolved",)
             projections.append(
                 _projection(
                     source=source_config,
@@ -944,8 +1087,8 @@ class MMRSAdapter:
                     ),
                     task_roles=("language_region",) if record_type == "region_language" else ("language_global",),
                     grouping_evidence=("exact_source_image_path",),
-                    ambiguity_flags=("component_license_unresolved",),
-                    blockers=blockers,
+                    ambiguity_flags=(),
+                    blockers=(),
                 )
             )
         return tuple(projections)
@@ -959,7 +1102,7 @@ class RSGPTAdapter:
         adapter_version=ADAPTER_VERSION,
         implementation_status="implemented",
         supported_record_types=("global_language",),
-        blockers=("academic_only_use_requires_human_approval",),
+        blockers=(),
     )
 
     def extract_samples(self, source_root: Path, source_config: SourceConfig, *, limit: int) -> tuple[SourceSampleProjection, ...]:
@@ -981,9 +1124,6 @@ class RSGPTAdapter:
             annotation_index = _index_asset(
                 source_root, source_config, index_relative, asset_id="annotation", container="json"
             )
-            blockers = _license_blockers(source_config)
-            if component == "RSIEval":
-                blockers += ("permanent_test_only",)
             projections.append(
                 _projection(
                     source=source_config,
@@ -1003,7 +1143,7 @@ class RSGPTAdapter:
                     task_roles=("language_global",),
                     grouping_evidence=("exact_filename_annotation_binding",),
                     ambiguity_flags=(),
-                    blockers=blockers,
+                    blockers=(),
                 )
             )
         return tuple(projections)

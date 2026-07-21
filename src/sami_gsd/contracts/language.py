@@ -9,7 +9,6 @@ from pydantic import Field, field_validator, model_validator
 from sami_gsd.contracts.canonical import (
     ArtifactRef,
     HalfOpenBox,
-    LicenseRecord,
     Sha256,
     StrictModel,
     validate_half_open_box,
@@ -18,7 +17,7 @@ from sami_gsd.contracts.canonical import (
 
 
 class LanguageImageRef(StrictModel):
-    """Immutable raw image evidence retained before licensed materialization."""
+    """Immutable raw image evidence retained before materialization."""
 
     logical_path: str
     sha256: Sha256
@@ -40,13 +39,13 @@ class LanguageAnswer(StrictModel):
 
 
 class DescriptionSourceRecord(StrictModel):
-    """One frozen selected language record; audit rows may remain unlicensed."""
+    """One frozen language record selected by scientific role and split policy."""
 
-    schema_version: Literal["sami_description_source_v2_component_license_bound"]
+    schema_version: Literal["sami_description_source_v3_provenance_bound"]
     record_id: Annotated[str, Field(min_length=1)]
     source_key: Literal["mmrs_1m", "rsgpt"]
     component: Literal["rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval"]
-    component_license_key: Annotated[
+    component_key: Annotated[
         str,
         Field(pattern=r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$"),
     ]
@@ -56,19 +55,16 @@ class DescriptionSourceRecord(StrictModel):
     image: LanguageImageRef
     answers: tuple[LanguageAnswer, ...]
     normalized_box_xyxy: tuple[float, float, float, float] | None
-    license: LicenseRecord
-    training_eligible: bool
+    is_train_candidate: bool
 
     @model_validator(mode="after")
-    def subset_role_and_license_are_closed(self) -> Self:
-        """Reject role drift, test leakage and unlicensed promotion."""
+    def subset_role_and_split_are_closed(self) -> Self:
+        """Reject role drift and permanent-test leakage."""
 
         if not self.answers:
             raise ValueError("description source record requires at least one answer")
-        if self.source_key != self.license.source_key:
-            raise ValueError("description source/license physical keys do not match")
-        if self.component_license_key != f"{self.source_key}:{self.component}":
-            raise ValueError("component_license_key must bind source_key and component")
+        if self.component_key != f"{self.source_key}:{self.component}":
+            raise ValueError("component_key must bind source_key and component")
         is_region = self.role == "region_short_phrase"
         if is_region != (self.component == "dior_rsvg"):
             raise ValueError("DIOR-RSVG is the sole region-short-phrase component")
@@ -80,9 +76,9 @@ class DescriptionSourceRecord(StrictModel):
                 raise ValueError("normalized box must satisfy 0<=min<max<=1")
         if self.component == "rsieval" and self.split_policy != "permanent_test_only":
             raise ValueError("RSIEval must remain permanent test-only")
-        if self.training_eligible:
-            if not self.license.allowed_for_training or self.split_policy == "permanent_test_only":
-                raise ValueError("training eligibility requires an approved non-test source")
+        expected_training = self.split_policy == "train_candidate"
+        if self.is_train_candidate != expected_training:
+            raise ValueError("is_train_candidate must be derived solely from split_policy")
         return self
 
 
@@ -103,16 +99,15 @@ class CanonicalDescriptionRecord(StrictModel):
     dependency.
     """
 
-    schema_version: Literal["sami_canonical_description_v2_component_license_bound"]
+    schema_version: Literal["sami_canonical_description_v3_provenance_bound"]
     record_id: Annotated[str, Field(min_length=1)]
     parent_id: Annotated[str, Field(min_length=1)]
     source_key: Literal["mmrs_1m", "rsgpt"]
     component: Literal["rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval"]
-    component_license_key: Annotated[
+    component_key: Annotated[
         str,
         Field(pattern=r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$"),
     ]
-    component_license_sha256: Sha256
     role: Literal["global_caption", "region_short_phrase"]
     split_policy: Literal["train_candidate", "permanent_test_only"]
     split: Literal["train", "val", "test"]
@@ -122,7 +117,7 @@ class CanonicalDescriptionRecord(StrictModel):
     source_record_sha256: Sha256
     answers: tuple[CanonicalLanguageAnswer, ...]
     region_box_half_open: HalfOpenBox | None
-    training_eligible: bool
+    is_train_candidate: bool
 
     @field_validator("region_box_half_open")
     @classmethod
@@ -137,8 +132,8 @@ class CanonicalDescriptionRecord(StrictModel):
 
         if not self.answers:
             raise ValueError("canonical description record requires at least one answer")
-        if self.component_license_key != f"{self.source_key}:{self.component}":
-            raise ValueError("canonical component_license_key must bind source_key and component")
+        if self.component_key != f"{self.source_key}:{self.component}":
+            raise ValueError("canonical component_key must bind source_key and component")
         is_region = self.role == "region_short_phrase"
         if is_region != (self.component == "dior_rsvg"):
             raise ValueError("DIOR-RSVG is the sole canonical region-short-phrase component")
@@ -148,8 +143,8 @@ class CanonicalDescriptionRecord(StrictModel):
             raise ValueError("canonical RSIEval rows must remain permanent test-only")
         if self.split_policy == "permanent_test_only" and self.split != "test":
             raise ValueError("permanent-test language rows must be assigned to test")
-        if self.training_eligible and self.split_policy == "permanent_test_only":
-            raise ValueError("permanent-test language rows cannot be training eligible")
+        if self.is_train_candidate and self.split_policy == "permanent_test_only":
+            raise ValueError("permanent-test language rows cannot be training candidates")
         return self
 
 

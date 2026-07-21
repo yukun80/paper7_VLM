@@ -1,0 +1,124 @@
+{
+  "schema_version": "sami_p1_completion_report_v1",
+  "phase": "P1",
+  "status": "engineering_accepted",
+  "formal_completion": true,
+  "date": "2026-07-21",
+  "branch": "refactor/sami-groundsegdesc",
+  "implementation_head_before_completion_commit": "e8dc9f340aa35be297d337ab32118bc3a97f5bac",
+  "governance": {
+    "accepted_adr": "docs/adr/ADR-0003-raw-data-provenance-not-runtime-license-gate.md",
+    "runtime_raw_data_license_gate": false,
+    "human_source_authorization_required": false,
+    "minimal_provenance_field_count": 7,
+    "future_publication_release_review_separate": true
+  },
+  "engineering": {
+    "canonical_parent_and_modality_schema": "passed",
+    "raw_read_only_scan": "passed",
+    "reference_canvas": "passed",
+    "reversible_transform_chain": "passed",
+    "preprocessing_and_materialization": "passed",
+    "valid_padding_nodata_propagation": "passed",
+    "parent_group_split": "passed",
+    "exact_and_perceptual_duplicates": "passed",
+    "t1_t4_task_view_expansion": "passed",
+    "description_source_subset": "passed",
+    "independent_validation_replay": "passed",
+    "deterministic_hash": "passed",
+    "real_small_acceptance": "passed"
+  },
+  "live_bounded_source_audit": {
+    "configured_source_count": 9,
+    "sampled_source_count": 8,
+    "scope_blocked_source_count": 1,
+    "candidate_count": 55,
+    "materialization_eligible_count": 16,
+    "errors": [],
+    "aggregate_sha256": "c4f508a181a9b6bfd94a7b4815691464979b201f2c81f5a68667ea7b0beaa6a7"
+  },
+  "accepted_small": {
+    "primary_root": "benchmark/sami_landslide_v3/small",
+    "repeat_root": "benchmark_repeat/sami_landslide_v3/small",
+    "size_each_approx": "5.4G",
+    "builder_version": "sami_canonical_benchmark_builder_v5_split_coverage_bound",
+    "validator_version": "sami_benchmark_validation_v5_split_coverage_replay",
+    "split_version": "sami_parent_group_split_v2_union_constraints_coverage_rebalanced",
+    "config_sha256": "cc4617fe89e1e331bc37b4f66a0a5992be6c1b59331cb99e97f78a9b0a31ac87",
+    "source_input_sha256": "762e776a552f79bab82a7555c76bdc7acd5000b82efc3b47f7b501a1aebde6e2",
+    "parent_record_sha256": "0ad7b92b1365d0b7fa8a88b67ea81844b781c77c1e3454765f53f2ea91f57298",
+    "manifest_aggregate_sha256": "5bd5f4dbd97f41b8276acd3f5c2a1953d6d41de0f3e509cf3dff6689ec321d54",
+    "validation_aggregate_sha256": "c7532c6ba4b00d2c503117ad34df3e2725948700cfc7a639ae26c5485ccae8dd",
+    "output_hash_entry_count": 4501,
+    "independent_build_count": 2,
+    "complete_output_hash_maps_equal": true,
+    "parent_count": 1064,
+    "spatial_parent_count": 128,
+    "language_parent_count": 936,
+    "parents_by_split": {
+      "train": 686,
+      "val": 121,
+      "test": 257
+    },
+    "spatial_parents_by_split": {
+      "train": 89,
+      "val": 15,
+      "test": 24
+    },
+    "description_source_record_count": 996,
+    "canonical_description_record_count": 996,
+    "description_train_target_count": 634,
+    "description_components": {
+      "rsicd": 128,
+      "ucm": 128,
+      "sydney": 128,
+      "nwpu": 128,
+      "rsitmd": 128,
+      "dior_rsvg": 128,
+      "rsicap": 128,
+      "rsieval": 100
+    },
+    "task_count": 128,
+    "tasks_by_type": {
+      "t1_global": 128,
+      "t2_referring": 0,
+      "t3_gt_region": 0,
+      "t4_predicted_region": 0
+    },
+    "provenance_source_count": 9,
+    "provenance_language_component_count": 8,
+    "provenance_binding_error_count": 0,
+    "duplicate_cluster_count": 1052,
+    "perceptual_candidate_edge_count": 168,
+    "verified_perceptual_edge_count": 54,
+    "verified_duplicate_cross_split_count": 0,
+    "validation_errors": []
+  },
+  "tests": {
+    "command": "/usr/bin/env PYTHONPATH=src /home/yukun80/miniconda3/envs/qwen3vl/bin/python -m unittest discover -s tests/p1 -v",
+    "passed": 62,
+    "failed": 0,
+    "exit_code": 0,
+    "static_json_yaml_schema_and_compile_checks": "passed",
+    "runtime_removed_field_scan": "passed",
+    "deletion_manifest_entry_count": 36,
+    "deletion_manifest_entries_approved": 0,
+    "deletion_manifest_entries_deleted": 0
+  },
+  "resolved_real_data_defects": [
+    "Sen12 literal None event dates are sample-level exclusions",
+    "DIOR-RSVG inverse phrase-to-box rows are excluded while forward multi-pair rows are parsed",
+    "Sen12 zero-valid S2 reference views are sample-level exclusions",
+    "duplicate-connected Small spatial components are deterministically coverage-rebalanced as whole groups"
+  ],
+  "warnings": [
+    "T2 is empty because selected Sen12 records have no referring regions and DIOR boxes do not fabricate masks.",
+    "T3 and T4 remain empty until region answers and fixed/OOF predictions are bound by their owning later phases.",
+    "P1 engineering acceptance is not model-training or scientific-performance evidence.",
+    "Public redistribution of raw data, materialized benchmarks, derived packages, checkpoints, or weights remains outside P0-P7 and requires a future human release review."
+  ],
+  "errors": [],
+  "physical_legacy_deletions": [],
+  "push_performed": false,
+  "next_accepted_task": "P2 model minimum skeleton"
+}

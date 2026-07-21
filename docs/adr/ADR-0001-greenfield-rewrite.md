@@ -5,6 +5,8 @@
 - Owners: project maintainer
 - Phase: P0
 - Commit: P0 documentation base `fab0ae7ce4ca17715d3fb52e5834b5110f2094d9`; this accepted decision is recorded by the local P0 acceptance commit
+- Amendment: raw-data runtime governance clauses are superseded by accepted `ADR-0003`; architecture,
+  incompatibility, baseline and deletion decisions remain in force.
 
 ## Context
 
@@ -20,7 +22,8 @@ The live P0 audit found:
 - an empty adjacent `/home/yukun80/codes/benchmark` root, while preserved legacy reports reference now-missing benchmark packages;
 - raw datasets and legacy output/model artifacts present beside or inside the repository;
 - no root project license or notice;
-- unresolved source licenses for most raw datasets and aggregate MMRS data.
+- sparse local source documentation for most raw datasets and aggregate MMRS data (historical P0 observation;
+  no longer a P0-P7 construction gate).
 
 The historical reports and checkpoints remain valuable for provenance and fair comparison, but their missing bound benchmark inputs mean P0 cannot promote them to current replay-verified evidence.
 
@@ -42,8 +45,9 @@ The implementation boundaries are frozen as follows:
 - New code uses a root `src/sami_gsd/` layout and exposes only the `sami-gsd` CLI.
 - Old Benchmark, reader, cache, config, checkpoint, CLI, protocol, and class names are incompatible and receive no adapters, aliases, migrations, or silent fallbacks.
 - Legacy code is preserved through Git history, a baseline tag, and a baseline branch, not through a `legacy/` directory.
-- Raw sources, accepted/historical artifacts, model cards/weights, source registries, licenses, expert-review provenance, and experiment logs remain read-only preservation assets.
-- Unknown-license data may be inventoried but must fail closed for training eligibility.
+- Raw sources, accepted/historical artifacts, model cards/weights, source registries, scientific provenance,
+  expert-review provenance, and experiment logs remain read-only preservation assets.
+- Raw-source inclusion is governed by technical/scientific validation under ADR-0003, not runtime permission fields.
 - Deletion is controlled exclusively by `docs/audits/deletion_plan.yaml`; no P0 deletion is authorized.
 
 ## Alternatives considered
@@ -57,7 +61,8 @@ The implementation boundaries are frozen as follows:
 ## Evidence
 
 - experiment/report: `docs/audits/repo_inventory.json` records current paths and hashes; preserved legacy reports are explicitly historical engineering evidence, not scientific success.
-- license/dependency: `docs/audits/license_matrix.md` records verified upstream terms and all unresolved project/data decisions.
+- license/dependency: `docs/audits/license_matrix.md` is retained as a historical P0 snapshot for code/dependency
+  obligations; its raw-data approval conclusions are superseded by ADR-0003 and are non-gating.
 - reuse/deletion: `docs/audits/reuse_matrix.md` and `docs/audits/deletion_plan.yaml` define preservation, independent reimplementation, and gated removal.
 - hardware: no GPU or environment probe was run in P0. The later implementation target remains one approximately 24 GiB GPU, subject to P7 measurement.
 - governing design: `docs/REFACTOR_TASK_SPEC.md` and `docs/CODEX_REFACTOR_PROMPT.md`.
@@ -68,15 +73,16 @@ The implementation boundaries are frozen as follows:
 
 - One canonical benchmark, package, Trainer, CLI, and lineage model replaces overlapping legacy protocols.
 - Scientific novelty is easier to attribute because mature upstream ideas are reused narrowly and explicitly.
-- Data-license, sensor, spatial-transform, valid-mask, and task-view provenance become first-class rather than inherited from old derived packages.
+- Scientific source, sensor, spatial-transform, valid-mask, and task-view provenance become first-class rather than inherited from old derived packages.
 - The baseline remains reproducible from Git and preserved artifacts without burdening the active runtime with compatibility code.
 
 ### Negative
 
 - Old checkpoints, caches, indexes, configuration files, and commands will not load in the new system.
-- P1 must rebuild from raw data and close source licenses before training indexes exist.
+- P1 must rebuild from raw data and close every technical source/group/transform/valid/split condition before indexes exist.
 - Historical reports whose bound inputs are missing cannot be replayed without a separately authorized restoration.
-- The project cannot publish greenfield code, benchmarks, or weights until the root license and data-use decisions are approved.
+- Public release of raw images, materialized benchmarks or derived data packages remains a separate future human
+  publication/release decision and does not block P0-P7 local research construction.
 - G0 still requires a separate ADR to select exactly one segmentation kernel and supported runtime profile.
 
 ## Implementation constraints
@@ -86,7 +92,7 @@ The implementation boundaries are frozen as follows:
 - Do not modify raw data or overwrite accepted artifacts.
 - Do not use old V1/V2/M1.1/Bridge/Unified/cache/checkpoint protocols as new runtime inputs.
 - Do not add pre/post/change, recovery advice, video, tracking, bbox generation by Qwen, fixed five-slot concatenation, compatibility shims, silent fallback, or oracle outputs.
-- P1 must reject `license_status=unknown` from every training-eligible index.
+- P1 must reject runtime permission/approval fields and bind only minimal non-gating source/component provenance.
 - G0 decisions are deferred to ADR-0002; this ADR does not choose Qwen3-VL-Seg-style versus PSALM-Lite, Profile S/M, or aligned support residual.
 - Every deletion requires all manifest gates, resolved targets, reference scans, replacement tests/docs, a verified baseline, and named human approval.
 
@@ -105,7 +111,8 @@ The annotated tag and baseline branch both resolve to the owner-approved legacy 
 ## Rollback
 
 - tag/branch: verified tag `pre-sami-rewrite-2026-07-20` and branch `baseline/sane-qmef-pmrd-mgrr`, both resolving to `0c53624dd93159f78acd6d39a579b100d7e3255f`.
-- trigger: frozen scientific scope changes; required source licenses cannot be obtained; G0 yields no viable 24 GiB candidate; replacement gates fail; deletion occurred without complete manifest approval; or greenfield work must be abandoned.
+- trigger: frozen scientific scope changes; G0 yields no viable 24 GiB candidate; replacement gates fail; deletion
+  occurred without complete manifest approval; or greenfield work must be abandoned.
 - procedure: stop mutation, preserve the failing refactor commit and reports, verify the baseline tag resolves to the approved SHA, switch to the baseline branch in a clean worktree, and restore any large accepted artifact only from its separately verified read-only path. Never use destructive reset or overwrite raw/accepted assets.
 
 ## Human approval
@@ -116,5 +123,6 @@ The annotated tag and baseline branch both resolve to the owner-approved legacy 
 - baseline tag verified: `pre-sami-rewrite-2026-07-20` -> approved baseline SHA
 - baseline branch verified: `baseline/sane-qmef-pmrd-mgrr` -> approved baseline SHA
 - root license decision: Apache License 2.0 for greenfield project code and project-authored documentation; see root `LICENSE` and `NOTICE`
-- restricted-data decision: not granted; every data/model/third-party asset remains separately licensed and fail-closed
-- notes: Deletion is authorized only phase by phase through `docs/audits/deletion_plan.yaml`. P1.1 performs no physical deletion, and every entry-level `approved_by` and `deleted_commit` remains null.
+- raw-data construction governance: superseded by ADR-0003; local project-owner-provided data is selected by
+  technical/scientific criteria, with any future publication/release review handled separately
+- notes: Deletion is authorized only phase by phase through `docs/audits/deletion_plan.yaml`. P1 performed no physical legacy deletion, and every entry-level `approved_by` and `deleted_commit` remains null.

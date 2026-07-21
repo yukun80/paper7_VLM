@@ -34,7 +34,7 @@ from sami_gsd.utilities.artifacts import (
 )
 
 
-BENCHMARK_BUILDER_VERSION = "sami_canonical_benchmark_builder_v3_component_license_bound"
+BENCHMARK_BUILDER_VERSION = "sami_canonical_benchmark_builder_v5_split_coverage_bound"
 
 
 class BenchmarkBuildError(ValueError):
@@ -60,43 +60,29 @@ def _write_jsonl(staging: Path, relative: str, rows: list[dict[str, Any]]) -> No
 
 
 def _registry(config: BenchmarkAuditConfig) -> dict[str, Any]:
-    """Publish the complete configured source/license registry."""
+    """Publish technical roles plus minimal scientific source provenance."""
 
     return {
-        "schema_version": "sami_source_registry_v2_component_license_bound",
+        "schema_version": "sami_source_registry_v3_provenance_bound",
         "entries": [
             {
-                "source_key": source.source_key,
-                "display_name": source.display_name,
-                "local_path": source.local_path,
+                **source.provenance.model_dump(mode="json"),
                 "enabled": source.enabled,
-                "allowed_task_roles": list(source.allowed_task_roles),
+                "task_roles": list(source.task_roles),
                 "language_components": [
                     {
                         "component": component.component,
                         "component_key": component.component_key,
-                        "allowed_task_roles": list(component.allowed_task_roles),
+                        "task_roles": list(component.task_roles),
                         "split_policy": component.split_policy,
-                        **component.license.model_dump(mode="json"),
+                        "provenance": component.provenance.model_dump(mode="json"),
                     }
                     for component in source.language_components
                 ],
-                **source.license.model_dump(mode="json"),
             }
             for source in sorted(config.sources, key=lambda item: item.source_key)
         ],
     }
-
-
-def _license_is_reviewed_for_use(license_record: Any) -> bool:
-    """Return whether one license has named, non-unknown review evidence."""
-
-    return (
-        license_record.license_status != "unknown"
-        and license_record.license_name.lower() != "unknown"
-        and license_record.reviewed_by is not None
-        and license_record.review_date is not None
-    )
 
 
 def _language_parent_inputs(
@@ -105,7 +91,7 @@ def _language_parent_inputs(
     *,
     datasets_root: Path | None,
 ) -> tuple[tuple[LanguageParentInput, ...], dict[str, str], dict[str, str]]:
-    """Resolve licensed language records into exact-image parent groups."""
+    """Resolve selected language records into exact-image parent groups."""
 
     configured = {source.source_key: source for source in config.sources}
     selected: list[tuple[DescriptionSourceRecord, Path]] = []
@@ -122,23 +108,16 @@ def _language_parent_inputs(
         if (
             source is None
             or component is None
-            or record.component_license_key != component.component_key
-            or record.license != component.license
+            or record.component_key != component.component_key
             or record.split_policy != component.split_policy
         ):
-            raise BenchmarkBuildError(f"unbound language component/license: {record.record_id}")
-        materialize_for_training = record.training_eligible
-        materialize_for_test = record.split_policy == "permanent_test_only" and record.license.allowed_for_evaluation
-        if not materialize_for_training and not materialize_for_test:
-            continue
+            raise BenchmarkBuildError(f"unbound language component: {record.record_id}")
         role = "language_region" if record.role == "region_short_phrase" else "language_global"
-        if role not in component.allowed_task_roles:
-            raise BenchmarkBuildError(f"language role is not approved by the component registry: {record.record_id}")
-        if not _license_is_reviewed_for_use(record.license):
-            raise BenchmarkBuildError(f"language materialization requires reviewed license evidence: {record.record_id}")
+        if role not in component.task_roles:
+            raise BenchmarkBuildError(f"language role is absent from the component registry: {record.record_id}")
         if datasets_root is None:
-            raise BenchmarkBuildError("datasets_root is required for licensed language materialization")
-        prefix = f"datasets/{source.local_path}/"
+            raise BenchmarkBuildError("datasets_root is required for language materialization")
+        prefix = f"{source.provenance.source_root}/"
         if not record.image.logical_path.startswith(prefix):
             raise BenchmarkBuildError(f"language image path is outside its configured source root: {record.record_id}")
         physical = datasets_root / record.image.logical_path.removeprefix("datasets/")
@@ -154,15 +133,14 @@ def _language_parent_inputs(
             raise BenchmarkBuildError(f"language image hash changed after subset selection: {record.record_id}")
         selected.append((record, physical))
 
-    grouped: dict[tuple[str, str, str], list[tuple[DescriptionSourceRecord, Path]]] = {}
+    grouped: dict[tuple[str, str], list[tuple[DescriptionSourceRecord, Path]]] = {}
     for record, physical in selected:
-        license_sha256 = sha256_bytes(canonical_json_bytes(record.license.model_dump(mode="json")))
-        grouped.setdefault((record.source_key, record.image.sha256, license_sha256), []).append((record, physical))
+        grouped.setdefault((record.source_key, record.image.sha256), []).append((record, physical))
     inputs: list[LanguageParentInput] = []
     record_to_parent: dict[str, str] = {}
     forced: dict[str, str] = {}
-    for (source_key, image_sha256, license_sha256), members in sorted(grouped.items()):
-        parent_id = f"language-{source_key}-{image_sha256[:16]}-{license_sha256[:8]}"
+    for (source_key, image_sha256), members in sorted(grouped.items()):
+        parent_id = f"language-{source_key}-{image_sha256[:16]}"
         ordered_records = tuple(sorted((record for record, _ in members), key=lambda item: item.record_id))
         physical = min((path for _, path in members), key=lambda path: path.as_posix())
         inputs.append(LanguageParentInput(parent_id=parent_id, records=ordered_records, raw_image_path=physical))
@@ -208,15 +186,12 @@ def _canonical_description_records(
         source_record_sha256 = sha256_bytes(canonical_json_bytes(record.model_dump(mode="json")))
         canonical.append(
             CanonicalDescriptionRecord(
-                schema_version="sami_canonical_description_v2_component_license_bound",
+                schema_version="sami_canonical_description_v3_provenance_bound",
                 record_id=record.record_id,
                 parent_id=parent_id,
                 source_key=record.source_key,
                 component=record.component,
-                component_license_key=record.component_license_key,
-                component_license_sha256=sha256_bytes(
-                    canonical_json_bytes(record.license.model_dump(mode="json"))
-                ),
+                component_key=record.component_key,
                 role=record.role,
                 split_policy=record.split_policy,
                 split=parent.split,
@@ -234,82 +209,59 @@ def _canonical_description_records(
                     for answer in record.answers
                 ),
                 region_box_half_open=region_box,
-                training_eligible=record.training_eligible,
+                is_train_candidate=record.is_train_candidate,
             )
         )
     return tuple(canonical)
 
 
-def _license_report(
+def _provenance_report(
     config: BenchmarkAuditConfig,
     parent_inputs: tuple[SpatialParentInput, ...],
     description_records: tuple[DescriptionSourceRecord, ...],
     *,
     materialized_description_ids: set[str],
 ) -> dict[str, Any]:
-    """Prove every materialized source is explicitly reviewed and eligible."""
+    """Bind materialized rows to configured source/component provenance."""
 
-    top_level_licenses = {
-        source.source_key: source.license
-        for source in config.sources
-    }
-    component_licenses = {
-        component.component_key: component.license
+    sources = {source.source_key: source for source in config.sources}
+    components = {
+        component.component_key: component
         for source in config.sources
         for component in source.language_components
     }
-    scopes = {**top_level_licenses, **component_licenses}
-    violations = [
-        scope_key
-        for scope_key, license_record in scopes.items()
-        if license_record.allowed_for_training
-        and (
-            license_record.license_status == "unknown"
-            or license_record.license_name.lower() == "unknown"
-            or license_record.reviewed_by is None
-            or license_record.review_date is None
-        )
-    ]
-    materialized_sources = sorted({item.license.source_key for item in parent_inputs})
+    violations: list[str] = []
+    materialized_sources = sorted({item.source_registry_key for item in parent_inputs})
     for item in parent_inputs:
-        if (
-            item.license.source_key not in top_level_licenses
-            or item.license != top_level_licenses[item.license.source_key]
-        ):
-            violations.append(f"unbound_input_license:{item.license.source_key}")
-    materialized_language_sources: set[str] = set()
+        if item.source_registry_key not in sources:
+            violations.append(f"unbound_spatial_source:{item.source_registry_key}")
+    materialized_language_components: set[str] = set()
     for record in description_records:
         if record.record_id not in materialized_description_ids:
             continue
-        materialized_language_sources.add(record.component_license_key)
-        if (
-            record.component_license_key not in component_licenses
-            or record.license != component_licenses[record.component_license_key]
-        ):
-            violations.append(f"unbound_language_license:{record.record_id}")
-        if record.training_eligible and not record.license.allowed_for_training:
-            violations.append(f"language_training_not_allowed:{record.record_id}")
-        if record.split_policy == "permanent_test_only" and not record.license.allowed_for_evaluation:
-            violations.append(f"language_evaluation_not_allowed:{record.record_id}")
-        if not _license_is_reviewed_for_use(record.license):
-            violations.append(f"language_license_unreviewed:{record.record_id}")
+        materialized_language_components.add(record.component_key)
+        component = components.get(record.component_key)
+        if component is None or component.component != record.component:
+            violations.append(f"unbound_language_component:{record.record_id}")
+    binding_sha256 = {
+        source.source_key: sha256_bytes(canonical_json_bytes(source.provenance.model_dump(mode="json")))
+        for source in config.sources
+    }
+    binding_sha256.update(
+        {
+            component.component_key: sha256_bytes(canonical_json_bytes(component.provenance.model_dump(mode="json")))
+            for component in components.values()
+        }
+    )
     return {
-        "schema_version": "sami_license_report_v2_component_license_bound",
+        "schema_version": "sami_provenance_report_v1",
         "builder_version": BENCHMARK_BUILDER_VERSION,
-        "training_eligible_sources": sorted(
-            scope_key
-            for scope_key, license_record in scopes.items()
-            if license_record.allowed_for_training
-        ),
-        "materialized_training_sources": materialized_sources,
-        "materialized_language_sources": sorted(materialized_language_sources),
-        "unknown_license_sources": sorted(
-            scope_key
-            for scope_key, license_record in scopes.items()
-            if license_record.license_status == "unknown"
-        ),
-        "training_eligible_unknown_count": len(set(violations)),
-        "errors": [f"license_gate_violation:{value}" for value in sorted(set(violations))],
+        "source_count": len(sources),
+        "language_component_count": len(components),
+        "materialized_spatial_sources": materialized_sources,
+        "materialized_language_components": sorted(materialized_language_components),
+        "binding_sha256": dict(sorted(binding_sha256.items())),
+        "errors": sorted(set(violations)),
         "warnings": [],
     }
 
@@ -333,7 +285,7 @@ def build_canonical_benchmark(
     if config.mode == "small":
         counts: dict[str, int] = {}
         for item in parent_inputs:
-            counts[item.license.source_key] = counts.get(item.license.source_key, 0) + 1
+            counts[item.source_registry_key] = counts.get(item.source_registry_key, 0) + 1
         if any(count > config.build.small_max_parents_per_source for count in counts.values()):
             raise BenchmarkBuildError("Small parent count exceeds the configured per-source limit")
     language_inputs, description_parent_ids, language_forced_splits = _language_parent_inputs(
@@ -341,14 +293,14 @@ def build_canonical_benchmark(
         description_records,
         datasets_root=datasets_root,
     )
-    license_report = _license_report(
+    provenance_report = _provenance_report(
         config,
         parent_inputs,
         description_records,
         materialized_description_ids=set(description_parent_ids),
     )
-    if license_report["errors"]:
-        raise BenchmarkBuildError("license report blocks canonical materialization")
+    if provenance_report["errors"]:
+        raise BenchmarkBuildError("provenance report contains unbound materialized rows")
 
     config_hash = sha256_bytes(canonical_json_bytes(config.model_dump(mode="json")))
     source_input_hash = sha256_bytes(
@@ -357,7 +309,7 @@ def build_canonical_benchmark(
                 {
                     "parent_id": item.parent_id,
                     "source_record_sha256": item.source_record_sha256,
-                    "license": item.license.model_dump(mode="json"),
+                    "source_registry_key": item.source_registry_key,
                 }
                 for item in sorted(parent_inputs, key=lambda value: value.parent_id)
             ]
@@ -410,6 +362,7 @@ def build_canonical_benchmark(
             settings=config.build.split,
             seed=config.seed,
             forced_splits=merged_forced_splits,
+            coverage_parent_ids=tuple(item.parent.parent_id for item in materialized_spatial),
         )
         parents = apply_parent_splits(audit_parents, split)
         tasks = expand_task_views(
@@ -452,6 +405,7 @@ def build_canonical_benchmark(
                 "seed": config.seed,
                 "settings": config.build.split.model_dump(mode="json"),
                 "forced_splits": dict(sorted(merged_forced_splits.items())),
+                "coverage_parent_ids": list(split.coverage_parent_ids),
                 "aggregate_sha256": split.aggregate_sha256,
                 "components": list(split.components),
                 "parent_to_split": split.parent_to_split,
@@ -472,16 +426,11 @@ def build_canonical_benchmark(
                 f"descriptions/{split_name}.jsonl",
                 [row for row in canonical_description_rows if row["split"] == split_name],
             )
-        _write_jsonl(
+        _write_json(
             staging,
-            "descriptions/train_eligible.jsonl",
-            [
-                row
-                for row in canonical_description_rows
-                if row["training_eligible"] and row["split"] == "train"
-            ],
+            "reports/provenance_report.json",
+            provenance_report,
         )
-        _write_json(staging, "reports/license_report.json", license_report)
         cross_split = sum(
             len({split.parent_to_split[parent_id] for parent_id in cluster["parent_ids"]}) > 1
             for cluster in duplicates.clusters
@@ -517,8 +466,8 @@ def build_canonical_benchmark(
             "canonical_description_record_count": len(canonical_descriptions),
             "language_parent_count": len(materialized_language),
             "spatial_parent_count": len(materialized_spatial),
-            "description_train_eligible_count": sum(
-                record.training_eligible and record.split == "train" for record in canonical_descriptions
+            "description_train_target_count": sum(
+                record.is_train_candidate and record.split == "train" for record in canonical_descriptions
             ),
             "valid_pixel_count": sum(item.valid_pixel_count for item in materialized_spatial)
             + sum(item.valid_pixel_count for item in materialized_language),
@@ -547,7 +496,7 @@ def build_canonical_benchmark(
             "duplicate_version": DUPLICATE_PROTOCOL_VERSION,
             "split_version": SPLIT_PROTOCOL_VERSION,
             "task_expansion_version": TASK_EXPANSION_VERSION,
-            "description_contract_version": "sami_canonical_description_v2_component_license_bound",
+            "description_contract_version": "sami_canonical_description_v3_provenance_bound",
             "validation_version": VALIDATION_VERSION,
             "mode": config.mode,
             "seed": config.seed,

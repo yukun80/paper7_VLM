@@ -3,7 +3,12 @@
   "audit_date": "2026-07-20",
   "timezone": "Asia/Shanghai",
   "phase": "P0",
-  "scope": "live repository, adjacent data roots, licenses, legacy assets, and deletion gates",
+  "scope": "live repository, adjacent data roots, scientific provenance, code/dependency licenses, legacy assets, and deletion gates",
+  "governance_amendment": {
+    "date": "2026-07-21",
+    "decision": "ADR-0003",
+    "effect": "Historical raw-data license and permission conclusions are superseded. P0-P7 data inclusion is scientific and technical; raw-data publication review is a separate future activity."
+  },
   "authority": {
     "primary": [
       "AGENTS.md",
@@ -150,9 +155,9 @@
         "val_data",
         "val_label"
       ],
-      "local_license_document": null,
-      "v3_training_eligible": false,
-      "reason": "license unknown"
+      "source_document": null,
+      "technical_status": "present_requires_grouping_resolution",
+      "technical_notes": "P1 must resolve original-scene grouping and descriptor-to-scene mapping."
     },
     {
       "source": "LMHLD",
@@ -163,9 +168,9 @@
         "Comparison_dataset_same_patch_size",
         "LMHLD_dataset_different_patch_sizes"
       ],
-      "local_license_document": null,
-      "v3_training_eligible": false,
-      "reason": "license unknown and archive contents require P1 raw scan"
+      "source_document": null,
+      "technical_status": "present_requires_band_and_grouping_resolution",
+      "technical_notes": "Archive contents require read-only scanning, band semantics, and parent/group resolution."
     },
     {
       "source": "Sen12Landslides",
@@ -178,11 +183,10 @@
         "s1dsc",
         "s2"
       ],
-      "local_license_document": "/home/yukun80/codes/datasets/Sen12Landslides/README.md",
-      "license_document_sha256": "77a5f542e7d57ff89ec62da8bf05d51c257700507bb24a04a3e6cffe1d5404a2",
-      "observed_license": "CC-BY-4.0 with underlying Sentinel/Copernicus/DEM terms",
-      "v3_training_eligible": false,
-      "reason": "P1 must register exact attribution, underlying product terms, and a single/contemporaneous temporal slice before eligibility"
+      "source_document": "/home/yukun80/codes/datasets/Sen12Landslides/README.md",
+      "source_document_sha256": "77a5f542e7d57ff89ec62da8bf05d51c257700507bb24a04a3e6cffe1d5404a2",
+      "technical_status": "resolved_for_small_spatial_materialization",
+      "technical_notes": "P1 formal loader selects one nearest contemporaneous S1 ascending, S1 descending, and S2 acquisition per event and propagates DEM plus valid masks."
     },
     {
       "source": "landslide4sense",
@@ -192,9 +196,9 @@
       "observed_top_level_entries": [
         "TrainData"
       ],
-      "local_license_document": null,
-      "v3_training_eligible": false,
-      "reason": "license unknown"
+      "source_document": null,
+      "technical_status": "present_requires_band_and_grouping_resolution",
+      "technical_notes": "P1 must resolve band semantics and stable parent/group identity."
     },
     {
       "source": "multimodal-landslide-dataset",
@@ -207,9 +211,9 @@
         "Test_XiZ.zip",
         "multimodal-landslide-dataset"
       ],
-      "local_license_document": null,
-      "v3_training_eligible": false,
-      "reason": "license unknown"
+      "source_document": null,
+      "technical_status": "present_requires_insar_semantics",
+      "technical_notes": "P1 must resolve InSAR units, sign convention, coordinates, valid regions, and grouping."
     },
     {
       "source": "LandslideBench_agent",
@@ -223,9 +227,9 @@
         "qwen3vl_landslide_train.jsonl",
         "qwen3vl_landslide_val.jsonl"
       ],
-      "local_license_document": null,
-      "v3_training_eligible": false,
-      "reason": "derived local package with no source registry/license proof; cannot be treated as raw canonical input"
+      "source_document": null,
+      "technical_status": "present_derived_requires_provenance_and_multizoom_resolution",
+      "technical_notes": "Derived rows require traceable original-scene provenance and multi-zoom leakage-safe grouping before canonical use."
     },
     {
       "source": "MMRS-1M",
@@ -238,9 +242,9 @@
         "caption",
         "json"
       ],
-      "local_license_document": null,
-      "v3_training_eligible": false,
-      "reason": "aggregate root license absent; only the five named caption sources and DIOR-RSVG may be audited individually in P1"
+      "source_document": null,
+      "technical_status": "resolved_selected_language_components",
+      "technical_notes": "P1 selects only RSICD, UCM-Captions, Sydney-Captions, NWPU-Captions, RSITMD, and DIOR-RSVG; aggregate total.json and unrelated tasks stay outside scope."
     },
     {
       "source": "RSGPT",
@@ -250,10 +254,9 @@
       "observed_top_level_entries": [
         "dataset"
       ],
-      "local_license_document": null,
-      "observed_upstream_restriction": "source imagery and annotations are academic-only; commercial use prohibited",
-      "v3_training_eligible": false,
-      "reason": "human acceptance of academic-only use and exact source registry is required"
+      "source_document": null,
+      "technical_status": "resolved_selected_language_components",
+      "technical_notes": "P1 selects RSICap and keeps RSIEval as permanent test data; no runtime permission or authorization field is used."
     },
     {
       "source": "DisasterM3",
@@ -265,11 +268,10 @@
         "DisasterM3_Instruct",
         "README.md"
       ],
-      "local_license_document": "/home/yukun80/codes/datasets/DisasterM3/README.md",
-      "license_document_sha256": "5b941adb1bbf27303aa92d97a7a1e1526582e91cc11dd80e739c58782325c1b4",
-      "observed_license": "CC-BY-NC-SA-4.0; academic use only",
-      "v3_training_eligible": false,
-      "reason": "bi-temporal disaster assessment is outside the frozen task; taxonomy/reference use only"
+      "source_document": "/home/yukun80/codes/datasets/DisasterM3/README.md",
+      "source_document_sha256": "5b941adb1bbf27303aa92d97a7a1e1526582e91cc11dd80e739c58782325c1b4",
+      "technical_status": "inventory_only_outside_frozen_single_time_scope",
+      "technical_notes": "Bi-temporal disaster assessment is outside the frozen single-time or contemporaneous multi-source task."
     }
   ],
   "legacy_code_inventory": {
@@ -519,7 +521,7 @@
     "The audited worktree began clean and is suitable as the proposed baseline commit, subject to human approval.",
     "No deletion gate is currently open because no greenfield replacement phase has been accepted and no baseline tag/branch has been verified.",
     "Raw datasets and accepted legacy artifacts remain read-only preservation assets.",
-    "Unknown or incomplete data licenses are hard exclusions from any training-eligible v3 index.",
+    "Raw-data inclusion is decided by frozen scientific scope and technical validation; runtime permission fields and human source authorization are not used.",
     "The old benchmark root is empty, so no historical report may be promoted to a current live validation result.",
     "P1 must scan raw sources directly and must not read old benchmark, cache, config, or checkpoint protocols."
   ]

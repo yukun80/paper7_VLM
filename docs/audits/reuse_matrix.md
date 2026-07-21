@@ -19,7 +19,7 @@
 
 | Current asset | Current responsibility | P0 decision | Greenfield destination or gate | Constraints |
 |---|---|---|---|---|
-| Raw `/home/yukun80/codes/datasets/*` | Source imagery, masks, captions, and provenance | Preserve read-only | P1 raw source scan and license registry | Never modify raw data. Unknown licenses cannot enter a training-eligible index. |
+| Raw `/home/yukun80/codes/datasets/*` | Source imagery, masks, captions, and provenance | Preserve read-only | P1 technical scan and minimal provenance registry | Never modify raw data. Inclusion is decided only by scientific scope, readability, parseability, task evidence, grouping, leakage control, coordinates, valid regions, and duplicate validation. |
 | `/home/yukun80/codes/benchmark/` | Intended generated benchmark root | Preserve path; currently empty | P1 creates a new, separately named Benchmark v3 package | Never reconstruct old V2/M1.1/Bridge/Unified implicitly. |
 | `outputs/` | Legacy reports, caches, checkpoints, logs, metrics, visualizations | Preserve read-only | Source crosswalk and fair-comparison evidence only | Historical reports bind missing benchmark directories and are not current replay evidence. |
 | `models_zoo/Qwen3-VL-2B-Instruct/` | Frozen local Qwen3-VL-2B model | Preserve read-only; declared upstream model dependency in P2 | Qwen wrapper under `src/sami_gsd/model/` | Verify exact model-card revision/license; no copied Qwen repository. |
@@ -86,8 +86,8 @@
 | PSALM | LMM-updated mask tokens and proposal/classification decoupling | Minimal G0 fallback with attribution | Do not copy LLaVA/Swin/full PSALM stack. |
 | Grasp Any Region | Mask prompts, global context, RoI-aligned replay | Prefer independent GAR-lite implementation; attribute any adapted small section | Do not copy AnyRes/PerceptionLM/XTuner/data pipeline. |
 | MIGRANT | Task taxonomy and data-centric curriculum | Reference only | Do not copy vendor dependencies or its task-specific runtime. |
-| RSGPT | RSICap/RSIEval roles | Data only under academic authorization | Do not copy code; keep commercial restriction explicit. |
-| EarthGPT/MMRS-1M | Source-specific language subset and task format | Parse only individually licensed sources | Do not inherit the general-assistant objective, aggregate `total.json`, or unlicensed subsets. |
+| RSGPT | RSICap/RSIEval roles | Parse locally provided scientific data with minimal provenance | Do not copy upstream code; preserve official-test semantics for RSIEval. |
+| EarthGPT/MMRS-1M | Source-specific language subset and task format | Parse only the technically selected source components | Do not inherit the general-assistant objective, aggregate `total.json`, classification, ordinary detection, VQA, or unrelated subsets. |
 | Qwen3-VL-Seg | Box-guided compact decoder and GT/predicted-box evaluation split | Paper-derived independent P3 candidate | No official implementation was established; third-party code is not an official source. |
 
 ## Assets explicitly outside the new task
@@ -100,4 +100,9 @@
 
 ## P0 conclusion
 
-The reusable core is a small set of data semantics, scientific invariants, engineering patterns, raw sources with proven licenses, and declared upstream dependencies. No old package path is approved as a greenfield runtime dependency. All code removal remains closed until the manifest gates and human approvals are satisfied.
+The reusable core is a small set of data semantics, scientific invariants, engineering patterns,
+locally provided raw sources with sufficient technical evidence, and declared upstream
+dependencies. No old package path is approved as a greenfield runtime dependency. Raw-data
+license approval is not a P0-P7 builder gate; future public release review remains separate. All
+legacy-code removal remains closed until the manifest gates and human deletion approvals are
+satisfied.

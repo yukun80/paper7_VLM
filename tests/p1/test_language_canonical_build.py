@@ -13,7 +13,6 @@ import numpy as np
 import yaml
 from PIL import Image
 
-from sami_gsd.contracts.canonical import LicenseRecord
 from sami_gsd.contracts.config import BenchmarkAuditConfig
 from sami_gsd.contracts.language import (
     DescriptionSourceRecord,
@@ -21,9 +20,9 @@ from sami_gsd.contracts.language import (
     LanguageImageRef,
 )
 from sami_gsd.data.adapters.formats import read_image_header
-from sami_gsd.data.builder import build_canonical_benchmark
+from sami_gsd.data.builder import BenchmarkBuildError, build_canonical_benchmark
 from sami_gsd.data.validation import validate_benchmark_payload, validate_published_benchmark
-from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
+from sami_gsd.utilities.artifacts import sha256_file
 from tests.p1.test_builder_validation import synthetic_build_config
 from tests.p1.test_materialization import spatial_input
 from tests.p1.test_source_adapters import write_png
@@ -33,68 +32,48 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 INDEX_SHA = "9" * 64
 
 
-def reviewed_license(source_key: str) -> LicenseRecord:
-    """Return a permissive reviewed language-source license for fixtures."""
-
-    return LicenseRecord(
-        source_key=source_key,
-        license_status="verified",
-        license_name="CC-BY-4.0",
-        license_url_or_document=f"licenses/{source_key}.txt",
-        allowed_for_training=True,
-        allowed_for_evaluation=True,
-        allowed_for_redistribution=False,
-        academic_only=True,
-        attribution=f"Synthetic {source_key} language fixture.",
-        reviewed_by="test-suite",
-        review_date="2026-07-21",
-    )
-
-
-def component_license(source_key: str, component: str) -> LicenseRecord:
-    """Return the exact fixture policy, keeping RSIEval test-only."""
-
-    license_record = reviewed_license(source_key)
-    if component == "rsieval":
-        return license_record.model_copy(update={"allowed_for_training": False})
-    return license_record
-
-
 def language_build_config() -> BenchmarkAuditConfig:
-    """Extend the spatial synthetic config with licensed language sources."""
+    """Extend the spatial synthetic config with provenance-bound language sources."""
 
     payload = synthetic_build_config().model_dump(mode="json")
     component_sets = {
         "mmrs_1m": ("rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg"),
         "rsgpt": ("rsicap", "rsieval"),
     }
-    for source_key, local_path in (("mmrs_1m", "MMRS-1M"), ("rsgpt", "RSGPT")):
-        aggregate = reviewed_license(source_key).model_copy(
-            update={
-                "allowed_for_training": False,
-                "allowed_for_evaluation": False,
-                "allowed_for_redistribution": False,
-            }
-        )
+    for source_key, relative_root in (("mmrs_1m", "MMRS-1M"), ("rsgpt", "RSGPT")):
         payload["sources"].append(
             {
                 "source_key": source_key,
-                "display_name": f"Synthetic {source_key}",
-                "local_path": local_path,
                 "enabled": True,
-                "allowed_task_roles": ["inventory"],
-                "license": aggregate.model_dump(mode="json"),
+                "task_roles": ["inventory"],
+                "provenance": {
+                    "source_key": source_key,
+                    "source_name": f"Synthetic {source_key}",
+                    "source_root": f"datasets/{relative_root}",
+                    "source_document": None,
+                    "citation_key": source_key,
+                    "upstream_url": None,
+                    "provenance_notes": "synthetic local research fixture",
+                },
                 "language_components": [
                     {
                         "component": component,
                         "component_key": f"{source_key}:{component}",
-                        "allowed_task_roles": [
+                        "task_roles": [
                             "language_region" if component == "dior_rsvg" else "language_global"
                         ],
                         "split_policy": (
                             "permanent_test_only" if component == "rsieval" else "train_candidate"
                         ),
-                        "license": component_license(source_key, component).model_dump(mode="json"),
+                        "provenance": {
+                            "source_key": f"{source_key}:{component}",
+                            "source_name": f"Synthetic {source_key} {component}",
+                            "source_root": f"datasets/{relative_root}",
+                            "source_document": None,
+                            "citation_key": component,
+                            "upstream_url": None,
+                            "provenance_notes": "synthetic local research fixture",
+                        },
                     }
                     for component in component_sets[source_key]
                 ],
@@ -125,7 +104,6 @@ def description_record(
     logical_path: str,
     text: str,
     split_policy: str = "train_candidate",
-    training_eligible: bool = True,
     box: tuple[float, float, float, float] | None = None,
 ) -> DescriptionSourceRecord:
     """Build one strict source row from a real synthetic image."""
@@ -133,11 +111,11 @@ def description_record(
     header = read_image_header(image_path)
     return DescriptionSourceRecord.model_validate(
         {
-            "schema_version": "sami_description_source_v2_component_license_bound",
+            "schema_version": "sami_description_source_v3_provenance_bound",
             "record_id": record_id,
             "source_key": source_key,
             "component": component,
-            "component_license_key": f"{source_key}:{component}",
+            "component_key": f"{source_key}:{component}",
             "source_group_id": f"group/{record_id}",
             "role": role,
             "split_policy": split_policy,
@@ -156,8 +134,7 @@ def description_record(
                 ).model_dump(mode="json")
             ],
             "normalized_box_xyxy": box,
-            "license": component_license(source_key, component).model_dump(mode="json"),
-            "training_eligible": training_eligible,
+            "is_train_candidate": split_policy == "train_candidate",
         }
     )
 
@@ -209,7 +186,6 @@ class CanonicalLanguageBuildTests(unittest.TestCase):
                     logical_path="datasets/RSGPT/rsieval.png",
                     text="Permanent test caption.",
                     split_policy="permanent_test_only",
-                    training_eligible=False,
                 ),
                 description_record(
                     record_id="mmrs/noise-caption",
@@ -231,12 +207,7 @@ class CanonicalLanguageBuildTests(unittest.TestCase):
                     box=(0.1, 0.2, 0.8, 0.9),
                 ),
             )
-            language_license_sha256 = sha256_bytes(
-                canonical_json_bytes(component_license("mmrs_1m", "nwpu").model_dump(mode="json"))
-            )
-            noise_parent = (
-                f"language-mmrs_1m-{sha256_file(noise)[:16]}-{language_license_sha256[:8]}"
-            )
+            noise_parent = f"language-mmrs_1m-{sha256_file(noise)[:16]}"
             first_root = root / "build-one"
             second_root = root / "build-two"
             first = build_canonical_benchmark(
@@ -273,10 +244,7 @@ class CanonicalLanguageBuildTests(unittest.TestCase):
             self.assertTrue(all(not row["image_ref"]["path"].startswith("datasets/") for row in rows))
             self.assertEqual(len(list(first_root.glob("assets/language-*"))), 3)
 
-            train_rows = [
-                json.loads(line)
-                for line in (first_root / "descriptions/train_eligible.jsonl").read_text().splitlines()
-            ]
+            train_rows = [json.loads(line) for line in (first_root / "descriptions/train.jsonl").read_text().splitlines()]
             self.assertEqual({row["record_id"] for row in train_rows}, {"mmrs/noise-caption", "mmrs/noise-region"})
             t2_rows = sum(
                 len((first_root / f"tasks/t2_referring/{split}.jsonl").read_text().splitlines())
@@ -292,60 +260,46 @@ class CanonicalLanguageBuildTests(unittest.TestCase):
                 for component in mmrs["language_components"]
                 if component["component"] == "rsicd"
             )
-            rsicd["attribution"] = "Tampered after publication."
+            rsicd["provenance"]["provenance_notes"] = "tampered provenance"
             registry_path.write_text(yaml.safe_dump(registry, sort_keys=True), encoding="utf-8")
             tampered = validate_benchmark_payload(first_root, schemas_root=REPOSITORY_ROOT / "schemas")
             self.assertTrue(
                 any(
-                    error == "description_component_license_mismatch:mmrs/shared-a"
+                    error == "provenance_report_replay_mismatch:binding_sha256"
                     for error in tampered["errors"]
                 )
             )
 
-    def test_unapproved_language_rows_remain_audit_only_without_raw_decode(self) -> None:
-        """A licensed spatial build may retain, but never materialize, denied language rows."""
+    def test_missing_selected_image_blocks_publication(self) -> None:
+        """Technical path/readability failure stops before an output directory is published."""
 
-        payload = language_build_config().model_dump(mode="json")
-        mmrs_source = next(source for source in payload["sources"] if source["source_key"] == "mmrs_1m")
-        rsicd_policy = next(
-            component
-            for component in mmrs_source["language_components"]
-            if component["component"] == "rsicd"
-        )
-        rsicd_policy["license"]["allowed_for_training"] = False
-        rsicd_policy["license"]["allowed_for_evaluation"] = False
-        config = BenchmarkAuditConfig.model_validate(payload)
+        config = language_build_config()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             missing_after_selection = root / "selected.png"
             write_png(missing_after_selection)
-            approved = description_record(
-                record_id="mmrs/audit-only",
+            selected = description_record(
+                record_id="mmrs/missing",
                 source_key="mmrs_1m",
                 component="rsicd",
                 role="global_caption",
                 image_path=missing_after_selection,
                 logical_path="datasets/MMRS-1M/missing-after-selection.png",
-                text="Audit-only caption.",
+                text="Selected caption.",
             )
-            denied_payload = approved.model_dump(mode="json")
-            denied_payload["license"] = rsicd_policy["license"]
-            denied_payload["training_eligible"] = False
-            denied = DescriptionSourceRecord.model_validate(denied_payload)
             missing_after_selection.unlink()
 
             output = root / "build"
-            build_canonical_benchmark(
-                config,
-                parent_inputs=(spatial_input(),),
-                description_records=(denied,),
-                output_dir=output,
-                schemas_root=REPOSITORY_ROOT / "schemas",
-            )
-            self.assertEqual((output / "descriptions/all.jsonl").read_text(), "")
-            self.assertEqual(len((output / "manifests/description_source_subset.jsonl").read_text().splitlines()), 1)
-            replay = validate_published_benchmark(output, schemas_root=REPOSITORY_ROOT / "schemas")
-            self.assertEqual(replay["errors"], [])
+            with self.assertRaisesRegex(BenchmarkBuildError, "language image is missing"):
+                build_canonical_benchmark(
+                    config,
+                    parent_inputs=(spatial_input(),),
+                    description_records=(selected,),
+                    output_dir=output,
+                    schemas_root=REPOSITORY_ROOT / "schemas",
+                    datasets_root=root / "datasets",
+                )
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

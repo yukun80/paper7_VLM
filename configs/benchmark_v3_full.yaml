@@ -37,285 +37,80 @@ build:
   small_max_parents_per_source: 4096
 sources:
   - source_key: gdcld
-    display_name: GDCLD
-    local_path: GDCLD
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: gdcld
-      license_status: unknown
-      license_name: unknown
-      license_url_or_document: null
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: false
-      attribution: Pending source and license review; no use authorized.
-      reviewed_by: null
-      review_date: null
+    task_roles: [inventory]
+    provenance: {source_key: gdcld, source_name: GDCLD, source_root: datasets/GDCLD, source_document: null, citation_key: gdcld, upstream_url: null, provenance_notes: local research copy provided by project owner}
   - source_key: lmhld
-    display_name: LMHLD
-    local_path: LMHLD
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: lmhld
-      license_status: unknown
-      license_name: unknown
-      license_url_or_document: null
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: false
-      attribution: Pending source and license review; no use authorized.
-      reviewed_by: null
-      review_date: null
+    task_roles: [inventory]
+    provenance: {source_key: lmhld, source_name: LMHLD, source_root: datasets/LMHLD, source_document: null, citation_key: lmhld, upstream_url: null, provenance_notes: local research copy provided by project owner}
   - source_key: sen12_landslides
-    display_name: Sen12Landslides
-    local_path: Sen12Landslides
     enabled: true
-    allowed_task_roles: [inventory, t1, t2]
-    license:
-      source_key: sen12_landslides
-      license_status: verified
-      license_name: CC-BY-4.0
-      license_url_or_document: datasets/Sen12Landslides/README.md
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: false
-      attribution: Preserve dataset, Sentinel, Copernicus and DEM attribution; human eligibility approval remains pending.
-      reviewed_by: P0 engineering audit
-      review_date: 2026-07-20
+    task_roles: [inventory, t1, t2]
+    provenance: {source_key: sen12_landslides, source_name: Sen12Landslides, source_root: datasets/Sen12Landslides, source_document: datasets/Sen12Landslides/README.md, citation_key: sen12_landslides, upstream_url: null, provenance_notes: local research copy provided by project owner}
   - source_key: landslide4sense
-    display_name: Landslide4Sense
-    local_path: landslide4sense
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: landslide4sense
-      license_status: unknown
-      license_name: unknown
-      license_url_or_document: null
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: false
-      attribution: Pending official dataset terms; no use authorized.
-      reviewed_by: null
-      review_date: null
+    task_roles: [inventory]
+    provenance: {source_key: landslide4sense, source_name: Landslide4Sense, source_root: datasets/landslide4sense, source_document: null, citation_key: landslide4sense, upstream_url: null, provenance_notes: local research copy provided by project owner}
   - source_key: multimodal_landslide
-    display_name: multimodal-landslide-dataset
-    local_path: multimodal-landslide-dataset
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: multimodal_landslide
-      license_status: unknown
-      license_name: unknown
-      license_url_or_document: null
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: false
-      attribution: Pending source and license review; no use authorized.
-      reviewed_by: null
-      review_date: null
+    task_roles: [inventory]
+    provenance: {source_key: multimodal_landslide, source_name: multimodal-landslide-dataset, source_root: datasets/multimodal-landslide-dataset, source_document: null, citation_key: multimodal_landslide, upstream_url: null, provenance_notes: local research copy provided by project owner}
   - source_key: landslidebench_agent
-    display_name: LandslideBench_agent derived assets
-    local_path: LandslideBench_agent
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: landslidebench_agent
-      license_status: unknown
-      license_name: unknown-derived
-      license_url_or_document: null
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: false
-      attribution: Derived asset provenance must be traced to an authorized raw source; no use authorized.
-      reviewed_by: null
-      review_date: null
+    task_roles: [inventory]
+    provenance: {source_key: landslidebench_agent, source_name: LandslideBench_agent derived assets, source_root: datasets/LandslideBench_agent, source_document: null, citation_key: landslidebench_agent, upstream_url: null, provenance_notes: local derived research copy provided by project owner}
   - source_key: mmrs_1m
-    display_name: MMRS-1M aggregate
-    local_path: MMRS-1M
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: mmrs_1m
-      license_status: unknown
-      license_name: per-component-review-required
-      license_url_or_document: null
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: false
-      attribution: Aggregate terms do not replace component image and annotation licenses; no use authorized.
-      reviewed_by: null
-      review_date: null
+    task_roles: [inventory]
+    provenance: {source_key: mmrs_1m, source_name: MMRS-1M aggregate, source_root: datasets/MMRS-1M, source_document: null, citation_key: mmrs_1m, upstream_url: null, provenance_notes: local research copy provided by project owner}
     language_components:
       - component: rsicd
         component_key: mmrs_1m:rsicd
-        allowed_task_roles: [language_global]
+        task_roles: [language_global]
         split_policy: train_candidate
-        license:
-          source_key: mmrs_1m
-          license_status: unknown
-          license_name: unknown
-          license_url_or_document: null
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: false
-          attribution: RSICD image and caption terms require an independent owner decision; no use authorized.
-          reviewed_by: null
-          review_date: null
+        provenance: {source_key: 'mmrs_1m:rsicd', source_name: MMRS-1M RSICD captions, source_root: datasets/MMRS-1M, source_document: datasets/MMRS-1M/json/caption/caption_rsicd.json, citation_key: rsicd, upstream_url: null, provenance_notes: local research copy provided by project owner}
       - component: ucm
         component_key: mmrs_1m:ucm
-        allowed_task_roles: [language_global]
+        task_roles: [language_global]
         split_policy: train_candidate
-        license:
-          source_key: mmrs_1m
-          license_status: unknown
-          license_name: unknown
-          license_url_or_document: null
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: false
-          attribution: UCM-Captions image and caption terms require an independent owner decision; no use authorized.
-          reviewed_by: null
-          review_date: null
+        provenance: {source_key: 'mmrs_1m:ucm', source_name: MMRS-1M UCM captions, source_root: datasets/MMRS-1M, source_document: datasets/MMRS-1M/json/caption/caption_ucm.json, citation_key: ucm_captions, upstream_url: null, provenance_notes: local research copy provided by project owner}
       - component: sydney
         component_key: mmrs_1m:sydney
-        allowed_task_roles: [language_global]
+        task_roles: [language_global]
         split_policy: train_candidate
-        license:
-          source_key: mmrs_1m
-          license_status: unknown
-          license_name: unknown
-          license_url_or_document: null
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: false
-          attribution: Sydney-Captions image and caption terms require an independent owner decision; no use authorized.
-          reviewed_by: null
-          review_date: null
+        provenance: {source_key: 'mmrs_1m:sydney', source_name: MMRS-1M Sydney captions, source_root: datasets/MMRS-1M, source_document: datasets/MMRS-1M/json/caption/caption_syndney.json, citation_key: sydney_captions, upstream_url: null, provenance_notes: local research copy provided by project owner}
       - component: nwpu
         component_key: mmrs_1m:nwpu
-        allowed_task_roles: [language_global]
+        task_roles: [language_global]
         split_policy: train_candidate
-        license:
-          source_key: mmrs_1m
-          license_status: unknown
-          license_name: unknown
-          license_url_or_document: null
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: false
-          attribution: NWPU-Captions image and caption terms require an independent owner decision; no use authorized.
-          reviewed_by: null
-          review_date: null
+        provenance: {source_key: 'mmrs_1m:nwpu', source_name: MMRS-1M NWPU captions, source_root: datasets/MMRS-1M, source_document: datasets/MMRS-1M/json/caption/caption_nwpu.json, citation_key: nwpu_captions, upstream_url: null, provenance_notes: local research copy provided by project owner}
       - component: rsitmd
         component_key: mmrs_1m:rsitmd
-        allowed_task_roles: [language_global]
+        task_roles: [language_global]
         split_policy: train_candidate
-        license:
-          source_key: mmrs_1m
-          license_status: unknown
-          license_name: unknown
-          license_url_or_document: null
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: false
-          attribution: RSITMD image and caption terms require an independent owner decision; no use authorized.
-          reviewed_by: null
-          review_date: null
+        provenance: {source_key: 'mmrs_1m:rsitmd', source_name: MMRS-1M RSITMD captions, source_root: datasets/MMRS-1M, source_document: datasets/MMRS-1M/json/caption/caption_rsitmd.json, citation_key: rsitmd, upstream_url: null, provenance_notes: local research copy provided by project owner}
       - component: dior_rsvg
         component_key: mmrs_1m:dior_rsvg
-        allowed_task_roles: [language_region]
+        task_roles: [language_region]
         split_policy: train_candidate
-        license:
-          source_key: mmrs_1m
-          license_status: unknown
-          license_name: unknown
-          license_url_or_document: null
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: false
-          attribution: DIOR-RSVG image and expression terms require an independent owner decision; no use authorized.
-          reviewed_by: null
-          review_date: null
+        provenance: {source_key: 'mmrs_1m:dior_rsvg', source_name: MMRS-1M DIOR-RSVG expressions, source_root: datasets/MMRS-1M, source_document: datasets/MMRS-1M/json/RSVG/rsvg_trainval.json, citation_key: dior_rsvg, upstream_url: null, provenance_notes: local research copy provided by project owner}
   - source_key: rsgpt
-    display_name: RSGPT RSICap and RSIEval
-    local_path: RSGPT
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: rsgpt
-      license_status: restricted
-      license_name: academic-only-DOTA-derived
-      license_url_or_document: https://github.com/Lavender105/RSGPT
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: true
-      attribution: DOTA-derived imagery is academic-only and commercial use is prohibited; explicit owner approval remains pending.
-      reviewed_by: P0 engineering audit
-      review_date: 2026-07-20
+    task_roles: [inventory]
+    provenance: {source_key: rsgpt, source_name: RSGPT RSICap and RSIEval, source_root: datasets/RSGPT, source_document: null, citation_key: rsgpt, upstream_url: null, provenance_notes: local research copy provided by project owner}
     language_components:
       - component: rsicap
         component_key: rsgpt:rsicap
-        allowed_task_roles: [language_global]
+        task_roles: [language_global]
         split_policy: train_candidate
-        license:
-          source_key: rsgpt
-          license_status: restricted
-          license_name: academic-only-DOTA-derived
-          license_url_or_document: https://github.com/Lavender105/RSGPT
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: true
-          attribution: RSICap uses DOTA-derived imagery; academic-only restrictions and owner approval remain pending.
-          reviewed_by: P0 engineering audit
-          review_date: 2026-07-20
+        provenance: {source_key: 'rsgpt:rsicap', source_name: RSGPT RSICap captions, source_root: datasets/RSGPT, source_document: datasets/RSGPT/dataset/RSICap/captions.json, citation_key: rsicap, upstream_url: null, provenance_notes: local research copy provided by project owner}
       - component: rsieval
         component_key: rsgpt:rsieval
-        allowed_task_roles: [language_global]
+        task_roles: [language_global]
         split_policy: permanent_test_only
-        license:
-          source_key: rsgpt
-          license_status: restricted
-          license_name: academic-only-DOTA-derived
-          license_url_or_document: https://github.com/Lavender105/RSGPT
-          allowed_for_training: false
-          allowed_for_evaluation: false
-          allowed_for_redistribution: false
-          academic_only: true
-          attribution: RSIEval uses DOTA-derived imagery, is academic-only and remains permanent test-only.
-          reviewed_by: P0 engineering audit
-          review_date: 2026-07-20
+        provenance: {source_key: 'rsgpt:rsieval', source_name: RSGPT RSIEval captions, source_root: datasets/RSGPT, source_document: datasets/RSGPT/dataset/RSIEval/annotations.json, citation_key: rsieval, upstream_url: null, provenance_notes: local research copy provided by project owner}
   - source_key: disasterm3
-    display_name: DisasterM3
-    local_path: DisasterM3
     enabled: true
-    allowed_task_roles: [inventory]
-    license:
-      source_key: disasterm3
-      license_status: restricted
-      license_name: CC-BY-NC-SA-4.0
-      license_url_or_document: datasets/DisasterM3/README.md
-      allowed_for_training: false
-      allowed_for_evaluation: false
-      allowed_for_redistribution: false
-      academic_only: true
-      attribution: Dataset is noncommercial and outside the frozen model-input scope; inventory only.
-      reviewed_by: P0 engineering audit
-      review_date: 2026-07-20
+    task_roles: [inventory]
+    provenance: {source_key: disasterm3, source_name: DisasterM3, source_root: datasets/DisasterM3, source_document: datasets/DisasterM3/README.md, citation_key: disasterm3, upstream_url: null, provenance_notes: local research copy provided by project owner; inventory only because it is outside the frozen single-time model-input scope}

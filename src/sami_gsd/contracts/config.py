@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Self
 import yaml
 from pydantic import Field, field_validator, model_validator
 
-from sami_gsd.contracts.canonical import LicenseRecord, StrictModel, validate_portable_path
+from sami_gsd.contracts.canonical import StrictModel, validate_portable_path
 
 
 LanguageComponentName = Literal[
@@ -24,6 +24,43 @@ LanguageComponentName = Literal[
 ]
 LanguageTaskRole = Literal["language_global", "language_region"]
 
+
+class SourceProvenance(StrictModel):
+    """Minimal scientific source/citation metadata with no runtime approval semantics."""
+
+    source_key: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_:-]*$")]
+    source_name: Annotated[str, Field(min_length=1)]
+    source_root: str
+    source_document: str | None
+    citation_key: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_:-]*$")]
+    upstream_url: str | None
+    provenance_notes: Annotated[str, Field(min_length=1)]
+
+    @field_validator("source_root")
+    @classmethod
+    def source_root_is_dataset_logical_path(cls, value: str) -> str:
+        """Keep registry roots portable and rooted in the logical datasets namespace."""
+
+        value = validate_portable_path(value)
+        if not value.startswith("datasets/") or value == "datasets/":
+            raise ValueError("source_root must be below datasets/")
+        return value
+
+    @field_validator("source_document")
+    @classmethod
+    def source_document_is_portable(cls, value: str | None) -> str | None:
+        """Validate an optional local provenance document without interpreting its terms."""
+
+        return None if value is None else validate_portable_path(value)
+
+    @field_validator("upstream_url")
+    @classmethod
+    def upstream_url_is_https(cls, value: str | None) -> str | None:
+        """Accept only an explicit HTTPS upstream citation URL."""
+
+        if value is not None and not value.startswith("https://"):
+            raise ValueError("upstream_url must use HTTPS")
+        return value
 
 class RootSpec(StrictModel):
     """Portable runtime-root policy with an optional environment override."""
@@ -124,50 +161,44 @@ class BuildSettings(StrictModel):
 
 
 class LanguageComponentConfig(StrictModel):
-    """One independently reviewed language component inside a shared raw root."""
+    """One scientifically selected language component inside a shared raw root."""
 
     component: LanguageComponentName
     component_key: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$")]
-    allowed_task_roles: tuple[LanguageTaskRole, ...]
+    task_roles: tuple[LanguageTaskRole, ...]
     split_policy: Literal["train_candidate", "permanent_test_only"]
-    license: LicenseRecord
+    provenance: SourceProvenance
 
     @model_validator(mode="after")
     def role_and_test_policy_are_frozen(self) -> Self:
         """Bind each component to its sole scientific role and split policy."""
 
         expected_role = "language_region" if self.component == "dior_rsvg" else "language_global"
-        if self.allowed_task_roles != (expected_role,):
-            raise ValueError(f"{self.component} must allow exactly {expected_role}")
+        if self.task_roles != (expected_role,):
+            raise ValueError(f"{self.component} must declare exactly {expected_role}")
         expected_split = "permanent_test_only" if self.component == "rsieval" else "train_candidate"
         if self.split_policy != expected_split:
             raise ValueError(f"{self.component} must use split_policy={expected_split}")
-        if self.component == "rsieval" and self.license.allowed_for_training:
-            raise ValueError("RSIEval can never be approved for training")
+        if self.provenance.source_key != self.component_key:
+            raise ValueError("component provenance source_key must equal component_key")
         return self
 
 
 class SourceConfig(StrictModel):
-    """One raw source plus its fail-closed license snapshot."""
+    """One local raw source plus technical roles and minimal provenance."""
 
     source_key: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
-    display_name: Annotated[str, Field(min_length=1)]
-    local_path: str
     enabled: bool
-    allowed_task_roles: tuple[Literal["inventory", "t1", "t2", "t3", "t4", "language_global", "language_region"], ...]
-    license: LicenseRecord
+    task_roles: tuple[Literal["inventory", "t1", "t2", "t3", "t4", "language_global", "language_region"], ...]
+    provenance: SourceProvenance
     language_components: tuple[LanguageComponentConfig, ...] = ()
 
-    _local_path_is_portable = field_validator("local_path")(validate_portable_path)
-
     @model_validator(mode="after")
-    def source_key_matches_license(self) -> Self:
-        """Prevent aggregate language permission from overriding components."""
+    def source_and_component_provenance_is_closed(self) -> Self:
+        """Bind source identity, frozen component coverage and scientific roles."""
 
-        if self.source_key != self.license.source_key:
-            raise ValueError("source_key must match license.source_key")
-        if self.license.allowed_for_training and not self.allowed_task_roles:
-            raise ValueError("training-eligible source requires at least one allowed task role")
+        if self.source_key != self.provenance.source_key:
+            raise ValueError("source_key must match provenance.source_key")
         expected_components: dict[str, tuple[str, ...]] = {
             "mmrs_1m": ("rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg"),
             "rsgpt": ("rsicap", "rsieval"),
@@ -177,23 +208,12 @@ class SourceConfig(StrictModel):
         if actual != expected:
             raise ValueError(f"{self.source_key} language_components must be exactly {expected}")
         if expected:
-            if self.allowed_task_roles != ("inventory",):
-                raise ValueError("aggregate language containers may expose only the inventory role")
-            if any(
-                (
-                    self.license.allowed_for_training,
-                    self.license.allowed_for_evaluation,
-                    self.license.allowed_for_redistribution,
-                )
-            ):
-                raise ValueError("aggregate language-container license cannot authorize component use")
+            if self.task_roles != ("inventory",):
+                raise ValueError("aggregate language containers expose only the inventory role")
             for component in self.language_components:
                 if component.component_key != f"{self.source_key}:{component.component}":
                     raise ValueError("language component_key must bind source_key and component")
-                if component.license.source_key != self.source_key:
-                    raise ValueError("language component license must retain its physical source_key")
         return self
-
 
 class BenchmarkAuditConfig(StrictModel):
     """Strict configuration for ``sami-gsd data audit``."""
@@ -216,11 +236,11 @@ class BenchmarkAuditConfig(StrictModel):
         """Reject ambiguous source or local-root bindings."""
 
         keys = [source.source_key for source in self.sources]
-        paths = [source.local_path for source in self.sources]
+        paths = [source.provenance.source_root for source in self.sources]
         if len(keys) != len(set(keys)):
             raise ValueError("source_key values must be unique")
         if len(paths) != len(set(paths)):
-            raise ValueError("source local_path values must be unique")
+            raise ValueError("source provenance roots must be unique")
         expected_suffix = f"sami_landslide_v3/{self.mode}"
         if self.benchmark_relative_path != expected_suffix:
             raise ValueError(f"benchmark_relative_path must be {expected_suffix!r}")

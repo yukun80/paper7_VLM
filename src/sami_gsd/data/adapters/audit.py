@@ -11,13 +11,13 @@ from sami_gsd.data.adapters.registry import build_source_adapter_registry
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
-SOURCE_SAMPLE_AUDIT_VERSION = "sami_source_sample_audit_p1_3_v1"
+SOURCE_SAMPLE_AUDIT_VERSION = "sami_source_sample_audit_p1_v2_technical_only"
 
 
-def _physical_asset_path(source_root: Path, logical_path: str, configured_local_path: str) -> Path:
+def _physical_asset_path(source_root: Path, logical_path: str, configured_relative_root: str) -> Path:
     """Resolve a previously validated logical asset inside its configured root."""
 
-    prefix = f"datasets/{configured_local_path}/"
+    prefix = f"datasets/{configured_relative_root}/"
     if not logical_path.startswith(prefix):
         raise ValueError("adapter emitted an asset outside its configured logical root")
     relative = logical_path[len(prefix) :]
@@ -51,7 +51,8 @@ def audit_source_samples(
     for source in sorted(config.sources, key=lambda value: value.source_key):
         adapter = registry.get(source.source_key)
         descriptor = adapter.descriptor
-        source_root = datasets_root / source.local_path
+        source_relative_root = source.provenance.source_root.removeprefix("datasets/")
+        source_root = datasets_root / source_relative_root
         blockers = list(descriptor.blockers)
         errors: list[str] = []
         projections = ()
@@ -83,7 +84,7 @@ def audit_source_samples(
                     comparisons: list[bool] = []
                     for projection in projections:
                         for asset in projection.raw_record.assets:
-                            physical_path = _physical_asset_path(source_root, asset.logical_path, source.local_path)
+                            physical_path = _physical_asset_path(source_root, asset.logical_path, source_relative_root)
                             comparisons.append(sha256_file(physical_path) == asset.sha256)
                     raw_bytes_unchanged = all(comparisons)
                     if not raw_bytes_unchanged:
@@ -120,7 +121,7 @@ def audit_source_samples(
         )
         source_report = {
             "source_key": source.source_key,
-            "logical_root": f"datasets/{source.local_path}",
+            "logical_root": source.provenance.source_root,
             "present": source_root.is_dir() and not source_root.is_symlink(),
             "adapter_version": descriptor.adapter_version,
             "implementation_status": descriptor.implementation_status,
@@ -130,7 +131,6 @@ def audit_source_samples(
             "sample_projection_sha256": projection_hashes,
             "sample_aggregate_sha256": sha256_bytes(canonical_json_bytes(projection_payloads)),
             "raw_bytes_unchanged": raw_bytes_unchanged,
-            "training_eligible": False,
             "blockers": sorted(set(blockers) | set(candidate_blockers)),
             "grouping_evidence": grouping_evidence,
             "ambiguity_flags": ambiguity_flags,
@@ -138,8 +138,7 @@ def audit_source_samples(
             "grouping_blockers": grouping_blockers,
             "audit_canonical_candidate_count": len(projections),
             "canonical_parent_materialization_eligible_count": sum(
-                not projection.canonical_candidate.blockers
-                and projection.canonical_candidate.license.allowed_for_training
+                projection.canonical_candidate.materialization_status == "ready"
                 for projection in projections
             ),
             "errors": errors,
@@ -167,7 +166,7 @@ def audit_source_samples(
             ),
             "source_group_closed_count": sum(report["grouping_status"] == "closed" for report in source_reports),
             "source_group_blocked_count": sum(report["grouping_status"] == "blocked" for report in source_reports),
-            "training_promotion_performed": False,
+            "benchmark_materialization_performed": False,
         },
         "errors": [
             f"{report['source_key']}:{error}"

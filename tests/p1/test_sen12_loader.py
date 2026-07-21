@@ -12,27 +12,34 @@ import numpy as np
 from sami_gsd.contracts.config import SourceConfig
 from sami_gsd.data.materialize import materialize_spatial_parent
 from sami_gsd.data.source_loaders.sen12 import load_sen12_parents
-from tests.p1.test_materialization import approved_license
-
-
 def sen12_source_config() -> SourceConfig:
-    """Return a reviewed synthetic-use configuration with the real source key."""
+    """Return a provenance-only synthetic configuration with the real source key."""
 
-    license_payload = approved_license().model_dump(mode="json")
-    license_payload["source_key"] = "sen12_landslides"
     return SourceConfig.model_validate(
         {
             "source_key": "sen12_landslides",
-            "display_name": "Synthetic Sen12 fixture",
-            "local_path": "Sen12Landslides",
             "enabled": True,
-            "allowed_task_roles": ["inventory", "t1"],
-            "license": license_payload,
+            "task_roles": ["inventory", "t1"],
+            "provenance": {
+                "source_key": "sen12_landslides",
+                "source_name": "Synthetic Sen12 fixture",
+                "source_root": "datasets/Sen12Landslides",
+                "source_document": None,
+                "citation_key": "sen12_landslides",
+                "upstream_url": None,
+                "provenance_notes": "synthetic local research fixture",
+            },
         }
     )
 
 
-def write_sen12_file(path: Path, *, satellite: str, annotated: str = "True") -> None:
+def write_sen12_file(
+    path: Path,
+    *,
+    satellite: str,
+    annotated: str = "True",
+    event_date: str = "2020-01-10",
+) -> None:
     """Write one paired time/x/y NetCDF record with source-like metadata."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +56,7 @@ def write_sen12_file(path: Path, *, satellite: str, annotated: str = "True") -> 
         spatial_ref = dataset.createVariable("spatial_ref", "i8")
         spatial_ref.GeoTransform = "100.0 10.0 0.0 200.0 0.0 -10.0"
         dataset.annotated = annotated
-        dataset.event_date = "2020-01-10"
+        dataset.event_date = event_date
         dataset.pre_post_dates = "{'pre': 0, 'post': 2}"
         dataset.satellite = satellite
         dataset.crs = "EPSG:32632"
@@ -117,6 +124,94 @@ class Sen12LoaderTests(unittest.TestCase):
             write_sen12_file(source_root / "s2/event_s2_1.nc", satellite="s2", annotated="False")
             write_sen12_file(source_root / "s1asc/event_s1asc_1.nc", satellite="s1-asc", annotated="False")
             write_sen12_file(source_root / "s1dsc/event_s1dsc_1.nc", satellite="s1-dsc", annotated="False")
+            self.assertEqual(load_sen12_parents(sen12_source_config(), source_root=source_root, limit=1), ())
+
+    def test_bounded_selection_round_robins_across_events(self) -> None:
+        """Small selection does not consume a lexical prefix from one event."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "Sen12Landslides"
+            for event in ("alpha", "beta", "gamma"):
+                for sample in ("1", "2"):
+                    write_sen12_file(source_root / f"s2/{event}_s2_{sample}.nc", satellite="s2")
+                    write_sen12_file(source_root / f"s1asc/{event}_s1asc_{sample}.nc", satellite="s1-asc")
+                    write_sen12_file(source_root / f"s1dsc/{event}_s1dsc_{sample}.nc", satellite="s1-dsc")
+            first = load_sen12_parents(sen12_source_config(), source_root=source_root, limit=3)
+            second = load_sen12_parents(sen12_source_config(), source_root=source_root, limit=3)
+            self.assertEqual(
+                tuple(parent.parent_id for parent in first),
+                ("sen12-alpha-1", "sen12-beta-1", "sen12-gamma-1"),
+            )
+            self.assertEqual(
+                tuple(parent.source.event_id for parent in first),
+                tuple(parent.source.event_id for parent in second),
+            )
+
+    def test_multiple_event_dates_choose_one_deterministic_nearest_date(self) -> None:
+        """Comma-separated source dates select the unique minimum-offset contemporaneous triple."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "Sen12Landslides"
+            for relative, satellite in (
+                ("s2/event_s2_1.nc", "s2"),
+                ("s1asc/event_s1asc_1.nc", "s1-asc"),
+                ("s1dsc/event_s1dsc_1.nc", "s1-dsc"),
+            ):
+                write_sen12_file(
+                    source_root / relative,
+                    satellite=satellite,
+                    event_date="2019-01-01, 2020-01-10",
+                )
+            parents = load_sen12_parents(sen12_source_config(), source_root=source_root, limit=1)
+            self.assertEqual(parents[0].source.event_id, "event:2020-01-10")
+
+    def test_out_of_window_record_is_excluded_without_blocking_the_source(self) -> None:
+        """A sample with no contemporaneous acquisition is a record-level technical exclusion."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "Sen12Landslides"
+            for relative, satellite in (
+                ("s2/event_s2_1.nc", "s2"),
+                ("s1asc/event_s1asc_1.nc", "s1-asc"),
+                ("s1dsc/event_s1dsc_1.nc", "s1-dsc"),
+            ):
+                write_sen12_file(
+                    source_root / relative,
+                    satellite=satellite,
+                    event_date="2010-01-01",
+                )
+            self.assertEqual(load_sen12_parents(sen12_source_config(), source_root=source_root, limit=1), ())
+
+    def test_missing_event_date_literal_is_excluded_without_blocking_the_source(self) -> None:
+        """The corpus literal ``None`` is missing metadata, not a malformed ISO date."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "Sen12Landslides"
+            for relative, satellite in (
+                ("s2/event_s2_1.nc", "s2"),
+                ("s1asc/event_s1asc_1.nc", "s1-asc"),
+                ("s1dsc/event_s1dsc_1.nc", "s1-dsc"),
+            ):
+                write_sen12_file(
+                    source_root / relative,
+                    satellite=satellite,
+                    event_date="None",
+                )
+            self.assertEqual(load_sen12_parents(sen12_source_config(), source_root=source_root, limit=1), ())
+
+    def test_zero_valid_s2_reference_is_excluded_without_blocking_the_source(self) -> None:
+        """An all-cloud selected S2 slice cannot become a zero-valid reference canvas."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "Sen12Landslides"
+            for relative, satellite in (
+                ("s2/event_s2_1.nc", "s2"),
+                ("s1asc/event_s1asc_1.nc", "s1-asc"),
+                ("s1dsc/event_s1dsc_1.nc", "s1-dsc"),
+            ):
+                write_sen12_file(source_root / relative, satellite=satellite)
+            with netCDF4.Dataset(source_root / "s2/event_s2_1.nc", mode="a") as dataset:
+                dataset.variables["SCL"][1, :, :] = 9
             self.assertEqual(load_sen12_parents(sen12_source_config(), source_root=source_root, limit=1), ())
 
 

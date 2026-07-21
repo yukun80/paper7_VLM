@@ -13,7 +13,7 @@ from sami_gsd.data.materialize import SourceModalityInput, SpatialParentInput
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
-SEN12_LOADER_VERSION = "sami_sen12_single_event_nearest_v1"
+SEN12_LOADER_VERSION = "sami_sen12_single_event_nearest_v2_event_round_robin"
 MAX_EVENT_OFFSET_DAYS = 30
 MAX_CROSS_MODALITY_SPAN_DAYS = 30
 _S2_PATTERN = re.compile(r"^(?P<event>.+)_s2_(?P<sample>\d+)\.nc$")
@@ -64,6 +64,25 @@ def _nearest_event_index(dataset: Any, *, event_date: dt.date) -> tuple[int, dt.
     if offsets[index] > MAX_EVENT_OFFSET_DAYS:
         raise Sen12LoadingError("nearest acquisition is outside the frozen event window")
     return index, normalized[index], offsets[index]
+
+
+def _event_date_candidates(value: str) -> tuple[dt.date, ...]:
+    """Parse one or more comma-separated source event dates deterministically."""
+
+    candidates: list[dt.date] = []
+    for token in value.split(","):
+        stripped = token.strip()
+        # NetCDF attributes in the local corpus encode a missing date both as an empty
+        # string and as the literal text "None". Both mean that this record cannot
+        # establish a contemporaneous tuple; they are not source-wide parse failures.
+        if not stripped or stripped.casefold() in {"none", "null", "nan"}:
+            continue
+        try:
+            candidates.append(dt.date.fromisoformat(stripped))
+        except ValueError as error:
+            raise Sen12LoadingError(f"invalid Sen12 event_date token: {stripped!r}") from error
+    ordered = tuple(sorted(set(candidates)))
+    return ordered
 
 
 def _grid(dataset: Any) -> tuple[str, tuple[float, float, float, float, float, float]]:
@@ -155,11 +174,31 @@ def _load_triplet(
         event_dates = tuple(str(dataset.getncattr("event_date")) for dataset in (s2, asc, dsc))
         if len(set(event_dates)) != 1 or not event_dates[0]:
             raise Sen12LoadingError(f"paired event dates disagree: {event}/{sample}")
-        event_date = dt.date.fromisoformat(event_dates[0])
-        selections = tuple(_nearest_event_index(dataset, event_date=event_date) for dataset in (s2, asc, dsc))
+        candidate_selections: list[
+            tuple[tuple[int, int, dt.date], dt.date, tuple[tuple[int, dt.datetime, int], ...]]
+        ] = []
+        for candidate_date in _event_date_candidates(event_dates[0]):
+            try:
+                candidate = tuple(
+                    _nearest_event_index(dataset, event_date=candidate_date)
+                    for dataset in (s2, asc, dsc)
+                )
+            except Sen12LoadingError:
+                continue
+            candidate_acquisitions = [selection[1] for selection in candidate]
+            if (
+                max(candidate_acquisitions) - min(candidate_acquisitions)
+            ).days > MAX_CROSS_MODALITY_SPAN_DAYS:
+                continue
+            offsets = tuple(selection[2] for selection in candidate)
+            candidate_selections.append(
+                ((max(offsets), sum(offsets), candidate_date), candidate_date, candidate)
+            )
+        if not candidate_selections:
+            # 该记录不满足冻结的同期窗口，属于可审计的样本级技术排除，而不是整源解析失败。
+            return None
+        _, event_date, selections = min(candidate_selections, key=lambda item: item[0])
         acquisition_dates = [selection[1] for selection in selections]
-        if (max(acquisition_dates) - min(acquisition_dates)).days > MAX_CROSS_MODALITY_SPAN_DAYS:
-            raise Sen12LoadingError(f"paired nearest acquisitions are not contemporaneous: {event}/{sample}")
         grids = tuple(_grid(dataset) for dataset in (s2, asc, dsc))
         if len({grid[0] for grid in grids}) != 1 or any(
             not all(abs(left - right) <= 1e-12 for left, right in zip(grids[0][1], grid[1], strict=True))
@@ -169,6 +208,10 @@ def _load_triplet(
 
         s2_array, s2_valid = _slice_hwc(s2, _S2_BANDS, selections[0][0])
         s2_valid = _s2_valid(s2, selections[0][0], s2_valid)
+        # S2 是该 source 的确定性参考视图。全云/全 nodata 的时间片无法提供
+        # duplicate、mask 或像素监督的有效画布，属于样本级技术排除。
+        if not np.any(s2_valid):
+            return None
         asc_array, asc_valid = _slice_hwc(asc, ("VV", "VH"), selections[1][0])
         dsc_array, dsc_valid = _slice_hwc(dsc, ("VV", "VH"), selections[2][0])
         dem_array, dem_valid = _slice_hwc(s2, ("DEM",), selections[0][0])
@@ -180,9 +223,9 @@ def _load_triplet(
     asc_hash = sha256_file(asc_path)
     dsc_hash = sha256_file(dsc_path)
     logical_paths = (
-        f"datasets/{source.local_path}/s2/{s2_path.name}",
-        f"datasets/{source.local_path}/s1asc/{asc_path.name}",
-        f"datasets/{source.local_path}/s1dsc/{dsc_path.name}",
+        f"{source.provenance.source_root}/s2/{s2_path.name}",
+        f"{source.provenance.source_root}/s1asc/{asc_path.name}",
+        f"{source.provenance.source_root}/s1dsc/{dsc_path.name}",
     )
     crs, geotransform = grids[0]
     gsd = abs(geotransform[1])
@@ -290,7 +333,7 @@ def _load_triplet(
         global_mask=masks[0],
         global_mask_origin="official",
         referring_regions=(),
-        license=source.license,
+        source_registry_key=source.source_key,
         source_record_sha256=source_record_hash,
         annotation_status="gold",
     )
@@ -302,29 +345,49 @@ def load_sen12_parents(
     source_root: Path,
     limit: int | None,
 ) -> tuple[SpatialParentInput, ...]:
-    """Load sorted annotated paired records without consulting pre/post indices."""
+    """Load annotated records in deterministic event round-robin order.
 
-    if not source.license.allowed_for_training:
-        raise Sen12LoadingError("Sen12 loader requires explicit human-approved training eligibility")
+    Small construction must not be an accidental prefix of one lexically first
+    disaster. Interleaving filename groups keeps the bounded set event-diverse
+    before parent-level split assignment while preserving read-only decoding.
+    """
+
     s2_root = source_root / "s2"
     if not s2_root.is_dir():
         raise Sen12LoadingError("Sen12 s2 directory is missing")
-    parents: list[SpatialParentInput] = []
+    paths_by_event: dict[str, list[tuple[Path, str]]] = {}
     for s2_path in sorted(s2_root.glob("*.nc"), key=lambda path: path.name):
         match = _S2_PATTERN.match(s2_path.name)
         if match is None:
             raise Sen12LoadingError(f"unexpected Sen12 S2 filename: {s2_path.name}")
-        parent = _load_triplet(
-            source,
-            source_root=source_root,
-            s2_path=s2_path,
-            event=match.group("event"),
-            sample=match.group("sample"),
-        )
-        if parent is not None:
-            parents.append(parent)
-            if limit is not None and len(parents) >= limit:
-                break
+        paths_by_event.setdefault(match.group("event"), []).append((s2_path, match.group("sample")))
+
+    parents: list[SpatialParentInput] = []
+    offsets = {event: 0 for event in paths_by_event}
+    active_events = sorted(paths_by_event)
+    while active_events and (limit is None or len(parents) < limit):
+        following_events: list[str] = []
+        for event in active_events:
+            rows = paths_by_event[event]
+            offset = offsets[event]
+            if offset >= len(rows):
+                continue
+            s2_path, sample = rows[offset]
+            offsets[event] = offset + 1
+            if offsets[event] < len(rows):
+                following_events.append(event)
+            parent = _load_triplet(
+                source,
+                source_root=source_root,
+                s2_path=s2_path,
+                event=event,
+                sample=sample,
+            )
+            if parent is not None:
+                parents.append(parent)
+                if limit is not None and len(parents) >= limit:
+                    break
+        active_events = following_events
     return tuple(parents)
 
 

@@ -350,7 +350,6 @@ global mask
 referring masks
 no-target eligibility
 provenance
-license
 hashes
 annotation status
 ```
@@ -423,7 +422,19 @@ river/road/settlement relations, alternative explanation,
 evidence limitation
 ```
 
-许可证未知的 source 可进入 audit inventory，但不得进入 training-eligible index。
+数据进入 Benchmark 只由本地存在/可读、格式可解析、研究范围、任务监督、可靠 parent/group、
+split 隔离、坐标/valid 和 duplicate 验证等技术条件决定。Builder 不承担法律审查职责，P1
+不得查询、推断或比较 raw data license，也不得生成授权请求或以 provenance 阻塞构建。
+
+source/component 仅保留以下非门禁 scientific provenance：
+
+```text
+source_key, source_name, source_root, source_document,
+citation_key, upstream_url, provenance_notes
+```
+
+原始图像、物化 Benchmark 或派生数据包的公开再分发，若未来发生，必须在独立
+publication/release 阶段人工审查；该审查不属于 P0-P7 builder gate。
 
 ---
 
@@ -500,7 +511,6 @@ API 调用必须 idempotent、可 resume、保存 raw response。没有人工授
 ```text
 repo_inventory.json
 reuse_matrix.md
-license_matrix.md
 deletion_plan.yaml
 ADR-0001
 REFACTOR_PROGRESS.md
@@ -904,8 +914,8 @@ final threshold selection
 遇到以下任一情况立即停止并报告：
 
 ```text
-raw data path ambiguous
-license unknown for requested training source
+raw data path ambiguous or unreadable
+raw data format or grouping cannot be uniquely resolved
 schema cannot be uniquely resolved
 coordinate transform inconsistent
 would overwrite raw/accepted artifacts
@@ -1084,6 +1094,6 @@ https://github.com/yukun80/paper7_VLM
 |---|---|
 | 已冻结 | greenfield、三模块、Qwen3-VL-2B、native forward、minimal Trainer、Benchmark v3、不兼容旧协议 |
 | G0 决定 | Qwen3-VL-Seg-style vs PSALM-Lite、Profile S/M、support residual |
-| 人工决定 | tag/branch、根许可证、data license、formal run、API、expert、阈值、最终发布 |
+| 人工决定 | tag/branch、根代码许可证、formal run、API、expert、阈值、最终 publication/release |
 | Codex 可决定 | 非公共内部拆分、测试 fixture、错误信息、局部性能优化；不得改变合同 |
 | 明确禁止 | pre/post/change、video/tracking、第三方整库嵌套、双 Trainer、compat shim、silent fallback、oracle、自动正式训练/API/expert |

@@ -42,18 +42,18 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(parent.reference_canvas.coordinate_space, "reference_pixel_half_open")
         self.assertEqual(task.task_type, "t2_referring")
 
-    def test_component_license_bound_description_schema_is_draft_2020_12(self) -> None:
+    def test_provenance_bound_description_schema_is_draft_2020_12(self) -> None:
         """The runtime description index has one valid, strict static schema."""
 
         schema = json.loads(
-            (REPOSITORY_ROOT / "schemas" / "canonical_description_v2.schema.json").read_text(
+            (REPOSITORY_ROOT / "schemas" / "canonical_description_v3.schema.json").read_text(
                 encoding="utf-8"
             )
         )
         Draft202012Validator.check_schema(schema)
         self.assertEqual(
             schema["properties"]["schema_version"]["const"],
-            "sami_canonical_description_v2_component_license_bound",
+            "sami_canonical_description_v3_provenance_bound",
         )
 
     def test_contracts_reject_extra_top_level_fields(self) -> None:
@@ -77,12 +77,11 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(JsonSchemaValidationError):
             Draft202012Validator(task_schema).validate(task)
 
-    def test_static_schema_rejects_training_eligible_unknown_license(self) -> None:
-        """The published JSON schema carries the fail-closed license rule."""
+    def test_static_schema_rejects_removed_license_contract(self) -> None:
+        """The published schema does not accept a runtime permission block."""
 
         parent = canonical_parent_payload()
-        parent["license"]["license_status"] = "unknown"
-        parent["license"]["license_name"] = "unknown"
+        parent["license"] = {"allowed_for_training": True}
         schema = json.loads(
             (REPOSITORY_ROOT / "schemas" / "canonical_parent_v3.schema.json").read_text(encoding="utf-8")
         )

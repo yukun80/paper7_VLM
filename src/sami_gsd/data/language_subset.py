@@ -13,7 +13,7 @@ from sami_gsd.data.adapters.formats import read_image_header
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
-LANGUAGE_SUBSET_VERSION = "sami_description_subset_v2_component_license_bound"
+LANGUAGE_SUBSET_VERSION = "sami_description_subset_v3_provenance_bound"
 
 
 class LanguageSubsetError(ValueError):
@@ -36,7 +36,7 @@ def _source(config: BenchmarkAuditConfig, key: str) -> SourceConfig:
 
 
 def _component_policy(source: SourceConfig, component: str) -> LanguageComponentConfig:
-    """Return the exact independently reviewed component policy."""
+    """Return the exact configured scientific component policy."""
 
     matches = [policy for policy in source.language_components if policy.component == component]
     if len(matches) != 1:
@@ -112,6 +112,43 @@ def _make_answers(
     )
 
 
+def _dior_region_pairs(conversations: Any) -> tuple[tuple[int, tuple[float, float, float, float], str], ...]:
+    """Extract only forward box-to-short-phrase pairs from alternating DIOR dialogs."""
+
+    if not isinstance(conversations, list) or len(conversations) < 2:
+        raise LanguageSubsetError("DIOR-RSVG row lacks box/phrase conversations")
+    pairs: list[tuple[int, tuple[float, float, float, float], str]] = []
+    for message_index in range(0, len(conversations) - 1, 2):
+        prompt_message = conversations[message_index]
+        answer_message = conversations[message_index + 1]
+        if not isinstance(prompt_message, dict) or not isinstance(answer_message, dict):
+            raise LanguageSubsetError("DIOR-RSVG conversation messages must be mappings")
+        prompt = prompt_message.get("value")
+        phrase = answer_message.get("value")
+        if (
+            prompt_message.get("from") != "human"
+            or answer_message.get("from") != "gpt"
+            or not isinstance(prompt, str)
+            or not isinstance(phrase, str)
+        ):
+            raise LanguageSubsetError("DIOR-RSVG conversations must alternate human and gpt text")
+        match = re.search(r"(\[[^\[\]]+\])\s*$", prompt)
+        if match is None:
+            # 本地索引交替包含 phrase->box 的逆向定位任务；P1 只选择 box->phrase，
+            # 因此没有终止 box 的 pair 被显式跳过，而不是误当作 caption。
+            continue
+        try:
+            box_payload = json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            raise LanguageSubsetError("DIOR-RSVG terminal box is not valid JSON") from error
+        if not isinstance(box_payload, list) or len(box_payload) != 4:
+            raise LanguageSubsetError("DIOR-RSVG normalized box must have four values")
+        if not phrase.strip():
+            raise LanguageSubsetError("DIOR-RSVG short phrase is empty")
+        pairs.append((message_index // 2, tuple(float(value) for value in box_payload), phrase.strip()))
+    return tuple(pairs)
+
+
 def _mmrs_records(
     source: SourceConfig,
     *,
@@ -127,21 +164,21 @@ def _mmrs_records(
         if not isinstance(payload, list):
             raise LanguageSubsetError(f"MMRS selected index is not an array: {index_relative}")
         index_hash = sha256_file(source_root / index_relative)
-        logical_index = f"datasets/{source.local_path}/{index_relative.as_posix()}"
+        logical_index = f"{source.provenance.source_root}/{index_relative.as_posix()}"
         for row_number, row in enumerate(payload[:limit_per_component]):
             if not isinstance(row, dict) or not isinstance(row.get("image"), str):
                 raise LanguageSubsetError(f"MMRS selected row lacks image: {index_relative}:{row_number}")
             image_relative = _mmrs_image_relative(row["image"])
-            logical_image = f"datasets/{source.local_path}/{image_relative.as_posix()}"
+            logical_image = f"{source.provenance.source_root}/{image_relative.as_posix()}"
             record_id = f"mmrs/{component}/{image_relative.as_posix()}"
             texts = _gpt_answers(row)
             records.append(
                 DescriptionSourceRecord(
-                    schema_version="sami_description_source_v2_component_license_bound",
+                    schema_version="sami_description_source_v3_provenance_bound",
                     record_id=record_id,
                     source_key="mmrs_1m",
                     component=component,
-                    component_license_key=policy.component_key,
+                    component_key=policy.component_key,
                     source_group_id=f"mmrs/image/{image_relative.as_posix()}",
                     role="global_caption",
                     split_policy="train_candidate",
@@ -154,8 +191,7 @@ def _mmrs_records(
                         index_sha256=index_hash,
                     ),
                     normalized_box_xyxy=None,
-                    license=policy.license,
-                    training_eligible=policy.license.allowed_for_training,
+                    is_train_candidate=True,
                 )
             )
 
@@ -165,52 +201,44 @@ def _mmrs_records(
     if not isinstance(payload, list):
         raise LanguageSubsetError("DIOR-RSVG selected index is not an array")
     index_hash = sha256_file(source_root / index_relative)
-    logical_index = f"datasets/{source.local_path}/{index_relative.as_posix()}"
-    for row_number, row in enumerate(payload[:limit_per_component]):
+    logical_index = f"{source.provenance.source_root}/{index_relative.as_posix()}"
+    dior_count = 0
+    for row_number, row in enumerate(payload):
+        if dior_count >= limit_per_component:
+            break
         if not isinstance(row, dict) or not isinstance(row.get("image"), str):
             raise LanguageSubsetError(f"DIOR-RSVG row lacks image: {row_number}")
         image_relative = _mmrs_image_relative(row["image"])
-        conversations = row.get("conversations")
-        if not isinstance(conversations, list) or len(conversations) < 2:
-            raise LanguageSubsetError("DIOR-RSVG row lacks box/phrase conversations")
-        prompt = conversations[0].get("value")
-        phrase = conversations[1].get("value")
-        if not isinstance(prompt, str) or not isinstance(phrase, str) or not phrase.strip():
-            raise LanguageSubsetError("DIOR-RSVG box/phrase values are invalid")
-        match = re.search(r":\s*(\[[^\]]+\])\s*$", prompt)
-        if match is None:
-            raise LanguageSubsetError("DIOR-RSVG prompt lacks a terminal normalized box")
-        box_payload = json.loads(match.group(1))
-        if not isinstance(box_payload, list) or len(box_payload) != 4:
-            raise LanguageSubsetError("DIOR-RSVG normalized box must have four values")
-        box = tuple(float(value) for value in box_payload)
-        record_id = f"mmrs/dior_rsvg/{image_relative.as_posix()}/{row_number}"
-        records.append(
-            DescriptionSourceRecord(
-                schema_version="sami_description_source_v2_component_license_bound",
-                record_id=record_id,
-                source_key="mmrs_1m",
-                component="dior_rsvg",
-                component_license_key=policy.component_key,
-                source_group_id=f"mmrs/image/{image_relative.as_posix()}",
-                role="region_short_phrase",
-                split_policy="train_candidate",
-                image=_image_ref(
-                    source_root / image_relative,
-                    logical_path=f"datasets/{source.local_path}/{image_relative.as_posix()}",
-                ),
-                answers=_make_answers(
-                    (phrase.strip(),),
+        for pair_number, box, phrase in _dior_region_pairs(row.get("conversations")):
+            if dior_count >= limit_per_component:
+                break
+            record_id = f"mmrs/dior_rsvg/{image_relative.as_posix()}/{row_number}/{pair_number}"
+            records.append(
+                DescriptionSourceRecord(
+                    schema_version="sami_description_source_v3_provenance_bound",
                     record_id=record_id,
-                    origin="source_expression",
-                    logical_index=logical_index,
-                    index_sha256=index_hash,
-                ),
-                normalized_box_xyxy=box,
-                license=policy.license,
-                training_eligible=policy.license.allowed_for_training,
+                    source_key="mmrs_1m",
+                    component="dior_rsvg",
+                    component_key=policy.component_key,
+                    source_group_id=f"mmrs/image/{image_relative.as_posix()}",
+                    role="region_short_phrase",
+                    split_policy="train_candidate",
+                    image=_image_ref(
+                        source_root / image_relative,
+                        logical_path=f"{source.provenance.source_root}/{image_relative.as_posix()}",
+                    ),
+                    answers=_make_answers(
+                        (phrase,),
+                        record_id=record_id,
+                        origin="source_expression",
+                        logical_index=logical_index,
+                        index_sha256=index_hash,
+                    ),
+                    normalized_box_xyxy=box,
+                    is_train_candidate=True,
+                )
             )
-        )
+            dior_count += 1
     return records
 
 
@@ -236,7 +264,7 @@ def _rsgpt_records(
         if not isinstance(rows, list):
             raise LanguageSubsetError(f"{directory} annotations must be an array")
         index_hash = sha256_file(source_root / index_relative)
-        logical_index = f"datasets/{source.local_path}/{index_relative.as_posix()}"
+        logical_index = f"{source.provenance.source_root}/{index_relative.as_posix()}"
         for row_number, row in enumerate(rows[:limit_per_component]):
             if not isinstance(row, dict) or not isinstance(row.get("filename"), str):
                 raise LanguageSubsetError(f"{directory} row lacks filename: {row_number}")
@@ -251,17 +279,17 @@ def _rsgpt_records(
             record_id = f"rsgpt/{component}/{row['filename']}"
             records.append(
                 DescriptionSourceRecord(
-                    schema_version="sami_description_source_v2_component_license_bound",
+                    schema_version="sami_description_source_v3_provenance_bound",
                     record_id=record_id,
                     source_key="rsgpt",
                     component=component,
-                    component_license_key=policy.component_key,
+                    component_key=policy.component_key,
                     source_group_id=f"rsgpt/{directory}/{row['filename']}",
                     role="global_caption",
                     split_policy=split_policy,
                     image=_image_ref(
                         source_root / image_relative,
-                        logical_path=f"datasets/{source.local_path}/{image_relative.as_posix()}",
+                        logical_path=f"{source.provenance.source_root}/{image_relative.as_posix()}",
                     ),
                     answers=_make_answers(
                         texts,
@@ -271,8 +299,7 @@ def _rsgpt_records(
                         index_sha256=index_hash,
                     ),
                     normalized_box_xyxy=None,
-                    license=policy.license,
-                    training_eligible=policy.license.allowed_for_training and component != "rsieval",
+                    is_train_candidate=split_policy == "train_candidate",
                 )
             )
     return records
@@ -284,7 +311,7 @@ def build_description_subset(
     datasets_root: Path,
     limit_per_component: int,
 ) -> dict[str, Any]:
-    """Build the exact selected audit/training subset without reading excluded indexes."""
+    """Build the exact selected scientific subset without reading excluded indexes."""
 
     if type(limit_per_component) is not int or limit_per_component <= 0:
         raise LanguageSubsetError("limit_per_component must be a positive integer")
@@ -292,11 +319,11 @@ def build_description_subset(
     rsgpt = _source(config, "rsgpt")
     records = _mmrs_records(
         mmrs,
-        source_root=datasets_root / mmrs.local_path,
+        source_root=datasets_root / mmrs.provenance.source_root.removeprefix("datasets/"),
         limit_per_component=limit_per_component,
     ) + _rsgpt_records(
         rsgpt,
-        source_root=datasets_root / rsgpt.local_path,
+        source_root=datasets_root / rsgpt.provenance.source_root.removeprefix("datasets/"),
         limit_per_component=limit_per_component,
     )
     ordered = tuple(sorted(records, key=lambda item: item.record_id))
@@ -304,41 +331,24 @@ def build_description_subset(
         raise LanguageSubsetError("description subset record IDs are not unique")
     payload_records = [record.model_dump(mode="json") for record in ordered]
     report: dict[str, Any] = {
-        "schema_version": "sami_description_subset_report_v2_component_license_bound",
+        "schema_version": "sami_description_subset_report_v3_provenance_bound",
         "builder_version": LANGUAGE_SUBSET_VERSION,
         "record_count": len(ordered),
-        "training_eligible_count": sum(record.training_eligible for record in ordered),
+        "train_candidate_count": sum(record.is_train_candidate for record in ordered),
         "permanent_test_only_count": sum(record.split_policy == "permanent_test_only" for record in ordered),
         "components": {
             component: sum(record.component == component for record in ordered)
             for component in ("rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval")
         },
-        "component_license_states": {
-            policy.component_key: {
-                "license_status": policy.license.license_status,
-                "allowed_for_training": policy.license.allowed_for_training,
-                "allowed_for_evaluation": policy.license.allowed_for_evaluation,
-                "allowed_for_redistribution": policy.license.allowed_for_redistribution,
-                "reviewed_by": policy.license.reviewed_by,
-                "review_date": (
-                    policy.license.review_date.isoformat()
-                    if policy.license.review_date is not None
-                    else None
-                ),
-            }
+        "component_provenance": {
+            policy.component_key: policy.provenance.model_dump(mode="json")
             for source in (mmrs, rsgpt)
             for policy in source.language_components
         },
         "excluded_inputs_read": [],
         "records": payload_records,
         "errors": [],
-        "warnings": sorted(
-            {
-                f"license_not_approved:{record.component_license_key}"
-                for record in ordered
-                if not record.license.allowed_for_training and record.split_policy != "permanent_test_only"
-            }
-        ),
+        "warnings": [],
     }
     report["aggregate_sha256"] = sha256_bytes(canonical_json_bytes(report))
     return report

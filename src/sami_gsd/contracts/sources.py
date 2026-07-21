@@ -1,9 +1,8 @@
 """Strict P1.3 contracts for raw-source evidence and canonical candidates.
 
-These audit records are deliberately not Canonical Parent v3 records.  They
+These audit records are deliberately not Canonical Parent v3 records. They
 capture enough source-side evidence to decide whether a source can later be
-materialized, while preventing an unlicensed or ambiguous sample from being
-mistaken for a training record.
+materialized without turning audit projections into runtime training rows.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from sami_gsd.contracts.canonical import LicenseRecord, Sha256, StrictModel, validate_portable_path
+from sami_gsd.contracts.canonical import Sha256, StrictModel, validate_portable_path
 from sami_gsd.contracts.spatial import ReferenceCanvasDecision
 
 
@@ -78,25 +77,19 @@ class RawSourceRecord(StrictModel):
     source_group_id: Annotated[str, Field(min_length=1)]
     source_declared_split: str | None
     split: Literal["audit"]
-    training_eligible: Literal[False]
     record_type: Literal["spatial_mask", "derived_spatial_mask", "global_language", "region_language"]
     assets: tuple[RawAssetEvidence, ...]
     grouping_evidence: tuple[str, ...]
     ambiguity_flags: tuple[str, ...]
-    license: LicenseRecord
     asset_set_sha256: Sha256
 
     @model_validator(mode="after")
-    def bind_assets_and_license(self) -> Self:
-        """Enforce unique assets and source/license identity."""
+    def bind_assets(self) -> Self:
+        """Enforce a non-empty unique source asset set."""
 
         asset_ids = [asset.asset_id for asset in self.assets]
         if not asset_ids or len(asset_ids) != len(set(asset_ids)):
             raise ValueError("raw source record requires non-empty unique asset_id values")
-        if self.source_key != self.license.source_key:
-            raise ValueError("raw source_key must match the attached license record")
-        if self.license.allowed_for_training:
-            raise ValueError("P1.3 raw source records are audit-only and cannot carry training eligibility")
         return self
 
 
@@ -150,30 +143,27 @@ class CanonicalParentCandidate(StrictModel):
     record_id: Annotated[str, Field(min_length=1)]
     source_group_id: Annotated[str, Field(min_length=1)]
     split: Literal["audit"]
-    training_eligible: Literal[False]
     task_roles: tuple[Literal["t1", "t2", "t3", "t4", "language_global", "language_region"], ...]
     reference_decision: ReferenceCanvasDecision
     modalities: tuple[ModalityCandidate, ...]
     annotations: AnnotationCandidate
-    license: LicenseRecord
     raw_asset_set_sha256: Sha256
-    materialization_status: Literal["audit_only"]
+    materialization_status: Literal["ready", "blocked"]
     blockers: tuple[str, ...]
 
     @model_validator(mode="after")
     def bind_candidate_identity_and_reference(self) -> Self:
         """Keep the projection self-consistent without silently promoting it."""
 
-        if self.source_key != self.license.source_key:
-            raise ValueError("candidate source_key must match the attached license")
         modality_ids = [modality.modality_id for modality in self.modalities]
         if not modality_ids or len(modality_ids) != len(set(modality_ids)):
             raise ValueError("candidate requires non-empty unique modalities")
         references = [modality for modality in self.modalities if modality.alignment_status == "reference"]
         if len(references) != 1 or references[0].modality_id != self.reference_decision.reference_modality_id:
             raise ValueError("candidate must bind exactly one modality to the reference decision")
-        if self.license.allowed_for_training:
-            raise ValueError("P1.3 canonical candidates are audit-only")
+        expected = "blocked" if self.blockers else "ready"
+        if self.materialization_status != expected:
+            raise ValueError("materialization_status must be derived from technical blockers")
         return self
 
 

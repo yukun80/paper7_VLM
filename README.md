@@ -2,17 +2,21 @@
 
 当前主线是经 ADR-0001 接受的 **SAMI-GroundSegDesc greenfield rewrite**。科学问题固定为：使用
 同一区域、单时相或同期的多源遥感观测，在一个 reference canvas 上分割滑坡，并生成只受当前有效
-模态支持的区域描述。正式阶段保持为完整 P1；内部实现包不是独立阶段或用户验收点。
+模态支持的区域描述。P1 Canonical Benchmark v3 已于 2026-07-21 完成工程验收；内部实现包从未作为
+独立阶段或用户验收点。
 
 P1 的 schema、只读扫描、reference canvas、可逆 transform、HDF5/NetCDF/GeoTIFF 元数据、原子
 materialization、valid/padding/nodata、parent group split、SHA/dHash/RGB64-MAE duplicate、T1--T4、
 冻结 description subset、canonical language parent、validator、summary 和 repeat-hash 工程链路均已
-实现。获批语言图片按 `source_key + exact image SHA + component-license SHA` 形成 parent；同一精确
-许可证快照下的 caption/DIOR short phrase 合并到同一视觉 parent，许可证不同的重复图像仍由
-verified duplicate connected component 锁在同一 split。RSIEval 的永久 test 身份沿该 component
-传播。合成 Small
-两次完整构建 byte-stable，独立 validation replay 为 `errors=[]`；真实 Small 仍被数据许可证人工
-门禁阻止，不得把合成工程验收报告成 P1 正式完成。
+实现。语言图片按 `source_key + exact image SHA` 形成 parent；同一物理 source 下的 caption/DIOR
+short phrase 可共享一个视觉 parent，跨 source 精确/感知重复仍由 verified duplicate connected
+component 锁在同一 split。RSIEval 的永久 test 身份沿该 component 传播。Builder 只执行技术/科学
+校验，不查询或推断 raw-data license；source/component 只保留非门禁 provenance。接受的真实
+Small 位于 `../benchmark/sami_landslide_v3/small`：1064 parents（128 spatial、936 language）、
+996 descriptions、128 T1 views，train/val/test parents 为 686/121/257；validation `errors=[]`、
+provenance binding errors 0、verified cross-split duplicates 0。独立 repeat 的完整 4501 项 output
+hash 与首份完全相等，manifest aggregate SHA-256 均为
+`5bd5f4dbd97f41b8276acd3f5c2a1953d6d41de0f3e509cf3dff6689ec321d54`。
 
 本文件后部的 Multi-Source Qwen-PSALM-Seg/Benchmark v2 命令暂时保留为只读 legacy baseline
 运行记录，不属于 greenfield runtime。新代码不读取旧 benchmark、cache、config 或 checkpoint；
@@ -53,30 +57,31 @@ sami-gsd data audit \
   --output-dir ../benchmark/sami_landslide_v3/p1_audit_small
 ```
 
-该命令只读 raw data，输出 `inventory.json`、`source_registry.yaml`、`license_report.json` 和
+该命令只读 raw data，输出 `inventory.json`、`source_registry.yaml`、`provenance_report.json` 和
 `audit_manifest.json`，拒绝覆盖已有输出目录。
 
-真实 Small 正式构建命令如下，但当前不得运行：配置中的九个 source 仍全部
-`allowed_for_training=false`，命令会在 raw decode 和任何输出写入前 fail closed。项目 owner 必须先
-逐 source 填写受审 license evidence、`reviewed_by`、`review_date` 和允许的 task role；空间源需显式
-允许 `t1`/`t2`。`mmrs_1m` 与 `rsgpt` 顶层条目固定为 inventory-only，不能授予训练、评估或再分发；
-语言授权必须写入对应 `language_components[]`，逐一绑定 `component_key`、唯一 role、split policy 和
-完整 license snapshot。不得用聚合布尔值放行全部组件，也不得仅把布尔值改为 true。
+真实 Small 正式构建仅选择本地存在/可读、格式和监督可解析、group/split/坐标/valid/duplicate
+条件闭合且具有 resolved loader 的 source。`mmrs_1m` 与 `rsgpt` 顶层条目保持 inventory-only；八个
+语言 component 分别绑定唯一 role、split policy 和最小 provenance。未来若公开发布 raw image、
+物化 Benchmark 或派生数据包，需要独立 publication/release 人工审查，但不阻塞 P1 本地科研构建。
 
 ```bash
 sami-gsd data build --config configs/benchmark_v3_small.yaml
 ```
 
-获得一个真实新目录后，独立重放 schema、asset hash、split、duplicate、license 和 manifest：
+获得一个真实新目录后，独立重放 schema、asset hash、split、duplicate、provenance 和 manifest：
 
 ```bash
 sami-gsd data validate --config configs/benchmark_v3_small.yaml
 ```
 
 默认输出固定为 `${PAPER7_BENCHMARK_ROOT:-../benchmark}/sami_landslide_v3/small`；build 和 audit
-都拒绝覆盖既有目录，raw source 永远只读。当前 Sen12 greenfield loader 仅取 `annotated=True` 的
-S2/S1-ascending/S1-descending 配对，分别选择离 event date 最近且在 30 天窗口内的一个 acquisition，
-不构造 pre/post pair；SCL cloud/nodata、masked raster 与 zero padding 均从有效域排除。
+都拒绝覆盖既有目录，raw source 永远只读。当前默认目录已保存接受的 P1 Small，不要覆盖；若需验证
+确定性，应显式指定新的 `--benchmark-root`。当前 Sen12 greenfield loader 仅取 `annotated=True` 的
+S2/S1-ascending/S1-descending 配对，按 event 确定性 round-robin 选择 Small parent，并分别选择离
+所有声明 event date 中最匹配、且在 30 天窗口内的一个 acquisition，不构造 pre/post pair；缺失
+event date、窗口不满足或 S2 参考视图零有效的记录按样本级排除。SCL cloud/nodata、masked raster
+与 zero padding 均从有效域排除。
 
 P1 冻结以下空间边界：reference 依次选 official/human 原生 mask 栅格、完整覆盖且 GSD 最细的
 registered mask 栅格、或唯一语言图像；候选顺序不影响结果。内部 box 永远使用 reference pixel
@@ -86,22 +91,17 @@ pixel-edge 坐标、half-pixel-center sampling 和 clamp border；image 固定 b
 padding 与 nodata 始终从有效 target 中排除。无可靠双向变换的 support 只能是 `global_only`，不得
 暴露 pixel-level transform。
 
-历史内部空间检查点证据见 `docs/reports/p1/p1_2_spatial_report.json`。
+正式验收证据见 `docs/reports/p1/p1_completion_report.json`。
 
-九源 registry 无 generic/legacy fallback。最新真实有界审计两次得到相同 aggregate SHA-256
-`4e2edbe2549313db49bb8e97144f0d6f2429d2aa0dadaddcdb1977f4f44c54fc`：九源全部 present，7 个
-sampled、2 个 blocked、14 个 audit candidate、0 个 materialization-eligible、`errors=[]`。GDCLD
+九源 registry 无 generic/legacy fallback。GDCLD
 混合 PNG/TIFF、Landslide4Sense HDF5 和 multimodal GeoTIFF 现有显式元数据投影；InSAR 无 units/sign
 时仍禁止定量解释。MMRS 只读五个 caption component 与 DIOR short phrase，RSGPT 只读 RSICap 和
 永久 test-only RSIEval；`total.json`、classification、detection、VQA、infrared 和无关 SAR 均不读。
-未获批语言行只保留在 `manifests/description_source_subset.jsonl`，不会解码或复制 raw image；八个
-组件的授权分别由 `mmrs_1m:{rsicd,ucm,sydney,nwpu,rsitmd,dior_rsvg}` 和
-`rsgpt:{rsicap,rsieval}` 控制，聚合容器无法越权。获批行
-进入 `descriptions/{all,train,val,test,train_eligible}.jsonl`，其中运行时 image/valid 引用只指向
+八个 component 分别为 `mmrs_1m:{rsicd,ucm,sydney,nwpu,rsitmd,dior_rsvg}` 和
+`rsgpt:{rsicap,rsieval}`；所选行进入 `descriptions/{all,train,val,test}.jsonl`，其中运行时 image/valid 引用只指向
 Benchmark 内 `assets/...`，原始 `datasets/...` 路径仅留在审计 provenance。DIOR box 被转换为
 reference-pixel half-open 坐标，但没有 mask 时不会伪造 T2 监督。
-连续工程状态见 `docs/reports/p1/p1_continuous_engineering_status.json`。这不是许可证批准、真实
-Small build 或 P1 acceptance。
+P1 完成交接见 `docs/handoffs/P1.md`。
 
 ## Legacy baseline 目录约定
 

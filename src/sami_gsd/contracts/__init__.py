@@ -1,7 +1,12 @@
 """Public typed contracts for SAMI-GroundSegDesc."""
 
 from sami_gsd.contracts.canonical import CanonicalParentV3, TaskViewV3
-from sami_gsd.contracts.config import BenchmarkAuditConfig, LanguageComponentConfig, load_audit_config
+from sami_gsd.contracts.config import (
+    BenchmarkAuditConfig,
+    LanguageComponentConfig,
+    SourceProvenance,
+    load_audit_config,
+)
 from sami_gsd.contracts.language import (
     CanonicalDescriptionRecord,
     CanonicalLanguageAnswer,
@@ -25,6 +30,7 @@ __all__ = [
     "ReferenceCanvasDecision",
     "RawSourceRecord",
     "SourceSampleProjection",
+    "SourceProvenance",
     "TaskViewV3",
     "load_audit_config",
 ]

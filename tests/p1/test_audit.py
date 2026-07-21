@@ -9,15 +9,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import ValidationError
-
 from sami_gsd.contracts.config import BenchmarkAuditConfig
 from sami_gsd.data.audit import audit_sources
 from sami_gsd.utilities.artifacts import atomic_write_json
 
 
-def build_audit_config(*, training_allowed: bool = False) -> BenchmarkAuditConfig:
-    """Build a minimal unknown-license audit config."""
+def build_audit_config() -> BenchmarkAuditConfig:
+    """Build a minimal provenance-only audit config."""
 
     payload: dict[str, Any] = {
         "schema_version": "sami_benchmark_audit_config_v3",
@@ -55,22 +53,16 @@ def build_audit_config(*, training_allowed: bool = False) -> BenchmarkAuditConfi
         "sources": [
             {
                 "source_key": "synthetic",
-                "display_name": "Synthetic source",
-                "local_path": "synthetic",
                 "enabled": True,
-                "allowed_task_roles": ["inventory"],
-                "license": {
+                "task_roles": ["inventory"],
+                "provenance": {
                     "source_key": "synthetic",
-                    "license_status": "unknown",
-                    "license_name": "unknown",
-                    "license_url_or_document": None,
-                    "allowed_for_training": training_allowed,
-                    "allowed_for_evaluation": False,
-                    "allowed_for_redistribution": False,
-                    "academic_only": False,
-                    "attribution": "Synthetic audit fixture; no use authorized.",
-                    "reviewed_by": None,
-                    "review_date": None,
+                    "source_name": "Synthetic source",
+                    "source_root": "datasets/synthetic",
+                    "source_document": None,
+                    "citation_key": "synthetic",
+                    "upstream_url": None,
+                    "provenance_notes": "synthetic local research fixture",
                 },
             }
         ],
@@ -80,12 +72,6 @@ def build_audit_config(*, training_allowed: bool = False) -> BenchmarkAuditConfi
 
 class AuditTests(unittest.TestCase):
     """Verify audit determinism, immutability and publication behavior."""
-
-    def test_unknown_license_fails_closed_for_training(self) -> None:
-        """Unknown sources can be inventoried but cannot train."""
-
-        with self.assertRaisesRegex(ValidationError, "training eligibility"):
-            build_audit_config(training_allowed=True)
 
     def test_audit_is_read_only_atomic_and_repeatable(self) -> None:
         """Independent runs over identical bytes yield one aggregate hash."""
@@ -114,10 +100,10 @@ class AuditTests(unittest.TestCase):
             self.assertTrue(all(not Path(path).is_absolute() for path in paths))
 
             registry = yaml.safe_load((root / "audit-one" / "source_registry.yaml").read_text(encoding="utf-8"))
-            self.assertFalse(registry["entries"][0]["allowed_for_training"])
-            report = json.loads((root / "audit-one" / "license_report.json").read_text(encoding="utf-8"))
-            self.assertEqual(report["training_eligible_unknown_count"], 0)
-            self.assertEqual(report["unknown_license_sources"], ["synthetic"])
+            self.assertEqual(registry["entries"][0]["source_root"], "datasets/synthetic")
+            report = json.loads((root / "audit-one" / "provenance_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["source_count"], 1)
+            self.assertEqual(set(report["binding_sha256"]), {"synthetic"})
 
     def test_audit_refuses_existing_output(self) -> None:
         """An existing audit directory is never overwriteable scratch."""

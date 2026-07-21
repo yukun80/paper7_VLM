@@ -6,7 +6,6 @@ spatial boxes use the frozen reference-pixel half-open convention.
 
 from __future__ import annotations
 
-from datetime import date
 from pathlib import PurePosixPath
 from typing import Annotated, Literal, Self
 
@@ -380,44 +379,6 @@ class ProvenanceRecord(StrictModel):
         return tuple(validate_portable_path(path) for path in value)
 
 
-class LicenseRecord(StrictModel):
-    """Source-license snapshot copied into a canonical parent record."""
-
-    source_key: Annotated[str, Field(min_length=1)]
-    license_status: Literal["verified", "restricted", "unknown"]
-    license_name: Annotated[str, Field(min_length=1)]
-    license_url_or_document: str | None
-    allowed_for_training: bool
-    allowed_for_evaluation: bool
-    allowed_for_redistribution: bool
-    academic_only: bool
-    attribution: Annotated[str, Field(min_length=1)]
-    reviewed_by: str | None
-    review_date: date | None
-
-    @field_validator("license_url_or_document")
-    @classmethod
-    def license_evidence_is_portable_or_https(cls, value: str | None) -> str | None:
-        """Accept a portable local document or an explicit HTTPS evidence URL."""
-
-        if value is None:
-            return None
-        if value.startswith("https://"):
-            return value
-        if "://" in value:
-            raise ValueError("license evidence URL must use HTTPS")
-        return validate_portable_path(value)
-
-    @model_validator(mode="after")
-    def unknown_or_unreviewed_never_trains(self) -> Self:
-        """Fail closed for unknown or unreviewed training sources."""
-
-        unknown = self.license_status == "unknown" or self.license_name.lower() == "unknown"
-        if self.allowed_for_training and (unknown or not self.reviewed_by or self.review_date is None):
-            raise ValueError("training eligibility requires a reviewed, non-unknown license")
-        return self
-
-
 class HashRecord(StrictModel):
     """Source and materialized-asset hashes excluding the enclosing record."""
 
@@ -436,7 +397,6 @@ class CanonicalParentV3(StrictModel):
     modalities: tuple[ModalityRecord, ...]
     annotations: AnnotationRecord
     provenance: ProvenanceRecord
-    license: LicenseRecord
     hashes: HashRecord
     annotation_status: Literal["unlabeled", "auto", "silver", "gold"]
 

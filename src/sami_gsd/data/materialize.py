@@ -2,7 +2,7 @@
 
 This module is the array-level P1 boundary. Raw-source adapters must decode an
 explicit HWC array and binary valid/mask rasters before calling it; the
-materializer never guesses layout, nodata, units, sign, grouping or license.
+materializer never guesses layout, nodata, units, sign or grouping.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from sami_gsd.contracts.canonical import (
     BandMetadata,
     CanonicalParentV3,
     HashRecord,
-    LicenseRecord,
     ModalityRecord,
     NormalizationRecord,
     ProvenanceRecord,
@@ -43,7 +42,7 @@ from sami_gsd.data.transforms import (
 from sami_gsd.utilities.artifacts import atomic_write_bytes, canonical_json_bytes, sha256_bytes
 
 
-MATERIALIZER_VERSION = "sami_canonical_materializer_v3_component_license_bound"
+MATERIALIZER_VERSION = "sami_canonical_materializer_v4_provenance_bound"
 
 
 class MaterializationError(ValueError):
@@ -92,13 +91,13 @@ class SpatialParentInput:
     """Fully resolved source record accepted for deterministic materialization."""
 
     parent_id: str
+    source_registry_key: str
     source: SourceIdentity
     reference_modality_id: str
     modalities: tuple[SourceModalityInput, ...]
     global_mask: Any
     global_mask_origin: Literal["official", "human", "pseudo"]
     referring_regions: tuple[SourceReferringInput, ...]
-    license: LicenseRecord
     source_record_sha256: str
     annotation_status: Literal["auto", "silver", "gold"]
 
@@ -395,15 +394,9 @@ def materialize_language_parent(
         raise MaterializationError("language parent requires non-empty unique source records")
     first = records[0]
     if any(record.source_key != first.source_key for record in records):
-        raise MaterializationError("one language parent cannot combine source-license keys")
+        raise MaterializationError("one language parent cannot combine physical source keys")
     if any(record.image.sha256 != first.image.sha256 or record.image.native_hw != first.image.native_hw for record in records):
         raise MaterializationError("language parent records must bind one exact source image")
-    if any(record.license != first.license for record in records):
-        raise MaterializationError("language parent records carry conflicting license snapshots")
-    if any(record.training_eligible for record in records) and not first.license.allowed_for_training:
-        raise MaterializationError("training language parent requires an approved training license")
-    if any(record.split_policy == "permanent_test_only" for record in records) and not first.license.allowed_for_evaluation:
-        raise MaterializationError("permanent-test language parent requires approved evaluation use")
 
     rgb, native_valid, suffix, raw_bytes = _decode_language_rgb(
         source.raw_image_path,
@@ -518,7 +511,7 @@ def materialize_language_parent(
             region_fact_refs=(),
         ),
         provenance=ProvenanceRecord(
-            source_registry_key=first.component_license_key,
+            source_registry_key=first.source_key,
             source_paths=source_paths,
             source_record_sha256=source_record_sha256,
             scanner_version=MATERIALIZER_VERSION,
@@ -530,7 +523,6 @@ def materialize_language_parent(
                 "zero_padding_excluded",
             ),
         ),
-        license=first.license,
         hashes=HashRecord(
             source_record_sha256=source_record_sha256,
             assets={
@@ -588,10 +580,6 @@ def materialize_spatial_parent(
     """
 
     np = _numpy()
-    if not source.license.allowed_for_training:
-        raise MaterializationError("canonical materialization requires an approved training license")
-    if source.license.license_status == "unknown":
-        raise MaterializationError("unknown-license source cannot be materialized")
     if not source.modalities:
         raise MaterializationError("spatial parent requires at least one modality")
     modality_ids = tuple(modality.modality_id for modality in source.modalities)
@@ -776,7 +764,7 @@ def materialize_spatial_parent(
             region_fact_refs=(),
         ),
         provenance=ProvenanceRecord(
-            source_registry_key=source.license.source_key,
+            source_registry_key=source.source_registry_key,
             source_paths=source_paths,
             source_record_sha256=source.source_record_sha256,
             scanner_version=MATERIALIZER_VERSION,
@@ -787,7 +775,6 @@ def materialize_spatial_parent(
                 "zero_padding_excluded",
             ),
         ),
-        license=source.license,
         hashes=HashRecord(source_record_sha256=source.source_record_sha256, assets=dict(sorted(asset_hashes.items()))),
         annotation_status=source.annotation_status,
     )

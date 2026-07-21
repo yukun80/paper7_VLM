@@ -13,7 +13,6 @@
     "modalities",
     "annotations",
     "provenance",
-    "license",
     "hashes",
     "annotation_status"
   ],
@@ -30,7 +29,6 @@
     },
     "annotations": {"$ref": "#/$defs/annotations"},
     "provenance": {"$ref": "#/$defs/provenance"},
-    "license": {"$ref": "#/$defs/license"},
     "hashes": {"$ref": "#/$defs/hashes"},
     "annotation_status": {"enum": ["unlabeled", "auto", "silver", "gold"]}
   },
@@ -447,61 +445,6 @@
         "scanner_version": {"type": "string", "minLength": 1},
         "derivation_steps": {"type": "array", "items": {"type": "string"}}
       }
-    },
-    "license": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "source_key",
-        "license_status",
-        "license_name",
-        "license_url_or_document",
-        "allowed_for_training",
-        "allowed_for_evaluation",
-        "allowed_for_redistribution",
-        "academic_only",
-        "attribution",
-        "reviewed_by",
-        "review_date"
-      ],
-      "properties": {
-        "source_key": {"type": "string", "minLength": 1},
-        "license_status": {"enum": ["verified", "restricted", "unknown"]},
-        "license_name": {"type": "string", "minLength": 1},
-        "license_url_or_document": {
-          "oneOf": [
-            {"type": "null"},
-            {"type": "string", "pattern": "^https://"},
-            {"$ref": "#/$defs/portablePath"}
-          ]
-        },
-        "allowed_for_training": {"type": "boolean"},
-        "allowed_for_evaluation": {"type": "boolean"},
-        "allowed_for_redistribution": {"type": "boolean"},
-        "academic_only": {"type": "boolean"},
-        "attribution": {"type": "string", "minLength": 1},
-        "reviewed_by": {"type": ["string", "null"]},
-        "review_date": {"type": ["string", "null"], "format": "date"}
-      },
-      "allOf": [
-        {
-          "if": {"properties": {"license_status": {"const": "unknown"}}},
-          "then": {"properties": {"allowed_for_training": {"const": false}}}
-        },
-        {
-          "if": {"properties": {"license_name": {"const": "unknown"}}},
-          "then": {"properties": {"allowed_for_training": {"const": false}}}
-        },
-        {
-          "if": {"properties": {"allowed_for_training": {"const": true}}},
-          "then": {
-            "properties": {
-              "reviewed_by": {"type": "string", "minLength": 1},
-              "review_date": {"type": "string", "format": "date"}
-            }
-          }
-        }
-      ]
     },
     "hashes": {
       "type": "object",
