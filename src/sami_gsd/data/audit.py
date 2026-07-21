@@ -1,4 +1,4 @@
-"""Read-only raw-source scanner for Canonical Benchmark v3 P1.1."""
+"""Read-only raw-source scanner for Canonical Benchmark v3 P1."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from sami_gsd.utilities.artifacts import (
 )
 
 
-AUDIT_BUILDER_VERSION = "sami_source_audit_v1"
+AUDIT_BUILDER_VERSION = "sami_source_audit_v2_component_license_bound"
 
 
 def _raise_walk_error(error: OSError) -> None:
@@ -153,11 +153,21 @@ def _build_registry(config: BenchmarkAuditConfig) -> dict[str, Any]:
                 "local_path": source.local_path,
                 "enabled": source.enabled,
                 "allowed_task_roles": list(source.allowed_task_roles),
+                "language_components": [
+                    {
+                        "component": component.component,
+                        "component_key": component.component_key,
+                        "allowed_task_roles": list(component.allowed_task_roles),
+                        "split_policy": component.split_policy,
+                        **component.license.model_dump(mode="json"),
+                    }
+                    for component in source.language_components
+                ],
                 **license_payload,
             }
         )
     return {
-        "schema_version": "sami_source_registry_v1",
+        "schema_version": "sami_source_registry_v2_component_license_bound",
         "entries": entries,
     }
 
@@ -166,23 +176,32 @@ def _build_license_report(registry: dict[str, Any]) -> dict[str, Any]:
     """Summarize eligibility and prove unknown sources cannot enter training."""
 
     entries = registry["entries"]
-    unknown = [entry["source_key"] for entry in entries if entry["license_status"] == "unknown"]
-    eligible = [entry["source_key"] for entry in entries if entry["allowed_for_training"]]
-    violations = [
-        entry["source_key"]
+    scopes = [
+        (entry["source_key"], entry)
         for entry in entries
-        if entry["allowed_for_training"]
+    ] + [
+        (component["component_key"], component)
+        for entry in entries
+        for component in entry["language_components"]
+    ]
+    unknown = [scope_key for scope_key, license_payload in scopes if license_payload["license_status"] == "unknown"]
+    eligible = [scope_key for scope_key, license_payload in scopes if license_payload["allowed_for_training"]]
+    violations = [
+        scope_key
+        for scope_key, license_payload in scopes
+        if license_payload["allowed_for_training"]
         and (
-            entry["license_status"] == "unknown"
-            or entry["license_name"].lower() == "unknown"
-            or entry["reviewed_by"] is None
-            or entry["review_date"] is None
+            license_payload["license_status"] == "unknown"
+            or license_payload["license_name"].lower() == "unknown"
+            or license_payload["reviewed_by"] is None
+            or license_payload["review_date"] is None
         )
     ]
     return {
-        "schema_version": "sami_license_report_v1",
+        "schema_version": "sami_license_report_v2_component_license_bound",
         "builder_version": AUDIT_BUILDER_VERSION,
         "source_count": len(entries),
+        "language_component_count": sum(len(entry["language_components"]) for entry in entries),
         "training_eligible_sources": sorted(eligible),
         "unknown_license_sources": sorted(unknown),
         "training_eligible_unknown_count": len(violations),
@@ -200,7 +219,7 @@ def audit_sources(
     """Scan configured raw roots and atomically publish a deterministic audit.
 
     Args:
-        config: Validated P1.1 audit configuration.
+        config: Validated P1 audit configuration.
         datasets_root: Runtime-only filesystem root containing raw source roots.
         output_dir: New output directory; existing paths are rejected.
 

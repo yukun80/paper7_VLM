@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -9,7 +10,7 @@ from pathlib import Path
 
 from sami_gsd.contracts.config import BenchmarkAuditConfig, load_audit_config
 from sami_gsd.data.builder import build_canonical_benchmark
-from sami_gsd.data.validation import validate_published_benchmark
+from sami_gsd.data.validation import validate_benchmark_payload, validate_published_benchmark
 from tests.p1.test_materialization import approved_license, spatial_input
 
 
@@ -90,6 +91,13 @@ class BuilderValidationTests(unittest.TestCase):
                     output_dir=first_root,
                     schemas_root=REPOSITORY_ROOT / "schemas",
                 )
+
+            summary_path = first_root / "reports/summary_report.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["valid_pixel_count"] = 0
+            summary_path.write_text(json.dumps(summary, allow_nan=False), encoding="utf-8")
+            tampered = validate_benchmark_payload(first_root, schemas_root=REPOSITORY_ROOT / "schemas")
+            self.assertIn("summary_report_replay_mismatch:valid_pixel_count", tampered["errors"])
 
 
 if __name__ == "__main__":

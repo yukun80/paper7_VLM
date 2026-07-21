@@ -155,6 +155,103 @@ sources:
       attribution: Aggregate terms do not replace component image and annotation licenses; no use authorized.
       reviewed_by: null
       review_date: null
+    language_components:
+      - component: rsicd
+        component_key: mmrs_1m:rsicd
+        allowed_task_roles: [language_global]
+        split_policy: train_candidate
+        license:
+          source_key: mmrs_1m
+          license_status: unknown
+          license_name: unknown
+          license_url_or_document: null
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: false
+          attribution: RSICD image and caption terms require an independent owner decision; no use authorized.
+          reviewed_by: null
+          review_date: null
+      - component: ucm
+        component_key: mmrs_1m:ucm
+        allowed_task_roles: [language_global]
+        split_policy: train_candidate
+        license:
+          source_key: mmrs_1m
+          license_status: unknown
+          license_name: unknown
+          license_url_or_document: null
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: false
+          attribution: UCM-Captions image and caption terms require an independent owner decision; no use authorized.
+          reviewed_by: null
+          review_date: null
+      - component: sydney
+        component_key: mmrs_1m:sydney
+        allowed_task_roles: [language_global]
+        split_policy: train_candidate
+        license:
+          source_key: mmrs_1m
+          license_status: unknown
+          license_name: unknown
+          license_url_or_document: null
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: false
+          attribution: Sydney-Captions image and caption terms require an independent owner decision; no use authorized.
+          reviewed_by: null
+          review_date: null
+      - component: nwpu
+        component_key: mmrs_1m:nwpu
+        allowed_task_roles: [language_global]
+        split_policy: train_candidate
+        license:
+          source_key: mmrs_1m
+          license_status: unknown
+          license_name: unknown
+          license_url_or_document: null
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: false
+          attribution: NWPU-Captions image and caption terms require an independent owner decision; no use authorized.
+          reviewed_by: null
+          review_date: null
+      - component: rsitmd
+        component_key: mmrs_1m:rsitmd
+        allowed_task_roles: [language_global]
+        split_policy: train_candidate
+        license:
+          source_key: mmrs_1m
+          license_status: unknown
+          license_name: unknown
+          license_url_or_document: null
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: false
+          attribution: RSITMD image and caption terms require an independent owner decision; no use authorized.
+          reviewed_by: null
+          review_date: null
+      - component: dior_rsvg
+        component_key: mmrs_1m:dior_rsvg
+        allowed_task_roles: [language_region]
+        split_policy: train_candidate
+        license:
+          source_key: mmrs_1m
+          license_status: unknown
+          license_name: unknown
+          license_url_or_document: null
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: false
+          attribution: DIOR-RSVG image and expression terms require an independent owner decision; no use authorized.
+          reviewed_by: null
+          review_date: null
   - source_key: rsgpt
     display_name: RSGPT RSICap and RSIEval
     local_path: RSGPT
@@ -172,6 +269,39 @@ sources:
       attribution: DOTA-derived imagery is academic-only and commercial use is prohibited; explicit owner approval remains pending.
       reviewed_by: P0 engineering audit
       review_date: 2026-07-20
+    language_components:
+      - component: rsicap
+        component_key: rsgpt:rsicap
+        allowed_task_roles: [language_global]
+        split_policy: train_candidate
+        license:
+          source_key: rsgpt
+          license_status: restricted
+          license_name: academic-only-DOTA-derived
+          license_url_or_document: https://github.com/Lavender105/RSGPT
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: true
+          attribution: RSICap uses DOTA-derived imagery; academic-only restrictions and owner approval remain pending.
+          reviewed_by: P0 engineering audit
+          review_date: 2026-07-20
+      - component: rsieval
+        component_key: rsgpt:rsieval
+        allowed_task_roles: [language_global]
+        split_policy: permanent_test_only
+        license:
+          source_key: rsgpt
+          license_status: restricted
+          license_name: academic-only-DOTA-derived
+          license_url_or_document: https://github.com/Lavender105/RSGPT
+          allowed_for_training: false
+          allowed_for_evaluation: false
+          allowed_for_redistribution: false
+          academic_only: true
+          attribution: RSIEval uses DOTA-derived imagery, is academic-only and remains permanent test-only.
+          reviewed_by: P0 engineering audit
+          review_date: 2026-07-20
   - source_key: disasterm3
     display_name: DisasterM3
     local_path: DisasterM3

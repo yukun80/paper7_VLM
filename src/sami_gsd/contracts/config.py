@@ -12,6 +12,19 @@ from pydantic import Field, field_validator, model_validator
 from sami_gsd.contracts.canonical import LicenseRecord, StrictModel, validate_portable_path
 
 
+LanguageComponentName = Literal[
+    "rsicd",
+    "ucm",
+    "sydney",
+    "nwpu",
+    "rsitmd",
+    "dior_rsvg",
+    "rsicap",
+    "rsieval",
+]
+LanguageTaskRole = Literal["language_global", "language_region"]
+
+
 class RootSpec(StrictModel):
     """Portable runtime-root policy with an optional environment override."""
 
@@ -110,6 +123,30 @@ class BuildSettings(StrictModel):
     small_max_parents_per_source: Annotated[int, Field(gt=0)]
 
 
+class LanguageComponentConfig(StrictModel):
+    """One independently reviewed language component inside a shared raw root."""
+
+    component: LanguageComponentName
+    component_key: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$")]
+    allowed_task_roles: tuple[LanguageTaskRole, ...]
+    split_policy: Literal["train_candidate", "permanent_test_only"]
+    license: LicenseRecord
+
+    @model_validator(mode="after")
+    def role_and_test_policy_are_frozen(self) -> Self:
+        """Bind each component to its sole scientific role and split policy."""
+
+        expected_role = "language_region" if self.component == "dior_rsvg" else "language_global"
+        if self.allowed_task_roles != (expected_role,):
+            raise ValueError(f"{self.component} must allow exactly {expected_role}")
+        expected_split = "permanent_test_only" if self.component == "rsieval" else "train_candidate"
+        if self.split_policy != expected_split:
+            raise ValueError(f"{self.component} must use split_policy={expected_split}")
+        if self.component == "rsieval" and self.license.allowed_for_training:
+            raise ValueError("RSIEval can never be approved for training")
+        return self
+
+
 class SourceConfig(StrictModel):
     """One raw source plus its fail-closed license snapshot."""
 
@@ -119,17 +156,42 @@ class SourceConfig(StrictModel):
     enabled: bool
     allowed_task_roles: tuple[Literal["inventory", "t1", "t2", "t3", "t4", "language_global", "language_region"], ...]
     license: LicenseRecord
+    language_components: tuple[LanguageComponentConfig, ...] = ()
 
     _local_path_is_portable = field_validator("local_path")(validate_portable_path)
 
     @model_validator(mode="after")
     def source_key_matches_license(self) -> Self:
-        """Prevent registry rows from being attached to the wrong source."""
+        """Prevent aggregate language permission from overriding components."""
 
         if self.source_key != self.license.source_key:
             raise ValueError("source_key must match license.source_key")
         if self.license.allowed_for_training and not self.allowed_task_roles:
             raise ValueError("training-eligible source requires at least one allowed task role")
+        expected_components: dict[str, tuple[str, ...]] = {
+            "mmrs_1m": ("rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg"),
+            "rsgpt": ("rsicap", "rsieval"),
+        }
+        expected = expected_components.get(self.source_key, ())
+        actual = tuple(component.component for component in self.language_components)
+        if actual != expected:
+            raise ValueError(f"{self.source_key} language_components must be exactly {expected}")
+        if expected:
+            if self.allowed_task_roles != ("inventory",):
+                raise ValueError("aggregate language containers may expose only the inventory role")
+            if any(
+                (
+                    self.license.allowed_for_training,
+                    self.license.allowed_for_evaluation,
+                    self.license.allowed_for_redistribution,
+                )
+            ):
+                raise ValueError("aggregate language-container license cannot authorize component use")
+            for component in self.language_components:
+                if component.component_key != f"{self.source_key}:{component.component}":
+                    raise ValueError("language component_key must bind source_key and component")
+                if component.license.source_key != self.source_key:
+                    raise ValueError("language component license must retain its physical source_key")
         return self
 
 

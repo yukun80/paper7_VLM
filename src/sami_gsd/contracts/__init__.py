@@ -1,7 +1,7 @@
 """Public typed contracts for SAMI-GroundSegDesc."""
 
 from sami_gsd.contracts.canonical import CanonicalParentV3, TaskViewV3
-from sami_gsd.contracts.config import BenchmarkAuditConfig, load_audit_config
+from sami_gsd.contracts.config import BenchmarkAuditConfig, LanguageComponentConfig, load_audit_config
 from sami_gsd.contracts.language import (
     CanonicalDescriptionRecord,
     CanonicalLanguageAnswer,
@@ -19,6 +19,7 @@ __all__ = [
     "CanonicalParentV3",
     "DescriptionSourceRecord",
     "LanguageAnswer",
+    "LanguageComponentConfig",
     "LanguageImageRef",
     "ReferenceCanvasCandidate",
     "ReferenceCanvasDecision",

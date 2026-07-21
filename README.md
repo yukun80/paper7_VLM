@@ -7,8 +7,10 @@
 P1 的 schema、只读扫描、reference canvas、可逆 transform、HDF5/NetCDF/GeoTIFF 元数据、原子
 materialization、valid/padding/nodata、parent group split、SHA/dHash/RGB64-MAE duplicate、T1--T4、
 冻结 description subset、canonical language parent、validator、summary 和 repeat-hash 工程链路均已
-实现。获批语言图片按 `source_key + exact image SHA` 只物化一次；caption/DIOR short phrase 绑定
-同一 parent，RSIEval 的永久 test 身份沿 verified duplicate connected component 传播。合成 Small
+实现。获批语言图片按 `source_key + exact image SHA + component-license SHA` 形成 parent；同一精确
+许可证快照下的 caption/DIOR short phrase 合并到同一视觉 parent，许可证不同的重复图像仍由
+verified duplicate connected component 锁在同一 split。RSIEval 的永久 test 身份沿该 component
+传播。合成 Small
 两次完整构建 byte-stable，独立 validation replay 为 `errors=[]`；真实 Small 仍被数据许可证人工
 门禁阻止，不得把合成工程验收报告成 P1 正式完成。
 
@@ -48,7 +50,7 @@ PYTHONPATH=src python -m pytest -q tests/p1
 ```bash
 sami-gsd data audit \
   --config configs/benchmark_v3_small.yaml \
-  --output-dir ../benchmark/sami_landslide_v3/p1_1_audit_small
+  --output-dir ../benchmark/sami_landslide_v3/p1_audit_small
 ```
 
 该命令只读 raw data，输出 `inventory.json`、`source_registry.yaml`、`license_report.json` 和
@@ -57,7 +59,9 @@ sami-gsd data audit \
 真实 Small 正式构建命令如下，但当前不得运行：配置中的九个 source 仍全部
 `allowed_for_training=false`，命令会在 raw decode 和任何输出写入前 fail closed。项目 owner 必须先
 逐 source 填写受审 license evidence、`reviewed_by`、`review_date` 和允许的 task role；空间源需显式
-允许 `t1`/`t2`，语言源需分别允许 `language_global`/`language_region`。不得仅把布尔值改为 true。
+允许 `t1`/`t2`。`mmrs_1m` 与 `rsgpt` 顶层条目固定为 inventory-only，不能授予训练、评估或再分发；
+语言授权必须写入对应 `language_components[]`，逐一绑定 `component_key`、唯一 role、split policy 和
+完整 license snapshot。不得用聚合布尔值放行全部组件，也不得仅把布尔值改为 true。
 
 ```bash
 sami-gsd data build --config configs/benchmark_v3_small.yaml
@@ -90,7 +94,9 @@ sampled、2 个 blocked、14 个 audit candidate、0 个 materialization-eligibl
 混合 PNG/TIFF、Landslide4Sense HDF5 和 multimodal GeoTIFF 现有显式元数据投影；InSAR 无 units/sign
 时仍禁止定量解释。MMRS 只读五个 caption component 与 DIOR short phrase，RSGPT 只读 RSICap 和
 永久 test-only RSIEval；`total.json`、classification、detection、VQA、infrared 和无关 SAR 均不读。
-未获批语言行只保留在 `manifests/description_source_subset.jsonl`，不会解码或复制 raw image；获批行
+未获批语言行只保留在 `manifests/description_source_subset.jsonl`，不会解码或复制 raw image；八个
+组件的授权分别由 `mmrs_1m:{rsicd,ucm,sydney,nwpu,rsitmd,dior_rsvg}` 和
+`rsgpt:{rsicap,rsieval}` 控制，聚合容器无法越权。获批行
 进入 `descriptions/{all,train,val,test,train_eligible}.jsonl`，其中运行时 image/valid 引用只指向
 Benchmark 内 `assets/...`，原始 `datasets/...` 路径仅留在审计 provenance。DIOR box 被转换为
 reference-pixel half-open 坐标，但没有 mask 时不会伪造 T2 监督。

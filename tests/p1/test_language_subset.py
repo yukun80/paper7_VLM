@@ -7,9 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
 from pydantic import ValidationError
 
-from sami_gsd.contracts.config import load_audit_config
+from sami_gsd.contracts.config import BenchmarkAuditConfig, load_audit_config
 from sami_gsd.contracts.language import DescriptionSourceRecord
 from sami_gsd.data.language_subset import build_description_subset
 from tests.p1.test_source_adapters import write_png
@@ -133,6 +134,38 @@ class LanguageSubsetTests(unittest.TestCase):
             wrong_role["normalized_box_xyxy"] = None
             with self.assertRaisesRegex(ValidationError, "sole region-short-phrase"):
                 DescriptionSourceRecord.model_validate(wrong_role)
+
+    def test_one_component_approval_promotes_only_that_component(self) -> None:
+        """Partial owner approval cannot leak through the aggregate MMRS container."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            datasets = build_language_fixture(Path(directory))
+            payload = yaml.safe_load(
+                (REPOSITORY_ROOT / "configs/benchmark_v3_small.yaml").read_text(encoding="utf-8")
+            )
+            mmrs = next(source for source in payload["sources"] if source["source_key"] == "mmrs_1m")
+            rsicd = next(
+                component
+                for component in mmrs["language_components"]
+                if component["component"] == "rsicd"
+            )
+            rsicd["license"].update(
+                {
+                    "license_status": "verified",
+                    "license_name": "synthetic-rsicd-approval",
+                    "license_url_or_document": "licenses/rsicd.txt",
+                    "allowed_for_training": True,
+                    "allowed_for_evaluation": True,
+                    "reviewed_by": "test-suite",
+                    "review_date": "2026-07-21",
+                }
+            )
+            config = BenchmarkAuditConfig.model_validate(payload)
+            report = build_description_subset(config, datasets_root=datasets, limit_per_component=1)
+            promoted = [record for record in report["records"] if record["training_eligible"]]
+            self.assertEqual([record["component"] for record in promoted], ["rsicd"])
+            self.assertNotIn("license_not_approved:mmrs_1m:rsicd", report["warnings"])
+            self.assertIn("license_not_approved:mmrs_1m:ucm", report["warnings"])
 
 
 if __name__ == "__main__":

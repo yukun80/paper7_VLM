@@ -43,7 +43,7 @@ from sami_gsd.data.transforms import (
 from sami_gsd.utilities.artifacts import atomic_write_bytes, canonical_json_bytes, sha256_bytes
 
 
-MATERIALIZER_VERSION = "sami_canonical_materializer_v2_spatial_and_language_parents"
+MATERIALIZER_VERSION = "sami_canonical_materializer_v3_component_license_bound"
 
 
 class MaterializationError(ValueError):
@@ -518,7 +518,7 @@ def materialize_language_parent(
             region_fact_refs=(),
         ),
         provenance=ProvenanceRecord(
-            source_registry_key=first.source_key,
+            source_registry_key=first.component_license_key,
             source_paths=source_paths,
             source_record_sha256=source_record_sha256,
             scanner_version=MATERIALIZER_VERSION,

@@ -10,6 +10,7 @@ import zlib
 from pathlib import Path
 
 import numpy as np
+import yaml
 from PIL import Image
 
 from sami_gsd.contracts.canonical import LicenseRecord
@@ -21,8 +22,8 @@ from sami_gsd.contracts.language import (
 )
 from sami_gsd.data.adapters.formats import read_image_header
 from sami_gsd.data.builder import build_canonical_benchmark
-from sami_gsd.data.validation import validate_published_benchmark
-from sami_gsd.utilities.artifacts import sha256_file
+from sami_gsd.data.validation import validate_benchmark_payload, validate_published_benchmark
+from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 from tests.p1.test_builder_validation import synthetic_build_config
 from tests.p1.test_materialization import spatial_input
 from tests.p1.test_source_adapters import write_png
@@ -50,23 +51,55 @@ def reviewed_license(source_key: str) -> LicenseRecord:
     )
 
 
+def component_license(source_key: str, component: str) -> LicenseRecord:
+    """Return the exact fixture policy, keeping RSIEval test-only."""
+
+    license_record = reviewed_license(source_key)
+    if component == "rsieval":
+        return license_record.model_copy(update={"allowed_for_training": False})
+    return license_record
+
+
 def language_build_config() -> BenchmarkAuditConfig:
     """Extend the spatial synthetic config with licensed language sources."""
 
     payload = synthetic_build_config().model_dump(mode="json")
-    payload["sources"].extend(
-        [
+    component_sets = {
+        "mmrs_1m": ("rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg"),
+        "rsgpt": ("rsicap", "rsieval"),
+    }
+    for source_key, local_path in (("mmrs_1m", "MMRS-1M"), ("rsgpt", "RSGPT")):
+        aggregate = reviewed_license(source_key).model_copy(
+            update={
+                "allowed_for_training": False,
+                "allowed_for_evaluation": False,
+                "allowed_for_redistribution": False,
+            }
+        )
+        payload["sources"].append(
             {
                 "source_key": source_key,
                 "display_name": f"Synthetic {source_key}",
                 "local_path": local_path,
                 "enabled": True,
-                "allowed_task_roles": ["inventory", "language_global", "language_region"],
-                "license": reviewed_license(source_key).model_dump(mode="json"),
+                "allowed_task_roles": ["inventory"],
+                "license": aggregate.model_dump(mode="json"),
+                "language_components": [
+                    {
+                        "component": component,
+                        "component_key": f"{source_key}:{component}",
+                        "allowed_task_roles": [
+                            "language_region" if component == "dior_rsvg" else "language_global"
+                        ],
+                        "split_policy": (
+                            "permanent_test_only" if component == "rsieval" else "train_candidate"
+                        ),
+                        "license": component_license(source_key, component).model_dump(mode="json"),
+                    }
+                    for component in component_sets[source_key]
+                ],
             }
-            for source_key, local_path in (("mmrs_1m", "MMRS-1M"), ("rsgpt", "RSGPT"))
-        ]
-    )
+        )
     return BenchmarkAuditConfig.model_validate(payload)
 
 
@@ -100,10 +133,11 @@ def description_record(
     header = read_image_header(image_path)
     return DescriptionSourceRecord.model_validate(
         {
-            "schema_version": "sami_description_source_v1",
+            "schema_version": "sami_description_source_v2_component_license_bound",
             "record_id": record_id,
             "source_key": source_key,
             "component": component,
+            "component_license_key": f"{source_key}:{component}",
             "source_group_id": f"group/{record_id}",
             "role": role,
             "split_policy": split_policy,
@@ -122,7 +156,7 @@ def description_record(
                 ).model_dump(mode="json")
             ],
             "normalized_box_xyxy": box,
-            "license": reviewed_license(source_key).model_dump(mode="json"),
+            "license": component_license(source_key, component).model_dump(mode="json"),
             "training_eligible": training_eligible,
         }
     )
@@ -197,7 +231,12 @@ class CanonicalLanguageBuildTests(unittest.TestCase):
                     box=(0.1, 0.2, 0.8, 0.9),
                 ),
             )
-            noise_parent = f"language-mmrs_1m-{sha256_file(noise)[:20]}"
+            language_license_sha256 = sha256_bytes(
+                canonical_json_bytes(component_license("mmrs_1m", "nwpu").model_dump(mode="json"))
+            )
+            noise_parent = (
+                f"language-mmrs_1m-{sha256_file(noise)[:16]}-{language_license_sha256[:8]}"
+            )
             first_root = root / "build-one"
             second_root = root / "build-two"
             first = build_canonical_benchmark(
@@ -245,14 +284,36 @@ class CanonicalLanguageBuildTests(unittest.TestCase):
             )
             self.assertEqual(t2_rows, 1)
 
+            registry_path = first_root / "manifests/source_registry.yaml"
+            registry = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+            mmrs = next(entry for entry in registry["entries"] if entry["source_key"] == "mmrs_1m")
+            rsicd = next(
+                component
+                for component in mmrs["language_components"]
+                if component["component"] == "rsicd"
+            )
+            rsicd["attribution"] = "Tampered after publication."
+            registry_path.write_text(yaml.safe_dump(registry, sort_keys=True), encoding="utf-8")
+            tampered = validate_benchmark_payload(first_root, schemas_root=REPOSITORY_ROOT / "schemas")
+            self.assertTrue(
+                any(
+                    error == "description_component_license_mismatch:mmrs/shared-a"
+                    for error in tampered["errors"]
+                )
+            )
+
     def test_unapproved_language_rows_remain_audit_only_without_raw_decode(self) -> None:
         """A licensed spatial build may retain, but never materialize, denied language rows."""
 
         payload = language_build_config().model_dump(mode="json")
         mmrs_source = next(source for source in payload["sources"] if source["source_key"] == "mmrs_1m")
-        mmrs_source["allowed_task_roles"] = ["inventory"]
-        mmrs_source["license"]["allowed_for_training"] = False
-        mmrs_source["license"]["allowed_for_evaluation"] = False
+        rsicd_policy = next(
+            component
+            for component in mmrs_source["language_components"]
+            if component["component"] == "rsicd"
+        )
+        rsicd_policy["license"]["allowed_for_training"] = False
+        rsicd_policy["license"]["allowed_for_evaluation"] = False
         config = BenchmarkAuditConfig.model_validate(payload)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -268,7 +329,7 @@ class CanonicalLanguageBuildTests(unittest.TestCase):
                 text="Audit-only caption.",
             )
             denied_payload = approved.model_dump(mode="json")
-            denied_payload["license"] = mmrs_source["license"]
+            denied_payload["license"] = rsicd_policy["license"]
             denied_payload["training_eligible"] = False
             denied = DescriptionSourceRecord.model_validate(denied_payload)
             missing_after_selection.unlink()

@@ -1,4 +1,4 @@
-"""Repository-owned P1.1 configuration tests."""
+"""Repository-owned P1 configuration tests."""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
 
-from sami_gsd.contracts.config import load_audit_config
+from sami_gsd.contracts.config import BenchmarkAuditConfig, load_audit_config
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,46 @@ class ConfigTests(unittest.TestCase):
                         if source.license.license_status == "unknown"
                     )
                 )
+                components = {
+                    component.component_key: component
+                    for source in config.sources
+                    for component in source.language_components
+                }
+                self.assertEqual(
+                    tuple(components),
+                    (
+                        "mmrs_1m:rsicd",
+                        "mmrs_1m:ucm",
+                        "mmrs_1m:sydney",
+                        "mmrs_1m:nwpu",
+                        "mmrs_1m:rsitmd",
+                        "mmrs_1m:dior_rsvg",
+                        "rsgpt:rsicap",
+                        "rsgpt:rsieval",
+                    ),
+                )
+                self.assertTrue(all(not component.license.allowed_for_training for component in components.values()))
+
+    def test_aggregate_language_license_cannot_authorize_components(self) -> None:
+        """A shared raw container must never override per-component decisions."""
+
+        payload = yaml.safe_load(
+            (REPOSITORY_ROOT / "configs/benchmark_v3_small.yaml").read_text(encoding="utf-8")
+        )
+        mmrs = next(source for source in payload["sources"] if source["source_key"] == "mmrs_1m")
+        mmrs["license"].update(
+            {
+                "license_status": "verified",
+                "license_name": "synthetic-approved",
+                "license_url_or_document": "licenses/mmrs.txt",
+                "allowed_for_training": True,
+                "allowed_for_evaluation": True,
+                "reviewed_by": "test-suite",
+                "review_date": "2026-07-21",
+            }
+        )
+        with self.assertRaisesRegex(ValidationError, "cannot authorize component use"):
+            BenchmarkAuditConfig.model_validate(payload)
 
     def test_scene_region_ontology_declares_every_required_policy(self) -> None:
         """Every frozen ontology field has all required attributes."""

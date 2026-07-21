@@ -7,13 +7,13 @@ import re
 from pathlib import Path
 from typing import Any
 
-from sami_gsd.contracts.config import BenchmarkAuditConfig, SourceConfig
+from sami_gsd.contracts.config import BenchmarkAuditConfig, LanguageComponentConfig, SourceConfig
 from sami_gsd.contracts.language import DescriptionSourceRecord, LanguageAnswer, LanguageImageRef
 from sami_gsd.data.adapters.formats import read_image_header
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
-LANGUAGE_SUBSET_VERSION = "sami_description_subset_v1_frozen_sources"
+LANGUAGE_SUBSET_VERSION = "sami_description_subset_v2_component_license_bound"
 
 
 class LanguageSubsetError(ValueError):
@@ -33,6 +33,15 @@ def _source(config: BenchmarkAuditConfig, key: str) -> SourceConfig:
     """Return one exact configured source row."""
 
     return next(source for source in config.sources if source.source_key == key)
+
+
+def _component_policy(source: SourceConfig, component: str) -> LanguageComponentConfig:
+    """Return the exact independently reviewed component policy."""
+
+    matches = [policy for policy in source.language_components if policy.component == component]
+    if len(matches) != 1:
+        raise LanguageSubsetError(f"component policy is not unique: {source.source_key}:{component}")
+    return matches[0]
 
 
 def _load_mapping(path: Path) -> Any:
@@ -113,6 +122,7 @@ def _mmrs_records(
 
     records: list[DescriptionSourceRecord] = []
     for component, index_relative in _MMRS_COMPONENTS:
+        policy = _component_policy(source, component)
         payload = _load_mapping(source_root / index_relative)
         if not isinstance(payload, list):
             raise LanguageSubsetError(f"MMRS selected index is not an array: {index_relative}")
@@ -127,10 +137,11 @@ def _mmrs_records(
             texts = _gpt_answers(row)
             records.append(
                 DescriptionSourceRecord(
-                    schema_version="sami_description_source_v1",
+                    schema_version="sami_description_source_v2_component_license_bound",
                     record_id=record_id,
                     source_key="mmrs_1m",
                     component=component,
+                    component_license_key=policy.component_key,
                     source_group_id=f"mmrs/image/{image_relative.as_posix()}",
                     role="global_caption",
                     split_policy="train_candidate",
@@ -143,12 +154,13 @@ def _mmrs_records(
                         index_sha256=index_hash,
                     ),
                     normalized_box_xyxy=None,
-                    license=source.license,
-                    training_eligible=source.license.allowed_for_training,
+                    license=policy.license,
+                    training_eligible=policy.license.allowed_for_training,
                 )
             )
 
     index_relative = Path("json/RSVG/rsvg_trainval.json")
+    policy = _component_policy(source, "dior_rsvg")
     payload = _load_mapping(source_root / index_relative)
     if not isinstance(payload, list):
         raise LanguageSubsetError("DIOR-RSVG selected index is not an array")
@@ -175,10 +187,11 @@ def _mmrs_records(
         record_id = f"mmrs/dior_rsvg/{image_relative.as_posix()}/{row_number}"
         records.append(
             DescriptionSourceRecord(
-                schema_version="sami_description_source_v1",
+                schema_version="sami_description_source_v2_component_license_bound",
                 record_id=record_id,
                 source_key="mmrs_1m",
                 component="dior_rsvg",
+                component_license_key=policy.component_key,
                 source_group_id=f"mmrs/image/{image_relative.as_posix()}",
                 role="region_short_phrase",
                 split_policy="train_candidate",
@@ -194,8 +207,8 @@ def _mmrs_records(
                     index_sha256=index_hash,
                 ),
                 normalized_box_xyxy=box,
-                license=source.license,
-                training_eligible=source.license.allowed_for_training,
+                license=policy.license,
+                training_eligible=policy.license.allowed_for_training,
             )
         )
     return records
@@ -215,6 +228,9 @@ def _rsgpt_records(
         ("rsieval", "RSIEval", Path("dataset/RSIEval/annotations.json"), "permanent_test_only"),
     )
     for component, directory, index_relative, split_policy in definitions:
+        policy = _component_policy(source, component)
+        if policy.split_policy != split_policy:
+            raise LanguageSubsetError(f"component split policy drift: {policy.component_key}")
         payload = _load_mapping(source_root / index_relative)
         rows = payload.get("annotations") if isinstance(payload, dict) else None
         if not isinstance(rows, list):
@@ -235,10 +251,11 @@ def _rsgpt_records(
             record_id = f"rsgpt/{component}/{row['filename']}"
             records.append(
                 DescriptionSourceRecord(
-                    schema_version="sami_description_source_v1",
+                    schema_version="sami_description_source_v2_component_license_bound",
                     record_id=record_id,
                     source_key="rsgpt",
                     component=component,
+                    component_license_key=policy.component_key,
                     source_group_id=f"rsgpt/{directory}/{row['filename']}",
                     role="global_caption",
                     split_policy=split_policy,
@@ -254,8 +271,8 @@ def _rsgpt_records(
                         index_sha256=index_hash,
                     ),
                     normalized_box_xyxy=None,
-                    license=source.license,
-                    training_eligible=source.license.allowed_for_training and component != "rsieval",
+                    license=policy.license,
+                    training_eligible=policy.license.allowed_for_training and component != "rsieval",
                 )
             )
     return records
@@ -287,7 +304,7 @@ def build_description_subset(
         raise LanguageSubsetError("description subset record IDs are not unique")
     payload_records = [record.model_dump(mode="json") for record in ordered]
     report: dict[str, Any] = {
-        "schema_version": "sami_description_subset_report_v1",
+        "schema_version": "sami_description_subset_report_v2_component_license_bound",
         "builder_version": LANGUAGE_SUBSET_VERSION,
         "record_count": len(ordered),
         "training_eligible_count": sum(record.training_eligible for record in ordered),
@@ -296,12 +313,28 @@ def build_description_subset(
             component: sum(record.component == component for record in ordered)
             for component in ("rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval")
         },
+        "component_license_states": {
+            policy.component_key: {
+                "license_status": policy.license.license_status,
+                "allowed_for_training": policy.license.allowed_for_training,
+                "allowed_for_evaluation": policy.license.allowed_for_evaluation,
+                "allowed_for_redistribution": policy.license.allowed_for_redistribution,
+                "reviewed_by": policy.license.reviewed_by,
+                "review_date": (
+                    policy.license.review_date.isoformat()
+                    if policy.license.review_date is not None
+                    else None
+                ),
+            }
+            for source in (mmrs, rsgpt)
+            for policy in source.language_components
+        },
         "excluded_inputs_read": [],
         "records": payload_records,
         "errors": [],
         "warnings": sorted(
             {
-                f"license_not_approved:{record.source_key}"
+                f"license_not_approved:{record.component_license_key}"
                 for record in ordered
                 if not record.license.allowed_for_training and record.split_policy != "permanent_test_only"
             }

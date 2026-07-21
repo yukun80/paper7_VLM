@@ -10,12 +10,16 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from sami_gsd.contracts.canonical import CanonicalParentV3, LicenseRecord, TaskViewV3
+from sami_gsd.contracts.config import DuplicateSettings, SplitSettings
 from sami_gsd.contracts.language import CanonicalDescriptionRecord, DescriptionSourceRecord
+from sami_gsd.data.duplicates import DUPLICATE_PROTOCOL_VERSION, build_duplicate_analysis
+from sami_gsd.data.split import SPLIT_PROTOCOL_VERSION, assign_parent_splits
+from sami_gsd.data.tasks import build_evaluation_conditions
 from sami_gsd.data.transforms import forward_box, quantize_covering_box
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
-VALIDATION_VERSION = "sami_benchmark_validation_v2_language_parent_replay"
+VALIDATION_VERSION = "sami_benchmark_validation_v3_component_license_replay"
 
 
 def _strict_json(text: str) -> Any:
@@ -108,7 +112,7 @@ def validate_benchmark_payload(
     parent_schema = _strict_json((schemas_root / "canonical_parent_v3.schema.json").read_text(encoding="utf-8"))
     task_schema = _strict_json((schemas_root / "task_view_v3.schema.json").read_text(encoding="utf-8"))
     description_schema = _strict_json(
-        (schemas_root / "canonical_description_v1.schema.json").read_text(encoding="utf-8")
+        (schemas_root / "canonical_description_v2.schema.json").read_text(encoding="utf-8")
     )
     parent_validator = Draft202012Validator(parent_schema)
     task_validator = Draft202012Validator(task_schema)
@@ -204,9 +208,18 @@ def validate_benchmark_payload(
     duplicate_rows = _read_jsonl(benchmark_root / "manifests/duplicate_clusters.jsonl")
     cross_split = 0
     covered: set[str] = set()
+    duplicate_mapping: dict[str, str] = {}
     for row in duplicate_rows:
         members = row.get("parent_ids", [])
         covered.update(members)
+        cluster_id = row.get("cluster_id")
+        if not isinstance(cluster_id, str):
+            errors.append("duplicate_cluster_id_invalid")
+        else:
+            for parent_id in members:
+                if parent_id in duplicate_mapping:
+                    errors.append(f"duplicate_cluster_parent_repeated:{parent_id}")
+                duplicate_mapping[parent_id] = cluster_id
         splits = {parent_by_id[parent_id].split for parent_id in members if parent_id in parent_by_id}
         if len(splits) > 1:
             cross_split += 1
@@ -215,10 +228,88 @@ def validate_benchmark_payload(
     if cross_split:
         errors.append(f"verified_duplicate_cross_split:{cross_split}")
 
+    duplicate_report = _strict_json(
+        (benchmark_root / "reports/duplicate_report.json").read_text(encoding="utf-8")
+    )
+    try:
+        duplicate_settings = DuplicateSettings.model_validate(duplicate_report.get("settings"))
+        replayed_duplicates = build_duplicate_analysis(
+            tuple(parents),
+            benchmark_root=benchmark_root,
+            settings=duplicate_settings,
+        )
+        expected_duplicate_report = {
+            "schema_version": "sami_duplicate_report_v1",
+            "protocol": DUPLICATE_PROTOCOL_VERSION,
+            "settings": duplicate_settings.model_dump(mode="json"),
+            "aggregate_sha256": replayed_duplicates.aggregate_sha256,
+            "cluster_count": len(replayed_duplicates.clusters),
+            "exact_edge_count": replayed_duplicates.exact_edge_count,
+            "perceptual_candidate_edge_count": replayed_duplicates.perceptual_candidate_edge_count,
+            "verified_perceptual_edge_count": replayed_duplicates.verified_perceptual_edge_count,
+            "verified_duplicate_cross_split_count": cross_split,
+            "errors": [] if cross_split == 0 else [f"verified_duplicate_cross_split:{cross_split}"],
+        }
+        if duplicate_rows != list(replayed_duplicates.clusters):
+            errors.append("duplicate_cluster_replay_mismatch")
+        if duplicate_report != expected_duplicate_report:
+            errors.append("duplicate_report_replay_mismatch")
+        if duplicate_mapping != replayed_duplicates.parent_to_cluster:
+            errors.append("duplicate_parent_mapping_replay_mismatch")
+    except Exception as error:
+        errors.append(f"duplicate_replay_failed:{error}")
+
+    split_manifest = _strict_json(
+        (benchmark_root / "manifests/split_manifest.json").read_text(encoding="utf-8")
+    )
+    try:
+        split_settings = SplitSettings.model_validate(split_manifest.get("settings"))
+        forced_splits = split_manifest.get("forced_splits")
+        if not isinstance(forced_splits, dict) or not all(
+            isinstance(parent_id, str) and split_name in {"train", "val", "test"}
+            for parent_id, split_name in forced_splits.items()
+        ):
+            raise ValueError("forced_splits must map parent IDs to train/val/test")
+        split_seed = split_manifest.get("seed")
+        if isinstance(split_seed, bool) or not isinstance(split_seed, int):
+            raise ValueError("split seed must be an integer")
+        replayed_split = assign_parent_splits(
+            tuple(parents),
+            duplicate_clusters=duplicate_mapping,
+            settings=split_settings,
+            seed=split_seed,
+            forced_splits=forced_splits,
+        )
+        expected_split_manifest = {
+            "schema_version": "sami_split_manifest_v1",
+            "protocol": SPLIT_PROTOCOL_VERSION,
+            "seed": split_seed,
+            "settings": split_settings.model_dump(mode="json"),
+            "forced_splits": dict(sorted(forced_splits.items())),
+            "aggregate_sha256": replayed_split.aggregate_sha256,
+            "components": list(replayed_split.components),
+            "parent_to_split": replayed_split.parent_to_split,
+        }
+        if split_manifest != expected_split_manifest:
+            errors.append("split_manifest_replay_mismatch")
+        if replayed_split.parent_to_split != {
+            parent.parent_id: parent.split for parent in parents
+        }:
+            errors.append("parent_split_replay_mismatch")
+    except Exception as error:
+        errors.append(f"split_replay_failed:{error}")
+
+    evaluation_conditions = _strict_json(
+        (benchmark_root / "manifests/evaluation_conditions.json").read_text(encoding="utf-8")
+    )
+    if evaluation_conditions != build_evaluation_conditions(tuple(parents)):
+        errors.append("evaluation_conditions_replay_mismatch")
+
     registry = yaml.safe_load((benchmark_root / "manifests/source_registry.yaml").read_text(encoding="utf-8"))
     entries = registry.get("entries", []) if isinstance(registry, dict) else []
     registry_licenses: dict[str, LicenseRecord] = {}
     registry_roles: dict[str, set[str]] = {}
+    component_registry: dict[str, dict[str, Any]] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             errors.append("invalid_source_registry_entry")
@@ -232,17 +323,96 @@ def validate_benchmark_payload(
             if not isinstance(allowed_roles, list) or not all(isinstance(role, str) for role in allowed_roles):
                 raise ValueError("allowed_task_roles must be a string array")
             registry_roles[source_key] = set(allowed_roles)
+            raw_components = entry.get("language_components")
+            if not isinstance(raw_components, list):
+                raise ValueError("language_components must be an array")
+            if raw_components and (
+                registry_roles[source_key] != {"inventory"}
+                or registry_licenses[source_key].allowed_for_training
+                or registry_licenses[source_key].allowed_for_evaluation
+                or registry_licenses[source_key].allowed_for_redistribution
+            ):
+                raise ValueError("aggregate language container cannot authorize component use")
+            for raw_component in raw_components:
+                if not isinstance(raw_component, dict):
+                    raise ValueError("language component registry row must be an object")
+                component_key = raw_component.get("component_key")
+                component_name = raw_component.get("component")
+                component_roles = raw_component.get("allowed_task_roles")
+                split_policy = raw_component.get("split_policy")
+                expected_role = "language_region" if component_name == "dior_rsvg" else "language_global"
+                expected_split_policy = (
+                    "permanent_test_only" if component_name == "rsieval" else "train_candidate"
+                )
+                if (
+                    not isinstance(component_key, str)
+                    or not isinstance(component_name, str)
+                    or component_key != f"{source_key}:{component_name}"
+                    or not isinstance(component_roles, list)
+                    or not all(isinstance(role, str) for role in component_roles)
+                    or component_roles != [expected_role]
+                    or split_policy != expected_split_policy
+                    or component_key in component_registry
+                ):
+                    raise ValueError("invalid or duplicate language component registry row")
+                component_registry[component_key] = {
+                    "source_key": source_key,
+                    "component": component_name,
+                    "allowed_task_roles": set(component_roles),
+                    "split_policy": split_policy,
+                    "license": LicenseRecord.model_validate(
+                        {name: raw_component.get(name) for name in LicenseRecord.model_fields}
+                    ),
+                }
         except Exception as error:
             errors.append(f"invalid_source_registry_license:{entry.get('source_key', 'unknown')}:{error}")
-    violations = [
-        entry.get("source_key", "unknown")
+    expected_component_keys = {
+        "mmrs_1m": {
+            "mmrs_1m:rsicd",
+            "mmrs_1m:ucm",
+            "mmrs_1m:sydney",
+            "mmrs_1m:nwpu",
+            "mmrs_1m:rsitmd",
+            "mmrs_1m:dior_rsvg",
+        },
+        "rsgpt": {"rsgpt:rsicap", "rsgpt:rsieval"},
+    }
+    for source_key, expected_keys in expected_component_keys.items():
+        if source_key not in registry_licenses:
+            continue
+        actual_keys = {
+            component_key
+            for component_key, component in component_registry.items()
+            if component["source_key"] == source_key
+        }
+        if actual_keys != expected_keys:
+            errors.append(f"source_registry_component_coverage_mismatch:{source_key}")
+    if any(
+        component["source_key"] not in expected_component_keys
+        for component in component_registry.values()
+    ):
+        errors.append("source_registry_unexpected_language_component")
+    license_scopes = [
+        (entry.get("source_key", "unknown"), entry)
         for entry in entries
-        if entry.get("allowed_for_training")
+        if isinstance(entry, dict)
+    ] + [
+        (component_key, raw_component)
+        for entry in entries
+        if isinstance(entry, dict)
+        for raw_component in entry.get("language_components", [])
+        if isinstance(raw_component, dict)
+        for component_key in [raw_component.get("component_key", "unknown")]
+    ]
+    violations = [
+        scope_key
+        for scope_key, license_payload in license_scopes
+        if license_payload.get("allowed_for_training")
         and (
-            entry.get("license_status") == "unknown"
-            or str(entry.get("license_name", "")).lower() == "unknown"
-            or entry.get("reviewed_by") is None
-            or entry.get("review_date") is None
+            license_payload.get("license_status") == "unknown"
+            or str(license_payload.get("license_name", "")).lower() == "unknown"
+            or license_payload.get("reviewed_by") is None
+            or license_payload.get("review_date") is None
         )
     ]
     errors.extend(f"training_eligible_unknown:{key}" for key in violations)
@@ -253,14 +423,24 @@ def validate_benchmark_payload(
         try:
             description = DescriptionSourceRecord.model_validate(payload)
             descriptions.append(description)
-            if registry_licenses.get(description.source_key) != description.license:
-                errors.append(f"description_source_license_mismatch:{description.record_id}")
+            component_policy = component_registry.get(description.component_license_key)
+            if (
+                component_policy is None
+                or component_policy["source_key"] != description.source_key
+                or component_policy["component"] != description.component
+                or component_policy["split_policy"] != description.split_policy
+                or component_policy["license"] != description.license
+            ):
+                errors.append(f"description_component_license_mismatch:{description.record_id}")
             should_materialize = description.training_eligible or (
                 description.split_policy == "permanent_test_only"
                 and description.license.allowed_for_evaluation
             )
             role = "language_region" if description.role == "region_short_phrase" else "language_global"
-            if should_materialize and role not in registry_roles.get(description.source_key, set()):
+            if should_materialize and (
+                component_policy is None
+                or role not in component_policy["allowed_task_roles"]
+            ):
                 errors.append(f"description_source_role_not_allowed:{description.record_id}")
             if should_materialize and (
                 description.license.license_status == "unknown"
@@ -334,6 +514,9 @@ def validate_benchmark_payload(
         if (
             record.source_key != source.source_key
             or record.component != source.component
+            or record.component_license_key != source.component_license_key
+            or record.component_license_sha256
+            != sha256_bytes(canonical_json_bytes(source.license.model_dump(mode="json")))
             or record.role != source.role
             or record.split_policy != source.split_policy
             or record.training_eligible != source.training_eligible
@@ -344,6 +527,8 @@ def validate_benchmark_payload(
             errors.append(f"canonical_description_source_projection_mismatch:{record.record_id}")
         if record.split != parent.split or parent.source.dataset != source.source_key:
             errors.append(f"canonical_description_parent_split_or_source_mismatch:{record.record_id}")
+        if parent.license != source.license:
+            errors.append(f"canonical_description_parent_license_mismatch:{record.record_id}")
         if parent.annotations.global_landslide_mask is not None or parent.annotations.global_target_status != "unknown":
             errors.append(f"language_parent_fabricated_spatial_target:{record.parent_id}")
         if (
@@ -394,6 +579,15 @@ def validate_benchmark_payload(
     description_by_parent: dict[str, list[CanonicalDescriptionRecord]] = {}
     for record in canonical_descriptions:
         description_by_parent.setdefault(record.parent_id, []).append(record)
+    for parent_id, records in description_by_parent.items():
+        parent = parent_by_id.get(parent_id)
+        if parent is None:
+            continue
+        component_keys = {record.component_license_key for record in records}
+        if parent.provenance.source_registry_key not in component_keys:
+            errors.append(f"language_parent_component_registry_binding_mismatch:{parent_id}")
+        if len({record.component_license_sha256 for record in records}) != 1:
+            errors.append(f"language_parent_conflicting_component_licenses:{parent_id}")
     for row in duplicate_rows:
         members = row.get("parent_ids", [])
         if any(
@@ -413,6 +607,114 @@ def validate_benchmark_payload(
     for task_type in ("t3_gt_region", "t4_predicted_region"):
         if not any(task.task_type == task_type for task in tasks):
             warnings.append(f"task_view_empty_until_bound_inputs:{task_type}")
+
+    license_report = _strict_json(
+        (benchmark_root / "reports/license_report.json").read_text(encoding="utf-8")
+    )
+    language_parent_ids = set(description_by_parent)
+    expected_license_fields = {
+        "schema_version": "sami_license_report_v2_component_license_bound",
+        "training_eligible_sources": sorted(
+            scope_key
+            for scope_key, license_payload in license_scopes
+            if license_payload.get("allowed_for_training")
+        ),
+        "materialized_training_sources": sorted(
+            {
+                parent.license.source_key
+                for parent in parents
+                if parent.parent_id not in language_parent_ids
+            }
+        ),
+        "materialized_language_sources": sorted(
+            {record.component_license_key for record in canonical_descriptions}
+        ),
+        "unknown_license_sources": sorted(
+            scope_key
+            for scope_key, license_payload in license_scopes
+            if license_payload.get("license_status") == "unknown"
+        ),
+        "training_eligible_unknown_count": len(set(violations)),
+        "errors": [],
+        "warnings": [],
+    }
+    for key, expected_value in expected_license_fields.items():
+        if license_report.get(key) != expected_value:
+            errors.append(f"license_report_replay_mismatch:{key}")
+    if not isinstance(license_report.get("builder_version"), str):
+        errors.append("license_report_builder_version_missing")
+
+    try:
+        import numpy as np
+
+        summary_report = _strict_json(
+            (benchmark_root / "reports/summary_report.json").read_text(encoding="utf-8")
+        )
+        summary_mode = summary_report.get("mode") if isinstance(summary_report, dict) else None
+        if summary_mode not in {"small", "full"}:
+            raise ValueError("summary mode must be small or full")
+        valid_pixel_count = 0
+        excluded_pixel_count = 0
+        positive_valid_pixel_count = 0
+        for parent in parents:
+            valid_path = benchmark_root / parent.reference_canvas.valid_mask_path
+            valid = np.load(valid_path, allow_pickle=False)
+            if (
+                valid.ndim != 2
+                or tuple(valid.shape) != parent.reference_canvas.canvas_hw
+                or not np.all((valid == 0) | (valid == 1))
+            ):
+                raise ValueError(f"invalid reference valid mask: {parent.parent_id}")
+            valid_binary = valid.astype(bool)
+            valid_pixel_count += int(valid_binary.sum())
+            excluded_pixel_count += int(valid_binary.size - valid_binary.sum())
+            if parent.annotations.global_landslide_mask is not None:
+                mask = np.load(
+                    benchmark_root / parent.annotations.global_landslide_mask.path,
+                    allow_pickle=False,
+                )
+                if (
+                    mask.ndim != 2
+                    or tuple(mask.shape) != parent.reference_canvas.canvas_hw
+                    or not np.all((mask == 0) | (mask == 1))
+                    or np.any(mask.astype(bool) & ~valid_binary)
+                ):
+                    raise ValueError(f"invalid effective global mask: {parent.parent_id}")
+                positive_valid_pixel_count += int(mask.sum())
+        expected_summary_fields = {
+            "schema_version": "sami_benchmark_summary_v1",
+            "mode": summary_mode,
+            "parent_count": len(parents),
+            "parents_by_split": {
+                split_name: sum(parent.split == split_name for parent in parents)
+                for split_name in ("train", "val", "test")
+            },
+            "task_count": len(tasks),
+            "tasks_by_type": {
+                task_type: sum(task.task_type == task_type for task in tasks)
+                for task_type in ("t1_global", "t2_referring", "t3_gt_region", "t4_predicted_region")
+            },
+            "description_source_record_count": len(descriptions),
+            "canonical_description_record_count": len(canonical_descriptions),
+            "language_parent_count": len(language_parent_ids),
+            "spatial_parent_count": len(parents) - len(language_parent_ids),
+            "description_train_eligible_count": sum(
+                record.training_eligible and record.split == "train"
+                for record in canonical_descriptions
+            ),
+            "valid_pixel_count": valid_pixel_count,
+            "excluded_pixel_count": excluded_pixel_count,
+            "positive_valid_pixel_count": positive_valid_pixel_count,
+            "warnings": [],
+            "errors": [],
+        }
+        for key, expected_value in expected_summary_fields.items():
+            if summary_report.get(key) != expected_value:
+                errors.append(f"summary_report_replay_mismatch:{key}")
+        if not isinstance(summary_report.get("builder_version"), str):
+            errors.append("summary_report_builder_version_missing")
+    except Exception as error:
+        errors.append(f"summary_report_replay_failed:{error}")
 
     report = {
         "schema_version": "sami_benchmark_validation_report_v1",

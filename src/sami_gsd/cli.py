@@ -30,7 +30,7 @@ def _repository_root() -> Path:
 
 
 def _run_data_audit(arguments: argparse.Namespace) -> int:
-    """Execute the read-only P1.1 audit command."""
+    """Execute the read-only P1 audit command."""
 
     config_path = arguments.config.resolve()
     config = load_audit_config(config_path)

@@ -58,7 +58,7 @@ def _task_id(parent_id: str, task_type: str, region_id: str | None) -> str:
     return f"task-{digest[:24]}"
 
 
-def _evaluation_conditions(parents: tuple[CanonicalParentV3, ...]) -> dict[str, Any]:
+def build_evaluation_conditions(parents: tuple[CanonicalParentV3, ...]) -> dict[str, Any]:
     """Publish modality combinations as conditions, never duplicated task rows."""
 
     rows: list[dict[str, Any]] = []
@@ -212,7 +212,7 @@ def expand_task_views(
                     )
                 )
     tasks_tuple = tuple(sorted(tasks, key=lambda item: item.task_id))
-    conditions = _evaluation_conditions(ordered)
+    conditions = build_evaluation_conditions(ordered)
     payload = {
         "version": TASK_EXPANSION_VERSION,
         "tasks": [task.model_dump(mode="json") for task in tasks_tuple],
@@ -231,5 +231,6 @@ __all__ = [
     "RegionAnswer",
     "TaskExpansion",
     "TaskExpansionError",
+    "build_evaluation_conditions",
     "expand_task_views",
 ]

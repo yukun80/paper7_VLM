@@ -42,10 +42,14 @@ class LanguageAnswer(StrictModel):
 class DescriptionSourceRecord(StrictModel):
     """One frozen selected language record; audit rows may remain unlicensed."""
 
-    schema_version: Literal["sami_description_source_v1"]
+    schema_version: Literal["sami_description_source_v2_component_license_bound"]
     record_id: Annotated[str, Field(min_length=1)]
     source_key: Literal["mmrs_1m", "rsgpt"]
     component: Literal["rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval"]
+    component_license_key: Annotated[
+        str,
+        Field(pattern=r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$"),
+    ]
     source_group_id: Annotated[str, Field(min_length=1)]
     role: Literal["global_caption", "region_short_phrase"]
     split_policy: Literal["train_candidate", "permanent_test_only"]
@@ -62,7 +66,9 @@ class DescriptionSourceRecord(StrictModel):
         if not self.answers:
             raise ValueError("description source record requires at least one answer")
         if self.source_key != self.license.source_key:
-            raise ValueError("description source/license keys do not match")
+            raise ValueError("description source/license physical keys do not match")
+        if self.component_license_key != f"{self.source_key}:{self.component}":
+            raise ValueError("component_license_key must bind source_key and component")
         is_region = self.role == "region_short_phrase"
         if is_region != (self.component == "dior_rsvg"):
             raise ValueError("DIOR-RSVG is the sole region-short-phrase component")
@@ -97,11 +103,16 @@ class CanonicalDescriptionRecord(StrictModel):
     dependency.
     """
 
-    schema_version: Literal["sami_canonical_description_v1"]
+    schema_version: Literal["sami_canonical_description_v2_component_license_bound"]
     record_id: Annotated[str, Field(min_length=1)]
     parent_id: Annotated[str, Field(min_length=1)]
     source_key: Literal["mmrs_1m", "rsgpt"]
     component: Literal["rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval"]
+    component_license_key: Annotated[
+        str,
+        Field(pattern=r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$"),
+    ]
+    component_license_sha256: Sha256
     role: Literal["global_caption", "region_short_phrase"]
     split_policy: Literal["train_candidate", "permanent_test_only"]
     split: Literal["train", "val", "test"]
@@ -126,6 +137,8 @@ class CanonicalDescriptionRecord(StrictModel):
 
         if not self.answers:
             raise ValueError("canonical description record requires at least one answer")
+        if self.component_license_key != f"{self.source_key}:{self.component}":
+            raise ValueError("canonical component_license_key must bind source_key and component")
         is_region = self.role == "region_short_phrase"
         if is_region != (self.component == "dior_rsvg"):
             raise ValueError("DIOR-RSVG is the sole canonical region-short-phrase component")

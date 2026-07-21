@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sami-groundsegdesc.local/schemas/canonical_description_v1.schema.json",
-  "title": "SAMI Canonical Description v1",
+  "$id": "https://sami-groundsegdesc.local/schemas/canonical_description_v2.schema.json",
+  "title": "SAMI Canonical Description v2 Component-License-Bound",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,6 +10,8 @@
     "parent_id",
     "source_key",
     "component",
+    "component_license_key",
+    "component_license_sha256",
     "role",
     "split_policy",
     "split",
@@ -22,11 +24,16 @@
     "training_eligible"
   ],
   "properties": {
-    "schema_version": {"const": "sami_canonical_description_v1"},
+    "schema_version": {"const": "sami_canonical_description_v2_component_license_bound"},
     "record_id": {"type": "string", "minLength": 1},
     "parent_id": {"type": "string", "minLength": 1},
     "source_key": {"enum": ["mmrs_1m", "rsgpt"]},
     "component": {"enum": ["rsicd", "ucm", "sydney", "nwpu", "rsitmd", "dior_rsvg", "rsicap", "rsieval"]},
+    "component_license_key": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$"
+    },
+    "component_license_sha256": {"$ref": "#/$defs/sha256"},
     "role": {"enum": ["global_caption", "region_short_phrase"]},
     "split_policy": {"enum": ["train_candidate", "permanent_test_only"]},
     "split": {"enum": ["train", "val", "test"]},

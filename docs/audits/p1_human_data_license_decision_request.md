@@ -55,6 +55,38 @@ row and do not set redistribution permission unless that permission was explicit
   permanent test-only regardless of approval.
 - DisasterM3 remains outside the frozen model-input scope because it is a pre/post change source.
 
+## Required form for each language component
+
+The `mmrs_1m` and `rsgpt` top-level rows are shared physical containers and must remain
+`allowed_task_roles: [inventory]` with all three aggregate permission flags `false`. Approval belongs
+inside the exact `language_components[]` item; one approved component must not authorize a sibling.
+Record each decision independently and copy it identically into the Small and Full configs:
+
+```yaml
+- component: rsicd  # one of the eight frozen component names
+  component_key: mmrs_1m:rsicd
+  allowed_task_roles: [language_global]  # DIOR-RSVG uses [language_region]
+  split_policy: train_candidate          # RSIEval remains permanent_test_only
+  license:
+    source_key: mmrs_1m                  # physical raw-source key, not the component_key
+    license_status: verified | restricted | unknown
+    license_name: "<exact component image-and-annotation terms>"
+    license_url_or_document: "<HTTPS evidence or portable local document>"
+    allowed_for_training: true | false
+    allowed_for_evaluation: true | false
+    allowed_for_redistribution: true | false
+    academic_only: true | false
+    attribution: "<owner-approved exact attribution/NOTICE text>"
+    reviewed_by: "<human name or accountable role>"
+    review_date: YYYY-MM-DD
+```
+
+The eight required keys are `mmrs_1m:rsicd`, `mmrs_1m:ucm`, `mmrs_1m:sydney`,
+`mmrs_1m:nwpu`, `mmrs_1m:rsitmd`, `mmrs_1m:dior_rsvg`, `rsgpt:rsicap` and
+`rsgpt:rsieval`. RSIEval can never set `allowed_for_training=true`. Exact-image rows carrying different
+component-license snapshots remain separate parents but are duplicate-grouped into one split; no license
+snapshot is silently replaced by an aggregate decision.
+
 ## Resume boundary
 
 After the human decision is recorded and both registry configs are updated consistently, resume P1
