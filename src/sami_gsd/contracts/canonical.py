@@ -339,6 +339,7 @@ class ReferringRegion(StrictModel):
     expression: Annotated[str, Field(min_length=1)]
     mask_ref: ArtifactRef
     bbox_half_open: HalfOpenBox
+    annotation_origin: Literal["official", "human"]
 
     _box_is_half_open = field_validator("bbox_half_open")(validate_half_open_box)
 
@@ -347,10 +348,19 @@ class AnnotationRecord(StrictModel):
     """Parent-level semantic and referring supervision references."""
 
     global_landslide_mask: ArtifactRef | None
+    global_mask_origin: Literal["official", "human", "pseudo"] | None
     global_target_status: Literal["positive", "no_target", "unknown"]
     referring_regions: tuple[ReferringRegion, ...]
     no_target_eligibility: bool
     region_fact_refs: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def mask_and_origin_match(self) -> Self:
+        """A present global mask must retain its source annotation class."""
+
+        if (self.global_landslide_mask is None) != (self.global_mask_origin is None):
+            raise ValueError("global mask and global_mask_origin must be present together")
+        return self
 
 
 class ProvenanceRecord(StrictModel):

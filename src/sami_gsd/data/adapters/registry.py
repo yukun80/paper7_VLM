@@ -10,8 +10,10 @@ from sami_gsd.data.adapters.base import AdapterDescriptor, SourceAdapter, Source
 from sami_gsd.data.adapters.implemented import (
     GDCLDAdapter,
     LMHLDAdapter,
+    Landslide4SenseAdapter,
     LandslideBenchAdapter,
     MMRSAdapter,
+    MultimodalLandslideAdapter,
     RSGPTAdapter,
 )
 
@@ -97,17 +99,8 @@ def build_source_adapter_registry() -> SourceAdapterRegistry:
             "sample_annotated_false",
             "pre_post_metadata_present_but_frozen_task_is_single_time",
         ),
-        _blocked(
-            "landslide4sense",
-            "hdf5_metadata_reader_not_declared_in_greenfield_runtime",
-            "official_source_license_unresolved",
-        ),
-        _blocked(
-            "multimodal_landslide",
-            "geotiff_metadata_reader_not_declared_in_greenfield_runtime",
-            "insar_units_and_sign_convention_unresolved",
-            "official_source_license_unresolved",
-        ),
+        Landslide4SenseAdapter(),
+        MultimodalLandslideAdapter(),
         LandslideBenchAdapter(),
         MMRSAdapter(),
         RSGPTAdapter(),

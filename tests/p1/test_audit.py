@@ -28,6 +28,30 @@ def build_audit_config(*, training_allowed: bool = False) -> BenchmarkAuditConfi
         "datasets_root": {"env": "SAMI_TEST_DATASETS_ROOT", "relative_to": "repository_root", "default": "datasets"},
         "benchmark_root": {"env": "SAMI_TEST_BENCHMARK_ROOT", "relative_to": "repository_root", "default": "benchmark"},
         "audit": {"hash_algorithm": "sha256", "include_hidden": False, "follow_symlinks": False},
+        "build": {
+            "materialization": {
+                "canvas_hw": [8, 8],
+                "resize_policy": "fit_inside_then_symmetric_zero_pad",
+                "image_interpolation": "bilinear_half_pixel_center",
+                "mask_valid_interpolation": "nearest",
+                "image_dtype": "float32",
+                "mask_valid_dtype": "uint8",
+            },
+            "split": {"train": 0.7, "val": 0.15, "test": 0.15},
+            "duplicates": {
+                "dhash_candidate_max_distance": 8,
+                "verified_rgb64_mae_threshold": 3.0,
+                "normalized_rgb_hw": [64, 64],
+            },
+            "description_subset": {
+                "mmrs_caption_sources": ["rsicd", "ucm", "sydney", "nwpu", "rsitmd"],
+                "include_dior_rsvg_short_phrase_only": True,
+                "include_rsicap": True,
+                "rsieval_policy": "permanent_test_only",
+                "excluded_mmrs_tasks": ["total", "classification", "detection", "vqa", "infrared", "unrelated_sar"],
+            },
+            "small_max_parents_per_source": 8,
+        },
         "sources": [
             {
                 "source_key": "synthetic",

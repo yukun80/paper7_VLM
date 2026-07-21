@@ -92,6 +92,32 @@ def audit_source_samples(
 
         projection_payloads = [projection.model_dump(mode="json") for projection in projections]
         projection_hashes = [projection.projection_sha256 for projection in projections]
+        candidate_blockers = sorted(
+            {
+                blocker
+                for projection in projections
+                for blocker in projection.canonical_candidate.blockers
+            }
+        )
+        grouping_evidence = sorted(
+            {
+                evidence
+                for projection in projections
+                for evidence in projection.raw_record.grouping_evidence
+            }
+        )
+        ambiguity_flags = sorted(
+            {
+                flag
+                for projection in projections
+                for flag in projection.raw_record.ambiguity_flags
+            }
+        )
+        grouping_blockers = sorted(
+            blocker
+            for blocker in candidate_blockers
+            if "group" in blocker or "scene_identity" in blocker or "provenance" in blocker
+        )
         source_report = {
             "source_key": source.source_key,
             "logical_root": f"datasets/{source.local_path}",
@@ -105,7 +131,17 @@ def audit_source_samples(
             "sample_aggregate_sha256": sha256_bytes(canonical_json_bytes(projection_payloads)),
             "raw_bytes_unchanged": raw_bytes_unchanged,
             "training_eligible": False,
-            "blockers": sorted(set(blockers)),
+            "blockers": sorted(set(blockers) | set(candidate_blockers)),
+            "grouping_evidence": grouping_evidence,
+            "ambiguity_flags": ambiguity_flags,
+            "grouping_status": "closed" if projections and not grouping_blockers else "blocked",
+            "grouping_blockers": grouping_blockers,
+            "audit_canonical_candidate_count": len(projections),
+            "canonical_parent_materialization_eligible_count": sum(
+                not projection.canonical_candidate.blockers
+                and projection.canonical_candidate.license.allowed_for_training
+                for projection in projections
+            ),
             "errors": errors,
         }
         source_reports.append(source_report)
@@ -124,6 +160,15 @@ def audit_source_samples(
         "blocked_source_count": sum(report["status"].startswith("blocked") for report in source_reports),
         "missing_source_count": sum(report["status"] == "missing" for report in source_reports),
         "sources": source_reports,
+        "canonical_dry_run": {
+            "candidate_count": sum(report["audit_canonical_candidate_count"] for report in source_reports),
+            "materialization_eligible_count": sum(
+                report["canonical_parent_materialization_eligible_count"] for report in source_reports
+            ),
+            "source_group_closed_count": sum(report["grouping_status"] == "closed" for report in source_reports),
+            "source_group_blocked_count": sum(report["grouping_status"] == "blocked" for report in source_reports),
+            "training_promotion_performed": False,
+        },
         "errors": [
             f"{report['source_key']}:{error}"
             for report in source_reports

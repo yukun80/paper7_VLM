@@ -30,6 +30,86 @@ class AuditSettings(StrictModel):
     follow_symlinks: Literal[False]
 
 
+class SplitSettings(StrictModel):
+    """Frozen deterministic parent-level split proportions."""
+
+    train: Annotated[float, Field(gt=0.0, lt=1.0)]
+    val: Annotated[float, Field(gt=0.0, lt=1.0)]
+    test: Annotated[float, Field(gt=0.0, lt=1.0)]
+
+    @model_validator(mode="after")
+    def proportions_sum_to_one(self) -> Self:
+        """Reject implicit normalization of split ratios."""
+
+        if abs(self.train + self.val + self.test - 1.0) > 1e-12:
+            raise ValueError("split proportions must sum exactly to one within 1e-12")
+        return self
+
+
+class DuplicateSettings(StrictModel):
+    """Frozen exact/perceptual duplicate verification policy."""
+
+    dhash_candidate_max_distance: Annotated[int, Field(ge=0, le=64)]
+    verified_rgb64_mae_threshold: Annotated[float, Field(ge=0.0)]
+    normalized_rgb_hw: tuple[Annotated[int, Field(gt=0)], Annotated[int, Field(gt=0)]]
+
+    @field_validator("normalized_rgb_hw")
+    @classmethod
+    def rgb64_is_frozen(cls, value: tuple[int, int]) -> tuple[int, int]:
+        """The verified duplicate protocol always uses RGB 64x64."""
+
+        if value != (64, 64):
+            raise ValueError("normalized_rgb_hw must be exactly (64, 64)")
+        return value
+
+
+class MaterializationSettings(StrictModel):
+    """Deterministic reference-canvas and output policy."""
+
+    canvas_hw: tuple[Annotated[int, Field(gt=0)], Annotated[int, Field(gt=0)]]
+    resize_policy: Literal["fit_inside_then_symmetric_zero_pad"]
+    image_interpolation: Literal["bilinear_half_pixel_center"]
+    mask_valid_interpolation: Literal["nearest"]
+    image_dtype: Literal["float32"]
+    mask_valid_dtype: Literal["uint8"]
+
+
+class DescriptionSubsetSettings(StrictModel):
+    """Frozen language-source selection and exclusions."""
+
+    mmrs_caption_sources: tuple[
+        Literal["rsicd", "ucm", "sydney", "nwpu", "rsitmd"], ...
+    ]
+    include_dior_rsvg_short_phrase_only: Literal[True]
+    include_rsicap: Literal[True]
+    rsieval_policy: Literal["permanent_test_only"]
+    excluded_mmrs_tasks: tuple[
+        Literal["total", "classification", "detection", "vqa", "infrared", "unrelated_sar"], ...
+    ]
+
+    @model_validator(mode="after")
+    def exact_frozen_selection(self) -> Self:
+        """Keep the P1 subset equal to the governing scientific protocol."""
+
+        expected_sources = ("rsicd", "ucm", "sydney", "nwpu", "rsitmd")
+        expected_excluded = ("total", "classification", "detection", "vqa", "infrared", "unrelated_sar")
+        if self.mmrs_caption_sources != expected_sources:
+            raise ValueError("MMRS caption sources must match the frozen ordered selection")
+        if self.excluded_mmrs_tasks != expected_excluded:
+            raise ValueError("MMRS exclusions must match the frozen ordered selection")
+        return self
+
+
+class BuildSettings(StrictModel):
+    """Complete P1 Small/Full construction policy."""
+
+    materialization: MaterializationSettings
+    split: SplitSettings
+    duplicates: DuplicateSettings
+    description_subset: DescriptionSubsetSettings
+    small_max_parents_per_source: Annotated[int, Field(gt=0)]
+
+
 class SourceConfig(StrictModel):
     """One raw source plus its fail-closed license snapshot."""
 
@@ -64,6 +144,7 @@ class BenchmarkAuditConfig(StrictModel):
     datasets_root: RootSpec
     benchmark_root: RootSpec
     audit: AuditSettings
+    build: BuildSettings
     sources: tuple[SourceConfig, ...]
 
     _benchmark_path_is_portable = field_validator("benchmark_relative_path")(validate_portable_path)

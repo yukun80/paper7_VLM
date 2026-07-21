@@ -97,6 +97,7 @@ def canonical_parent_payload() -> dict[str, Any]:
         ],
         "annotations": {
             "global_landslide_mask": {"path": "assets/synthetic-parent-001/mask.npy", "sha256": SHA},
+            "global_mask_origin": "official",
             "global_target_status": "positive",
             "referring_regions": [
                 {
@@ -104,6 +105,7 @@ def canonical_parent_payload() -> dict[str, Any]:
                     "expression": "the central landslide region",
                     "mask_ref": {"path": "assets/synthetic-parent-001/mask.npy", "sha256": SHA},
                     "bbox_half_open": [4, 5, 20, 24],
+                    "annotation_origin": "official",
                 }
             ],
             "no_target_eligibility": False,

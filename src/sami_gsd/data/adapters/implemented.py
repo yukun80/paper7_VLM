@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -19,12 +20,18 @@ from sami_gsd.contracts.sources import (
 from sami_gsd.contracts.spatial import ReferenceCanvasCandidate
 from sami_gsd.contracts.spatial import ReferenceCanvasDecision
 from sami_gsd.data.adapters.base import AdapterDescriptor, SourceAdapterError
-from sami_gsd.data.adapters.formats import read_first_json_array_item, read_image_header, read_npy_header
+from sami_gsd.data.adapters.formats import (
+    read_first_json_array_item,
+    read_geotiff_header,
+    read_hdf5_dataset_header,
+    read_image_header,
+    read_npy_header,
+)
 from sami_gsd.data.reference_canvas import select_reference_canvas
 from sami_gsd.utilities.artifacts import canonical_json_bytes, sha256_bytes, sha256_file
 
 
-ADAPTER_VERSION = "sami_source_adapter_p1_3_v1"
+ADAPTER_VERSION = "sami_source_adapter_p1_v2_spatial_metadata"
 
 
 def _logical(source: SourceConfig, relative: Path | str) -> str:
@@ -80,6 +87,115 @@ def _image_asset(
     )
 
 
+def _geotiff_asset(
+    source_root: Path,
+    source: SourceConfig,
+    relative: Path,
+    *,
+    asset_id: str,
+    role: Literal["reference_image", "support_image", "mask"],
+    band_names: tuple[str, ...] | None = None,
+) -> RawAssetEvidence:
+    """Bind one GeoTIFF by immutable bytes and header-only spatial metadata."""
+
+    path = source_root / relative
+    if not path.is_file():
+        raise SourceAdapterError(f"required source asset is missing: {relative.as_posix()}")
+    header = read_geotiff_header(path)
+    names = band_names or tuple(f"source_band_{index + 1}" for index in range(header.channel_count))
+    if len(names) != header.channel_count:
+        raise SourceAdapterError("explicit GeoTIFF band names do not match the raster band count")
+    dtype = header.dtypes[0] if len(set(header.dtypes)) == 1 else ",".join(header.dtypes)
+    return RawAssetEvidence(
+        asset_id=asset_id,
+        role=role,
+        logical_path=_logical(source, relative),
+        container="tiff",
+        internal_key=None,
+        sample_index=None,
+        byte_size=path.stat().st_size,
+        sha256=sha256_file(path),
+        array_shape=(header.height, header.width, header.channel_count),
+        native_hw=(header.height, header.width),
+        channel_count=header.channel_count,
+        dtype=dtype,
+        band_names=names,
+        metadata_evidence=("geotiff_header", "crs", "geotransform", "nodata_values"),
+        crs=header.crs,
+        geotransform=header.geotransform,
+        nodata_values=header.nodata_values,
+    )
+
+
+def _mixed_image_asset(
+    source_root: Path,
+    source: SourceConfig,
+    relative: Path,
+    *,
+    asset_id: str,
+    role: Literal["reference_image", "mask"],
+) -> RawAssetEvidence:
+    """Read signature-disguised PNG/JPEG first, then a genuine GeoTIFF."""
+
+    try:
+        return _image_asset(source_root, source, relative, asset_id=asset_id, role=role)
+    except SourceAdapterError as error:
+        if "unsupported image container" not in str(error):
+            raise
+    names = ("mask",) if role == "mask" else None
+    return _geotiff_asset(
+        source_root,
+        source,
+        relative,
+        asset_id=asset_id,
+        role=role,
+        band_names=names,
+    )
+
+
+def _hdf5_asset(
+    source_root: Path,
+    source: SourceConfig,
+    relative: Path,
+    *,
+    internal_key: str,
+    asset_id: str,
+    role: Literal["reference_image", "mask"],
+    band_names: tuple[str, ...],
+) -> RawAssetEvidence:
+    """Bind an HDF5 dataset without reading its pixel payload."""
+
+    path = source_root / relative
+    if not path.is_file():
+        raise SourceAdapterError(f"required source asset is missing: {relative.as_posix()}")
+    header = read_hdf5_dataset_header(path, internal_key=internal_key)
+    if len(header.shape) == 2:
+        native_hw = (header.shape[0], header.shape[1])
+        channels = 1
+    elif len(header.shape) == 3:
+        native_hw = (header.shape[0], header.shape[1])
+        channels = header.shape[2]
+    else:
+        raise SourceAdapterError("HDF5 image/mask dataset must be HW or HWC")
+    if len(band_names) != channels:
+        raise SourceAdapterError("HDF5 band names do not match dataset channels")
+    return RawAssetEvidence(
+        asset_id=asset_id,
+        role=role,
+        logical_path=_logical(source, relative),
+        container="hdf5",
+        internal_key=internal_key,
+        sample_index=None,
+        byte_size=path.stat().st_size,
+        sha256=sha256_file(path),
+        array_shape=header.shape,
+        native_hw=native_hw,
+        channel_count=channels,
+        dtype=header.dtype,
+        band_names=band_names,
+        metadata_evidence=("hdf5_dataset_header", "hdf5_dataset_attributes"),
+        metadata_attributes=header.attributes,
+    )
 def _index_asset(
     source_root: Path,
     source: SourceConfig,
@@ -155,6 +271,7 @@ def _projection(
     grouping_evidence: tuple[str, ...],
     ambiguity_flags: tuple[str, ...],
     blockers: tuple[str, ...],
+    support_modalities: tuple[ModalityCandidate, ...] = (),
 ) -> SourceSampleProjection:
     """Construct and cross-bind both strict layers of one projection."""
 
@@ -190,7 +307,7 @@ def _projection(
         training_eligible=False,
         task_roles=task_roles,
         reference_decision=decision,
-        modalities=(modality,),
+        modalities=(modality, *support_modalities),
         annotations=annotation,
         license=source.license,
         raw_asset_set_sha256=fingerprint,
@@ -241,14 +358,13 @@ class GDCLDAdapter:
         implementation_status="implemented",
         supported_record_types=("spatial_mask",),
         blockers=(
-            "mixed_png_tiff_patch_container_partial_implementation",
             "scene_test_image_mask_grid_mismatch",
             "source_grouping_policy_unresolved",
         ),
     )
 
     def extract_samples(self, source_root: Path, source_config: SourceConfig, *, limit: int) -> tuple[SourceSampleProjection, ...]:
-        """Extract bounded train-patch pairs; mismatched large test scenes stay blocked."""
+        """Extract bounded mixed-container patch pairs; mismatched test scenes stay blocked."""
 
         names = sorted(path.name for path in (source_root / "train_data").iterdir() if path.is_file())
         projections: list[SourceSampleProjection] = []
@@ -256,23 +372,21 @@ class GDCLDAdapter:
             if len(projections) >= limit:
                 break
             try:
-                image = _image_asset(
+                image = _mixed_image_asset(
                     source_root,
                     source_config,
                     Path("train_data") / name,
                     asset_id="reference",
                     role="reference_image",
                 )
-                mask = _image_asset(
+                mask = _mixed_image_asset(
                     source_root,
                     source_config,
                     Path("train_label") / name,
                     asset_id="mask",
                     role="mask",
                 )
-            except SourceAdapterError as error:
-                if "unsupported image container" in str(error):
-                    continue
+            except SourceAdapterError:
                 raise
             if image.native_hw != mask.native_hw:
                 raise SourceAdapterError(f"GDCLD patch image/mask shape conflict: {name}")
@@ -296,10 +410,266 @@ class GDCLDAdapter:
                     grouping_evidence=("same_basename_image_mask_pair",),
                     ambiguity_flags=("original_scene_identity_unresolved",),
                     blockers=_license_blockers(source_config)
-                    + (
-                        "mixed_png_tiff_patch_container_partial_implementation",
-                        "original_scene_identity_unresolved",
+                    + ("original_scene_identity_unresolved",),
+                )
+            )
+        return tuple(projections)
+
+
+class Landslide4SenseAdapter:
+    """Audit same-suffix HDF5 image/mask pairs with explicit metadata uncertainty."""
+
+    descriptor = AdapterDescriptor(
+        source_key="landslide4sense",
+        adapter_version=ADAPTER_VERSION,
+        implementation_status="implemented",
+        supported_record_types=("spatial_mask",),
+        blockers=("band_semantics_unresolved", "original_scene_grouping_unresolved"),
+    )
+
+    def extract_samples(
+        self,
+        source_root: Path,
+        source_config: SourceConfig,
+        *,
+        limit: int,
+    ) -> tuple[SourceSampleProjection, ...]:
+        """Read stable numeric pairs and leave unknown band/group semantics blocked."""
+
+        image_root = source_root / "TrainData/img"
+        image_paths = sorted(image_root.glob("image_*.h5"), key=lambda path: path.name)
+        projections: list[SourceSampleProjection] = []
+        for image_path in image_paths[:limit]:
+            suffix = image_path.stem.removeprefix("image_")
+            mask_path = source_root / "TrainData/mask" / f"mask_{suffix}.h5"
+            image_relative = image_path.relative_to(source_root)
+            mask_relative = mask_path.relative_to(source_root)
+            image_header = read_hdf5_dataset_header(image_path, internal_key="img")
+            if len(image_header.shape) != 3:
+                raise SourceAdapterError("Landslide4Sense image must use HWC layout")
+            image = _hdf5_asset(
+                source_root,
+                source_config,
+                image_relative,
+                internal_key="img",
+                asset_id="reference",
+                role="reference_image",
+                band_names=tuple(f"source_band_{index + 1}" for index in range(image_header.shape[2])),
+            )
+            mask = _hdf5_asset(
+                source_root,
+                source_config,
+                mask_relative,
+                internal_key="mask",
+                asset_id="mask",
+                role="mask",
+                band_names=("mask",),
+            )
+            if image.native_hw != mask.native_hw:
+                raise SourceAdapterError(f"Landslide4Sense image/mask shape conflict: {suffix}")
+            modality = ModalityCandidate(
+                modality_id="reference_multispectral",
+                family="multispectral",
+                sensor="source_unspecified_multispectral",
+                product_type="fourteen_channel_patch",
+                band_names=image.band_names,
+                native_asset_id="reference",
+                native_hw=image.native_hw,
+                native_gsd_m=None,
+                units=None,
+                signed=None,
+                sign_convention=None,
+                alignment_status="reference",
+                alignment_evidence=("same_hdf5_patch_grid_as_mask",),
+                valid_status="unresolved",
+            )
+            projections.append(
+                _projection(
+                    source=source_config,
+                    record_id=f"TrainData/{suffix}",
+                    source_group_id=f"landslide4sense/patch/{suffix}",
+                    source_declared_split="train",
+                    record_type="spatial_mask",
+                    assets=(image, mask),
+                    modality=modality,
+                    annotation=AnnotationCandidate(
+                        global_mask_asset_id="mask",
+                        target_status="unknown",
+                        normalized_box_xyxy=None,
+                        phrase=None,
+                        annotation_origin="official",
                     ),
+                    task_roles=("t1",),
+                    grouping_evidence=("same_numeric_suffix_hdf5_pair",),
+                    ambiguity_flags=("band_semantics_unresolved", "original_scene_grouping_unresolved"),
+                    blockers=_license_blockers(source_config)
+                    + ("band_semantics_unresolved", "original_scene_grouping_unresolved"),
+                )
+            )
+        return tuple(projections)
+
+
+def _aligned_grid_matches(reference: RawAssetEvidence, support: RawAssetEvidence) -> bool:
+    """Require exact grid, CRS and transform equality for pixel-level support."""
+
+    transforms_match = (
+        reference.geotransform is not None
+        and support.geotransform is not None
+        and all(
+            math.isclose(left, right, rel_tol=0.0, abs_tol=1e-12)
+            for left, right in zip(reference.geotransform, support.geotransform, strict=True)
+        )
+    )
+    return (
+        reference.native_hw == support.native_hw
+        and reference.crs == support.crs
+        and transforms_match
+    )
+
+
+class MultimodalLandslideAdapter:
+    """Audit co-registered RGB, DEM, InSAR-like and label GeoTIFF records."""
+
+    descriptor = AdapterDescriptor(
+        source_key="multimodal_landslide",
+        adapter_version=ADAPTER_VERSION,
+        implementation_status="implemented",
+        supported_record_types=("spatial_mask",),
+        blockers=("insar_units_and_sign_convention_unresolved",),
+    )
+
+    def extract_samples(
+        self,
+        source_root: Path,
+        source_config: SourceConfig,
+        *,
+        limit: int,
+    ) -> tuple[SourceSampleProjection, ...]:
+        """Read explicit split lists and exact same-stem grids without quantitative claims."""
+
+        inner = source_root / "multimodal-landslide-dataset"
+        if not inner.is_dir():
+            raise SourceAdapterError("multimodal dataset inner root is missing")
+        entries: list[tuple[str, str]] = []
+        for split_name in ("train", "val"):
+            split_path = inner / f"{split_name}.txt"
+            if not split_path.is_file():
+                continue
+            for line in split_path.read_text(encoding="utf-8").splitlines():
+                stem = Path(line.strip()).stem
+                if stem:
+                    entries.append((split_name, stem))
+        entries = sorted(set(entries), key=lambda item: (item[0], item[1]))
+        projections: list[SourceSampleProjection] = []
+        for split_name, stem in entries[:limit]:
+            prefix = Path("multimodal-landslide-dataset")
+            rgb = _geotiff_asset(
+                source_root,
+                source_config,
+                prefix / "rgb" / f"{stem}.tif",
+                asset_id="reference_rgb",
+                role="reference_image",
+                band_names=("R", "G", "B"),
+            )
+            dem = _geotiff_asset(
+                source_root,
+                source_config,
+                prefix / "dem" / f"{stem}.tif",
+                asset_id="support_dem",
+                role="support_image",
+                band_names=("DEM",),
+            )
+            insar = _geotiff_asset(
+                source_root,
+                source_config,
+                prefix / "insar_vel" / f"{stem}.tif",
+                asset_id="support_insar",
+                role="support_image",
+                band_names=("source_insar_like_value",),
+            )
+            mask = _geotiff_asset(
+                source_root,
+                source_config,
+                prefix / "label" / f"{stem}.tif",
+                asset_id="mask",
+                role="mask",
+                band_names=("mask",),
+            )
+            if not all(_aligned_grid_matches(rgb, asset) for asset in (dem, insar, mask)):
+                raise SourceAdapterError(f"multimodal source grids are not exactly co-registered: {stem}")
+            reference = ModalityCandidate(
+                modality_id="reference_rgb",
+                family="optical",
+                sensor="source_unspecified_optical",
+                product_type="rgb_raster",
+                band_names=rgb.band_names,
+                native_asset_id="reference_rgb",
+                native_hw=rgb.native_hw,
+                native_gsd_m=None,
+                units=None,
+                signed=None,
+                sign_convention=None,
+                alignment_status="reference",
+                alignment_evidence=("exact_crs_transform_and_grid_match",),
+                valid_status="source_nodata_only",
+            )
+            supports = (
+                ModalityCandidate(
+                    modality_id="support_dem",
+                    family="dem",
+                    sensor="source_unspecified_dem",
+                    product_type="digital_elevation_raster",
+                    band_names=dem.band_names,
+                    native_asset_id="support_dem",
+                    native_hw=dem.native_hw,
+                    native_gsd_m=None,
+                    units=None,
+                    signed=None,
+                    sign_convention=None,
+                    alignment_status="aligned",
+                    alignment_evidence=("exact_crs_transform_and_grid_match",),
+                    valid_status="source_nodata_only",
+                ),
+                ModalityCandidate(
+                    modality_id="support_insar",
+                    family="insar",
+                    sensor="source_unspecified_insar",
+                    product_type="insar_like_raster",
+                    band_names=insar.band_names,
+                    native_asset_id="support_insar",
+                    native_hw=insar.native_hw,
+                    native_gsd_m=None,
+                    units=None,
+                    signed=None,
+                    sign_convention=None,
+                    alignment_status="aligned",
+                    alignment_evidence=("exact_crs_transform_and_grid_match",),
+                    valid_status="source_nodata_only",
+                ),
+            )
+            prefix_group = stem.split("_", maxsplit=1)[0]
+            projections.append(
+                _projection(
+                    source=source_config,
+                    record_id=f"{split_name}/{stem}",
+                    source_group_id=f"multimodal/{prefix_group}/{stem}",
+                    source_declared_split=split_name,
+                    record_type="spatial_mask",
+                    assets=(rgb, dem, insar, mask),
+                    modality=reference,
+                    support_modalities=supports,
+                    annotation=AnnotationCandidate(
+                        global_mask_asset_id="mask",
+                        target_status="unknown",
+                        normalized_box_xyxy=None,
+                        phrase=None,
+                        annotation_origin="official",
+                    ),
+                    task_roles=("t1",),
+                    grouping_evidence=("explicit_split_list", "same_stem_multimodal_record", "region_prefix"),
+                    ambiguity_flags=("insar_units_and_sign_convention_unresolved",),
+                    blockers=_license_blockers(source_config)
+                    + ("insar_units_and_sign_convention_unresolved",),
                 )
             )
         return tuple(projections)
@@ -639,4 +1009,12 @@ class RSGPTAdapter:
         return tuple(projections)
 
 
-__all__ = ["GDCLDAdapter", "LMHLDAdapter", "LandslideBenchAdapter", "MMRSAdapter", "RSGPTAdapter"]
+__all__ = [
+    "GDCLDAdapter",
+    "LMHLDAdapter",
+    "Landslide4SenseAdapter",
+    "LandslideBenchAdapter",
+    "MMRSAdapter",
+    "MultimodalLandslideAdapter",
+    "RSGPTAdapter",
+]

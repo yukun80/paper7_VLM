@@ -32,6 +32,30 @@ class NpyHeader:
     fortran_order: bool
 
 
+@dataclass(frozen=True)
+class ArrayContainerHeader:
+    """Header-only metadata for one HDF5 or NetCDF variable."""
+
+    container: Literal["hdf5", "netcdf"]
+    internal_key: str
+    shape: tuple[int, ...]
+    dtype: str
+    attributes: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class GeoTiffHeader:
+    """Raster grid and nodata metadata without reading pixel payloads."""
+
+    height: int
+    width: int
+    channel_count: int
+    dtypes: tuple[str, ...]
+    crs: str | None
+    geotransform: tuple[float, float, float, float, float, float]
+    nodata_values: tuple[float | int | None, ...]
+
+
 def _read_png_header(handle: BinaryIO) -> ImageHeader:
     """Read the PNG signature and IHDR only."""
 
@@ -134,6 +158,105 @@ def read_npy_header(path: Path) -> NpyHeader:
     return NpyHeader(shape=shape, dtype=payload["descr"], fortran_order=payload["fortran_order"])
 
 
+def _stable_attributes(attributes: Any) -> tuple[tuple[str, str], ...]:
+    """Serialize scalar metadata conservatively for deterministic evidence."""
+
+    result: list[tuple[str, str]] = []
+    for key in sorted(attributes):
+        value = attributes[key]
+        if isinstance(value, bytes):
+            rendered = value.decode("utf-8", errors="replace")
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            rendered = str(value)
+        else:
+            rendered = repr(value)
+        result.append((str(key), rendered))
+    return tuple(result)
+
+
+def read_hdf5_dataset_header(path: Path, *, internal_key: str) -> ArrayContainerHeader:
+    """Read one HDF5 dataset header through the declared optional data extra."""
+
+    try:
+        import h5py
+    except ImportError as error:  # pragma: no cover - exercised in minimal installs
+        raise SourceAdapterError("HDF5 metadata requires the sami-groundsegdesc[data] extra") from error
+    with h5py.File(path, "r") as handle:
+        if internal_key not in handle:
+            raise SourceAdapterError(f"HDF5 dataset is missing: {internal_key}")
+        dataset = handle[internal_key]
+        if not isinstance(dataset, h5py.Dataset):
+            raise SourceAdapterError(f"HDF5 key is not a dataset: {internal_key}")
+        shape = tuple(int(value) for value in dataset.shape)
+        if not shape or any(value <= 0 for value in shape):
+            raise SourceAdapterError("HDF5 dataset shape must contain positive integers")
+        return ArrayContainerHeader(
+            container="hdf5",
+            internal_key=internal_key,
+            shape=shape,
+            dtype=str(dataset.dtype),
+            attributes=_stable_attributes(dataset.attrs),
+        )
+
+
+def read_netcdf_variable_header(path: Path, *, internal_key: str) -> ArrayContainerHeader:
+    """Read one NetCDF variable header without decoding or scaling its data."""
+
+    try:
+        import netCDF4
+    except ImportError as error:  # pragma: no cover - exercised in minimal installs
+        raise SourceAdapterError("NetCDF metadata requires the sami-groundsegdesc[data] extra") from error
+    with netCDF4.Dataset(path, mode="r") as handle:
+        if internal_key not in handle.variables:
+            raise SourceAdapterError(f"NetCDF variable is missing: {internal_key}")
+        variable = handle.variables[internal_key]
+        shape = tuple(int(value) for value in variable.shape)
+        if not shape or any(value <= 0 for value in shape):
+            raise SourceAdapterError("NetCDF variable shape must contain positive integers")
+        attributes = {name: variable.getncattr(name) for name in variable.ncattrs()}
+        return ArrayContainerHeader(
+            container="netcdf",
+            internal_key=internal_key,
+            shape=shape,
+            dtype=str(variable.dtype),
+            attributes=_stable_attributes(attributes),
+        )
+
+
+def read_geotiff_header(path: Path) -> GeoTiffHeader:
+    """Read GeoTIFF grid/CRS/nodata metadata without materializing bands."""
+
+    try:
+        import rasterio
+    except ImportError as error:  # pragma: no cover - exercised in minimal installs
+        raise SourceAdapterError("GeoTIFF metadata requires the sami-groundsegdesc[data] extra") from error
+    try:
+        with rasterio.open(path) as dataset:
+            if min(dataset.height, dataset.width, dataset.count) <= 0:
+                raise SourceAdapterError("GeoTIFF grid and band count must be positive")
+            transform = dataset.transform
+            return GeoTiffHeader(
+                height=int(dataset.height),
+                width=int(dataset.width),
+                channel_count=int(dataset.count),
+                dtypes=tuple(str(value) for value in dataset.dtypes),
+                crs=None if dataset.crs is None else dataset.crs.to_string(),
+                geotransform=(
+                    float(transform.c),
+                    float(transform.a),
+                    float(transform.b),
+                    float(transform.f),
+                    float(transform.d),
+                    float(transform.e),
+                ),
+                nodata_values=tuple(dataset.nodatavals),
+            )
+    except SourceAdapterError:
+        raise
+    except Exception as error:
+        raise SourceAdapterError(f"invalid or unsupported GeoTIFF: {path.name}") from error
+
+
 def read_first_json_array_item(path: Path, *, array_key: str | None = None, max_bytes: int = 2_000_000) -> Any:
     """Decode only the first item of a top-level or named JSON array."""
 
@@ -157,4 +280,15 @@ def read_first_json_array_item(path: Path, *, array_key: str | None = None, max_
     return value
 
 
-__all__ = ["ImageHeader", "NpyHeader", "read_first_json_array_item", "read_image_header", "read_npy_header"]
+__all__ = [
+    "ArrayContainerHeader",
+    "GeoTiffHeader",
+    "ImageHeader",
+    "NpyHeader",
+    "read_first_json_array_item",
+    "read_geotiff_header",
+    "read_hdf5_dataset_header",
+    "read_image_header",
+    "read_netcdf_variable_header",
+    "read_npy_header",
+]

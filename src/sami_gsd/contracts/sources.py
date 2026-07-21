@@ -22,7 +22,7 @@ class RawAssetEvidence(StrictModel):
     asset_id: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_.-]*$")]
     role: Literal["reference_image", "support_image", "mask", "annotation_index"]
     logical_path: str
-    container: Literal["png", "jpeg", "npy", "json", "jsonl"]
+    container: Literal["png", "jpeg", "tiff", "npy", "hdf5", "netcdf", "json", "jsonl"]
     internal_key: str | int | None
     sample_index: Annotated[int, Field(ge=0)] | None
     byte_size: Annotated[int, Field(ge=0)]
@@ -33,6 +33,10 @@ class RawAssetEvidence(StrictModel):
     dtype: str | None
     band_names: tuple[str, ...]
     metadata_evidence: tuple[str, ...]
+    crs: str | None = None
+    geotransform: tuple[float, float, float, float, float, float] | None = None
+    nodata_values: tuple[float | int | None, ...] = ()
+    metadata_attributes: tuple[tuple[str, str], ...] = ()
 
     _logical_path_is_portable = field_validator("logical_path")(validate_portable_path)
 
@@ -47,12 +51,21 @@ class RawAssetEvidence(StrictModel):
                 raise ValueError("NPY virtual assets require shape, dtype and sample_index")
             if self.sample_index >= self.array_shape[0]:
                 raise ValueError("NPY sample_index is outside the first array dimension")
+        elif self.container in {"hdf5", "netcdf"}:
+            if self.array_shape is None or self.dtype is None or self.internal_key is None:
+                raise ValueError("HDF5/NetCDF assets require shape, dtype and internal_key")
+            if self.sample_index is not None and self.sample_index >= self.array_shape[0]:
+                raise ValueError("container sample_index is outside the first array dimension")
         elif self.sample_index is not None:
-            raise ValueError("sample_index is reserved for NPY virtual assets")
+            raise ValueError("sample_index is reserved for virtual array assets")
         if self.role == "annotation_index" and self.native_hw is not None:
             raise ValueError("annotation indexes must not claim a raster grid")
         if self.channel_count is not None and self.band_names and self.channel_count != len(self.band_names):
             raise ValueError("channel_count must match the explicit band_names length")
+        if self.nodata_values and self.channel_count is not None and len(self.nodata_values) != self.channel_count:
+            raise ValueError("nodata_values must be empty or match channel_count")
+        if tuple(sorted(self.metadata_attributes)) != self.metadata_attributes:
+            raise ValueError("metadata_attributes must be sorted for deterministic hashing")
         return self
 
 
