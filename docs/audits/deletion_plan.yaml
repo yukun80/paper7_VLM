@@ -18,6 +18,12 @@ phase_evidence:
     physical_deletions: []
     entry_approvals_changed: 0
     deleted_commits_changed: 0
+  p2:
+    status: engineering_accepted
+    report: docs/reports/p2/p2_completion_report.json
+    physical_deletions: []
+    entry_approvals_changed: 0
+    deleted_commits_changed: 0
 global_preconditions:
   - replacement_accepted
   - baseline_tag_verified
@@ -68,6 +74,64 @@ entries:
     tests_removed_or_replaced: []
     docs_removed_or_replaced: []
     license_notes: No controller code is approved for copying into the new wrapper.
+    approved_by: null
+    deleted_commit: null
+
+  - path: SEG_Multi-Source_Landslides/qpsalm_seg/models/qwen_vision_encoder.py
+    kind: file
+    owner_phase: P4
+    replacement: src/sami_gsd/model/qwen_backbone.py
+    delete_after:
+      - p2_official_native_multi_image_forward_accepted
+      - p4_segmentation_accepted
+      - baseline_tag_verified
+      - baseline_branch_verified
+    references_checked: false
+    tests_removed_or_replaced:
+      - tests/p2/test_qwen_cache.py
+    docs_removed_or_replaced:
+      - README.md
+      - docs/handoffs/P2.md
+    license_notes: Do not copy the legacy wrapper or its cache assumptions into the official greenfield boundary.
+    approved_by: null
+    deleted_commit: null
+
+  - path: SEG_Multi-Source_Landslides/qpsalm_seg/models/vision_cache.py
+    kind: file
+    owner_phase: P4
+    replacement: src/sami_gsd/model/cache.py
+    delete_after:
+      - p2_greenfield_cache_equivalence_accepted
+      - p4_segmentation_accepted
+      - baseline_tag_verified
+      - baseline_branch_verified
+    references_checked: false
+    tests_removed_or_replaced:
+      - tests/p2/test_qwen_cache.py
+    docs_removed_or_replaced:
+      - README.md
+      - docs/handoffs/P2.md
+    license_notes: Old cache bytes and formats are never accepted by the greenfield cache reader.
+    approved_by: null
+    deleted_commit: null
+
+  - path: SEG_Multi-Source_Landslides/qpsalm_seg/cli/cache_qwen_vision_features.py
+    kind: file
+    owner_phase: P7
+    replacement: sami-gsd model smoke plus the optional transparent cache boundary
+    delete_after:
+      - p2_greenfield_cache_equivalence_accepted
+      - p7_all_required_cli_paths_accepted
+      - readme_only_documents_current_commands
+      - baseline_tag_verified
+      - baseline_branch_verified
+    references_checked: false
+    tests_removed_or_replaced:
+      - tests/p2/test_rendering_cli_boundaries.py
+    docs_removed_or_replaced:
+      - README.md
+      - docs/handoffs/P2.md
+    license_notes: Historical generated cache artifacts remain preserved and are outside this code deletion entry.
     approved_by: null
     deleted_commit: null
 

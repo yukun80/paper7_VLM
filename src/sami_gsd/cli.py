@@ -1,15 +1,16 @@
 """SAMI-GroundSegDesc 唯一命令行入口。
 
-用途：P1 raw audit、Canonical Benchmark v3 原子构建与独立验证。
-推荐命令：``sami-gsd data build --config configs/benchmark_v3_small.yaml``。
-输入：严格校验 YAML 与只读 raw source；输出：配置指定的新 Benchmark 目录和可重放报告。
-写行为：拒绝覆盖既有目录且不修改 raw data；工作流阶段：P1。
+用途：P1 Canonical Benchmark v3 与 P2 官方 Qwen3-VL 有界 one-forward smoke。
+推荐命令：``sami-gsd model smoke --help``。
+输入：严格 YAML、只读 accepted Benchmark/model；输出：原子、可重放报告及可选新 cache。
+写行为：拒绝覆盖报告/accepted artifact；工作流阶段：P1--P2。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -104,6 +105,39 @@ def _run_data_validate(arguments: argparse.Namespace) -> int:
     return 0 if not report["errors"] else 1
 
 
+def _run_model_smoke(arguments: argparse.Namespace) -> int:
+    """Run one bounded official P2 multi-image forward and publish evidence."""
+
+    from sami_gsd.contracts.model import load_model_config
+    from sami_gsd.model.smoke import run_model_smoke
+
+    config_path = arguments.config.resolve()
+    config = load_model_config(config_path)
+    repository_root = _repository_root()
+    if arguments.benchmark_root is None:
+        benchmark_root_base = Path(
+            os.environ.get("PAPER7_BENCHMARK_ROOT", repository_root.parent / "benchmark")
+        )
+        benchmark_root = benchmark_root_base.resolve() / config.benchmark.relative_path
+    else:
+        benchmark_root = arguments.benchmark_root.resolve()
+    report = run_model_smoke(
+        config,
+        config_path=config_path,
+        repository_root=repository_root,
+        benchmark_root=benchmark_root,
+        parent_id=arguments.parent_id,
+        active_modality_ids=(
+            None if arguments.active_modality is None else tuple(arguments.active_modality)
+        ),
+        device=arguments.device,
+        cache_dir=None if arguments.cache_dir is None else arguments.cache_dir.resolve(),
+        output_path=arguments.output.resolve(),
+    )
+    print(json.dumps(report, allow_nan=False, ensure_ascii=False, sort_keys=True))
+    return 0 if not report["errors"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the sole project CLI parser without reading config or data."""
 
@@ -130,6 +164,33 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--datasets-root", type=Path, help="accepted for shared root resolution")
     validate_parser.add_argument("--benchmark-root", type=Path, help="runtime-only benchmark root override")
     validate_parser.set_defaults(handler=_run_data_validate)
+
+    model_parser = top_level.add_parser("model", help="greenfield model operations")
+    model_commands = model_parser.add_subparsers(dest="model_command", required=True)
+    smoke_parser = model_commands.add_parser(
+        "smoke",
+        help="run one bounded official Qwen3-VL native multi-image forward",
+    )
+    smoke_parser.add_argument("--config", type=Path, required=True, help="strict SAMI model YAML")
+    smoke_parser.add_argument(
+        "--benchmark-root",
+        type=Path,
+        help="accepted sami_landslide_v3/small directory; default uses PAPER7_BENCHMARK_ROOT",
+    )
+    smoke_parser.add_argument("--parent-id", required=True, help="exact Canonical Parent v3 identity")
+    smoke_parser.add_argument(
+        "--active-modality",
+        action="append",
+        help="active modality id; repeat to declare a subset (default: all declared modalities)",
+    )
+    smoke_parser.add_argument("--device", default="cuda:0", help="explicit torch device; no fallback")
+    smoke_parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        help="new/empty greenfield cache root used for online/cache equivalence",
+    )
+    smoke_parser.add_argument("--output", type=Path, required=True, help="new atomic smoke report path")
+    smoke_parser.set_defaults(handler=_run_model_smoke)
     return parser
 
 

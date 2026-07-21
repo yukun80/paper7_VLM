@@ -26,6 +26,12 @@ data = [
 test = [
   "pytest>=8",
 ]
+model = [
+  "numpy>=1.26,<3",
+  "Pillow>=10,<12",
+  "torch>=2.8,<3",
+  "transformers>=5.3,<6",
+]
 
 [project.scripts]
 sami-gsd = "sami_gsd.cli:main"

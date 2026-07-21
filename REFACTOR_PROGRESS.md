@@ -2,21 +2,40 @@
 
 ## Current status
 
-- phase: `P1`
+- phase: `P2`
 - phase_status: `engineering_accepted`
 - phase_completion_date: `2026-07-21`
 - current_branch: `refactor/sami-groundsegdesc`
-- completion_implementation_report_commit: `ea066c90b0f31b67f8fe759c4e2beacdfc7e6e89`
+- completion_implementation_report_commit: `pending_local_commit`
 - push_performed: `false`
 - active_adrs:
   - `docs/adr/ADR-0001-greenfield-rewrite.md` (`accepted`, raw-data clauses amended)
   - `docs/adr/ADR-0003-raw-data-provenance-not-runtime-license-gate.md` (`accepted`)
-- completion_report: `docs/reports/p1/p1_completion_report.json`
-- handoff: `docs/handoffs/P1.md`
-- next_accepted_task: `P2 model minimum skeleton`
+- completion_report: `docs/reports/p2/p2_completion_report.json`
+- handoff: `docs/handoffs/P2.md`
+- next_accepted_task: `P3 G0 segmentation-kernel selection`
 
-P1 was executed and accepted as one formal phase. Historical P1.1-P1.3 labels were internal work
-packages only.
+P2 was executed and accepted as one formal phase. Its design, implementation, synthetic matrix,
+official processor probe, real Profile S forward, regression, report and handoff were continuous
+internal work packages rather than separate user gates.
+
+## Accepted P2 evidence
+
+- official local backend: `Qwen3VLProcessor` plus `Qwen3VLForConditionalGeneration` from
+  Transformers 5.3.0;
+- accepted input: P1 Small parent `sen12-chimanimani-1001` bound to the accepted manifest and
+  validation aggregate hashes;
+- one official native multi-image forward over `s2_optical`, `s1_ascending`, `s1_descending`, and
+  `dem`;
+- reconstructable merged grids: reference 16x16; each support 12x12; four DeepStack/final spatial
+  levels per view;
+- Profile S peak allocated 4.1048808097839355 GiB and peak reserved 4.205078125 GiB, below the
+  frozen 22 GiB limit;
+- cache equivalence: exact metadata/shape/dtype, 24 tensors, minimum cosine
+  0.9999999999999998, maximum absolute difference 0;
+- P2 focused tests: 16/16 passed; P1 regression: 62/62 passed; final combined standard-library
+  discovery: 78/78 passed. The optional `pytest` command collected nothing because the current
+  environment has not installed the declared test extra.
 
 ## Accepted P1 evidence
 
@@ -41,12 +60,12 @@ review is a separate future human process. Code/dependency license and notice ob
 
 ## Deletion state
 
-No deletion-manifest legacy path was deleted in P1. All 36 entry approvals and deleted commits
-remain null. Obsolete greenfield authorization/schema/internal-report drafts were removed or
-replaced as recorded in the P1 handoff.
+No deletion-manifest legacy path was deleted in P2. Three explicit old Qwen wrapper/cache/CLI
+entries were added, bringing the manifest to 39 entries. Every `approved_by` and `deleted_commit`
+remains null.
 
 ## Stop cursor
 
-Do not auto-advance from this completed task. P2 requires a new explicit `CURRENT_PHASE=P2` task.
-Do not overwrite the accepted Small artifacts, build Full, start model training, or execute legacy
-deletion under this P1 authorization.
+Do not auto-advance from this completed task. P3 requires a new explicit `CURRENT_PHASE=P3` task.
+Do not overwrite accepted Small/model smoke artifacts, build Full, start formal training, choose a
+G0 segmentation kernel, or execute legacy deletion under this P2 authorization.

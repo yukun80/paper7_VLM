@@ -2,8 +2,8 @@
 
 当前主线是经 ADR-0001 接受的 **SAMI-GroundSegDesc greenfield rewrite**。科学问题固定为：使用
 同一区域、单时相或同期的多源遥感观测，在一个 reference canvas 上分割滑坡，并生成只受当前有效
-模态支持的区域描述。P1 Canonical Benchmark v3 已于 2026-07-21 完成工程验收；内部实现包从未作为
-独立阶段或用户验收点。
+模态支持的区域描述。P1 Canonical Benchmark v3 与 P2 模型最小骨架已于 2026-07-21 完成工程
+验收；内部实现包从未作为独立阶段或用户验收点。
 
 P1 的 schema、只读扫描、reference canvas、可逆 transform、HDF5/NetCDF/GeoTIFF 元数据、原子
 materialization、valid/padding/nodata、parent group split、SHA/dHash/RGB64-MAE duplicate、T1--T4、
@@ -102,6 +102,51 @@ padding 与 nodata 始终从有效 target 中排除。无可靠双向变换的 s
 Benchmark 内 `assets/...`，原始 `datasets/...` 路径仅留在审计 provenance。DIOR box 被转换为
 reference-pixel half-open 坐标，但没有 mask 时不会伪造 T2 监督。
 P1 完成交接见 `docs/handoffs/P1.md`。
+
+## Greenfield P2：官方 Qwen3-VL 多图骨架
+
+P2 只建立任务无关的模型输入/状态边界，不包含分割 decoder、训练或科学效果结论。运行依赖使用
+官方 `Qwen3VLProcessor`、官方 `Qwen3VLForConditionalGeneration` 和本地
+`models_zoo/Qwen3-VL-2B-Instruct`，不导入旧 controller、vision cache 或 `qpsalm_seg`。
+
+安装数据、模型和测试依赖：
+
+```bash
+conda activate qwen3vl
+python -m pip install -e '.[data,model,test]'
+```
+
+CPU 合成合同测试覆盖 optical-only、SAR-only、terrain-only、multi-view、view-order、dropout、
+missing/zero-valid、空间 grid 和 cache corruption/equivalence：
+
+```bash
+PYTHONPATH=src:. python -m unittest discover -s tests/p2 -v
+```
+
+在 accepted v3 Small 上手动执行一次 Profile S 官方多图前向。`--cache-dir` 和 `--output` 必须是
+新的路径；命令拒绝覆盖已有报告或非空 cache。重复相同 encode 时第二次调用只允许命中新 v1 cache，
+并强制检查 metadata/shape/dtype、cosine 和 max-absolute 等价性。
+
+```bash
+PYTHONPATH=src:. sami-gsd model smoke \
+  --config configs/model_sami.yaml \
+  --benchmark-root ../benchmark/sami_landslide_v3/small \
+  --parent-id sen12-chimanimani-1001 \
+  --device cuda:0 \
+  --cache-dir outputs/sami_gsd/p2/manual_cache_run_001 \
+  --output outputs/sami_gsd/p2/manual_profile_s_run_001.json
+```
+
+Profile S 固定为 reference 不超过 512²、support 不超过 384²、每 parent 最多 4 views；Profile M
+仅作为已注册候选，不在 P2 自动运行。view 顺序固定为 reference、optical、multispectral、SAR、
+terrain、deformation，同 family 按 `modality_id`；调用方 list/dict 排列不参与 identity。Sensor card
+只含传感器、产品、band/polarization、orbit、GSD、units/sign、valid coverage 和 quality，不含 dataset、
+split、normalization、label 或 target geometry。missing、present-zero-valid 和 dropout 均不创建视觉 token。
+
+P2 接受的真实四视图 Profile S 报告为 `docs/reports/p2/profile_s_smoke.json`：一次官方模型 forward，
+peak reserved 4.205078125 GiB（门限 22 GiB），24 个在线/cache tensor shape 与 metadata 完全一致、
+最大绝对误差 0。完整工程验收和交接分别见 `docs/reports/p2/p2_completion_report.json` 与
+`docs/handoffs/P2.md`。
 
 ## Legacy baseline 目录约定
 

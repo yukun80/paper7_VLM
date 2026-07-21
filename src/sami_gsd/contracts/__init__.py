@@ -14,6 +14,7 @@ from sami_gsd.contracts.language import (
     LanguageAnswer,
     LanguageImageRef,
 )
+from sami_gsd.contracts.model import SamiModelConfig, load_model_config
 from sami_gsd.contracts.spatial import ReferenceCanvasCandidate, ReferenceCanvasDecision
 from sami_gsd.contracts.sources import RawSourceRecord, SourceSampleProjection
 
@@ -31,6 +32,8 @@ __all__ = [
     "RawSourceRecord",
     "SourceSampleProjection",
     "SourceProvenance",
+    "SamiModelConfig",
     "TaskViewV3",
     "load_audit_config",
+    "load_model_config",
 ]
