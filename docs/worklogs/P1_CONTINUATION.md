@@ -12,11 +12,12 @@
 ## Resume binding
 
 - Branch: `refactor/sami-groundsegdesc`
-- Resume HEAD for the latest continuation: `4ef107aaf19c2cba8c20bdefb379c67e56a64af0`
+- Resume implementation HEAD for the latest continuation: `ea185efa6dc8a89bc7ade1dd5ae5c52264f578b0`
 - Worktree at resume: clean
 - Continuous engineering commit: `c83c11a833f8fec12c8dbc46fbc54ee0fdff7c2c`
 - Human license-gate documentation commit: `430a9cc70f3ae23256a43e4d4ea6eb8ef79c825d`
 - Canonical language-parent implementation commit: `487b309d7b99f120367e2cf5b137c3e4b92f2e98`
+- Component-license and independent-report-replay commit: `ea185efa6dc8a89bc7ade1dd5ae5c52264f578b0`
 - Governing task-spec SHA-256:
   `ad3f40ef1c4c06b17d97b68523aadbe00ccc1659a56ffa96b2f9ff2fcb34802b`
 - P1.3-named historical report (internal checkpoint only):
@@ -39,17 +40,26 @@
 12. Independent validator, summary, manifest hashing and two-build deterministic synthetic Small acceptance.
 13. Sen12 single-time loader for annotated S2/ASC/DSC triplets using one event-nearest acquisition per modality.
 14. Canonical language-parent closure:
-    - licensed MMRS/RSGPT image rows group by `source_key + exact image SHA` and materialize once;
+    - licensed MMRS/RSGPT image rows sharing one license snapshot group by
+      `source_key + exact image SHA + component-license SHA` and materialize once;
     - raw source rows retain `datasets/...` provenance while canonical description indexes bind only
       Benchmark `assets/...` image/valid references;
     - answer text, answer ID, source index SHA and source-record SHA remain replayable;
     - RSIEval permanent-test priority propagates through verified duplicate connected components;
     - DIOR-RSVG remains box/short phrase only and cannot fabricate a maskless T2 view;
     - denied language rows remain audit-only and are not decoded or copied.
+15. Exact language component-license and report-replay closure:
+    - MMRS-1M/RSGPT aggregate containers are inventory-only and cannot authorize component use;
+    - eight frozen component keys independently bind role, split policy and full license snapshot;
+    - one approved component cannot promote a sibling, and RSIEval can never enter training;
+    - source rows, visual parents, canonical descriptions, registry provenance and license hashes replay exactly;
+    - validator independently rebuilds duplicate clusters, group split, evaluation conditions, component
+      license report and summary pixel counts instead of trusting builder reports.
 
-Last verified regression: 54/54 focused P1 unit tests passed in `qwen3vl`. The licensed-language synthetic
+Last verified regression: 57/57 focused P1 unit tests passed in `qwen3vl`. The licensed-language synthetic
 Small was built twice from reversed source-record order with identical manifest/output hashes; independent
-validation replay returned `errors=[]`. The live bounded adapter audit
+validation replay returned `errors=[]`. Aggregate override, one-component approval, registry tampering and
+summary-report tampering have focused negative coverage. The live bounded adapter audit
 had `errors=[]`, 14 audit candidates, zero materialization-eligible candidates and repeated aggregate SHA-256
 `4e2edbe2549313db49bb8e97144f0d6f2429d2aa0dadaddcdb1977f4f44c54fc`.
 
@@ -65,8 +75,9 @@ No raw decode or output write occurs. This matches the governing manual stop con
 - Required human decision: training/evaluation/redistribution permissions and full Sentinel,
   Copernicus and DEM attribution obligations; update both Small and Full registry rows consistently.
 - Decision form: `docs/audits/p1_human_data_license_decision_request.md`.
-- MMRS components and RSGPT require separate license and allowed-role decisions and remain audit-only. Their
-  canonical materializer is implemented and covered by synthetic replay; no live language image was promoted.
+- MMRS components and RSGPT require eight separate license decisions and remain audit-only. Their aggregate
+  containers are contractually inventory-only; the canonical materializer is covered by synthetic replay and
+  no live language image was promoted.
 
 ## Remaining work after the human gate
 
