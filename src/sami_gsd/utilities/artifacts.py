@@ -92,6 +92,41 @@ def atomic_write_yaml(path: Path, payload: Any, *, overwrite: bool = False) -> N
     atomic_write_bytes(path, canonical_yaml_bytes(payload), overwrite=overwrite)
 
 
+def atomic_copy_file(
+    source: Path,
+    target: Path,
+    *,
+    expected_sha256: str,
+    expected_size_bytes: int,
+) -> None:
+    """Byte-copy one immutable asset and verify it before atomic publication."""
+
+    source = source.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        raise FileExistsError(f"refusing to overwrite existing copied asset: {target}")
+    if source.stat().st_size != expected_size_bytes:
+        raise ValueError(f"source size changed before copy: {source}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.part-",
+        dir=target.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with source.open("rb") as source_handle, os.fdopen(descriptor, "wb") as target_handle:
+            shutil.copyfileobj(source_handle, target_handle, length=8 * 1024 * 1024)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
+        if temporary_path.stat().st_size != expected_size_bytes:
+            raise ValueError(f"copied asset size mismatch: {target}")
+        if sha256_file(temporary_path) != expected_sha256:
+            raise ValueError(f"copied asset hash mismatch: {target}")
+        os.replace(temporary_path, target)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def sha256_bytes(content: bytes) -> str:
     """Return the lowercase SHA-256 digest of in-memory bytes."""
 

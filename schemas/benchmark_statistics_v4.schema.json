@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sami-gsd.local/schemas/benchmark_statistics_v4.schema.json",
+  "title": "SAMI Benchmark Statistics v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_counts",
+    "source_record_count",
+    "parent_count",
+    "positive_count",
+    "no_target_count",
+    "split_counts",
+    "assurance_counts",
+    "eligibility_counts",
+    "strict_population",
+    "strict_generalization_status",
+    "normalization_binding_sha256",
+    "aggregate_sha256",
+    "schema_version"
+  ],
+  "properties": {
+    "source_counts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "parent_count",
+          "positive_count",
+          "no_target_count",
+          "target_valid_pixel_count",
+          "positive_target_pixel_count"
+        ],
+        "properties": {
+          "parent_count": {"$ref": "#/$defs/count"},
+          "positive_count": {"$ref": "#/$defs/count"},
+          "no_target_count": {"$ref": "#/$defs/count"},
+          "target_valid_pixel_count": {"$ref": "#/$defs/count"},
+          "positive_target_pixel_count": {"$ref": "#/$defs/count"}
+        }
+      }
+    },
+    "source_record_count": {"$ref": "#/$defs/count"},
+    "parent_count": {"$ref": "#/$defs/count"},
+    "positive_count": {"$ref": "#/$defs/count"},
+    "no_target_count": {"$ref": "#/$defs/count"},
+    "split_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "train": {"$ref": "#/$defs/count"},
+        "val": {"$ref": "#/$defs/count"},
+        "test": {"$ref": "#/$defs/count"}
+      }
+    },
+    "assurance_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verified_group_isolated",
+        "source_declared_unverified",
+        "train_only"
+      ],
+      "properties": {
+        "verified_group_isolated": {"const": 0},
+        "source_declared_unverified": {"$ref": "#/$defs/count"},
+        "train_only": {"$ref": "#/$defs/count"}
+      }
+    },
+    "eligibility_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict", "exploratory", "train_only"],
+      "properties": {
+        "strict": {"const": 0},
+        "exploratory": {"$ref": "#/$defs/count"},
+        "train_only": {"$ref": "#/$defs/count"}
+      }
+    },
+    "strict_population": {"const": 0},
+    "strict_generalization_status": {"const": "unavailable"},
+    "normalization_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "aggregate_sha256": {"$ref": "#/$defs/sha256"},
+    "schema_version": {"const": "sami_benchmark_statistics_v4"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0}
+  }
+}

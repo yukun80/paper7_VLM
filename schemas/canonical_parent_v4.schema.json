@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sami-gsd.local/schemas/canonical_parent_v4.schema.json",
+  "title": "SAMI Canonical Parent v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "parent_id",
+    "source_key",
+    "source_sample_id",
+    "canonical_split",
+    "split_assurance",
+    "evaluation_eligibility",
+    "channels",
+    "image_ref",
+    "mask_ref",
+    "validity_ref",
+    "registered_views",
+    "group",
+    "source_record_sha256",
+    "record_sha256",
+    "schema_version"
+  ],
+  "properties": {
+    "parent_id": {"type": "string", "pattern": "^p4-[0-9a-f]{64}$"},
+    "source_key": {"type": "string", "minLength": 1},
+    "source_sample_id": {"type": "string", "minLength": 1},
+    "canonical_split": {"enum": ["train", "val", "test"]},
+    "split_assurance": {
+      "enum": [
+        "verified_group_isolated",
+        "source_declared_unverified",
+        "train_only"
+      ]
+    },
+    "evaluation_eligibility": {
+      "enum": ["strict", "exploratory", "train_only"]
+    },
+    "channels": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "hdf5_source_record_v1.schema.json#/$defs/channel"
+      }
+    },
+    "image_ref": {
+      "$ref": "hdf5_source_record_v1.schema.json#/$defs/image_ref"
+    },
+    "mask_ref": {
+      "$ref": "hdf5_source_record_v1.schema.json#/$defs/mask_ref"
+    },
+    "validity_ref": {
+      "$ref": "hdf5_source_record_v1.schema.json#/$defs/validity"
+    },
+    "registered_views": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {"$ref": "#/$defs/registered_rgb"}
+    },
+    "group": {"$ref": "hdf5_source_record_v1.schema.json#/$defs/group"},
+    "source_record_sha256": {"$ref": "#/$defs/sha256"},
+    "record_sha256": {"$ref": "#/$defs/sha256"},
+    "schema_version": {"const": "sami_canonical_parent_v4"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "split_assurance": {"const": "verified_group_isolated"}
+        }
+      },
+      "then": {
+        "properties": {"evaluation_eligibility": {"const": "strict"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "split_assurance": {"const": "source_declared_unverified"}
+        }
+      },
+      "then": {
+        "properties": {"evaluation_eligibility": {"const": "exploratory"}}
+      }
+    },
+    {
+      "if": {"properties": {"split_assurance": {"const": "train_only"}}},
+      "then": {
+        "properties": {
+          "canonical_split": {"const": "train"},
+          "evaluation_eligibility": {"const": "train_only"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "registered_rgb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_indices",
+        "channel_keys",
+        "normalization_binding",
+        "mapping_evidence",
+        "schema_version",
+        "view_id",
+        "role"
+      ],
+      "properties": {
+        "source_indices": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "channel_keys": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "normalization_binding": {"$ref": "#/$defs/sha256"},
+        "mapping_evidence": {"type": "string", "minLength": 1},
+        "schema_version": {"const": "sami_registered_rgb_view_v1"},
+        "view_id": {"const": "registered_rgb"},
+        "role": {"const": "rgb"}
+      }
+    }
+  }
+}

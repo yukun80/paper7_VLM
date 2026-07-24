@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sami-gsd.local/schemas/benchmark_manifest_v4.schema.json",
+  "title": "SAMI Benchmark Manifest v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "benchmark_name",
+    "mode",
+    "benchmark_relative_path",
+    "config_sha256",
+    "source_contract_sha256",
+    "source_inventory_sha256",
+    "source_registry_sha256",
+    "normalization_binding_sha256",
+    "channel_catalog_sha256",
+    "materialization_index_sha256",
+    "artifact_bindings",
+    "materialized_asset_count",
+    "materialized_size_bytes",
+    "source_record_count",
+    "parent_count",
+    "split_counts",
+    "assurance_counts",
+    "eligibility_counts",
+    "strict_generalization_status",
+    "aggregate_sha256",
+    "schema_version",
+    "protocol"
+  ],
+  "properties": {
+    "benchmark_name": {"type": "string", "minLength": 1},
+    "mode": {"const": "small"},
+    "benchmark_relative_path": {
+      "const": "sami_landslide_hdf5_v4/small"
+    },
+    "config_sha256": {"$ref": "#/$defs/sha256"},
+    "source_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "source_inventory_sha256": {"$ref": "#/$defs/sha256"},
+    "source_registry_sha256": {"$ref": "#/$defs/sha256"},
+    "normalization_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "channel_catalog_sha256": {"$ref": "#/$defs/sha256"},
+    "materialization_index_sha256": {"$ref": "#/$defs/sha256"},
+    "artifact_bindings": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^(?:indexes|manifests|reports)/"},
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    },
+    "materialized_asset_count": {"type": "integer", "minimum": 1},
+    "materialized_size_bytes": {"type": "integer", "minimum": 1},
+    "source_record_count": {"type": "integer", "minimum": 0},
+    "parent_count": {"type": "integer", "minimum": 0},
+    "split_counts": {"$ref": "#/$defs/split_counts"},
+    "assurance_counts": {"$ref": "#/$defs/assurance_counts"},
+    "eligibility_counts": {"$ref": "#/$defs/eligibility_counts"},
+    "strict_generalization_status": {"const": "unavailable"},
+    "aggregate_sha256": {"$ref": "#/$defs/sha256"},
+    "schema_version": {"const": "sami_benchmark_manifest_v4"},
+    "protocol": {"const": "sami_hdf5_materialized_copy_v1"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0},
+    "split_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "train": {"$ref": "#/$defs/count"},
+        "val": {"$ref": "#/$defs/count"},
+        "test": {"$ref": "#/$defs/count"}
+      }
+    },
+    "assurance_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verified_group_isolated",
+        "source_declared_unverified",
+        "train_only"
+      ],
+      "properties": {
+        "verified_group_isolated": {"const": 0},
+        "source_declared_unverified": {"$ref": "#/$defs/count"},
+        "train_only": {"$ref": "#/$defs/count"}
+      }
+    },
+    "eligibility_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict", "exploratory", "train_only"],
+      "properties": {
+        "strict": {"const": 0},
+        "exploratory": {"$ref": "#/$defs/count"},
+        "train_only": {"$ref": "#/$defs/count"}
+      }
+    }
+  }
+}

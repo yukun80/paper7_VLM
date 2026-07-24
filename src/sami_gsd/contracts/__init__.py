@@ -1,39 +1,8 @@
-"""Public typed contracts for SAMI-GroundSegDesc."""
+"""Typed contracts for the active HDF5-first segmentation route.
 
-from sami_gsd.contracts.canonical import CanonicalParentV3, TaskViewV3
-from sami_gsd.contracts.config import (
-    BenchmarkAuditConfig,
-    LanguageComponentConfig,
-    SourceProvenance,
-    load_audit_config,
-)
-from sami_gsd.contracts.language import (
-    CanonicalDescriptionRecord,
-    CanonicalLanguageAnswer,
-    DescriptionSourceRecord,
-    LanguageAnswer,
-    LanguageImageRef,
-)
-from sami_gsd.contracts.model import SamiModelConfig, load_model_config
-from sami_gsd.contracts.spatial import ReferenceCanvasCandidate, ReferenceCanvasDecision
-from sami_gsd.contracts.sources import RawSourceRecord, SourceSampleProjection
+Public contracts are imported from their versioned modules.  Keeping this
+package initializer side-effect free prevents retired v3 language/model
+contracts from entering the Benchmark v4 import path.
+"""
 
-__all__ = [
-    "BenchmarkAuditConfig",
-    "CanonicalDescriptionRecord",
-    "CanonicalLanguageAnswer",
-    "CanonicalParentV3",
-    "DescriptionSourceRecord",
-    "LanguageAnswer",
-    "LanguageComponentConfig",
-    "LanguageImageRef",
-    "ReferenceCanvasCandidate",
-    "ReferenceCanvasDecision",
-    "RawSourceRecord",
-    "SourceSampleProjection",
-    "SourceProvenance",
-    "SamiModelConfig",
-    "TaskViewV3",
-    "load_audit_config",
-    "load_model_config",
-]
+__all__: list[str] = []

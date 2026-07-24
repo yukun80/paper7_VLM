@@ -1,0 +1,396 @@
+{
+  "schema_version": "sami_hdf5_source_inventory_v1",
+  "phase": "P0R",
+  "snapshot_date": "2026-07-24",
+  "scope": "read_only_local_hdf5_audit",
+  "strict_cohort_available": false,
+  "totals": {
+    "ready_sources": 5,
+    "not_ready_sources": 1,
+    "ready_pairs": 53645,
+    "ready_positive": 49146,
+    "ready_no_target_or_background": 4499
+  },
+  "shared_findings": {
+    "conversion_error_rows": 0,
+    "absolute_paths_observed_in_source_metadata": true,
+    "absolute_paths_allowed_in_canonical_identity": false,
+    "random_resplit_allowed": false,
+    "missing_group_blocks_training": false,
+    "numeric_channel_wavelength_available": false,
+    "reliable_per_sample_model_gsd_available": false
+  },
+  "sources": [
+    {
+      "source_key": "gdcld",
+      "source_root": "datasets/GDCLD",
+      "authoritative_indexes": [
+        "datasets/GDCLD/jsonl/sample_index_train.jsonl",
+        "datasets/GDCLD/jsonl/sample_index_val.jsonl",
+        "datasets/GDCLD/jsonl/sample_index_test.jsonl",
+        "datasets/GDCLD/hdf5/conversion_manifest.jsonl"
+      ],
+      "channel_schema": "datasets/GDCLD/hdf5/channel_schema.json",
+      "channel_schema_sha256": "9528a1520501828a76a7a1696b43b005d38acc2a0e65652bdced5a86808fdb04",
+      "canonical_channels": [
+        {"index": 0, "channel_key": "visible_red", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 1, "channel_key": "visible_green", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 2, "channel_key": "visible_blue", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"}
+      ],
+      "registered_rgb": {
+        "source_indices": [0, 1, 2],
+        "channel_keys": ["visible_red", "visible_green", "visible_blue"],
+        "mapping_evidence": "channel_schema_explicit_red_green_blue_order"
+      },
+      "ingestion_status": "ready",
+      "pair_count": 13447,
+      "image_hdf5_count": 13447,
+      "mask_hdf5_count": 13447,
+      "positive_count": 11593,
+      "no_target_count": 1854,
+      "source_split_counts": {
+        "train": 7897,
+        "val": 4459,
+        "test": 1091
+      },
+      "canonical_split_policy": "preserve_source_split",
+      "split_assurance": "source_declared_unverified",
+      "evaluation_eligibility": "exploratory",
+      "image_dataset": {
+        "key": "/image",
+        "shape": [3, 1024, 1024],
+        "dtype": "float32",
+        "layout": "CHW",
+        "channels": ["Red", "Green", "Blue"]
+      },
+      "mask_dataset": {
+        "key": "/mask",
+        "dtype": "uint8",
+        "values": {
+          "0": "background",
+          "1": "landslide"
+        }
+      },
+      "validity": {
+        "valid_mask_key": "/valid_mask",
+        "pixel_valid_key": null,
+        "channel_valid_key": "/channel_valid"
+      },
+      "group_identity": "unavailable_or_incomplete",
+      "duplicate_component": "unverified",
+      "conversion_error_rows": 0,
+      "risks": [
+        "native split group isolation not independently replayed",
+        "source metadata contains machine absolute paths"
+      ]
+    },
+    {
+      "source_key": "lmhld",
+      "source_root": "datasets/LMHLD",
+      "authoritative_indexes": [
+        "datasets/LMHLD/jsonl/sample_index_train.jsonl",
+        "datasets/LMHLD/jsonl/sample_index_val.jsonl",
+        "datasets/LMHLD/jsonl/sample_index_test.jsonl",
+        "datasets/LMHLD/hdf5/conversion_manifest.jsonl"
+      ],
+      "channel_schema": "datasets/LMHLD/hdf5/channel_schema.json",
+      "channel_schema_sha256": "ee87927d58e3eaca2b8cbd74d87d026d67f9753847a46111a1db000faccece4f",
+      "canonical_channels": [
+        {"index": 0, "channel_key": "visible_blue", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 1, "channel_key": "visible_green", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 2, "channel_key": "visible_red", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 3, "channel_key": "near_infrared", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"}
+      ],
+      "registered_rgb": {
+        "source_indices": [2, 1, 0],
+        "channel_keys": ["visible_red", "visible_green", "visible_blue"],
+        "mapping_evidence": "channel_schema_rgb_visualization"
+      },
+      "ingestion_status": "ready",
+      "pair_count": 28185,
+      "image_hdf5_count": 28185,
+      "mask_hdf5_count": 28185,
+      "positive_count": 28008,
+      "no_target_count": 177,
+      "source_split_counts": {
+        "train": 19729,
+        "val": 5637,
+        "test": 2819
+      },
+      "canonical_split_policy": "preserve_source_split",
+      "split_assurance": "source_declared_unverified",
+      "evaluation_eligibility": "exploratory",
+      "image_dataset": {
+        "key": "/image",
+        "shape": [4, 128, 128],
+        "dtype": "float32",
+        "layout": "CHW",
+        "channels": ["Blue", "Green", "Red", "NIR"]
+      },
+      "mask_dataset": {
+        "key": "/mask",
+        "dtype": "uint8",
+        "values": {
+          "0": "background",
+          "1": "landslide"
+        }
+      },
+      "validity": {
+        "valid_mask_key": null,
+        "pixel_valid_key": null,
+        "channel_valid_key": "/channel_valid"
+      },
+      "group_identity": "unavailable",
+      "duplicate_component": "unverified",
+      "conversion_error_rows": 0,
+      "risks": [
+        "per-sample sensor, location, CRS, date, unit, parent, and group unavailable",
+        "177 zero masks",
+        "39 full-one masks",
+        "18100 masks below 10 percent coverage",
+        "source metadata contains machine absolute paths"
+      ]
+    },
+    {
+      "source_key": "landslidebench_agent",
+      "source_root": "datasets/LandslideBench_agent",
+      "authoritative_indexes": [
+        "datasets/LandslideBench_agent/jsonl/sample_index_train.jsonl",
+        "datasets/LandslideBench_agent/jsonl/sample_index_val.jsonl",
+        "datasets/LandslideBench_agent/jsonl/sample_index_test.jsonl",
+        "datasets/LandslideBench_agent/reports/conversion_manifest.jsonl"
+      ],
+      "channel_schema": "datasets/LandslideBench_agent/hdf5/channel_schema.json",
+      "channel_schema_sha256": "8776b262428156e9036161b287a47a4029f2f38acb458ba54eccd80a6b7f3050",
+      "canonical_channels": [
+        {"index": 0, "channel_key": "visible_red", "modality_family": "optical", "physical_unit": "digital_color_value", "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 1, "channel_key": "visible_green", "modality_family": "optical", "physical_unit": "digital_color_value", "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 2, "channel_key": "visible_blue", "modality_family": "optical", "physical_unit": "digital_color_value", "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"}
+      ],
+      "registered_rgb": {
+        "source_indices": [0, 1, 2],
+        "channel_keys": ["visible_red", "visible_green", "visible_blue"],
+        "mapping_evidence": "channel_schema_explicit_r_g_b_semantics"
+      },
+      "ingestion_status": "ready",
+      "pair_count": 2130,
+      "image_hdf5_count": 2130,
+      "mask_hdf5_count": 2130,
+      "positive_count": 1819,
+      "no_target_count": 311,
+      "source_split_counts": {
+        "train": 1701,
+        "val": 210,
+        "test": 219
+      },
+      "canonical_split_policy": "preserve_source_split_and_report_conflicts",
+      "split_assurance": "source_declared_unverified",
+      "evaluation_eligibility": "exploratory",
+      "image_dataset": {
+        "key": "/image",
+        "shape": [3, 512, 512],
+        "dtype": "float32",
+        "layout": "CHW",
+        "channels": ["R", "G", "B"]
+      },
+      "mask_dataset": {
+        "key": "/mask",
+        "dtype": "uint8",
+        "values": {
+          "0": "background",
+          "1": "landslide"
+        }
+      },
+      "validity": {
+        "valid_mask_key": null,
+        "pixel_valid_key": null,
+        "channel_valid_key": "/channel_valid"
+      },
+      "group_identity": "partial_location_key_with_conflicts",
+      "duplicate_component": "unverified",
+      "location_cross_split_conflict_count": 311,
+      "text_supervision_status": "unverified_provenance_or_auto_candidate_only",
+      "conversion_error_rows": 0,
+      "risks": [
+        "311 location-level cross-split conflicts",
+        "dialogue text is not factual or expert truth"
+      ]
+    },
+    {
+      "source_key": "landslide4sense",
+      "source_root": "datasets/landslide4sense",
+      "authoritative_indexes": [
+        "datasets/landslide4sense/hdf5/conversion_manifest.jsonl"
+      ],
+      "channel_schema": "datasets/landslide4sense/hdf5/channel_schema.json",
+      "channel_schema_sha256": "8f12b66cb9dba0bdb4e7674c8ef942416775e45ccc606388478408650fa89a05",
+      "canonical_channels": [
+        {"index": 0, "channel_key": "sentinel2_b01", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 1, "channel_key": "sentinel2_b02", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 2, "channel_key": "sentinel2_b03", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 3, "channel_key": "sentinel2_b04", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 4, "channel_key": "sentinel2_b05", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 5, "channel_key": "sentinel2_b06", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 6, "channel_key": "sentinel2_b07", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 7, "channel_key": "sentinel2_b08", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 8, "channel_key": "sentinel2_b09", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 9, "channel_key": "sentinel2_b10", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 10, "channel_key": "sentinel2_b11", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 11, "channel_key": "sentinel2_b12", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 12, "channel_key": "slope", "modality_family": "slope", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 13, "channel_key": "dem", "modality_family": "dem", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"}
+      ],
+      "registered_rgb": {
+        "source_indices": [3, 2, 1],
+        "channel_keys": ["sentinel2_b04", "sentinel2_b03", "sentinel2_b02"],
+        "mapping_evidence": "channel_schema_explicit_red_green_blue_meanings"
+      },
+      "ingestion_status": "ready",
+      "pair_count": 3799,
+      "image_hdf5_count": 3799,
+      "mask_hdf5_count": 3799,
+      "positive_count": 2231,
+      "no_target_count": 1568,
+      "source_split_counts": null,
+      "canonical_split_policy": "all_train_only",
+      "split_assurance": "train_only",
+      "evaluation_eligibility": "train_only",
+      "image_dataset": {
+        "key": "/image",
+        "shape": [14, 128, 128],
+        "dtype": "float32",
+        "layout": "CHW",
+        "channels": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07",
+          "B08",
+          "B09",
+          "B10",
+          "B11",
+          "B12",
+          "slope",
+          "DEM"
+        ]
+      },
+      "mask_dataset": {
+        "key": "/mask",
+        "dtype": "uint8",
+        "values": {
+          "0": "background",
+          "1": "landslide"
+        }
+      },
+      "validity": {
+        "valid_mask_key": null,
+        "pixel_valid_key": null,
+        "channel_valid_key": "/channel_valid"
+      },
+      "group_identity": "unavailable",
+      "duplicate_component": "unverified",
+      "model_gsd_known": false,
+      "native_resolution_provenance": "source channel schema reports native 10/20/60 m and an approximately 10 m target grid; neither is a reliable per-sample model condition",
+      "conversion_error_rows": 0,
+      "risks": [
+        "no trustworthy canonical val or test index",
+        "114 all-zero slope channels",
+        "per-sample location and group unavailable",
+        "source metadata contains machine absolute paths"
+      ]
+    },
+    {
+      "source_key": "multimodal_landslide",
+      "source_root": "datasets/multimodal-landslide-dataset",
+      "authoritative_indexes": [
+        "datasets/multimodal-landslide-dataset/jsonl/sample_index_train.jsonl",
+        "datasets/multimodal-landslide-dataset/jsonl/sample_index_val.jsonl",
+        "datasets/multimodal-landslide-dataset/hdf5/conversion_manifest.jsonl"
+      ],
+      "channel_schema": "datasets/multimodal-landslide-dataset/hdf5/channel_schema.json",
+      "channel_schema_sha256": "9d43aee8def851849151d22c14507f005c975f45f599531b008a34f22a819b82",
+      "canonical_channels": [
+        {"index": 0, "channel_key": "visible_red", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 1, "channel_key": "visible_green", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 2, "channel_key": "visible_blue", "modality_family": "optical", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 3, "channel_key": "dem", "modality_family": "dem", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"},
+        {"index": 4, "channel_key": "insar_mean_los_velocity_encoded", "modality_family": "insar", "physical_unit": null, "wavelength_nm": null, "wavelength_known": false, "gsd_m": null, "gsd_known": false, "normalization": "zscore_valid_pixels"}
+      ],
+      "registered_rgb": {
+        "source_indices": [0, 1, 2],
+        "channel_keys": ["visible_red", "visible_green", "visible_blue"],
+        "mapping_evidence": "channel_schema_explicit_red_green_blue_order"
+      },
+      "ingestion_status": "ready",
+      "pair_count": 6084,
+      "image_hdf5_count": 6084,
+      "mask_hdf5_count": 6084,
+      "positive_count": 5495,
+      "no_target_count": 589,
+      "source_split_counts": {
+        "train": 4395,
+        "val": 1689
+      },
+      "canonical_split_policy": "preserve_source_split",
+      "split_assurance": "source_declared_unverified",
+      "evaluation_eligibility": "exploratory",
+      "image_dataset": {
+        "key": "/image",
+        "shape": [5, 128, 128],
+        "dtype": "float32",
+        "layout": "CHW",
+        "channels": [
+          "Red",
+          "Green",
+          "Blue",
+          "DEM",
+          "InSAR_mean_LOS_velocity_encoded"
+        ]
+      },
+      "mask_dataset": {
+        "key": "/mask",
+        "dtype": "uint8",
+        "values": {
+          "0": "background",
+          "1": "landslide"
+        }
+      },
+      "validity": {
+        "valid_mask_key": "/valid_mask",
+        "pixel_valid_key": "/pixel_valid",
+        "channel_valid_key": "/channel_valid"
+      },
+      "group_identity": "source_region_only_not_verified_parent_group",
+      "duplicate_component": "unverified",
+      "conversion_error_rows": 0,
+      "risks": [
+        "known spatial-neighbour cross-split leakage",
+        "9580 invalid InSAR pixels",
+        "DEM and InSAR unit or scale not confirmed",
+        "source metadata contains machine absolute paths"
+      ]
+    },
+    {
+      "source_key": "sen12_landslides",
+      "source_root": "datasets/Sen12Landslides",
+      "authoritative_indexes": [],
+      "channel_schema": null,
+      "ingestion_status": "not_ready",
+      "pair_count": 0,
+      "image_hdf5_count": 0,
+      "mask_hdf5_count": 0,
+      "positive_count": 0,
+      "no_target_count": 0,
+      "source_split_counts": null,
+      "canonical_split_policy": "excluded_until_new_audit",
+      "split_assurance": null,
+      "evaluation_eligibility": null,
+      "risks": [
+        "empty source directory"
+      ]
+    }
+  ]
+}

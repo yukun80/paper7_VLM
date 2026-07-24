@@ -1,0 +1,209 @@
+schema_version: sami_segmentation_research_state_v1
+program_name: SEGMENTATION_MODEL_CONTINUATION
+updated_on: "2026-07-24"
+current_phase: P1_owner_gate
+
+goal:
+  status: resumed_by_owner_after_interrupted_blocked_state
+  terminal_scope: P4_MODEL_ENGINEERING_ACCEPTED
+  completion_definition_met: false
+
+scope:
+  task: single_time_binary_landslide_segmentation
+  included_phases:
+    - P1
+    - P2
+    - P3
+    - P4
+  excluded:
+    - description
+    - bridge
+    - segdesc
+    - joint_training
+    - bbox_first
+    - proposal_cascade
+    - autoregressive_mask_generation
+    - external_segmentation_foundation_model
+
+evidence_state:
+  authority_review: complete
+  literature_review: complete
+  first_principles_review: complete
+  p1_owner_acceptance: pending
+  p2_owner_acceptance: not_eligible
+  p3_owner_acceptance: not_eligible
+  p4_owner_acceptance: not_eligible
+  experiments_executed: 0
+  experimental_results_available: false
+  unique_kernel_frozen: false
+  prompt_information_status: not_audited
+  strict_cohort_available: false
+
+research_inputs:
+  literature_matrix: docs/research/segmentation_literature_matrix.md
+  first_principles: docs/research/segmentation_first_principles.md
+  findings: docs/research/segmentation_findings.md
+  detailed_authority: docs/REFACTOR_TASK_SPEC.md
+  execution_authority: docs/CODEX_REFACTOR_PROMPT.md
+
+protocol_contract:
+  freeze_before_implementation: true
+  required_on_freeze:
+    - experiment_id
+    - hypothesis_id
+    - population_index_sha256
+    - split
+    - split_assurance
+    - seeds
+    - config_sha256
+    - code_identity
+    - metrics
+    - thresholds
+    - trainable_parameters_max
+    - peak_memory_gib_max
+    - relative_flops_max
+    - prediction
+    - falsifier
+    - owner_command
+    - artifact_paths
+  unexplained_hyperparameter_sweep_allowed: false
+  formal_seeds:
+    - 3407
+    - 3408
+    - 3409
+
+candidate_boundaries:
+  K0:
+    role: P2_registered_rgb_diagnostic
+    selection_eligible: false
+    trainable_parameters_max: 5000000
+    status: blocked_by_prerequisite
+    prerequisite: P1_owner_builder_and_independent_validator_acceptance
+  K1:
+    role: channel_set_dense_default
+    selection_eligible: true
+    trainable_parameters_max: 20000000
+    initial_fusion: sum_normalized_masked_mean
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: P1_and_P2_owner_acceptance
+  K2:
+    role: channel_set_dense_with_lightweight_prompt_conditioning
+    selection_eligible: conditional
+    additional_trainable_parameters_max: 2000000
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: K1_engineering_gate_and_nonredundant_prompt_audit
+  K3:
+    role: complex_vlm_pixel_decoder
+    selection_eligible: false
+    status: excluded
+    prerequisite: new_owner_approved_adr_outside_current_goal
+
+hypotheses:
+  - hypothesis_id: H1
+    statement: Explicit channel identity and masked set aggregation are sufficient for variable channel combinations.
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: P1_and_P2_owner_acceptance
+  - hypothesis_id: H2
+    statement: Source-balanced sampling and channel or modality dropout reduce dominant-source collapse.
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: K1_implementation_ready
+  - hypothesis_id: H3
+    statement: GSD conditioning helps only where reliable physical scale exists.
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: verified_gsd_cohort
+  - hypothesis_id: H4
+    statement: Prompt conditioning helps only where prompt text changes target information.
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: K1_gate_and_prompt_information_audit
+  - hypothesis_id: H5
+    statement: Zero or one learned fusion layer is sufficient relative to deeper fusion.
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: reproducible_masked_mean_failure
+  - hypothesis_id: H6
+    statement: Heterogeneous non-RGB channels are more reliable through a channel-set encoder than an RGB VLM path.
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: P1_and_P2_owner_acceptance
+
+experiments:
+  - experiment_id: H1_K1_CHANNEL_SET
+    hypothesis_id: H1
+    candidate_id: K1
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: P1_and_P2_owner_acceptance
+    protocol_binding_status: not_frozen
+  - experiment_id: H2_BALANCED_DROPOUT
+    hypothesis_id: H2
+    candidate_id: K1
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: H1_K1_engineering_gate
+    protocol_binding_status: not_frozen
+  - experiment_id: H3_VERIFIED_GSD
+    hypothesis_id: H3
+    candidate_id: K1
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: verified_gsd_cohort
+    protocol_binding_status: not_frozen
+  - experiment_id: H4_PROMPT_INFORMATION
+    hypothesis_id: H4
+    candidate_id: K2
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: K1_gate_and_prompt_information_audit
+    protocol_binding_status: not_frozen
+  - experiment_id: H5_FUSION_DEPTH
+    hypothesis_id: H5
+    candidate_id: K1
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: reproducible_masked_mean_failure
+    protocol_binding_status: not_frozen
+  - experiment_id: H6_FULL_CHANNEL_VS_RGB
+    hypothesis_id: H6
+    candidate_id: K1
+    status: proposed
+    gate_status: blocked_by_prerequisite
+    prerequisite: P1_and_P2_owner_acceptance
+    protocol_binding_status: not_frozen
+
+rejected_complexity:
+  - dynamic_wavelength_weights_without_verified_wavelength
+  - three_dimensional_spectral_cube_for_heterogeneous_modalities
+  - full_foundation_pretraining
+  - attention_before_reproducible_masked_mean_failure
+  - rgb_vlm_as_multimodal_spatial_encoder
+  - pixel_text_contrastive_loss_without_pixel_text_truth
+  - llm_segmentation_tokens
+  - sam_or_proposal_cascade
+  - bbox_or_oracle_region_input
+  - runtime_candidate_switch
+
+owner_gates:
+  current:
+    phase: P1
+    status: awaiting_owner_builder_and_independent_validator
+    required_evidence:
+      - builder_completed_without_overwrite
+      - independent_validator_errors_empty
+      - source_hash_and_hdf5_metadata_replay
+      - native_split_and_assurance_replay
+      - validity_and_normalization_replay
+  future:
+    - P2_overfit_no_target_validity_reload
+    - P3_frozen_three_seed_candidate_comparison
+    - P4_overfit_reload_resume_export_lineage_memory
+
+next_action:
+  phase: P1
+  work_package: owner_run_hdf5_benchmark_v4_small_and_independent_validator
+  prohibition: do_not_implement_P2_P3_or_P4_before_live_prerequisite_acceptance

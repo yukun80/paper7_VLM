@@ -1,624 +1,257 @@
-version: sami_deletion_manifest_v1
-generated_at: "2026-07-20"
-phase: P0
-baseline_commit_candidate: 0c53624dd93159f78acd6d39a579b100d7e3255f
-baseline_tag: pre-sami-rewrite-2026-07-20
-baseline_branch: baseline/sane-qmef-pmrd-mgrr
-proposed_baseline_tag: pre-sami-rewrite-2026-07-20
-proposed_baseline_branch: baseline/sane-qmef-pmrd-mgrr
-proposed_refactor_branch: refactor/sami-groundsegdesc
-baseline_tag_verified: true
-baseline_branch_verified: true
-human_manifest_approval: "project owner approved gated, phase-by-phase deletion on 2026-07-20; each entry still requires a later named approval"
-deletions_executed_in_p0: false
-phase_evidence:
-  p1:
-    status: engineering_accepted
-    report: docs/reports/p1/p1_completion_report.json
-    physical_deletions: []
-    entry_approvals_changed: 0
-    deleted_commits_changed: 0
-  p2:
-    status: engineering_accepted
-    report: docs/reports/p2/p2_completion_report.json
-    physical_deletions: []
-    entry_approvals_changed: 0
-    deleted_commits_changed: 0
+version: sami_deletion_manifest_v3
+generated_at: "2026-07-24"
+phase: SEGMENTATION_MODEL_CONTINUATION
+baseline_adr: docs/adr/ADR-0004-hdf5-rebaseline-and-clean-p3-reset.md
+governing_adr: docs/adr/ADR-0006-self-contained-hdf5-benchmark.md
+replacement_owned: true
+p8_policy: residual_only
+commit_performed: false
+push_performed: false
+
 global_preconditions:
-  - replacement_accepted
-  - baseline_tag_verified
-  - baseline_branch_verified
-  - references_scanned
-  - tests_removed_or_replaced
-  - docs_removed_or_replaced
-  - human_approval_present
-preserve_forever_or_until_separate_human_decision:
-  - path: /home/yukun80/codes/datasets
-    reason: raw source data; read-only
-  - path: outputs
-    reason: accepted and historical benchmark/cache/checkpoint/report/visualization bytes; read-only
+  - owning_replacement_accepted
+  - exact_targets_resolved
+  - references_and_imports_scanned
+  - tests_replaced_or_explicitly_retired
+  - live_docs_replaced
+  - human_entry_approval_present
+
+never_delete_under_this_manifest:
+  - path: ../datasets
+    reason: read_only_source_assets
+  - path: ../benchmark
+    reason: generated_artifacts_require_exact_output_authorization
   - path: models_zoo
-    reason: upstream model cards, configs, and weights; read-only and separately licensed
+    reason: external_models_and_weights_require_separate_human_decision
   - path: 参考文献
-    reason: research evidence; not runtime input
-  - path: human_review_sources_and_arbitration_artifacts
-    reason: immutable expert provenance wherever present in preserved artifacts
+    reason: research_reference_assets
+  - path: accepted_external_artifacts
+    reason: separate_human_release_or_retention_decision
+  - path: excluded_description_and_joint_training_programs
+    reason: outside_segmentation_goal_and_requires_separate_future_authority
+
+p0r_dirty_reset:
+  kind: uncommitted_exact_path_reset
+  status: executed
+  manifest: docs/audits/p0r_dirty_p3_reset_manifest.json
+  approved_by: project_owner_current_task
+  patch_backup_created: false
+  deleted_commit: null
+  reusable_as_future_cleanup_authority: false
+
 entries:
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/models
-    kind: directory
-    owner_phase: P4
-    replacement: src/sami_gsd/model/sensor_adapter.py plus the single ADR-0002-selected segmentation kernel
+  - id: p1_replace_legacy_raw_segmentation_builder
+    targets:
+      - scripts/1-benchmark
+      - scripts/run_1_build_benchmark.sh
+    owner_phase: P1
+    replacement: HDF5_materialized_copy_Benchmark_v4_builder_validator_and_tests
+    replacement_status: implemented_awaiting_owner_acceptance
+    replacement_paths:
+      - configs/benchmark_v4_small.yaml
+      - schemas/hdf5_source_record_v1.schema.json
+      - schemas/canonical_parent_v4.schema.json
+      - schemas/benchmark_manifest_v4.schema.json
+      - schemas/benchmark_statistics_v4.schema.json
+      - schemas/benchmark_validation_report_v4.schema.json
+      - schemas/channel_catalog_v1.schema.json
+      - schemas/materialized_hdf5_asset_v1.schema.json
+      - src/sami_gsd/contracts/benchmark_v4.py
+      - src/sami_gsd/contracts/benchmark_v4_config.py
+      - src/sami_gsd/data/hdf5_sources_v4.py
+      - src/sami_gsd/data/benchmark_v4.py
+      - src/sami_gsd/data/benchmark_v4_validation.py
+      - src/sami_gsd/cli.py
     delete_after:
-      - p2_native_qwen_and_adapter_accepted
-      - p3_adr_0002_accepted
-      - p4_segmentation_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
+      - p1_v4_small_owner_run_passed
+      - p1_v4_independent_validation_errors_empty
+      - source_copy_hash_materialization_channel_catalog_and_manifest_replay_passed
+      - readme_documents_only_v4_command
+    references_checked: false
+    tests_removed_or_replaced:
+      - tests/p1/test_v4_contracts_config.py
+      - tests/p1/test_v4_source_records.py
+      - tests/p1/test_v4_builder_validation.py
+      - tests/p1/test_v4_cli.py
+    docs_removed_or_replaced:
+      - README.md
+      - docs/handoffs/P1.md
+    approved_by: null
+    deleted_commit: null
+
+  - id: p1_replace_committed_v3_greenfield_data_line
+    targets:
+      - configs/benchmark_v3_small.yaml
+      - configs/benchmark_v3_full.yaml
+      - schemas/canonical_parent_v3.schema.json
+      - src/sami_gsd/contracts/canonical.py
+      - src/sami_gsd/contracts/config.py
+      - src/sami_gsd/contracts/sources.py
+      - src/sami_gsd/data/adapters
+      - src/sami_gsd/data/audit.py
+      - src/sami_gsd/data/builder.py
+      - src/sami_gsd/data/materialize.py
+      - src/sami_gsd/data/source_loaders
+      - src/sami_gsd/data/validation.py
+      - tests/p1/conftest.py
+      - tests/p1/test_audit.py
+      - tests/p1/test_builder_validation.py
+      - tests/p1/test_configs.py
+      - tests/p1/test_contracts.py
+      - tests/p1/test_duplicates_split.py
+      - tests/p1/test_language_canonical_build.py
+      - tests/p1/test_language_subset.py
+      - tests/p1/test_materialization.py
+      - tests/p1/test_sen12_loader.py
+      - tests/p1/test_source_adapters.py
+      - tests/p1/test_spatial.py
+      - tests/p1/test_tasks.py
+    retained_rebound_paths:
+      - src/sami_gsd/cli.py
+      - src/sami_gsd/__init__.py
+      - src/sami_gsd/contracts/__init__.py
+      - src/sami_gsd/data/__init__.py
+      - src/sami_gsd/utilities/artifacts.py
+      - tests/p1/__init__.py
+    owner_phase: P1
+    replacement: Benchmark_v4_source_contract_builder_validator_and_focused_tests
+    replacement_status: implemented_awaiting_owner_acceptance
+    replacement_paths:
+      - configs/benchmark_v4_small.yaml
+      - schemas/hdf5_source_record_v1.schema.json
+      - schemas/canonical_parent_v4.schema.json
+      - schemas/benchmark_manifest_v4.schema.json
+      - schemas/benchmark_statistics_v4.schema.json
+      - schemas/benchmark_validation_report_v4.schema.json
+      - schemas/channel_catalog_v1.schema.json
+      - schemas/materialized_hdf5_asset_v1.schema.json
+      - src/sami_gsd/contracts/benchmark_v4.py
+      - src/sami_gsd/contracts/benchmark_v4_config.py
+      - src/sami_gsd/data/hdf5_sources_v4.py
+      - src/sami_gsd/data/benchmark_v4.py
+      - src/sami_gsd/data/benchmark_v4_validation.py
+    delete_after:
+      - exact_file_classification_replayed_from_reset_matrix
+      - p1_v4_replacement_accepted
+      - generic_rebind_files_retained_instead_of_deleted
+      - obsolete_tests_replaced_or_retired
+    references_checked: false
+    tests_removed_or_replaced:
+      - tests/p1/test_v4_contracts_config.py
+      - tests/p1/test_v4_source_records.py
+      - tests/p1/test_v4_builder_validation.py
+      - tests/p1/test_v4_cli.py
+    docs_removed_or_replaced:
+      - README.md
+      - docs/handoffs/P1.md
+    approved_by: null
+    deleted_commit: null
+
+  - id: p2_replace_committed_pre_rebaseline_model_skeleton
+    targets:
+      - configs/model_sami.yaml
+      - src/sami_gsd/model/cache.py
+      - src/sami_gsd/model/qwen_backbone.py
+      - src/sami_gsd/model/sensor_adapter.py
+      - src/sami_gsd/model/smoke.py
+      - tests/p2
+    owner_phase: P2
+    replacement: minimal_convolutional_direct_dense_sanity_and_1_4_8_32_parent_gates
+    delete_after:
+      - p1_v4_accepted
+      - p2_direct_dense_owner_run_passed
+      - p2_checkpoint_reload_passed
+      - no_language_model_or_box_dependency_remains
     references_checked: false
     tests_removed_or_replaced: []
     docs_removed_or_replaced: []
-    license_notes: Preserve PSALM attribution for independently reimplemented proposal/mask-token ideas.
     approved_by: null
     deleted_commit: null
 
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/controllers.py
-    kind: file
-    owner_phase: P4
-    replacement: src/sami_gsd/model/qwen_backbone.py
+  - id: p3_retire_unselected_channel_set_candidates
+    targets:
+      - future_p3_candidate_paths_resolved_at_p3_acceptance
+    owner_phase: P3
+    replacement: exactly_one_accepted_dense_segmentation_kernel
     delete_after:
-      - p2_official_native_multi_image_forward_accepted
-      - p4_segmentation_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
+      - all_eligible_candidates_compared_on_same_population_and_budget
+      - unique_kernel_decision_accepted
+      - selected_kernel_reload_and_memory_gates_passed
+      - unselected_paths_and_references_resolved
     references_checked: false
     tests_removed_or_replaced: []
     docs_removed_or_replaced: []
-    license_notes: No controller code is approved for copying into the new wrapper.
     approved_by: null
     deleted_commit: null
 
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/models/qwen_vision_encoder.py
-    kind: file
+  - id: p3_p4_replace_legacy_segmentation_runtime
+    targets:
+      - SEG_Multi-Source_Landslides/qpsalm_seg/controllers.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/models
+      - SEG_Multi-Source_Landslides/qpsalm_seg/data
     owner_phase: P4
-    replacement: src/sami_gsd/model/qwen_backbone.py
+    replacement: Benchmark_v4_input_plus_P3_selected_kernel_plus_P4_training_model
     delete_after:
-      - p2_official_native_multi_image_forward_accepted
-      - p4_segmentation_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced:
-      - tests/p2/test_qwen_cache.py
-    docs_removed_or_replaced:
-      - README.md
-      - docs/handoffs/P2.md
-    license_notes: Do not copy the legacy wrapper or its cache assumptions into the official greenfield boundary.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/models/vision_cache.py
-    kind: file
-    owner_phase: P4
-    replacement: src/sami_gsd/model/cache.py
-    delete_after:
-      - p2_greenfield_cache_equivalence_accepted
-      - p4_segmentation_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced:
-      - tests/p2/test_qwen_cache.py
-    docs_removed_or_replaced:
-      - README.md
-      - docs/handoffs/P2.md
-    license_notes: Old cache bytes and formats are never accepted by the greenfield cache reader.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/cli/cache_qwen_vision_features.py
-    kind: file
-    owner_phase: P7
-    replacement: sami-gsd model smoke plus the optional transparent cache boundary
-    delete_after:
-      - p2_greenfield_cache_equivalence_accepted
-      - p7_all_required_cli_paths_accepted
-      - readme_only_documents_current_commands
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced:
-      - tests/p2/test_rendering_cli_boundaries.py
-    docs_removed_or_replaced:
-      - README.md
-      - docs/handoffs/P2.md
-    license_notes: Historical generated cache artifacts remain preserved and are outside this code deletion entry.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/data
-    kind: directory
-    owner_phase: P4
-    replacement: src/sami_gsd/data plus P1 canonical Benchmark v3 contracts
-    delete_after:
-      - p1_benchmark_v3_accepted
-      - p2_model_input_contract_accepted
-      - p4_segmentation_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
+      - p1_v4_accepted
+      - p3_unique_kernel_accepted
+      - p4_training_entrypoint_and_checkpoint_reload_accepted
+      - legacy_package_import_scan_empty
     references_checked: false
     tests_removed_or_replaced: []
     docs_removed_or_replaced: []
-    license_notes: Raw datasets are not part of this deletion entry.
     approved_by: null
     deleted_commit: null
 
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/description/data
-    kind: directory
+  - id: p4_replace_legacy_training_runtime
+    targets:
+      - SEG_Multi-Source_Landslides/qpsalm_seg/engine/checkpoint.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/engine/common.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/engine/diagnostics.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/engine/optimizer.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/engine/threshold.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/engine/trainer.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/cli/train.py
+    owner_phase: P4
+    replacement: greenfield_single_gpu_training_entrypoint
+    delete_after:
+      - p4_training_entrypoint_accepted
+      - strict_checkpoint_resume_and_lineage_accepted
+      - exact_cli_reference_scan_complete
+    references_checked: false
+    tests_removed_or_replaced: []
+    docs_removed_or_replaced: []
+    approved_by: null
+    deleted_commit: null
+
+  - id: p5_replace_legacy_evaluation_runtime
+    targets:
+      - SEG_Multi-Source_Landslides/qpsalm_seg/engine/evaluator.py
+      - SEG_Multi-Source_Landslides/qpsalm_seg/cli/eval.py
     owner_phase: P5
-    replacement: P1 v3 task views and P5 greenfield region-description dataset modules
+    replacement: strict_exploratory_separated_greenfield_evaluation
     delete_after:
-      - p1_benchmark_v3_accepted
-      - p5_region_description_dataset_accepted
-      - accepted_expert_sources_preserved_read_only
-      - baseline_tag_verified
-      - baseline_branch_verified
+      - p5_evaluation_entrypoint_accepted
+      - strict_exploratory_train_only_replay_passed
+      - exact_report_and_metric_reference_scan_complete
     references_checked: false
     tests_removed_or_replaced: []
     docs_removed_or_replaced: []
-    license_notes: Preserve reviewer, arbitration, and accepted report bytes outside active runtime code.
     approved_by: null
     deleted_commit: null
 
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/description/modeling
-    kind: directory
-    owner_phase: P6
-    replacement: src/sami_gsd/model/region_reader.py and src/sami_gsd/model/model.py
+  - id: p8_residual_active_documentation
+    targets:
+      - SEG_Multi-Source_Landslides/ALGORITHM.md
+      - docs/archive
+      - unresolved_legacy_packaging_and_entrypoints
+    owner_phase: P8
+    replacement: complete_live_README_Task_Spec_ADRs_and_phase_reports
     delete_after:
-      - p4_segmentation_accepted
-      - p6_gar_lite_accepted
-      - p6_counterfactual_tests_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
+      - all_earlier_replacement_owned_gates_audited
+      - target_confirmed_residual
+      - historical_evidence_retention_decision_recorded
     references_checked: false
     tests_removed_or_replaced: []
     docs_removed_or_replaced: []
-    license_notes: GAR and PSALM scientific attribution must remain in live documentation.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/description/evaluation
-    kind: directory
-    owner_phase: P7
-    replacement: src/sami_gsd/evaluation
-    delete_after:
-      - p6_evaluation_contracts_accepted
-      - p7_evaluation_entrypoints_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Historical result artifacts are preserved and are not deleted with code.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/description/training
-    kind: directory
-    owner_phase: P7
-    replacement: src/sami_gsd/training
-    delete_after:
-      - p7_training_entrypoints_accepted
-      - p7_checkpoint_reload_and_resume_accepted
-      - p7_24g_profile_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/description/protocols
-    kind: directory
-    owner_phase: P7
-    replacement: v3 schemas, typed greenfield contracts, and P7 strict artifact utilities
-    delete_after:
-      - p1_schemas_accepted
-      - p5_region_description_contracts_accepted
-      - p7_checkpoint_and_report_contracts_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: No old protocol version or compatibility reader may remain.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/description/workflows
-    kind: directory
-    owner_phase: P7
-    replacement: single sami-gsd CLI orchestration over greenfield modules
-    delete_after:
-      - p7_all_required_cli_paths_accepted
-      - readme_only_documents_current_commands
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/engine
-    kind: directory
-    owner_phase: P7
-    replacement: src/sami_gsd/training and src/sami_gsd/evaluation
-    delete_after:
-      - p7_minimal_trainer_accepted
-      - p7_evaluator_accepted
-      - p7_checkpoint_reload_and_resume_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg/cli
-    kind: directory
-    owner_phase: P7
-    replacement: src/sami_gsd/cli.py exposed only as sami-gsd
-    delete_after:
-      - p1_through_p7_commands_accepted
-      - readme_only_documents_current_commands
-      - old_qpsalm_command_scan_reviewed
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/qpsalm_seg
-    kind: directory_remainder
-    owner_phase: P8
-    replacement: src/sami_gsd
-    delete_after:
-      - p1_through_p7_engineering_accepted
-      - all_child_manifest_entries_deleted_or_retired
-      - active_import_scan_is_empty
-      - old_protocol_scan_is_empty
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Final remainder sweep only; never recursively delete before an explicit resolved-path review.
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/1-benchmark
-    kind: directory
-    owner_phase: P8
-    replacement: sami-gsd benchmark scan/build/validate/summarize
-    delete_after:
-      - p1_benchmark_v3_accepted
-      - p1_repeat_hash_stable
-      - p1_no_legacy_dependency_verified
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/2-instruction
-    kind: directory
-    owner_phase: P8
-    replacement: P1 v3 task-view and language-view builders
-    delete_after:
-      - p1_benchmark_v3_accepted
-      - p1_task_views_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/3-description
-    kind: directory
-    owner_phase: P8
-    replacement: P1 canonical language-subset scan/dedup/split/materialization
-    delete_after:
-      - p1_language_subset_accepted
-      - p1_provenance_report_replay_accepted
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Preserve source provenance and duplicate evidence in v3 reports.
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/4-landslide-bridge
-    kind: directory
-    owner_phase: P8
-    replacement: P5 region-description data pipeline
-    delete_after:
-      - p5_region_description_dataset_accepted
-      - accepted_expert_sources_preserved_read_only
-      - p5_no_legacy_bridge_reader_verified
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Expert review, arbitration, and gate artifacts are not deletion targets.
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/5-segdesc
-    kind: directory
-    owner_phase: P8
-    replacement: P1/P5 v3 task views and region-description bindings
-    delete_after:
-      - p5_region_description_dataset_accepted
-      - p5_no_legacy_unified_reader_verified
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/run_1_build_benchmark.sh
-    kind: file
-    owner_phase: P8
-    replacement: sami-gsd benchmark subcommands
-    delete_after: [p1_benchmark_v3_accepted, readme_updated_for_sami_gsd, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/run_2_build_instruction_dataset.sh
-    kind: file
-    owner_phase: P8
-    replacement: sami-gsd benchmark task-view subcommands
-    delete_after: [p1_task_views_accepted, readme_updated_for_sami_gsd, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/run_3_build_description_benchmark.sh
-    kind: file
-    owner_phase: P8
-    replacement: sami-gsd benchmark language-view subcommands
-    delete_after: [p1_language_subset_accepted, readme_updated_for_sami_gsd, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/run_4_build_landslide_bridge.sh
-    kind: file
-    owner_phase: P8
-    replacement: sami-gsd P5 region-description dataset command
-    delete_after: [p5_region_description_dataset_accepted, readme_updated_for_sami_gsd, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/run_5_build_segdesc_dataset.sh
-    kind: file
-    owner_phase: P8
-    replacement: canonical v3 task-view bindings
-    delete_after: [p5_region_description_dataset_accepted, readme_updated_for_sami_gsd, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: scripts/run_segdesc_artifact_acceptance.sh
-    kind: file
-    owner_phase: P8
-    replacement: sami-gsd validation and report subcommands
-    delete_after: [p7_acceptance_entrypoints_accepted, readme_updated_for_sami_gsd, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/configs
-    kind: directory
-    owner_phase: P8
-    replacement: root configs for Benchmark v3, SAMI, S1/S2/S3, and evaluation
-    delete_after:
-      - p1_through_p7_configs_accepted
-      - old_config_reader_scan_is_empty
-      - readme_updated_for_sami_gsd
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: configs/description_ontology_v1.yaml
-    kind: file
-    owner_phase: P8
-    replacement: v3 region-description ontology/schema
-    delete_after: [p5_v3_ontology_accepted, p6_structured_description_accepted, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Preserve deterministic-geometry versus modality-evidence semantics in the replacement.
-    approved_by: null
-    deleted_commit: null
-
-  - path: configs/instruction_templates/multisource_landslide_v2.yaml
-    kind: file
-    owner_phase: P8
-    replacement: P1 v3 task-view templates
-    delete_after: [p1_task_views_accepted, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: configs/landslide_bridge_v1.yaml
-    kind: file
-    owner_phase: P8
-    replacement: P5 region-description dataset config
-    delete_after: [p5_region_description_dataset_accepted, accepted_expert_sources_preserved_read_only, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: configs/qpsalm_description_output_v1.schema.json
-    kind: file
-    owner_phase: P8
-    replacement: v3 structured description output schema
-    delete_after: [p6_structured_description_accepted, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: configs/qpsalm_description_record_v2.schema.json
-    kind: file
-    owner_phase: P8
-    replacement: schemas/canonical_parent_v3.schema.json and schemas/task_view_v3.schema.json
-    delete_after: [p1_benchmark_v3_accepted, p5_region_description_dataset_accepted, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: configs/qpsalm_landslide_region_description_v1.schema.json
-    kind: file
-    owner_phase: P8
-    replacement: v3 region-description record/output schemas
-    delete_after: [p5_region_description_dataset_accepted, p6_structured_description_accepted, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/tests
-    kind: directory
-    owner_phase: P8
-    replacement: tests for P1 through P7 under the greenfield package
-    delete_after:
-      - p1_through_p7_tests_accepted
-      - legacy_test_coverage_crosswalk_reviewed
-      - baseline_tag_verified
-      - baseline_branch_verified
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Every scientifically relevant invariant must have an explicit replacement test before deletion.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/pyproject.toml
-    kind: file
-    owner_phase: P8
-    replacement: pyproject.toml at repository root
-    delete_after: [p7_install_and_cli_accepted, root_license_and_notice_resolved, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Root dependency set must be minimal and independently licensed.
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/scripts
-    kind: directory
-    owner_phase: P8
-    replacement: sami-gsd train/eval CLI commands
-    delete_after: [p7_training_and_evaluation_entrypoints_accepted, readme_updated_for_sami_gsd, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/README.md
-    kind: file
-    owner_phase: P8
-    replacement: root README as the only runbook
-    delete_after: [p7_root_readme_complete, p8_documentation_scan_reviewed, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: null
-    approved_by: null
-    deleted_commit: null
-
-  - path: SEG_Multi-Source_Landslides/ALGORITHM.md
-    kind: file
-    owner_phase: P8
-    replacement: accepted ADRs, root README, and live v3 reports
-    delete_after: [p1_through_p7_documentation_complete, p8_old_protocol_scan_reviewed, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Git history is the archive; do not create a legacy directory.
-    approved_by: null
-    deleted_commit: null
-
-  - path: docs/archive
-    kind: directory
-    owner_phase: P8
-    replacement: accepted ADRs, root README, task specification, and live reports
-    delete_after: [p1_through_p7_documentation_complete, p8_old_protocol_scan_reviewed, baseline_tag_verified, baseline_branch_verified]
-    references_checked: false
-    tests_removed_or_replaced: []
-    docs_removed_or_replaced: []
-    license_notes: Git history is the only long-term legacy archive.
     approved_by: null
     deleted_commit: null
