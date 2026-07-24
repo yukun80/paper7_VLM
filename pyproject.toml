@@ -3,42 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sami-groundsegdesc"
+name = "oa-auxseg-vlm"
 version = "0.1.0"
-description = "Greenfield SAMI-GroundSegDesc research software."
+description = "Optical-anchored arbitrary-auxiliary landslide segmentation and mask-grounded VLM research."
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.11"
-dependencies = [
-  "jsonschema>=4.20",
-  "pydantic>=2.6,<3",
-  "PyYAML>=6",
-]
+dependencies = []
 
-[project.optional-dependencies]
-data = [
-  "h5py>=3.10,<4",
-  "netCDF4>=1.6,<2",
-  "numpy>=1.26,<3",
-  "Pillow>=10,<12",
-  "rasterio>=1.3,<2",
-]
-test = [
-  "pytest>=8",
-]
-model = [
-  "numpy>=1.26,<3",
-  "Pillow>=10,<12",
-  "torch>=2.8,<3",
-  "transformers>=5.3,<6",
-]
-
-[project.scripts]
-sami-gsd = "sami_gsd.cli:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.pytest.ini_options]
-addopts = "-ra"
-testpaths = ["tests"]
+[tool.setuptools]
+packages = []

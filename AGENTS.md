@@ -1,193 +1,102 @@
 # Repository Agent Guide
 
-## 1. Active program
+## 1. 当前研究主线
 
-This repository is executing an incompatible HDF5-first rewrite of single-time landslide
-segmentation. The active runtime package is `src/sami_gsd/`, but location inside that package does
-not imply that an existing file is approved for the new line.
+本仓库正在从零重建 OA-AuxSeg + VLM 滑坡遥感研究系统。当前设计权威为：
 
-The current authorities, in order, are:
+1. 项目负责人当前明确指令；
+2. `docs/光学锚定任意辅助模态滑坡分割与VLM区域理解_算法构建方案.md`；
+3. `README.md`；
+4. `REBUILD_PROGRESS.md`。
 
-1. the project owner's current phase and explicit corrections;
-2. `docs/REFACTOR_TASK_SPEC.md` — the only detailed scientific and interface design;
-3. `docs/CODEX_REFACTOR_PROMPT.md` — execution boundaries and prohibited actions;
-4. `REFACTOR_PROGRESS.md` — current cursor only;
-5. the latest applicable handoff under `docs/handoffs/`;
-6. accepted ADRs under `docs/adr/`.
+`docs/archive/` 仅保存历史资料，不是当前设计、接口或验收依据。
 
-Old reports, handoffs, archived documents, checkpoints, and Git history are historical evidence.
-They do not prove the current HDF5 Benchmark or model route has passed.
-
-For every refactor task, read both authorities before planning or editing. The active
-`SEGMENTATION_MODEL_CONTINUATION` Goal is authorized through P4, but real owner-run gates still
-control every phase transition.
-
-## 2. Stage map
+## 2. 阶段顺序
 
 ```text
-P0R  governance, HDF5 audit, dirty-P3 reset
-  -> P1  self-contained materialized HDF5 Canonical Benchmark v4 Small
-  -> P2  minimal convolutional direct-dense sanity
-  -> P3  independent kernel candidates and one frozen winner
-  -> P4  selected-model training engineering
-  -> P5  strict/exploratory-separated evaluation
-  -> P6  robustness and necessary ablations
-  -> P7  reproducibility and export packaging
-  -> P8  residual deletion only
+阶段 0  清理旧实现并建立最小工程基线
+阶段 1  只读审计真实 HDF5
+阶段 2  构建统一 Benchmark
+阶段 3  光学分割 baseline
+阶段 4  辅助模态编码
+阶段 5  任意辅助模态注入
+阶段 6  质量选择
+阶段 7  完整分割训练与评价
+阶段 8  VLM 指令路由与区域证据
+阶段 9  VLM 区域描述与问答
+阶段 10 端到端集成
 ```
 
-Internal work packages are not additional approval points within an explicitly authorized complete
-phase. Continue within the active Goal, but stop code progression at a phase artifact, destructive
-gate, or documented owner/scientific gate.
+不得跳过数据审计直接继承旧字段、通道顺序、归一化参数或 Benchmark 协议。
 
-## 3. Current cursor
+## 3. 当前边界
 
-P0R is the completed governance baseline. The P3-P8 authority restoration and continuous Goal were
-authorized on 2026-07-24. P1 materialized-copy implementation and focused checks are complete; the
-current cursor is the owner builder and independent-validator gate. Benchmark v4 has not been built
-or accepted. The benchmark root was empty at the continuation start.
+阶段 0 只允许清理、文档整理和静态验证。禁止：
 
-The dirty uncommitted P3 was intentionally discarded under the project owner's explicit
-authorization. Do not reconstruct it, its class/config/schema names, or its checkpoints.
+- 编写模型、Trainer、Evaluator、Benchmark builder 或 RAG；
+- 运行 GPU、训练、正式评估或长时间任务；
+- 下载数据、模型或依赖；
+- 修改 `../datasets`、`../benchmark` 或 `../external`；
+- 修改或复制第三方参考实现；
+- 创建 legacy 目录、兼容包装、alias 或旧接口适配层。
 
-Before new work, reopen:
+进入后续阶段前，先读取新算法方案和 `REBUILD_PROGRESS.md`，并核对项目负责人的当前授权。
 
-- `docs/adr/ADR-0004-hdf5-rebaseline-and-clean-p3-reset.md`;
-- `docs/adr/ADR-0005-segmentation-only-continuation.md`;
-- `docs/audits/hdf5_source_audit.md`;
-- `docs/audits/hdf5_source_contract.yaml`;
-- `docs/audits/greenfield_reset_reuse_matrix.md`;
-- `docs/audits/deletion_plan.yaml`;
-- `docs/handoffs/P0R.md`.
-- `docs/handoffs/P1.md`.
+## 4. 数据与外部资产
 
-## 4. Data governance
-
-Training admission and evaluation credibility are separate. Every new source/canonical record
-must carry:
-
-- `ingestion_status`;
-- `canonical_split`;
-- `split_assurance`;
-- `evaluation_eligibility`.
-
-Missing per-sample location, parent/group, canonical index, or complete duplicate-component
-evidence does not exclude readable image/mask pairs from training. It prevents strict
-group-isolation claims.
-
-P1 must preserve native splits for GDCLD, LMHLD, LandslideBench_agent, and Multimodal with
-`source_declared_unverified` assurance. Landslide4Sense is entirely `train_only`. Empty Sen12 is
-`not_ready`. Do not randomly re-split any of them.
-
-Canonical identities bind portable `datasets/...` source paths and
-`benchmark/sami_landslide_hdf5_v4/small/assets/...` copy paths to the same content hashes. Do not
-serialize machine absolute paths. HDF5 files under the datasets root are read-only construction
-assets; downstream model loading uses only immutable Benchmark copies and the bound channel catalog.
-
-Canonical builders perform technical and scientific validation, not legal review. Do not create
-raw-data license or source-permission runtime gates. Preserve non-gating scientific provenance;
-future public release remains a separate human review.
-
-## 5. Model boundaries
-
-P1 contains no model algorithm.
-
-P2 implements only a small convolutional direct-dense segmentation baseline and 1/4/8/32-parent
-memory tests. It must not load a language model, generate boxes, build a candidate registry, or
-pre-implement P3.
-
-P3 may then implement independent:
-
-1. the Channel-Set Dense direct multimodal kernel;
-2. a lightweight prompt-conditioned derivative after the direct kernel passes.
-
-No candidate may auto-switch or silently fall back. Larger language-driven pixel decoders and
-box/proposal paths are outside the current program. The old runtime architecture, previous
-uncommitted candidate framework, old schemas, and old checkpoint formats are forbidden from the
-new main line. Compatibility shims are forbidden.
-
-## 6. Collaboration and runtime rules
-
-The current program explicitly authorizes focused CPU/unit tests and a synthetic or
-accepted-tiny-fixture GPU smoke with batch size 1 and at most two optimizer steps. These checks do
-not establish phase acceptance.
-
-- do not run builders, independent validators, owner micro-overfit, frozen multi-seed comparisons,
-  formal memory gates, long training, formal evaluation, web servers, or paid APIs;
-- provide exact owner commands for every phase gate;
-- never claim a phase passed because code or a report path exists;
-- diagnose returned logs from the actual stack trace, config, report, or artifact before editing.
-
-Read-only `rg`, `sed`, `find`, Git inspection, JSON/YAML/Markdown parsing, Python `ast.parse`, and
-`git diff --check` are allowed. Run permitted Python checks through
-`/home/yukun80/miniconda3/envs/qwen3vl/bin/python`.
-
-Do not commit or push unless the project owner explicitly requests it.
-
-## 7. Filesystem and paths
+默认根目录：
 
 ```text
-codes/
-├── datasets/       read-only HDF5 source assets
-├── benchmark/      generated artifacts; empty at P0R
-└── paper7_VLM/     this repository
+/home/yukun80/codes/
+├── datasets/    只读 HDF5 原始训练资产
+├── benchmark/   后续阶段生成的统一 Benchmark
+├── external/    第三方算法参考代码
+└── paper7_VLM/  当前仓库
 ```
 
-Default runtime roots:
+- `../datasets` 只读；不得覆盖、重命名、移动或删除文件。
+- `../benchmark` 的写入必须由后续 Benchmark 阶段明确授权，且不得覆盖已有输出。
+- `../external` 只作阅读参考，不得作为运行时依赖或复制进项目代码。
+- `models_zoo/` 保存本地模型权重与元数据；未经明确授权不得删除或改写。
+- `参考文献/` 和 `docs/archive/` 必须保留。
 
-```text
-PAPER7_DATASETS_ROOT=/home/yukun80/codes/datasets
-PAPER7_BENCHMARK_ROOT=/home/yukun80/codes/benchmark
-```
+HDF5 格式统一不代表字段、模态、配准、数值范围或科学语义统一。任何读取合同必须来自现场只读审计。
 
-These runtime values must never enter canonical identity. New indexes store portable
-`datasets/...` and `benchmark/...` references and use shared resolvers.
+## 5. 新系统边界
 
-Do not modify `../datasets`, invent assets under `../benchmark`, or overwrite existing outputs
-without exact authorization.
+- 光学影像是分割主模态和空间边界基准。
+- SAR、InSAR、DEM、多光谱等只能作为可选辅助证据。
+- 分割模型只输出概率图、mask、no-target 状态和区域信息。
+- VLM 在分割稳定后，基于 mask、光学区域和可用辅助证据完成区域理解。
+- RAG 只预留接口，不是当前实现重点。
 
-## 8. Dirty worktree and deletion
+旧 SANE、QMEF、PMRD、MGRR、SegDesc、Bridge、proposal、query 和 reliability 路线不得恢复到活动代码。
 
-Preserve user changes by default. Never use `git reset --hard` or `git checkout --`. Use
-`apply_patch` for text edits.
+## 6. 工程规则
 
-The completed P0R dirty reset was a one-time, exact-path authorization recorded in
-`docs/audits/p0r_dirty_p3_reset_manifest.json`; it does not authorize future broad cleanup.
+- Python 3.11，四空格缩进，公共合同使用类型标注。
+- 优先使用 `pathlib`、严格 JSON/JSONL、原子写入和 SHA-256。
+- 新可执行脚本必须有简短中文头部，说明用途、命令、输入、输出、写入行为和所属阶段。
+- 算法不得写在 CLI 中。
+- 不从文件名猜测通道科学含义。
+- 不在模型 `forward` 中读取 HDF5。
+- 保留用户已有改动；禁止 `git reset --hard`、`git checkout --` 和广泛清理。
+- 未经明确请求不得 commit 或 push。
 
-Committed deletion is replacement-owned:
+## 7. 文档职责
 
-- the owning replacement must be accepted;
-- exact targets must be resolved;
-- references/imports, tests, and docs must be scanned;
-- human approval for that deletion entry must be present;
-- raw datasets, models, accepted external artifacts, and unresolved legacy paths are excluded;
-- `deleted_commit` stays `null` until the owner creates a later deletion commit.
+- 新算法方案：唯一详细设计。
+- `README.md`：当前项目概览和有效运行入口。
+- `REBUILD_PROGRESS.md`：唯一活动进度文件。
+- `docs/archive/`：只读历史资料。
 
-P8 is not a universal waiting room; it receives only assets whose earlier replacement gates were
-never satisfied.
+不要新增 ADR、handoff、audit、worklog 或重复运行说明。
 
-## 9. Coding and documentation style
+## 8. 新会话检查
 
-- Python 3.11, four-space indentation, and type hints for contracts.
-- Prefer `pathlib`, `argparse`, dataclasses/Pydantic, strict JSON/JSONL, atomic writes, and SHA-256.
-- New executable scripts need a short Chinese header describing purpose, recommended command,
-  inputs, outputs, write behavior, and stage.
-- Use concise Chinese comments for scientific or non-obvious logic.
-- Keep algorithms out of CLI modules.
-- Add only the modules, schemas, configs, and entrypoints required by the current phase.
-- README is the sole runbook; Task Spec owns design; AGENTS owns agent behavior; Progress owns the
-  cursor; handoffs own command evidence.
-
-## 10. New-session checklist
-
-1. Read the two authorities, current progress, applicable handoff, accepted ADRs, source contract,
-   reset matrix, and deletion plan.
-2. Run read-only `git branch --show-current`, `git rev-parse HEAD`, `git status --short`, and
-   `git diff --stat`.
-3. Inspect current `../benchmark` and relevant source/report files; do not trust dated counts
-   without cheap verification.
-4. Confirm the user's exact phase and deletion authority.
-5. Make the smallest phase-complete change and stop at the phase/human gate.
-6. Update Progress and write a handoff before declaring phase completion.
-7. Report changed/restored/deleted paths, actual commands and exit codes, unrun programs, risks,
-   and required human actions.
+1. 读取本文件、新算法方案、README 和 REBUILD_PROGRESS。
+2. 运行只读 Git branch、HEAD、status 和 diff 检查。
+3. 核对 `../datasets`、`../benchmark`、`../external` 的现场状态。
+4. 确认当前阶段和写入授权。
+5. 只完成当前阶段的最小闭环。
+6. 报告实际修改、检查命令、未运行程序、阻塞和下一步。
