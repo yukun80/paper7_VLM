@@ -1,4 +1,4 @@
-"""阶段 1B 五个只读 HDF5 数据源的显式读取合同。"""
+"""阶段 1B 六个只读 HDF5 数据源的显式读取合同。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,15 @@ from typing import Any, Mapping, Sequence
 import h5py
 import numpy as np
 
-from benchmark_common import SOURCE_ORDER, SPLIT_ORDER, read_json, read_jsonl, stable_rank
+from benchmark_common import (
+    SOURCE_ORDER,
+    SPLIT_ORDER,
+    canonical_json,
+    read_json,
+    read_jsonl,
+    sha256_bytes,
+    stable_rank,
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,17 @@ CONTRACTS = {
         {"dem": (3,), "insar_velocity": (4,)},
         "sample_only",
     ),
+    "sen12landslides": SourceContract(
+        "sen12landslides",
+        "Sen12Landslides",
+        tuple(range(10)),
+        {
+            "sar_ascending": (10, 11),
+            "sar_descending": (12, 13),
+            "dem": (14,),
+        },
+        "known",
+    ),
 }
 
 
@@ -118,6 +137,13 @@ def _provenance(row: Mapping[str, Any]) -> dict[str, Any]:
         "scene",
         "geotransform",
         "crs_wkt",
+        "pre_hdf5",
+        "post_hdf5",
+        "mask_hdf5",
+        "available_modalities",
+        "placeholder_channels_post",
+        "source_channel_names",
+        "status",
     }
     return {
         key: value
@@ -142,17 +168,38 @@ def _base_sample(
     split_source: str,
     group_id: str | None,
     group_status: str | None = None,
+    auxiliary_indices: Mapping[str, tuple[int, ...]] | None = None,
+    auxiliary_channel_names: Mapping[str, tuple[str, ...]] | None = None,
+    positive: bool | None = None,
 ) -> SourceSample:
     sample_key = str(row["sample_key"])
+    selected_auxiliaries = dict(
+        contract.auxiliaries if auxiliary_indices is None else auxiliary_indices
+    )
     optical_names = tuple(channel_names[index] for index in contract.optical_indices)
-    auxiliary_names = {
-        name: tuple(channel_names[index] for index in indices)
-        for name, indices in contract.auxiliaries.items()
-    }
+    auxiliary_names = (
+        {
+            name: tuple(channel_names[index] for index in indices)
+            for name, indices in selected_auxiliaries.items()
+        }
+        if auxiliary_channel_names is None
+        else dict(auxiliary_channel_names)
+    )
+    if set(auxiliary_names) != set(selected_auxiliaries):
+        raise ValueError(f"{sample_key}: 辅助模态通道名与索引合同不一致")
     positive_count = row.get(
         "positive_pixel_count", row.get("mask_positive_pixel_count", 0)
     )
-    positive = bool(row.get("has_landslide", int(positive_count) > 0))
+    is_positive = (
+        bool(row.get("has_landslide", int(positive_count) > 0))
+        if positive is None
+        else positive
+    )
+    source_record_sha256 = row.get("record_sha256")
+    if not source_record_sha256:
+        source_record_sha256 = sha256_bytes(
+            canonical_json(dict(row)).encode("utf-8")
+        )
     return SourceSample(
         sample_id=f"{contract.source}::{sample_key}",
         source=contract.source,
@@ -163,16 +210,14 @@ def _base_sample(
         mask_path=_resolve(root, str(row["mask_hdf5"])),
         optical_indices=contract.optical_indices,
         optical_channel_names=optical_names,
-        auxiliary_indices=dict(contract.auxiliaries),
+        auxiliary_indices=selected_auxiliaries,
         auxiliary_channel_names=auxiliary_names,
-        positive=positive,
+        positive=is_positive,
         source_group_id=group_id,
         group_status=group_status or contract.group_status,
         source_schema_version=schema_version,
         provenance=_provenance(row),
-        source_record_sha256=(
-            str(row["record_sha256"]) if row.get("record_sha256") else None
-        ),
+        source_record_sha256=str(source_record_sha256),
     )
 
 
@@ -278,6 +323,123 @@ def _discover_landslide4sense(
     return samples
 
 
+def _sen12_region(sample_key: str) -> str:
+    region, separator, identifier = sample_key.rpartition("_")
+    if not separator or not region or not identifier.isdigit():
+        raise ValueError(f"Sen12 sample_key 无法解析 region：{sample_key!r}")
+    return region
+
+
+def _balanced_group_splits(
+    group_sizes: Mapping[str, int], split_seed: int, source: str
+) -> dict[str, str]:
+    total = sum(group_sizes.values())
+    targets = _largest_remainder_counts(total)
+    assigned = {split: 0 for split in SPLIT_ORDER}
+    group_to_split: dict[str, str] = {}
+    ordered_groups = sorted(
+        group_sizes,
+        key=lambda group: (
+            -group_sizes[group],
+            stable_rank(split_seed, source, group),
+            group,
+        ),
+    )
+    for group in ordered_groups:
+        size = group_sizes[group]
+
+        def score(split: str) -> tuple[float, int]:
+            projected = dict(assigned)
+            projected[split] += size
+            squared_error = sum(
+                ((projected[name] - targets[name]) ** 2) / max(targets[name], 1)
+                for name in SPLIT_ORDER
+            )
+            return squared_error, SPLIT_ORDER.index(split)
+
+        selected = min(SPLIT_ORDER, key=score)
+        group_to_split[group] = selected
+        assigned[selected] += size
+    if total >= len(SPLIT_ORDER) and any(assigned[split] == 0 for split in SPLIT_ORDER):
+        raise ValueError(f"{source}: group-aware split 未覆盖全部 split：{assigned}")
+    return group_to_split
+
+
+def _discover_sen12landslides(
+    datasets_root: Path, split_seed: int
+) -> list[SourceSample]:
+    contract = CONTRACTS["sen12landslides"]
+    dataset_root = datasets_root / contract.root_name
+    root = dataset_root / "hdf5"
+    schema_version, channel_names = _channel_contract(datasets_root, contract)
+    manifest_path = root / "conversion_manifest.jsonl"
+    rows = read_jsonl(manifest_path)
+    converted = [row for row in rows if row.get("status") == "converted"]
+    if len(converted) != len(rows):
+        raise ValueError(
+            f"{manifest_path}: manifest 应只包含 converted，实际 "
+            f"{len(converted)}/{len(rows)}"
+        )
+    group_sizes = Counter(_sen12_region(str(row["sample_key"])) for row in rows)
+    group_splits = _balanced_group_splits(
+        group_sizes, split_seed, contract.source
+    )
+    samples: list[SourceSample] = []
+    for row in rows:
+        sample_key = str(row["sample_key"])
+        region = _sen12_region(sample_key)
+        placeholders = {
+            int(index) for index in row.get("placeholder_channels_post", [])
+        }
+        if placeholders & set(contract.optical_indices):
+            raise ValueError(f"{sample_key}: post 光学通道不得缺失")
+        selected_auxiliaries: dict[str, tuple[int, ...]] = {}
+        for name, indices in contract.auxiliaries.items():
+            missing = placeholders & set(indices)
+            if missing and missing != set(indices):
+                raise ValueError(
+                    f"{sample_key}: {name} 只缺部分通道，无法形成模态合同"
+                )
+            if not missing:
+                selected_auxiliaries[name] = indices
+        if "dem" not in selected_auxiliaries:
+            raise ValueError(f"{sample_key}: DEM 不得缺失")
+        mask_path = _resolve(root, str(row["mask_hdf5"]))
+        with h5py.File(mask_path, "r") as handle:
+            if "positive_pixel_count" in handle.attrs:
+                positive_count = int(handle.attrs["positive_pixel_count"])
+            else:
+                positive_count = int(
+                    np.count_nonzero(np.asarray(handle["mask"][...]))
+                )
+        source_row = dict(row)
+        source_row["image_hdf5"] = row["post_hdf5"]
+        source_row["positive_pixel_count"] = positive_count
+        source_row["source_channel_names"] = list(channel_names)
+        selected_channel_names = {
+            name: tuple(channel_names[index] for index in indices)
+            for name, indices in selected_auxiliaries.items()
+        }
+        selected_channel_names["dem"] = ("DEM",)
+        samples.append(
+            _base_sample(
+                row=source_row,
+                contract=contract,
+                root=root,
+                schema_version=schema_version,
+                channel_names=channel_names,
+                split=group_splits[region],
+                split_source="benchmark_deterministic_region_v1",
+                group_id=f"sen12landslides::{region}",
+                group_status="known",
+                auxiliary_indices=selected_auxiliaries,
+                auxiliary_channel_names=selected_channel_names,
+                positive=positive_count > 0,
+            )
+        )
+    return samples
+
+
 def discover_all_sources(
     datasets_root: Path, split_seed: int
 ) -> tuple[list[SourceSample], dict[str, Any]]:
@@ -287,6 +449,8 @@ def discover_all_sources(
     for source in SOURCE_ORDER:
         if source == "landslide4sense":
             discovered = _discover_landslide4sense(datasets_root, split_seed)
+        elif source == "sen12landslides":
+            discovered = _discover_sen12landslides(datasets_root, split_seed)
         else:
             discovered = _discover_indexed_source(datasets_root, CONTRACTS[source])
         source_counts[source] = len(discovered)
@@ -332,17 +496,23 @@ def load_source_sample(sample: SourceSample) -> LoadedSourceSample:
         if "image" not in handle or "channel_valid" not in handle:
             raise ValueError(f"{sample.image_path}: 必须包含 /image 和 /channel_valid")
         image = np.asarray(handle["image"][...], dtype=np.float32)
-        channel_valid = np.asarray(handle["channel_valid"][...], dtype=np.uint8)
+        channel_valid_raw = np.asarray(handle["channel_valid"][...])
         if "pixel_valid" in handle:
-            pixel_valid = np.asarray(handle["pixel_valid"][...], dtype=np.uint8)
+            pixel_valid_raw = np.asarray(handle["pixel_valid"][...])
         else:
-            pixel_valid = np.ones(image.shape, dtype=np.uint8)
+            pixel_valid_raw = np.ones(image.shape, dtype=np.uint8)
     if image.ndim != 3:
         raise ValueError(f"{sample.image_path}: /image 必须是 CHW")
-    if channel_valid.shape != (image.shape[0],):
+    if channel_valid_raw.shape != (image.shape[0],):
         raise ValueError(f"{sample.image_path}: /channel_valid shape 错误")
-    if pixel_valid.shape != image.shape:
+    if not np.isin(channel_valid_raw, (0, 1)).all():
+        raise ValueError(f"{sample.image_path}: /channel_valid 只能包含 0/1")
+    if pixel_valid_raw.shape != image.shape:
         raise ValueError(f"{sample.image_path}: /pixel_valid shape 错误")
+    if not np.isin(pixel_valid_raw, (0, 1)).all():
+        raise ValueError(f"{sample.image_path}: /pixel_valid 只能包含 0/1")
+    channel_valid = channel_valid_raw.astype(np.uint8)
+    pixel_valid = pixel_valid_raw.astype(np.uint8)
     with h5py.File(sample.mask_path, "r") as handle:
         if "mask" not in handle:
             raise ValueError(f"{sample.mask_path}: 缺少 /mask")
@@ -359,6 +529,15 @@ def load_source_sample(sample: SourceSample) -> LoadedSourceSample:
         raise ValueError(
             f"{sample.image_path}: 通道数 {image.shape[0]}，预期 {expected_channels}"
         )
+    if sample.source == "sen12landslides":
+        expected_valid = set(sample.optical_indices)
+        for indices in sample.auxiliary_indices.values():
+            expected_valid.update(indices)
+        actual_valid = set(np.flatnonzero(channel_valid == 1).tolist())
+        if actual_valid != expected_valid:
+            raise ValueError(
+                f"{sample.sample_id}: manifest 模态与 post /channel_valid 不一致"
+            )
     if mask.shape[-2:] != image.shape[-2:]:
         raise ValueError(
             f"{sample.sample_id}: image HW={image.shape[-2:]} 与 mask HW={mask.shape[-2:]} 不一致"

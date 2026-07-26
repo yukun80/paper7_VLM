@@ -2,7 +2,7 @@
 """阶段 1B：构建 small/full 统一 Benchmark。
 
 命令：python 1_1_build_benchmark.py --mode small --patch-size 224
-输入：只读 ../datasets 下五个 HDF5 数据源及其 JSONL 索引。
+输入：只读 ../datasets 下六个 HDF5 数据源及其 JSONL 索引。
 输出：../benchmark/oa_auxseg_hdf5_v1/{small,full}。
 写入：拒绝覆盖，先写同级临时目录，完成后原子发布。
 """
@@ -62,20 +62,34 @@ def select_small(
     selected: list[SourceSample] = []
     for source in SOURCE_ORDER:
         source_samples = [sample for sample in samples if sample.source == source]
-        buckets: dict[tuple[str, bool], list[SourceSample]] = defaultdict(list)
+        buckets: dict[
+            tuple[str, bool, tuple[str, ...]], list[SourceSample]
+        ] = defaultdict(list)
         for sample in source_samples:
-            buckets[(sample.split, sample.positive)].append(sample)
+            signature = tuple(sorted(sample.auxiliary_indices))
+            buckets[(sample.split, sample.positive, signature)].append(sample)
         for key in buckets:
             buckets[key].sort(
                 key=lambda sample: (
-                    stable_rank(seed, source, key[0], int(key[1]), sample.sample_id),
+                    stable_rank(
+                        seed,
+                        source,
+                        key[0],
+                        int(key[1]),
+                        ",".join(key[2]),
+                        sample.sample_id,
+                    ),
                     sample.sample_id,
                 )
             )
         picked: list[SourceSample] = []
         keys = sorted(
             buckets,
-            key=lambda item: (SPLIT_ORDER.index(item[0]), 0 if item[1] else 1),
+            key=lambda item: (
+                SPLIT_ORDER.index(item[0]),
+                0 if item[1] else 1,
+                item[2],
+            ),
         )
         positions = {key: 0 for key in keys}
         while len(picked) < min(per_source, len(source_samples)):
@@ -461,47 +475,64 @@ def build_benchmark(
     stats_names: dict[str, dict[str, tuple[str, ...]]] = {}
     try:
         atomic_write_json(staging / "build_config.json", config)
-        grouped: dict[tuple[str, str], list[SourceSample]] = defaultdict(list)
+        grouped: dict[
+            tuple[str, str, tuple[tuple[str, tuple[int, ...]], ...]],
+            list[SourceSample],
+        ] = defaultdict(list)
         for sample in samples:
-            grouped[(sample.source, sample.split)].append(sample)
+            signature = tuple(sorted(sample.auxiliary_indices.items()))
+            grouped[(sample.source, sample.split, signature)].append(sample)
         for source in SOURCE_ORDER:
             for split in SPLIT_ORDER:
-                group_samples = sorted(
-                    grouped.get((source, split), []), key=lambda item: item.sample_id
+                signatures = sorted(
+                    signature
+                    for group_source, group_split, signature in grouped
+                    if group_source == source and group_split == split
                 )
-                if not group_samples:
-                    continue
-                first = group_samples[0]
-                total_channels = len(first.optical_indices) + sum(
-                    len(indices) for indices in first.auxiliary_indices.values()
-                )
-                logical_per_sample = (
-                    patch_size * patch_size * (total_channels * 5 + 1)
-                )
-                samples_per_shard = max(
-                    1,
-                    int(shard_target_mib * 1024 * 1024 // logical_per_sample),
-                )
-                for shard_index, shard_samples in enumerate(
-                    iter_chunks(group_samples, samples_per_shard)
-                ):
-                    relative = (
-                        Path("data")
-                        / source
-                        / split
-                        / f"shard-{shard_index:05d}.h5"
+                shard_index = 0
+                for signature in signatures:
+                    group_samples = sorted(
+                        grouped[(source, split, signature)],
+                        key=lambda item: item.sample_id,
                     )
-                    records.extend(
-                        _write_shard(
-                            staging=staging,
-                            shard_relative=relative,
-                            samples=shard_samples,
-                            patch_size=patch_size,
-                            datasets_root=datasets_root,
-                            running_stats=running_stats,
-                            stats_names=stats_names,
+                    first = group_samples[0]
+                    total_channels = len(first.optical_indices) + sum(
+                        len(indices)
+                        for indices in first.auxiliary_indices.values()
+                    )
+                    logical_per_sample = (
+                        patch_size * patch_size * (total_channels * 5 + 1)
+                    )
+                    samples_per_shard = max(
+                        1,
+                        int(
+                            shard_target_mib
+                            * 1024
+                            * 1024
+                            // logical_per_sample
                         )
                     )
+                    for shard_samples in iter_chunks(
+                        group_samples, samples_per_shard
+                    ):
+                        relative = (
+                            Path("data")
+                            / source
+                            / split
+                            / f"shard-{shard_index:05d}.h5"
+                        )
+                        records.extend(
+                            _write_shard(
+                                staging=staging,
+                                shard_relative=relative,
+                                samples=shard_samples,
+                                patch_size=patch_size,
+                                datasets_root=datasets_root,
+                                running_stats=running_stats,
+                                stats_names=stats_names,
+                            )
+                        )
+                        shard_index += 1
         records.sort(key=lambda row: (
             SOURCE_ORDER.index(row["source"]),
             SPLIT_ORDER.index(row["split"]),

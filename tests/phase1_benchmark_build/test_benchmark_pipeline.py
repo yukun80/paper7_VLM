@@ -1,4 +1,4 @@
-"""阶段 1B Benchmark 的五源合成 fixture 与破坏检测测试。"""
+"""阶段 1B Benchmark 的六源合成 fixture 与破坏检测测试。"""
 
 from __future__ import annotations
 
@@ -237,6 +237,59 @@ def build_fixture(root: Path) -> None:
         ],
     )
 
+    sen12 = root / "Sen12Landslides"
+    _schema(
+        sen12 / "hdf5/channel_schema.json",
+        "sen12landslides_fixed_channels_v1",
+        [
+            "s2_b02",
+            "s2_b03",
+            "s2_b04",
+            "s2_b05",
+            "s2_b06",
+            "s2_b07",
+            "s2_b08",
+            "s2_b8a",
+            "s2_b11",
+            "s2_b12",
+            "s1asc_vv",
+            "s1asc_vh",
+            "s1dsc_vv",
+            "s1dsc_vh",
+            "dem",
+        ],
+    )
+    _h5_pair(
+        sen12 / "hdf5/post/region_1.h5",
+        sen12 / "hdf5/mask/region_1.h5",
+        15,
+    )
+    _h5_pair(
+        sen12 / "hdf5/pre/region_1.h5",
+        sen12 / "hdf5/mask/pre_unused.h5",
+        15,
+    )
+    with h5py.File(sen12 / "hdf5/post/region_1.h5", "r+") as handle:
+        handle["image"][12:14] = 0
+        handle["channel_valid"][12:14] = 0
+    with h5py.File(sen12 / "hdf5/mask/region_1.h5", "r+") as handle:
+        handle.attrs["positive_pixel_count"] = 4
+    _write_jsonl(
+        sen12 / "hdf5/conversion_manifest.jsonl",
+        [
+            {
+                "sample_key": "region_1",
+                "post_hdf5": "post/region_1.h5",
+                "pre_hdf5": "pre/region_1.h5",
+                "mask_hdf5": "mask/region_1.h5",
+                "available_modalities": ["s1asc", "s2"],
+                "placeholder_channels_post": [12, 13],
+                "placeholder_channels_pre": [12, 13],
+                "status": "converted",
+            }
+        ],
+    )
+
 
 class BenchmarkPipelineTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -276,7 +329,7 @@ class BenchmarkPipelineTest(unittest.TestCase):
         self.assertEqual(mask.shape, (1, 8, 8))
         self.assertLessEqual(set(np.unique(mask).tolist()), {0, 1})
 
-    def test_five_source_build_is_deterministic_and_loadable(self) -> None:
+    def test_six_source_build_is_deterministic_and_loadable(self) -> None:
         first = self._build("first")
         second = self._build("second")
         first_rows = read_jsonl(first / "index.jsonl")
@@ -291,16 +344,26 @@ class BenchmarkPipelineTest(unittest.TestCase):
         )
         report = VALIDATOR.validate_benchmark(first, deep=True)
         self.assertEqual(report["errors"], [])
-        self.assertEqual(report["checked_samples"], 5)
+        self.assertEqual(report["checked_samples"], 6)
         dataset = BenchmarkDataset(first)
-        batch = collate_benchmark_samples([dataset[index] for index in range(5)])
-        self.assertEqual(tuple(batch["mask"].shape), (5, 1, 8, 8))
+        batch = collate_benchmark_samples([dataset[index] for index in range(6)])
+        self.assertEqual(tuple(batch["mask"].shape), (6, 1, 8, 8))
         self.assertEqual(
             sorted(batch["auxiliaries"]),
-            ["dem", "insar_velocity", "slope"],
+            ["dem", "insar_velocity", "sar_ascending", "slope"],
         )
         smoke = SMOKE.smoke(first)
         self.assertEqual(smoke["status"], "pass")
+        sen12_post = (
+            self.datasets
+            / "Sen12Landslides/hdf5/post/region_1.h5"
+        )
+        with h5py.File(sen12_post, "r+") as handle:
+            handle["channel_valid"][12:14] = 1
+        with self.assertRaisesRegex(
+            ValueError, "manifest 模态与 post /channel_valid 不一致"
+        ):
+            self._build("sen12-validity-mismatch")
         with self.assertRaises(FileExistsError):
             self._build("first")
 

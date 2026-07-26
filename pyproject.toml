@@ -12,8 +12,15 @@ requires-python = ">=3.11"
 dependencies = [
     "h5py>=3.16,<4",
     "numpy>=2.1,<3",
+    "scipy>=1.16,<2",
     "torch>=2.8,<3",
+    "torchvision>=0.23,<0.24",
 ]
 
-[tool.setuptools]
-packages = []
+[project.scripts]
+oa-auxseg = "oa_groundrag.phase2.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["oa_groundrag*", "scripts.phase1_benchmark_build*"]
+namespaces = true

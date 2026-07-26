@@ -27,6 +27,7 @@ SOURCE_ORDER = (
     "landslidebench_agent",
     "landslide4sense",
     "multimodal_landslide",
+    "sen12landslides",
 )
 SPLIT_ORDER = ("train", "val", "test")
 

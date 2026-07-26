@@ -215,14 +215,40 @@ Codex 应根据数据审计结果确定两类数据源的处理方式：
 - 数据 split；
 - 必要的来源信息。
 
-本阶段不预先规定保存为某种模板。Coding Agent 应根据样本规模、读取效率和当前 HDF5 结构，在以下实现中选择最合适的一种：
+统一 Benchmark 已冻结为“分片 HDF5 + 全局 JSONL 索引”，small 和 full 使用同一
+`oa_auxseg_hdf5_v1` schema。分片边界为 `source + split + 辅助模态签名`，因此单个
+shard 内的通道数和辅助模态集合固定，不同 shard 可以保留不同的真实光学通道数。
 
-- 新的统一 HDF5；
-- 多个分片 HDF5；
-- HDF5 数据加轻量索引；
-- 其他能够随机读取且可复现的本地格式。
+磁盘、单样本和运行时 batch 的维度必须明确区分：
 
-选择结果需要说明 I/O、可维护性和可重复构建理由。
+```text
+磁盘 shard:       optical [N,C,H,W], mask [N,1,H,W]
+Dataset 单样本:   optical [C,H,W],   mask [1,H,W]
+DataLoader batch: mask [B,1,H,W]
+可变通道 optical: List[Tensor[C_i,H,W]]
+```
+
+`N` 是当前 shard 保存的样本数，不是训练 batch size；`B` 仅由 DataLoader 在运行时
+决定。全局 `index.jsonl` 的每条记录通过 `storage.shard + storage.row` 定位一个
+样本，Dataset 只读取对应 row，不把整个 shard 载入内存。
+
+每个 shard 的固定 dataset 合同为：
+
+```text
+/optical                         float32 [N,C_o,H,W]
+/optical_pixel_valid             uint8   [N,C_o,H,W]
+/optical_channel_valid           uint8   [N,C_o]
+/mask                            uint8   [N,1,H,W]
+/auxiliary/{name}/values         float32 [N,C_m,H,W]
+/auxiliary/{name}/pixel_valid    uint8   [N,C_m,H,W]
+/auxiliary/{name}/channel_valid  uint8   [N,C_m]
+```
+
+连续值和 dense validity 使用按样本、按通道的 `[1,1,H,W]` chunk；channel validity
+使用 `[min(N,256),C]` chunk。所有 dataset 使用 gzip level 4、shuffle 和
+Fletcher32。`--shard-target-mib` 默认 512 MiB，builder 根据未压缩逻辑大小计算每个
+shard 的样本上限；分组样本少于上限时，一个 HDF5 可以保存该组的全部样本。该设计
+减少小文件和反复打开文件的开销，同时保留按 `row` 随机读取、内容校验和原子发布。
 
 ## 4.7 数据划分
 
