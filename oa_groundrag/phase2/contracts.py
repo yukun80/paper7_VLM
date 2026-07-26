@@ -11,9 +11,9 @@ import torch
 from torch import Tensor
 
 
-MODEL_SCHEMA_VERSION = "oa_auxseg_model_v4"
-CHECKPOINT_SCHEMA_VERSION = "oa_auxseg_checkpoint_v4"
-CONFIG_SCHEMA_VERSION = "oa_auxseg_runtime_config_v3"
+MODEL_SCHEMA_VERSION = "oa_auxseg_model_v5"
+CHECKPOINT_SCHEMA_VERSION = "oa_auxseg_checkpoint_v5"
+CONFIG_SCHEMA_VERSION = "oa_auxseg_runtime_config_v4"
 SUPPORTED_BACKBONE = "convnext_small"
 SUPPORTED_AUXILIARY_ORDER = (
     "dem",
@@ -78,7 +78,7 @@ class ModelRegistry:
         )
         if missing:
             raise ValueError(
-                f"Phase 2 v4 registry 缺少固定辅助模态列：{sorted(missing)}"
+                f"Phase 2 v5 registry 缺少固定辅助模态列：{sorted(missing)}"
             )
         if len(set(self.optical_signatures)) != len(self.optical_signatures):
             raise ValueError("registry 光学通道签名不能重复")
@@ -178,6 +178,9 @@ class OAAuxSegConfig:
     variant: str
     decoder_dim: int = 512
     region_projection_dim: int = 128
+    optical_stochastic_depth: float = 0.1
+    auxiliary_drop_path: float = 0.1
+    decoder_dropout: float = 0.1
     region_threshold: float = 0.5
     min_region_area: int = 16
 
@@ -185,9 +188,16 @@ class OAAuxSegConfig:
         if self.variant not in VARIANTS:
             raise ValueError(f"variant 必须是 {VARIANTS}，实际为 {self.variant!r}")
         if self.decoder_dim != 512:
-            raise ValueError("Phase 2 v4 固定要求 decoder_dim=512")
+            raise ValueError("Phase 2 v5 固定要求 decoder_dim=512")
         if self.region_projection_dim != 128:
-            raise ValueError("Phase 2 v4 固定要求 region_projection_dim=128")
+            raise ValueError("Phase 2 v5 固定要求 region_projection_dim=128")
+        for name, probability in (
+            ("optical_stochastic_depth", self.optical_stochastic_depth),
+            ("auxiliary_drop_path", self.auxiliary_drop_path),
+            ("decoder_dropout", self.decoder_dropout),
+        ):
+            if not 0 <= probability < 1:
+                raise ValueError(f"{name} 必须位于 [0,1)")
         if not 0 < self.region_threshold < 1:
             raise ValueError("region_threshold 必须位于 (0,1)")
         if self.min_region_area <= 0:
@@ -199,6 +209,9 @@ class OAAuxSegConfig:
             "variant": self.variant,
             "decoder_dim": self.decoder_dim,
             "region_projection_dim": self.region_projection_dim,
+            "optical_stochastic_depth": self.optical_stochastic_depth,
+            "auxiliary_drop_path": self.auxiliary_drop_path,
+            "decoder_dropout": self.decoder_dropout,
             "region_threshold": self.region_threshold,
             "min_region_area": self.min_region_area,
         }
@@ -210,6 +223,9 @@ class OAAuxSegConfig:
             "variant",
             "decoder_dim",
             "region_projection_dim",
+            "optical_stochastic_depth",
+            "auxiliary_drop_path",
+            "decoder_dropout",
             "region_threshold",
             "min_region_area",
         }
@@ -223,6 +239,11 @@ class OAAuxSegConfig:
             variant=str(value["variant"]),
             decoder_dim=int(value["decoder_dim"]),
             region_projection_dim=int(value["region_projection_dim"]),
+            optical_stochastic_depth=float(
+                value["optical_stochastic_depth"]
+            ),
+            auxiliary_drop_path=float(value["auxiliary_drop_path"]),
+            decoder_dropout=float(value["decoder_dropout"]),
             region_threshold=float(value["region_threshold"]),
             min_region_area=int(value["min_region_area"]),
         )
@@ -396,8 +417,14 @@ class RuntimeConfig:
     new_lr: float = 3e-4
     weight_decay: float = 0.05
     warmup_ratio: float = 0.05
+    min_lr_ratio: float = 0.05
     grad_clip: float = 1.0
     modality_dropout: float = 0.2
+    auxiliary_null_probability: float = 0.1
+    train_sampler: str = "uniform"
+    optical_stochastic_depth: float = 0.1
+    auxiliary_drop_path: float = 0.1
+    decoder_dropout: float = 0.1
     use_bf16: bool = True
     gradient_checkpointing: bool = True
     region_threshold: float = 0.5
@@ -410,7 +437,7 @@ class RuntimeConfig:
             raise ValueError(f"非法 variant：{self.variant}")
         if self.backbone != SUPPORTED_BACKBONE:
             raise ValueError(
-                f"Phase 2 v4 只支持 backbone={SUPPORTED_BACKBONE!r}"
+                f"Phase 2 v5 只支持 backbone={SUPPORTED_BACKBONE!r}"
             )
         if self.normalization not in {"none", "zscore"}:
             raise ValueError("normalization 必须是 none 或 zscore")
@@ -434,8 +461,30 @@ class RuntimeConfig:
             raise ValueError("weight_decay 不能小于 0")
         if not 0 <= self.modality_dropout < 1:
             raise ValueError("modality_dropout 必须位于 [0,1)")
+        if not 0 <= self.auxiliary_null_probability < 1:
+            raise ValueError("auxiliary_null_probability 必须位于 [0,1)")
         if not 0 <= self.warmup_ratio < 1:
             raise ValueError("warmup_ratio 必须位于 [0,1)")
+        if not 0 < self.min_lr_ratio <= 1:
+            raise ValueError("min_lr_ratio 必须位于 (0,1]")
+        if self.train_sampler not in {"uniform", "balanced_target_presence"}:
+            raise ValueError(
+                "train_sampler 必须是 uniform 或 balanced_target_presence"
+            )
+        if (
+            self.train_sampler == "balanced_target_presence"
+            and self.batch_size % 2 != 0
+        ):
+            raise ValueError(
+                "balanced_target_presence 要求偶数 batch_size"
+            )
+        for name, probability in (
+            ("optical_stochastic_depth", self.optical_stochastic_depth),
+            ("auxiliary_drop_path", self.auxiliary_drop_path),
+            ("decoder_dropout", self.decoder_dropout),
+        ):
+            if not 0 <= probability < 1:
+                raise ValueError(f"{name} 必须位于 [0,1)")
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "RuntimeConfig":

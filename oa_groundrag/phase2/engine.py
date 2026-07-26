@@ -7,10 +7,11 @@ import math
 import os
 import random
 import tempfile
-from collections import Counter, defaultdict
+import time
+from collections import Counter, defaultdict, deque
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -22,6 +23,7 @@ from scripts.phase1_benchmark_build.benchmark_common import (
     atomic_write_json,
     atomic_write_jsonl,
     collate_benchmark_samples,
+    read_jsonl,
     sha256_file,
 )
 
@@ -46,6 +48,7 @@ from .contracts import (
 from .data import (
     AuxiliarySubsetSampler,
     PreparedBatch,
+    StatefulTrainingBatcher,
     available_auxiliaries_by_sample,
     filter_auxiliaries,
     make_dataloader,
@@ -55,6 +58,8 @@ from .data import (
 from .losses import bce_dice_loss
 from .metrics import SegmentationMetrics
 from .model import OAAuxSegModel
+from .progress import TrainingProgress, format_duration
+from .validity import resample_validity, validity_from_channels
 
 
 def load_runtime_config(path: Path) -> RuntimeConfig:
@@ -70,6 +75,28 @@ def set_global_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def effective_training_config(
+    config: RuntimeConfig, *, capacity_overfit: bool
+) -> RuntimeConfig:
+    if not capacity_overfit:
+        return config
+    return config.with_overrides(
+        weight_decay=0.0,
+        eval_interval=100,
+        checkpoint_interval=100,
+        min_lr_ratio=0.10,
+        grad_clip=5.0,
+        modality_dropout=0.0,
+        auxiliary_null_probability=0.0,
+        train_sampler="uniform",
+        optical_stochastic_depth=0.0,
+        auxiliary_drop_path=0.0,
+        decoder_dropout=0.0,
+        use_bf16=False,
+        gradient_checkpointing=False,
+    )
 
 
 def resolve_runtime(
@@ -92,7 +119,7 @@ def resolve_runtime(
 def require_local_backbone(path: Path) -> None:
     if not path.is_file():
         raise FileNotFoundError(
-            "Phase 2 v4 真实训练要求本地 torchvision ConvNeXt-Small 官方 "
+            "Phase 2 v5 真实训练要求本地 torchvision ConvNeXt-Small 官方 "
             f"state_dict，当前不存在：{path}"
         )
 
@@ -102,8 +129,8 @@ def make_optimizer(
 ) -> torch.optim.AdamW:
     backbone_modules = (
         model.backbone,
+        model.optical_rgb_stem,
         model.optical_stem_norm,
-        model.optical_stems,
     )
     backbone_parameters = [
         parameter
@@ -112,6 +139,31 @@ def make_optimizer(
         if parameter.requires_grad
     ]
     backbone_ids = {id(parameter) for parameter in backbone_parameters}
+    no_decay_ids: set[int] = set()
+    normalization_types = (
+        nn.LayerNorm,
+        nn.BatchNorm1d,
+        nn.BatchNorm2d,
+        nn.BatchNorm3d,
+        nn.GroupNorm,
+    )
+    for module_name, module in model.named_modules():
+        if isinstance(module, normalization_types):
+            no_decay_ids.update(
+                id(parameter)
+                for parameter in module.parameters(recurse=False)
+                if parameter.requires_grad
+            )
+        for parameter_name, parameter in module.named_parameters(
+            recurse=False
+        ):
+            qualified = (
+                f"{module_name}.{parameter_name}"
+                if module_name
+                else parameter_name
+            )
+            if parameter_name == "bias" or "layer_scale" in qualified:
+                no_decay_ids.add(id(parameter))
     new_parameters = [
         parameter
         for parameter in model.parameters()
@@ -119,12 +171,34 @@ def make_optimizer(
     ]
     if not backbone_parameters or not new_parameters:
         raise RuntimeError("optimizer 参数分组为空")
+    groups = []
+    for family, parameters, learning_rate in (
+        ("backbone", backbone_parameters, config.backbone_lr),
+        ("new", new_parameters, config.new_lr),
+    ):
+        for decay_label, use_decay in (
+            ("decay", True),
+            ("no_decay", False),
+        ):
+            selected = [
+                parameter
+                for parameter in parameters
+                if (id(parameter) not in no_decay_ids) == use_decay
+            ]
+            if selected:
+                groups.append(
+                    {
+                        "params": selected,
+                        "lr": learning_rate,
+                        "weight_decay": (
+                            config.weight_decay if use_decay else 0.0
+                        ),
+                        "group_name": f"{family}_{decay_label}",
+                    }
+                )
     return torch.optim.AdamW(
-        [
-            {"params": backbone_parameters, "lr": config.backbone_lr},
-            {"params": new_parameters, "lr": config.new_lr},
-        ],
-        weight_decay=config.weight_decay,
+        groups,
+        weight_decay=0.0,
     )
 
 
@@ -133,6 +207,7 @@ def make_scheduler(
     *,
     total_steps: int,
     warmup_ratio: float,
+    min_lr_ratio: float,
 ) -> torch.optim.lr_scheduler.LambdaLR:
     warmup_steps = int(total_steps * warmup_ratio)
 
@@ -141,9 +216,25 @@ def make_scheduler(
             return max((step + 1) / warmup_steps, 1e-8)
         progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
         progress = min(max(progress, 0.0), 1.0)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, multiplier)
+
+
+def optimizer_learning_rates(
+    optimizer: torch.optim.Optimizer,
+) -> tuple[float, float]:
+    values: dict[str, float] = {}
+    for group in optimizer.param_groups:
+        name = str(group.get("group_name", ""))
+        if name.startswith("backbone_"):
+            values["backbone"] = float(group["lr"])
+        elif name.startswith("new_"):
+            values["new"] = float(group["lr"])
+    if set(values) != {"backbone", "new"}:
+        raise RuntimeError("optimizer 缺少 backbone/new LR 参数组")
+    return values["backbone"], values["new"]
 
 
 def make_scaler(device: torch.device) -> torch.amp.GradScaler:
@@ -163,6 +254,142 @@ def _active_label(names: Sequence[str]) -> str:
     return "+".join(sorted(names)) if names else "none"
 
 
+def _subset_category(
+    active: Sequence[str], available: Sequence[str]
+) -> str:
+    if not active:
+        return "none"
+    if len(active) == 1:
+        return "single"
+    if len(active) == len(available):
+        return "all"
+    return "multi"
+
+
+def _batch_conditional_weight_diagnostics(
+    *,
+    model: OAAuxSegModel,
+    batch: OAAuxSegBatch,
+    output: Any,
+    active: Sequence[Sequence[str]],
+) -> dict[str, Any]:
+    covered: list[set[str]] = [set() for _ in active]
+    for modality, packed in batch.auxiliaries.items():
+        local_valid = (
+            packed.pixel_valid.to(torch.bool)
+            & packed.channel_valid.to(torch.bool)[:, :, None, None]
+        ).flatten(1).any(dim=1)
+        for local_index, sample_index in enumerate(
+            packed.sample_indices.tolist()
+        ):
+            if bool(local_valid[local_index].item()):
+                covered[int(sample_index)].add(modality)
+    selected = [
+        set(names) & covered[index]
+        for index, names in enumerate(active)
+    ]
+    global_values: dict[str, float | None] = {}
+    counts: dict[str, int] = {}
+    for modality_index, modality in enumerate(model.modality_order):
+        indices = [
+            index
+            for index, names in enumerate(selected)
+            if modality in names
+        ]
+        counts[modality] = len(indices)
+        global_values[modality] = (
+            float(
+                output.modality_weights[indices, modality_index]
+                .detach()
+                .float()
+                .mean()
+                .item()
+            )
+            if indices
+            else None
+        )
+    auxiliary_indices = [
+        index for index, names in enumerate(selected) if names
+    ]
+    counts["__null__"] = len(auxiliary_indices)
+    global_values["__null__"] = (
+        float(
+            output.modality_weights[auxiliary_indices, -1]
+            .detach()
+            .float()
+            .mean()
+            .item()
+        )
+        if auxiliary_indices
+        else None
+    )
+    stage_values: dict[str, dict[str, float | None]] = {}
+    for stride, weight_map in zip(
+        output.modality_weight_map_strides,
+        output.modality_weight_maps,
+        strict=True,
+    ):
+        coverage = torch.cat(
+            [
+                resample_validity(
+                    validity_from_channels(
+                        pixel_valid.unsqueeze(0),
+                        channel_valid.unsqueeze(0),
+                    ),
+                    weight_map.shape[-2:],
+                ).coverage
+                for pixel_valid, channel_valid in zip(
+                    batch.optical_pixel_valid,
+                    batch.optical_channel_valid,
+                    strict=True,
+                )
+            ],
+            dim=0,
+        ).float()
+        summary = (
+            weight_map.float() * coverage
+        ).sum(dim=(2, 3)) / coverage.sum(dim=(2, 3)).clamp_min(1e-6)
+        stage_values[f"stride{stride}"] = {
+            name: (
+                float(
+                    summary[
+                        (
+                            [
+                                index
+                                for index, names in enumerate(selected)
+                                if names
+                            ]
+                            if name == "__null__"
+                            else [
+                                index
+                                for index, names in enumerate(selected)
+                                if name in names
+                            ]
+                        ),
+                        modality_index,
+                    ]
+                    .detach()
+                    .mean()
+                    .item()
+                )
+                if (
+                    auxiliary_indices
+                    if name == "__null__"
+                    else any(name in names for names in selected)
+                )
+                else None
+            )
+            for modality_index, name in enumerate(
+                model.modality_weight_order
+            )
+        }
+    return {
+        "counts": counts,
+        "global": global_values,
+        "by_stage": stage_values,
+    }
+
+
 def prepare_policy_batch(
     batch: OAAuxSegBatch,
     *,
@@ -177,58 +404,6 @@ def prepare_policy_batch(
     else:
         active = available
     return filter_auxiliaries(batch, active), available, active
-
-
-class CyclingDataIterator:
-    """记录当前 epoch 的 generator 起点与 batch offset，支持精确跳回。"""
-
-    def __init__(
-        self, loader: DataLoader[dict[str, Any]], generator: torch.Generator
-    ) -> None:
-        self.loader = loader
-        self.generator = generator
-        self.epoch = 0
-        self.batch_offset = 0
-        self.epoch_start_generator_state: Tensor | None = None
-        self._iterator: Iterable[dict[str, Any]] | None = None
-
-    def _start_epoch(self) -> None:
-        self.epoch_start_generator_state = self.generator.get_state().clone()
-        self._iterator = iter(self.loader)
-        self.batch_offset = 0
-
-    def next(self) -> dict[str, Any]:
-        if self._iterator is None:
-            self._start_epoch()
-        try:
-            value = next(self._iterator)  # type: ignore[arg-type]
-        except StopIteration:
-            self.epoch += 1
-            self._start_epoch()
-            value = next(self._iterator)  # type: ignore[arg-type]
-        self.batch_offset += 1
-        return value
-
-    def state_dict(self) -> dict[str, Any]:
-        if self.epoch_start_generator_state is None:
-            self._start_epoch()
-        return {
-            "epoch": self.epoch,
-            "batch_offset": self.batch_offset,
-            "epoch_start_generator_state": self.epoch_start_generator_state,
-        }
-
-    def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        self.epoch = int(state["epoch"])
-        target_offset = int(state["batch_offset"])
-        self.generator.set_state(state["epoch_start_generator_state"])
-        self._start_epoch()
-        for _ in range(target_offset):
-            try:
-                next(self._iterator)  # type: ignore[arg-type]
-            except StopIteration as error:
-                raise ValueError("checkpoint batch_offset 超出当前 DataLoader") from error
-            self.batch_offset += 1
 
 
 def _metric_update_one(
@@ -279,7 +454,10 @@ def evaluate_model(
     *,
     device: torch.device,
     config: RuntimeConfig,
+    progress: TrainingProgress | None = None,
+    progress_label: str | None = None,
 ) -> dict[str, Any]:
+    evaluation_started = time.perf_counter()
     was_training = model.training
     model.eval()
     overall = SegmentationMetrics()
@@ -291,48 +469,164 @@ def evaluate_model(
     weight_sum = torch.zeros(
         len(model.modality_weight_order), dtype=torch.float64
     )
-    for collated in loader:
-        prepared = prepare_collated_batch(collated).to(
-            device, non_blocking=device.type == "cuda"
+    conditional_weight_sum: Counter[str] = Counter()
+    conditional_weight_count: Counter[str] = Counter()
+    stage_conditional_sum: dict[int, Counter[str]] = {
+        stride: Counter() for stride in model.modality_weight_map_strides
+    }
+    stage_conditional_count: dict[int, Counter[str]] = {
+        stride: Counter() for stride in model.modality_weight_map_strides
+    }
+    source_conditional_sum: dict[str, Counter[str]] = defaultdict(Counter)
+    source_conditional_count: dict[str, Counter[str]] = defaultdict(Counter)
+    if progress is not None and progress_label is not None:
+        progress.start_evaluation(
+            label=progress_label, total_batches=len(loader)
         )
-        model_batch, available, active = prepare_policy_batch(
-            prepared.model,
-            variant=model.variant,
-            subset_sampler=None,
-        )
-        with _autocast(config, device):
-            output = model(model_batch)
-            loss, _ = bce_dice_loss(output.mask_logits, prepared.mask)
-        batch_size = prepared.model.batch_size
-        total_loss += float(loss.item()) * batch_size
-        total_samples += batch_size
-        probability = output.mask_probability.float()
-        target = prepared.mask
-        overall.update(probability, target)
-        weight_sum += output.modality_weights.detach().double().sum(dim=0).cpu()
-        for index in range(batch_size):
-            _metric_update_one(
-                by_source,
-                str(prepared.metadata[index]["source"]),
-                probability[index : index + 1],
-                target[index : index + 1],
+    try:
+        for batch_index, collated in enumerate(loader, start=1):
+            prepared = prepare_collated_batch(collated).to(
+                device, non_blocking=device.type == "cuda"
             )
-            _metric_update_one(
-                by_available,
-                _active_label(available[index]),
-                probability[index : index + 1],
-                target[index : index + 1],
+            model_batch, available, active = prepare_policy_batch(
+                prepared.model,
+                variant=model.variant,
+                subset_sampler=None,
             )
-            _metric_update_one(
-                by_active,
-                _active_label(active[index]),
-                probability[index : index + 1],
-                target[index : index + 1],
+            with _autocast(config, device):
+                output = model(model_batch)
+                loss, _ = bce_dice_loss(output.mask_logits, prepared.mask)
+            batch_size = prepared.model.batch_size
+            total_loss += float(loss.item()) * batch_size
+            total_samples += batch_size
+            probability = output.mask_probability.float()
+            target = prepared.mask
+            overall.update(probability, target)
+            weight_sum += (
+                output.modality_weights.detach().double().sum(dim=0).cpu()
             )
-    if was_training:
-        model.train()
-    return {
+            covered_available: list[list[str]] = [
+                [] for _ in range(batch_size)
+            ]
+            for modality, packed in model_batch.auxiliaries.items():
+                local_valid = (
+                    packed.pixel_valid.to(torch.bool)
+                    & packed.channel_valid.to(torch.bool)[:, :, None, None]
+                ).flatten(1).any(dim=1)
+                for local_index, sample_index in enumerate(
+                    packed.sample_indices.tolist()
+                ):
+                    if bool(local_valid[local_index].item()):
+                        covered_available[int(sample_index)].append(modality)
+            stage_summaries: list[Tensor] = []
+            for weight_map in output.modality_weight_maps:
+                coverage = torch.cat(
+                    [
+                        resample_validity(
+                            validity_from_channels(
+                                pixel_valid.unsqueeze(0),
+                                channel_valid.unsqueeze(0),
+                            ),
+                            weight_map.shape[-2:],
+                        ).coverage
+                        for pixel_valid, channel_valid in zip(
+                            model_batch.optical_pixel_valid,
+                            model_batch.optical_channel_valid,
+                            strict=True,
+                        )
+                    ],
+                    dim=0,
+                ).float()
+                stage_summaries.append(
+                    (
+                        weight_map.float() * coverage
+                    ).sum(dim=(2, 3))
+                    / coverage.sum(dim=(2, 3)).clamp_min(1e-6)
+                )
+            for index in range(batch_size):
+                covered_names = tuple(covered_available[index])
+                source = str(prepared.metadata[index]["source"])
+                if covered_names:
+                    null_index = len(model.modality_order)
+                    null_value = float(
+                        output.modality_weights[index, null_index]
+                        .detach()
+                        .item()
+                    )
+                    conditional_weight_sum["__null__"] += null_value
+                    conditional_weight_count["__null__"] += 1
+                    source_conditional_sum[source]["__null__"] += null_value
+                    source_conditional_count[source]["__null__"] += 1
+                    for stage_index, stride in enumerate(
+                        model.modality_weight_map_strides
+                    ):
+                        stage_null = float(
+                            stage_summaries[stage_index][index, null_index]
+                            .detach()
+                            .item()
+                        )
+                        stage_conditional_sum[stride][
+                            "__null__"
+                        ] += stage_null
+                        stage_conditional_count[stride]["__null__"] += 1
+                for modality in covered_names:
+                    modality_index = model.modality_index[modality]
+                    value = float(
+                        output.modality_weights[index, modality_index]
+                        .detach()
+                        .item()
+                    )
+                    conditional_weight_sum[modality] += value
+                    conditional_weight_count[modality] += 1
+                    source_conditional_sum[source][modality] += value
+                    source_conditional_count[source][modality] += 1
+                    for stage_index, stride in enumerate(
+                        model.modality_weight_map_strides
+                    ):
+                        stage_value = float(
+                            stage_summaries[stage_index][
+                                index, modality_index
+                            ]
+                            .detach()
+                            .item()
+                        )
+                        stage_conditional_sum[stride][modality] += stage_value
+                        stage_conditional_count[stride][modality] += 1
+                _metric_update_one(
+                    by_source,
+                    source,
+                    probability[index : index + 1],
+                    target[index : index + 1],
+                )
+                _metric_update_one(
+                    by_available,
+                    _active_label(available[index]),
+                    probability[index : index + 1],
+                    target[index : index + 1],
+                )
+                _metric_update_one(
+                    by_active,
+                    _active_label(active[index]),
+                    probability[index : index + 1],
+                    target[index : index + 1],
+                )
+            if progress is not None and progress_label is not None:
+                progress.update_evaluation(
+                    batch=batch_index,
+                    running_loss=total_loss / max(total_samples, 1),
+                    metrics=overall.compute(),
+                )
+    except BaseException:
+        if progress is not None:
+            progress.abort_evaluation()
+        raise
+    finally:
+        if was_training:
+            model.train()
+    duration_seconds = time.perf_counter() - evaluation_started
+    result = {
         "loss": total_loss / max(total_samples, 1),
+        "duration_seconds": duration_seconds,
         "overall": overall.compute(),
         "by_source": {
             key: value.compute() for key, value in sorted(by_source.items())
@@ -347,14 +641,64 @@ def evaluate_model(
             name: float(weight_sum[index].item() / max(total_samples, 1))
             for index, name in enumerate(model.modality_weight_order)
         },
+        "conditional_mean_modality_weights": {
+            name: (
+                conditional_weight_sum[name]
+                / conditional_weight_count[name]
+                if conditional_weight_count[name]
+                else None
+            )
+            for name in model.modality_weight_order
+        },
+        "conditional_weight_counts": {
+            name: conditional_weight_count[name]
+            for name in model.modality_weight_order
+        },
+        "conditional_stage_modality_weights": {
+            f"stride{stride}": {
+                name: (
+                    stage_conditional_sum[stride][name]
+                    / stage_conditional_count[stride][name]
+                    if stage_conditional_count[stride][name]
+                    else None
+                )
+                for name in model.modality_weight_order
+            }
+            for stride in model.modality_weight_map_strides
+        },
+        "conditional_modality_weights_by_source": {
+            source: {
+                name: (
+                    source_conditional_sum[source][name]
+                    / source_conditional_count[source][name]
+                    if source_conditional_count[source][name]
+                    else None
+                )
+                for name in model.modality_weight_order
+            }
+            for source in sorted(source_conditional_sum)
+        },
     }
+    if progress is not None and progress_label is not None:
+        progress.finish_evaluation(
+            label=progress_label,
+            result=result,
+            duration_seconds=duration_seconds,
+        )
+    return result
 
 
 def _gradient_modules(model: OAAuxSegModel) -> dict[str, nn.Module]:
     modules: dict[str, nn.Module] = {
-        f"auxiliary_adapter_{name}": module
-        for name, module in model.auxiliary_adapters.items()
+        "extra_band_optical_stems": model.optical_stems,
+        "direct_concat_extra_stems": model.direct_stems,
     }
+    modules.update(
+        {
+            f"auxiliary_adapter_{name}": module
+            for name, module in model.auxiliary_adapters.items()
+        }
+    )
     for stride, auxiliary_stage, quality_selector, cmnext_selector, fusion in zip(
         (4, 8, 16, 32),
         model.auxiliary_stages,
@@ -371,12 +715,110 @@ def _gradient_modules(model: OAAuxSegModel) -> dict[str, nn.Module]:
     return modules
 
 
-def _gradient_norm(module: nn.Module) -> float:
-    total = torch.zeros((), dtype=torch.float64)
-    for parameter in module.parameters():
-        if parameter.grad is not None:
-            total += parameter.grad.detach().double().square().sum().cpu()
-    return float(total.sqrt().item())
+def _gradient_norms(
+    modules: Mapping[str, nn.Module],
+) -> dict[str, float]:
+    """在设备端聚合后一次回传，避免逐模块/逐参数 CUDA 同步。"""
+
+    names: list[str] = []
+    totals: list[Tensor] = []
+    fallback_device = next(
+        (
+            parameter.device
+            for module in modules.values()
+            for parameter in module.parameters()
+        ),
+        torch.device("cpu"),
+    )
+    for name, module in modules.items():
+        total: Tensor | None = None
+        for parameter in module.parameters():
+            if parameter.grad is None:
+                continue
+            squared = parameter.grad.detach().float().square().sum()
+            total = squared if total is None else total + squared
+        if total is None:
+            total = torch.zeros((), device=fallback_device)
+        names.append(name)
+        totals.append(total)
+    if not totals:
+        return {}
+    values = torch.stack(totals).sqrt().detach().cpu().tolist()
+    return {
+        name: float(value)
+        for name, value in zip(names, values, strict=True)
+    }
+
+
+def _required_auxiliary_modules(
+    model: OAAuxSegModel,
+) -> tuple[str, ...]:
+    return (
+        ("extra_band_optical_stems",)
+        + tuple(
+            f"auxiliary_adapter_{name}" for name in model.modality_order
+        )
+        + tuple(
+            f"{family}_stride{stride}"
+            for stride in (4, 8, 16, 32)
+            for family in ("mspa", "quality_selector", "frm", "ffm")
+        )
+    )
+
+
+def _capacity_acceptance(
+    *,
+    loss_history: Sequence[float],
+    metrics: Mapping[str, Any],
+    gradient_max: Mapping[str, float],
+    parameter_updates: Mapping[str, float],
+    required_modules: Sequence[str],
+) -> dict[str, bool]:
+    window = min(10, len(loss_history))
+    initial = sum(loss_history[:window]) / max(window, 1)
+    final = sum(loss_history[-window:]) / max(window, 1)
+    overall = metrics["overall"]
+    return {
+        "loss_drop_at_least_90_percent": (
+            1.0 - final / max(initial, 1e-12) >= 0.90
+        ),
+        "micro_dice_at_least_0_95": overall["dice"] >= 0.95,
+        "positive_dice_at_least_0_90": (
+            overall["positive_only_dice"] >= 0.90
+        ),
+        "empty_mask_fpr_zero": (
+            overall["no_target_false_positive_rate"] == 0
+        ),
+        "empty_mean_probability_at_most_0_01": (
+            overall["empty_mean_foreground_probability"] <= 0.01
+        ),
+        "all_auxiliary_gradients_nonzero": all(
+            gradient_max.get(name, 0.0) > 0 for name in required_modules
+        ),
+        "all_auxiliary_parameters_updated": all(
+            parameter_updates.get(name, 0.0) > 0
+            for name in required_modules
+        ),
+    }
+
+
+def _validation_is_better(
+    candidate: Mapping[str, Any],
+    best: Mapping[str, Any] | None,
+) -> bool:
+    if best is None:
+        return True
+    candidate_key = (
+        float(candidate["dice"]),
+        -float(candidate["loss"]),
+        -float(candidate["no_target_false_positive_rate"]),
+    )
+    best_key = (
+        float(best["dice"]),
+        -float(best["loss"]),
+        -float(best["no_target_false_positive_rate"]),
+    )
+    return candidate_key > best_key
 
 
 def _acceptance_collated(
@@ -508,7 +950,17 @@ def _training_state(
     ema_loss: float | None,
     initial_ema_loss: float | None,
     gradient_max: Mapping[str, float],
-    loader: CyclingDataIterator,
+    parameter_change_max: Mapping[str, float],
+    training_step_seconds: float,
+    training_samples_seen: int,
+    training_steps_timed: int,
+    clipped_steps: int,
+    clip_scale_sum: float,
+    clip_scale_min: float,
+    validation_trajectory: Sequence[Mapping[str, Any]],
+    best_selection: Mapping[str, Any] | None,
+    training_subset_counts: Mapping[str, int],
+    training_subset_reason_counts: Mapping[str, int],
 ) -> dict[str, Any]:
     return {
         "runtime_config": config.to_dict(),
@@ -516,7 +968,23 @@ def _training_state(
         "ema_loss": ema_loss,
         "initial_ema_loss": initial_ema_loss,
         "gradient_max": dict(gradient_max),
-        "loader_state": loader.state_dict(),
+        "parameter_change_max": dict(parameter_change_max),
+        "training_step_seconds": float(training_step_seconds),
+        "training_samples_seen": int(training_samples_seen),
+        "training_steps_timed": int(training_steps_timed),
+        "clipped_steps": int(clipped_steps),
+        "clip_scale_sum": float(clip_scale_sum),
+        "clip_scale_min": float(clip_scale_min),
+        "validation_trajectory": [
+            dict(item) for item in validation_trajectory
+        ],
+        "best_selection": (
+            dict(best_selection) if best_selection is not None else None
+        ),
+        "training_subset_counts": dict(training_subset_counts),
+        "training_subset_reason_counts": dict(
+            training_subset_reason_counts
+        ),
     }
 
 
@@ -526,15 +994,62 @@ def run_training(
     repo_root: Path,
     capacity_overfit: bool,
     resume_checkpoint: Path | None = None,
+    progress: TrainingProgress | None = None,
 ) -> dict[str, Any]:
+    terminal = (
+        progress
+        if progress is not None
+        else TrainingProgress(log_interval=config.log_interval)
+    )
+    try:
+        return _run_training_impl(
+            config,
+            repo_root=repo_root,
+            capacity_overfit=capacity_overfit,
+            resume_checkpoint=resume_checkpoint,
+            progress=terminal,
+        )
+    finally:
+        terminal.close()
+
+
+def _run_training_impl(
+    config: RuntimeConfig,
+    *,
+    repo_root: Path,
+    capacity_overfit: bool,
+    resume_checkpoint: Path | None,
+    progress: TrainingProgress,
+) -> dict[str, Any]:
+    wall_started = time.perf_counter()
+    config = effective_training_config(
+        config, capacity_overfit=capacity_overfit
+    )
+    if config.num_workers != 0:
+        raise ValueError(
+            "v5 可恢复定长训练 batcher 要求 num_workers=0；"
+            "评价与推理仍可使用多 worker"
+        )
     benchmark_root, output_dir, backbone_weights, device = resolve_runtime(
         config, repo_root
     )
+    command_label = "overfit" if capacity_overfit else "train"
+    gpu_name = (
+        torch.cuda.get_device_name(device) if device.type == "cuda" else None
+    )
+    progress.phase(
+        "[setup] "
+        f"command={command_label} variant={config.variant} "
+        f"device={device.type} output={output_dir} loading runtime"
+    )
     benchmark_hash = sha256_file(benchmark_root / "index.jsonl")
     set_global_seed(config.seed)
-    data_generator = torch.Generator().manual_seed(config.seed + 1)
     subset_sampler = (
-        AuxiliarySubsetSampler(config.seed + 2, config.modality_dropout)
+        AuxiliarySubsetSampler(
+            config.seed + 2,
+            config.modality_dropout,
+            config.auxiliary_null_probability,
+        )
         if config.variant == "proposed_dropout" and not capacity_overfit
         else None
     )
@@ -545,6 +1060,9 @@ def run_training(
         model = OAAuxSegModel(
             OAAuxSegConfig(
                 variant=config.variant,
+                optical_stochastic_depth=config.optical_stochastic_depth,
+                auxiliary_drop_path=config.auxiliary_drop_path,
+                decoder_dropout=config.decoder_dropout,
                 region_threshold=config.region_threshold,
                 min_region_area=config.min_region_area,
             ),
@@ -557,6 +1075,17 @@ def run_training(
         ema_loss: float | None = None
         initial_ema_loss: float | None = None
         gradient_max: dict[str, float] = defaultdict(float)
+        parameter_change_max: dict[str, float] = defaultdict(float)
+        training_step_seconds = 0.0
+        training_samples_seen = 0
+        training_steps_timed = 0
+        clipped_steps = 0
+        clip_scale_sum = 0.0
+        clip_scale_min = 1.0
+        validation_trajectory: list[dict[str, Any]] = []
+        best_selection: dict[str, Any] | None = None
+        training_subset_counts: Counter[str] = Counter()
+        training_subset_reason_counts: Counter[str] = Counter()
         resume_payload = None
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -584,7 +1113,15 @@ def run_training(
             "new_lr",
             "weight_decay",
             "warmup_ratio",
+            "min_lr_ratio",
             "modality_dropout",
+            "auxiliary_null_probability",
+            "train_sampler",
+            "optical_stochastic_depth",
+            "auxiliary_drop_path",
+            "decoder_dropout",
+            "use_bf16",
+            "grad_clip",
             "gradient_checkpointing",
         ):
             if old_config[name] != getattr(config, name):
@@ -602,19 +1139,61 @@ def run_training(
             float,
             {str(key): float(value) for key, value in state["gradient_max"].items()},
         )
+        parameter_change_max = defaultdict(
+            float,
+            {
+                str(key): float(value)
+                for key, value in state.get(
+                    "parameter_change_max", {}
+                ).items()
+            },
+        )
+        training_step_seconds = float(
+            state.get("training_step_seconds", 0.0)
+        )
+        training_samples_seen = int(state.get("training_samples_seen", 0))
+        training_steps_timed = int(state.get("training_steps_timed", 0))
+        clipped_steps = int(state.get("clipped_steps", 0))
+        clip_scale_sum = float(state.get("clip_scale_sum", 0.0))
+        clip_scale_min = float(state.get("clip_scale_min", 1.0))
+        validation_trajectory = [
+            dict(item)
+            for item in state.get("validation_trajectory", [])
+        ]
+        stored_best = state.get("best_selection")
+        best_selection = (
+            None if stored_best is None else dict(stored_best)
+        )
+        training_subset_counts = Counter(
+            {
+                str(key): int(value)
+                for key, value in state.get(
+                    "training_subset_counts", {}
+                ).items()
+            }
+        )
+        training_subset_reason_counts = Counter(
+            {
+                str(key): int(value)
+                for key, value in state.get(
+                    "training_subset_reason_counts", {}
+                ).items()
+            }
+        )
     optimizer = make_optimizer(model, config)
     scheduler = make_scheduler(
-        optimizer, total_steps=config.max_steps, warmup_ratio=config.warmup_ratio
+        optimizer,
+        total_steps=config.max_steps,
+        warmup_ratio=config.warmup_ratio,
+        min_lr_ratio=config.min_lr_ratio,
     )
     scaler = make_scaler(device)
-    train_loader = make_dataloader(
+    train_batcher = StatefulTrainingBatcher(
         benchmark_root,
-        split="train",
         batch_size=config.batch_size,
         normalization=config.normalization,
-        shuffle=True,
-        num_workers=config.num_workers,
-        generator=data_generator,
+        seed=config.seed + 1,
+        policy=config.train_sampler,
     )
     val_loader = make_dataloader(
         benchmark_root,
@@ -624,9 +1203,15 @@ def run_training(
         shuffle=False,
         num_workers=config.num_workers,
     )
-    cycling = CyclingDataIterator(train_loader, data_generator)
+    train_eval_loader = make_dataloader(
+        benchmark_root,
+        split="train",
+        batch_size=config.batch_size,
+        normalization=config.normalization,
+        shuffle=False,
+        num_workers=config.num_workers,
+    )
     if resume_payload is not None:
-        data_generator.set_state(resume_payload["dataloader_generator_state"])
         restore_training_state(
             payload=resume_payload,
             optimizer=optimizer,
@@ -639,18 +1224,98 @@ def run_training(
             if sampler_state is None:
                 raise ValueError("proposed_dropout checkpoint 缺少 sampler state")
             subset_sampler.load_state_dict(sampler_state)
-        cycling.load_state_dict(resume_payload["training_state"]["loader_state"])
+        train_batcher.load_state_dict(
+            resume_payload["training_batcher_state"]
+        )
     modules = _gradient_modules(model)
     snapshots = {
         name: module_parameter_snapshot(module) for name, module in modules.items()
     }
-    logs: list[dict[str, Any]] = []
+    train_log_path = output_dir / "train_log.jsonl"
+    logs: list[dict[str, Any]] = (
+        [dict(item) for item in read_jsonl(train_log_path)]
+        if resume_payload is not None and train_log_path.is_file()
+        else []
+    )
     checkpoint_path = output_dir / "checkpoint_last.pt"
+    best_checkpoint_path = output_dir / "checkpoint_best.pt"
+    if (
+        resume_payload is not None
+        and best_selection is not None
+        and not best_checkpoint_path.is_file()
+    ):
+        raise FileNotFoundError(
+            "resume checkpoint 记录了 best_selection，"
+            f"但输出目录缺少 {best_checkpoint_path.name}"
+        )
+    checkpoint_total_seconds = 0.0
+    speed_window: deque[tuple[float, int]] = deque(
+        maxlen=max(config.log_interval, 10)
+    )
+    progress.announce_setup(
+        command=command_label,
+        variant=config.variant,
+        device=device.type,
+        gpu_name=gpu_name,
+        train_samples=len(train_batcher.dataset),
+        validation_samples=len(val_loader.dataset),
+        batch_size=config.batch_size,
+        total_steps=config.max_steps,
+        start_step=start_step,
+        eval_interval=config.eval_interval,
+        checkpoint_interval=config.checkpoint_interval,
+        output_dir=output_dir,
+    )
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     model.train()
+    progress.start_training(
+        variant=config.variant,
+        total_steps=config.max_steps,
+        start_step=start_step,
+    )
+
+    def save_current_checkpoint(
+        path: Path,
+        *,
+        step: int,
+        training_state: Mapping[str, Any],
+        label: str,
+    ) -> tuple[float, int]:
+        progress.phase(f"[checkpoint] step={step} saving {label} {path}")
+        started = time.perf_counter()
+        save_training_checkpoint(
+            path,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            step=step,
+            benchmark_index_sha256=benchmark_hash,
+            subset_sampler_state=(
+                subset_sampler.state_dict()
+                if subset_sampler is not None
+                else None
+            ),
+            training_batcher_state=train_batcher.state_dict(),
+            training_state=training_state,
+        )
+        duration = time.perf_counter() - started
+        size = path.stat().st_size
+        progress.phase(
+            "[checkpoint] "
+            f"step={step} saved {label} "
+            f"time={format_duration(duration)} "
+            f"size={size / (1024**3):.2f} GiB"
+        )
+        return duration, size
+
+    actual_step = start_step
+    early_capacity_acceptance: dict[str, bool] | None = None
     for step in range(start_step + 1, config.max_steps + 1):
-        prepared = prepare_collated_batch(cycling.next()).to(
+        actual_step = step
+        step_started = time.perf_counter()
+        prepared = prepare_collated_batch(train_batcher.next()).to(
             device, non_blocking=device.type == "cuda"
         )
         model_batch, available, active = prepare_policy_batch(
@@ -658,43 +1323,142 @@ def run_training(
             variant=config.variant,
             subset_sampler=subset_sampler,
         )
+        for active_names, available_names in zip(
+            active, available, strict=True
+        ):
+            training_subset_counts[
+                _subset_category(active_names, available_names)
+            ] += 1
+        if subset_sampler is not None:
+            reasons = subset_sampler.last_reasons
+        else:
+            reasons = [
+                (
+                    "native_none"
+                    if not available_names
+                    else (
+                        "active"
+                        if active_names
+                        else "variant_forced_none"
+                    )
+                )
+                for active_names, available_names in zip(
+                    active, available, strict=True
+                )
+            ]
+        training_subset_reason_counts.update(reasons)
         optimizer.zero_grad(set_to_none=True)
         with _autocast(config, device):
             output = model(model_batch)
             loss, components = bce_dice_loss(output.mask_logits, prepared.mask)
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        current_gradient = {
-            name: _gradient_norm(module) for name, module in modules.items()
-        }
+        current_gradient = _gradient_norms(modules)
         for name, value in current_gradient.items():
             gradient_max[name] = max(gradient_max[name], value)
         gradient_total = float(
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
         )
+        clip_scale = min(
+            1.0,
+            config.grad_clip / (gradient_total + 1e-6),
+        )
+        clipped_steps += int(clip_scale < 1.0)
+        clip_scale_sum += clip_scale
+        clip_scale_min = min(clip_scale_min, clip_scale)
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
         loss_value = float(loss.detach().item())
+        bce_value = float(components["bce"].detach().item())
+        dice_loss_value = float(components["dice"].detach().item())
+        step_seconds = time.perf_counter() - step_started
+        batch_size = prepared.model.batch_size
+        training_step_seconds += step_seconds
+        training_samples_seen += batch_size
+        training_steps_timed += 1
+        speed_window.append((step_seconds, batch_size))
+        rolling_seconds = sum(item[0] for item in speed_window)
+        rolling_steps_per_second = len(speed_window) / max(
+            rolling_seconds, 1e-12
+        )
+        rolling_samples_per_second = sum(
+            item[1] for item in speed_window
+        ) / max(rolling_seconds, 1e-12)
+        estimated_remaining_seconds = (
+            config.max_steps - step
+        ) / max(rolling_steps_per_second, 1e-12)
+        peak_cuda_memory_bytes = (
+            int(torch.cuda.max_memory_allocated(device))
+            if device.type == "cuda"
+            else None
+        )
+        peak_cuda_memory_gib = (
+            peak_cuda_memory_bytes / (1024**3)
+            if peak_cuda_memory_bytes is not None
+            else None
+        )
         loss_history.append(loss_value)
-        ema_loss = loss_value if ema_loss is None else 0.95 * ema_loss + 0.05 * loss_value
+        ema_loss = (
+            loss_value
+            if ema_loss is None
+            else 0.95 * ema_loss + 0.05 * loss_value
+        )
         if initial_ema_loss is None:
             initial_ema_loss = ema_loss
+        progress.update_training(
+            step=step,
+            loss=loss_value,
+            ema_loss=float(ema_loss),
+            bce=bce_value,
+            dice_loss=dice_loss_value,
+            learning_rates=optimizer_learning_rates(optimizer),
+            samples_per_second=rolling_samples_per_second,
+            estimated_remaining_seconds=estimated_remaining_seconds,
+            peak_cuda_memory_gib=peak_cuda_memory_gib,
+        )
         if step == 1 or step % config.log_interval == 0 or step == config.max_steps:
             active_counts = Counter(_active_label(names) for names in active)
             available_counts = Counter(_active_label(names) for names in available)
+            conditional_weights = _batch_conditional_weight_diagnostics(
+                model=model,
+                batch=model_batch,
+                output=output,
+                active=active,
+            )
             logs.append(
                 {
                     "step": step,
                     "loss": loss_value,
-                    "bce": float(components["bce"].item()),
-                    "dice_loss": float(components["dice"].item()),
+                    "bce": bce_value,
+                    "dice_loss": dice_loss_value,
                     "ema_loss": ema_loss,
                     "lr": [float(group["lr"]) for group in optimizer.param_groups],
+                    "step_time_seconds": step_seconds,
+                    "rolling_steps_per_second": rolling_steps_per_second,
+                    "rolling_samples_per_second": rolling_samples_per_second,
+                    "estimated_remaining_seconds": estimated_remaining_seconds,
+                    "training_elapsed_seconds": training_step_seconds,
+                    "wall_elapsed_seconds": time.perf_counter() - wall_started,
+                    "peak_cuda_memory_bytes": peak_cuda_memory_bytes,
+                    "peak_cuda_memory_gib": peak_cuda_memory_gib,
                     "gradient_total_before_clip": gradient_total,
+                    "gradient_clip_scale": clip_scale,
+                    "gradient_was_clipped": clip_scale < 1.0,
                     "gradient_norms": current_gradient,
                     "available_subsets": dict(sorted(available_counts.items())),
                     "active_subsets": dict(sorted(active_counts.items())),
+                    "subset_category_counts_cumulative": dict(
+                        sorted(training_subset_counts.items())
+                    ),
+                    "subset_reason_counts_cumulative": (
+                        dict(
+                            sorted(
+                                training_subset_reason_counts.items()
+                            )
+                        )
+                    ),
+                    "conditional_modality_weights": conditional_weights,
                     "mean_modality_weights": {
                         name: float(
                             output.modality_weights[:, index]
@@ -754,61 +1518,220 @@ def run_training(
                     },
                 }
             )
-            atomic_write_jsonl(output_dir / "train_log.jsonl", logs)
+            atomic_write_jsonl(train_log_path, logs)
+        should_evaluate = (
+            step % config.eval_interval == 0 or step == config.max_steps
+        )
+        is_new_best = False
+        if should_evaluate:
+            for name, module in modules.items():
+                parameter_change_max[name] = max(
+                    parameter_change_max[name],
+                    maximum_parameter_change(module, snapshots[name]),
+                )
+            capacity_metrics = None
+            if capacity_overfit:
+                capacity_metrics = evaluate_model(
+                    model,
+                    train_eval_loader,
+                    device=device,
+                    config=config,
+                    progress=progress,
+                    progress_label=f"train@step{step}",
+                )
+                early_capacity_acceptance = _capacity_acceptance(
+                    loss_history=loss_history,
+                    metrics=capacity_metrics,
+                    gradient_max=gradient_max,
+                    parameter_updates=parameter_change_max,
+                    required_modules=_required_auxiliary_modules(model),
+                )
+            validation = evaluate_model(
+                model,
+                val_loader,
+                device=device,
+                config=config,
+                progress=progress,
+                progress_label=f"val@step{step}",
+            )
+            overall = validation["overall"]
+            candidate = {
+                "step": step,
+                "dice": float(overall["dice"]),
+                "loss": float(validation["loss"]),
+                "no_target_false_positive_rate": float(
+                    overall["no_target_false_positive_rate"]
+                ),
+            }
+            is_new_best = _validation_is_better(
+                candidate, best_selection
+            )
+            if is_new_best:
+                best_selection = candidate
+            trajectory_item: dict[str, Any] = {
+                "step": step,
+                "validation": validation,
+                "is_new_best": is_new_best,
+            }
+            if capacity_metrics is not None:
+                trajectory_item["capacity_train"] = capacity_metrics
+                trajectory_item["capacity_acceptance"] = dict(
+                    early_capacity_acceptance or {}
+                )
+            validation_trajectory.append(trajectory_item)
+            logs.append(trajectory_item)
+            atomic_write_jsonl(train_log_path, logs)
+        elif step % config.checkpoint_interval == 0:
+            for name, module in modules.items():
+                parameter_change_max[name] = max(
+                    parameter_change_max[name],
+                    maximum_parameter_change(module, snapshots[name]),
+                )
         training_state = _training_state(
             config=config,
             loss_history=loss_history,
             ema_loss=ema_loss,
             initial_ema_loss=initial_ema_loss,
             gradient_max=gradient_max,
-            loader=cycling,
+            parameter_change_max=parameter_change_max,
+            training_step_seconds=training_step_seconds,
+            training_samples_seen=training_samples_seen,
+            training_steps_timed=training_steps_timed,
+            clipped_steps=clipped_steps,
+            clip_scale_sum=clip_scale_sum,
+            clip_scale_min=clip_scale_min,
+            validation_trajectory=validation_trajectory,
+            best_selection=best_selection,
+            training_subset_counts=training_subset_counts,
+            training_subset_reason_counts=(
+                training_subset_reason_counts
+            ),
         )
-        should_checkpoint = (
-            step % config.checkpoint_interval == 0 or step == config.max_steps
-        )
-        if should_checkpoint:
-            save_training_checkpoint(
-                checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
+        if is_new_best:
+            duration, size = save_current_checkpoint(
+                best_checkpoint_path,
                 step=step,
-                benchmark_index_sha256=benchmark_hash,
-                subset_sampler_state=(
-                    subset_sampler.state_dict() if subset_sampler is not None else None
-                ),
-                dataloader_generator_state=data_generator.get_state(),
                 training_state=training_state,
+                label="best",
             )
-        if step % config.eval_interval == 0 and step != config.max_steps:
+            checkpoint_total_seconds += duration
             logs.append(
                 {
                     "step": step,
-                    "validation": evaluate_model(
-                        model, val_loader, device=device, config=config
-                    ),
+                    "checkpoint_best": {
+                        "path": str(best_checkpoint_path),
+                        "duration_seconds": duration,
+                        "size_bytes": size,
+                    },
                 }
             )
-            atomic_write_jsonl(output_dir / "train_log.jsonl", logs)
+        capacity_passed = (
+            capacity_overfit
+            and early_capacity_acceptance is not None
+            and all(early_capacity_acceptance.values())
+        )
+        should_checkpoint = (
+            step % config.checkpoint_interval == 0
+            or step == config.max_steps
+            or capacity_passed
+        )
+        if should_checkpoint:
+            duration, size = save_current_checkpoint(
+                checkpoint_path,
+                step=step,
+                training_state=training_state,
+                label="last",
+            )
+            checkpoint_total_seconds += duration
+            logs.append(
+                {
+                    "step": step,
+                    "checkpoint_last": {
+                        "path": str(checkpoint_path),
+                        "duration_seconds": duration,
+                        "size_bytes": size,
+                    },
+                }
+            )
+        if is_new_best or should_checkpoint:
+            atomic_write_jsonl(train_log_path, logs)
+        if capacity_passed:
+            progress.phase(
+                f"[overfit] all capacity thresholds passed at step={step}"
+            )
+            break
+    progress.finish_training()
     if not checkpoint_path.is_file():
         raise RuntimeError("训练结束后缺少 checkpoint")
-    train_eval_loader = make_dataloader(
-        benchmark_root,
-        split="train",
-        batch_size=config.batch_size,
-        normalization=config.normalization,
-        shuffle=False,
-        num_workers=config.num_workers,
+    if train_batcher.samples_emitted != training_samples_seen:
+        raise RuntimeError(
+            "训练 batcher 与累计样本计数不一致："
+            f"{train_batcher.samples_emitted} != {training_samples_seen}"
+        )
+    if (
+        sum(training_subset_counts.values()) != training_samples_seen
+        or sum(training_subset_reason_counts.values())
+        != training_samples_seen
+    ):
+        raise RuntimeError("训练子集诊断计数与累计样本数不一致")
+    for name, module in modules.items():
+        parameter_change_max[name] = max(
+            parameter_change_max[name],
+            maximum_parameter_change(module, snapshots[name]),
+        )
+    updates = dict(parameter_change_max)
+    last_train_metrics = evaluate_model(
+        model,
+        train_eval_loader,
+        device=device,
+        config=config,
+        progress=progress,
+        progress_label="train-last",
     )
-    train_metrics = evaluate_model(
-        model, train_eval_loader, device=device, config=config
+    last_validation_metrics = evaluate_model(
+        model,
+        val_loader,
+        device=device,
+        config=config,
+        progress=progress,
+        progress_label="val-last",
     )
-    validation_metrics = evaluate_model(
-        model, val_loader, device=device, config=config
+    selected_checkpoint_path = (
+        checkpoint_path
+        if capacity_overfit or not best_checkpoint_path.is_file()
+        else best_checkpoint_path
     )
+    if selected_checkpoint_path == best_checkpoint_path:
+        selected_payload = read_checkpoint(
+            selected_checkpoint_path,
+            expected_benchmark_index_sha256=benchmark_hash,
+        )
+        model = model_from_checkpoint(selected_payload, device=device)
+        train_metrics = evaluate_model(
+            model,
+            train_eval_loader,
+            device=device,
+            config=config,
+            progress=progress,
+            progress_label="train-best",
+        )
+        validation_metrics = evaluate_model(
+            model,
+            val_loader,
+            device=device,
+            config=config,
+            progress=progress,
+            progress_label="val-best",
+        )
+    else:
+        train_metrics = last_train_metrics
+        validation_metrics = last_validation_metrics
+    progress.phase(
+        "[reload] checking selected checkpoint output consistency"
+    )
+    reload_started = time.perf_counter()
     reload_difference = checkpoint_reload_difference(
-        checkpoint_path=checkpoint_path,
+        checkpoint_path=selected_checkpoint_path,
         model=model,
         collated=_acceptance_collated(
             benchmark_root,
@@ -818,10 +1741,12 @@ def run_training(
         benchmark_index_sha256=benchmark_hash,
         device=device,
     )
-    updates = {
-        name: maximum_parameter_change(module, snapshots[name])
-        for name, module in modules.items()
-    }
+    reload_seconds = time.perf_counter() - reload_started
+    progress.phase(
+        "[reload] "
+        f"done time={format_duration(reload_seconds)} "
+        f"max_abs_difference={max(reload_difference.values()):.3e}"
+    )
     initial_window = (
         sum(loss_history[: min(10, len(loss_history))])
         / min(10, len(loss_history))
@@ -835,24 +1760,55 @@ def run_training(
         if device.type == "cuda"
         else None
     )
-    subset_counts = (
-        dict(sorted(subset_sampler.counts.items()))
-        if subset_sampler is not None
-        else {}
+    subset_counts = dict(sorted(training_subset_counts.items()))
+    subset_reason_counts = dict(
+        sorted(training_subset_reason_counts.items())
     )
+    subset_reason_summary = {
+        "native_none": subset_reason_counts.get("native_none", 0),
+        "sampled_null": subset_reason_counts.get("sampled_null", 0),
+        "dropped_to_none": subset_reason_counts.get("dropped_to_none", 0),
+        "variant_forced_none": subset_reason_counts.get(
+            "variant_forced_none", 0
+        ),
+        "single": subset_counts.get("single", 0),
+        "multi": subset_counts.get("multi", 0),
+        "all": subset_counts.get("all", 0),
+    }
+    active_auxiliary_exposures = sum(
+        subset_counts.get(name, 0) for name in ("single", "multi", "all")
+    )
+    subset_total = sum(subset_counts.values())
+    training_report_path = output_dir / "training_report.json"
     report: dict[str, Any] = {
-        "command": "overfit" if capacity_overfit else "train",
+        "command": command_label,
         "schema_version": CONFIG_SCHEMA_VERSION,
         "variant": config.variant,
         "backbone": config.backbone,
         "architecture": model.model_contract()["architecture"],
         "gradient_checkpointing": config.gradient_checkpointing,
-        "steps": config.max_steps,
+        "steps": actual_step,
+        "maximum_steps": config.max_steps,
+        "stopped_early": actual_step < config.max_steps,
         "benchmark_index_sha256": benchmark_hash,
         "backbone_sha256": model.backbone_sha256,
         "modality_weight_order": list(model.modality_weight_order),
         "region_feature_dim": model.region_feature_dim,
-        "checkpoint": str(checkpoint_path),
+        "checkpoint": str(selected_checkpoint_path),
+        "checkpoint_last": str(checkpoint_path),
+        "checkpoint_best": (
+            str(best_checkpoint_path)
+            if best_checkpoint_path.is_file()
+            else None
+        ),
+        "best_step": (
+            int(best_selection["step"])
+            if best_selection is not None
+            else None
+        ),
+        "best_selection": best_selection,
+        "validation_trajectory": validation_trajectory,
+        "training_report": str(training_report_path),
         "initial_loss_window_mean": initial_window,
         "final_loss_window_mean": final_window,
         "loss_drop_fraction": 1.0 - final_window / max(initial_window, 1e-12),
@@ -866,56 +1822,63 @@ def run_training(
         "gradient_max_norms": dict(sorted(gradient_max.items())),
         "parameter_max_changes": updates,
         "subset_counts": subset_counts,
+        "subset_reason_counts": subset_reason_summary,
+        "subset_reason_events": subset_reason_counts,
+        "effective_auxiliary_exposure_fraction": (
+            active_auxiliary_exposures / subset_total
+            if subset_total
+            else None
+        ),
+        "train_sampler": config.train_sampler,
+        "actual_batch_size": config.batch_size,
         "train_metrics": train_metrics,
         "validation_metrics": validation_metrics,
+        "last_train_metrics": last_train_metrics,
+        "last_validation_metrics": last_validation_metrics,
         "checkpoint_reload_max_abs_difference": reload_difference,
+        "training_step_seconds": training_step_seconds,
+        "training_steps_timed": training_steps_timed,
+        "training_samples_seen": training_samples_seen,
+        "gradient_clipped_steps": clipped_steps,
+        "gradient_clipped_fraction": (
+            clipped_steps / max(training_steps_timed, 1)
+        ),
+        "gradient_clip_scale_mean": (
+            clip_scale_sum / max(training_steps_timed, 1)
+        ),
+        "gradient_clip_scale_min": clip_scale_min,
+        "average_steps_per_second": (
+            training_steps_timed / training_step_seconds
+            if training_step_seconds > 0
+            else None
+        ),
+        "average_samples_per_second": (
+            training_samples_seen / training_step_seconds
+            if training_step_seconds > 0
+            else None
+        ),
+        "checkpoint_save_seconds": checkpoint_total_seconds,
+        "checkpoint_reload_seconds": reload_seconds,
+        "evaluation_duration_seconds": {
+            "train": train_metrics["duration_seconds"],
+            "validation": validation_metrics["duration_seconds"],
+            "train_last": last_train_metrics["duration_seconds"],
+            "validation_last": last_validation_metrics["duration_seconds"],
+        },
         "peak_cuda_memory_bytes": peak_memory,
         "peak_cuda_memory_gib": (
             peak_memory / (1024**3) if peak_memory is not None else None
         ),
     }
-    required_auxiliary_modules = (
-        tuple(
-            f"auxiliary_adapter_{name}" for name in model.modality_order
-        )
-        + (
-            "mspa_stride4",
-            "quality_selector_stride4",
-            "frm_stride4",
-            "ffm_stride4",
-            "mspa_stride8",
-            "quality_selector_stride8",
-            "frm_stride8",
-            "ffm_stride8",
-            "mspa_stride16",
-            "quality_selector_stride16",
-            "frm_stride16",
-            "ffm_stride16",
-            "mspa_stride32",
-            "quality_selector_stride32",
-            "frm_stride32",
-            "ffm_stride32",
-        )
-    )
+    required_auxiliary_modules = _required_auxiliary_modules(model)
     if capacity_overfit:
-        overall = train_metrics["overall"]
-        report["acceptance"] = {
-            "loss_drop_at_least_90_percent": report["loss_drop_fraction"] >= 0.90,
-            "micro_dice_at_least_0_95": overall["dice"] >= 0.95,
-            "positive_dice_at_least_0_90": overall["positive_only_dice"] >= 0.90,
-            "empty_mask_fpr_zero": overall["no_target_false_positive_rate"] == 0,
-            "empty_mean_probability_at_most_0_01": (
-                overall["empty_mean_foreground_probability"] <= 0.01
-            ),
-            "all_auxiliary_gradients_nonzero": all(
-                gradient_max.get(name, 0.0) > 0
-                for name in required_auxiliary_modules
-            ),
-            "all_auxiliary_parameters_updated": all(
-                updates.get(name, 0.0) > 0
-                for name in required_auxiliary_modules
-            ),
-        }
+        report["acceptance"] = _capacity_acceptance(
+            loss_history=loss_history,
+            metrics=train_metrics,
+            gradient_max=gradient_max,
+            parameter_updates=updates,
+            required_modules=required_auxiliary_modules,
+        )
     else:
         report["acceptance"] = {
             "ema_drop_at_least_50_percent": (
@@ -927,14 +1890,41 @@ def run_training(
             "observed_multi_or_all": (
                 subset_counts.get("multi", 0) + subset_counts.get("all", 0) > 0
             ),
+            "effective_auxiliary_exposure_at_least_40_percent": (
+                report["effective_auxiliary_exposure_fraction"] is not None
+                and report["effective_auxiliary_exposure_fraction"] >= 0.40
+            ),
+            "fixed_batch_sample_count_exact": (
+                training_samples_seen
+                == training_steps_timed * config.batch_size
+            ),
             "reload_within_1e_6": max(reload_difference.values()) <= 1e-6,
         }
-    atomic_write_json(output_dir / "training_report.json", report)
     should_enforce = capacity_overfit or (
         config.variant == "proposed_dropout" and subset_sampler is not None
     )
-    if should_enforce and not all(report["acceptance"].values()):
-        raise RuntimeError("训练完成，但未通过配置对应的 Phase 2 验收阈值")
+    acceptance_passed = all(report["acceptance"].values())
+    report["acceptance_enforced"] = should_enforce
+    report["acceptance_passed"] = (
+        acceptance_passed if should_enforce else None
+    )
+    report["wall_elapsed_seconds"] = time.perf_counter() - wall_started
+    atomic_write_json(training_report_path, report)
+    if should_enforce and not acceptance_passed:
+        failed = [
+            name
+            for name, passed in report["acceptance"].items()
+            if not passed
+        ]
+        progress.phase(
+            "[done] "
+            f"acceptance=FAIL failed={','.join(failed)} "
+            f"report={training_report_path}"
+        )
+        raise RuntimeError(
+            "训练完成，但未通过 Phase 2 验收阈值："
+            + ", ".join(failed)
+        )
     return report
 
 
@@ -1133,7 +2123,7 @@ def run_inference(
         atomic_write_json(
             temporary_dir / "manifest.json",
             {
-                "schema_version": "oa_auxseg_inference_v4",
+                "schema_version": "oa_auxseg_inference_v5",
                 "checkpoint": str(Path(checkpoint_path).resolve()),
                 "checkpoint_step": int(payload["step"]),
                 "benchmark_index_sha256": benchmark_hash,
@@ -1198,6 +2188,11 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
             model = OAAuxSegModel(
                 OAAuxSegConfig(
                     variant=variant,
+                    optical_stochastic_depth=(
+                        config.optical_stochastic_depth
+                    ),
+                    auxiliary_drop_path=config.auxiliary_drop_path,
+                    decoder_dropout=config.decoder_dropout,
                     region_threshold=config.region_threshold,
                     min_region_area=config.min_region_area,
                 ),
@@ -1208,7 +2203,10 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
             variant_config = config.with_overrides(variant=variant, max_steps=1)
             optimizer = make_optimizer(model, variant_config)
             scheduler = make_scheduler(
-                optimizer, total_steps=1, warmup_ratio=variant_config.warmup_ratio
+                optimizer,
+                total_steps=1,
+                warmup_ratio=variant_config.warmup_ratio,
+                min_lr_ratio=variant_config.min_lr_ratio,
             )
             scaler = make_scaler(device)
             model_batch, available, active = prepare_policy_batch(
@@ -1248,9 +2246,10 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
                 step=1,
                 benchmark_index_sha256=benchmark_hash,
                 subset_sampler_state=None,
-                dataloader_generator_state=torch.Generator()
-                .manual_seed(config.seed)
-                .get_state(),
+                training_batcher_state={
+                    "smoke": True,
+                    "batch_size": config.batch_size,
+                },
                 training_state={"runtime_config": variant_config.to_dict()},
             )
             difference = checkpoint_reload_difference(

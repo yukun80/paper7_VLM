@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
 from collections import OrderedDict
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 import numpy as np
@@ -27,18 +30,27 @@ from oa_groundrag.phase2.contracts import (
     RuntimeConfig,
     SUPPORTED_AUXILIARY_ORDER,
     VARIANTS,
+    ordered_auxiliary_names,
 )
 from oa_groundrag.phase2.data import (
     AuxiliarySubsetSampler,
+    StatefulTrainingBatcher,
     available_auxiliaries_by_sample,
     filter_auxiliaries,
     prepare_collated_batch,
     registry_from_benchmark,
 )
 from oa_groundrag.phase2.engine import (
+    _capacity_acceptance,
+    _training_state,
+    _validation_is_better,
+    effective_training_config,
+    evaluate_model,
+    load_runtime_config,
     make_optimizer,
     make_scaler,
     make_scheduler,
+    optimizer_learning_rates,
     require_local_backbone,
     run_inference,
 )
@@ -51,9 +63,14 @@ from oa_groundrag.phase2.model import (
 )
 from oa_groundrag.phase2.fusion import (
     CMNeXtSpatialSelector,
+    FullChannelCrossAttention,
     SparseStageFeature,
 )
 from oa_groundrag.phase2.regions import extract_regions_and_features
+from oa_groundrag.phase2.progress import (
+    TrainingProgress,
+    format_compact_training_report,
+)
 from oa_groundrag.phase2.validity import (
     resample_validity,
     validity_from_channels,
@@ -458,6 +475,45 @@ class OAAuxSegTest(unittest.TestCase):
         self.assertFalse(bool(none_valid.support.any()))
         self.assertEqual(float(none_valid.coverage.max().item()), 0.0)
 
+    def test_ffm_matches_deliver_context_formula(self) -> None:
+        attention = FullChannelCrossAttention(channels=4, heads=2)
+        values = torch.randn(
+            2, 5, 4, generator=torch.Generator().manual_seed(37)
+        )
+        coverage = torch.ones(2, 5)
+        key, value = attention.optical_kv(values).chunk(2, dim=-1)
+        key = attention._heads(key)
+        value = attention._heads(value)
+        expected = torch.softmax(
+            (key.transpose(-2, -1) @ value) * attention.scale,
+            dim=-2,
+        )
+        actual = attention._context(
+            values, coverage, attention.optical_kv
+        )
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+        fractional = torch.tensor(
+            [[1.0, 0.5, 0.25, 0.0, 1.0]] * 2
+        )
+        expected_fractional = torch.softmax(
+            (
+                key.transpose(-2, -1)
+                @ (value * fractional[:, None, :, None])
+            )
+            * attention.scale,
+            dim=-2,
+        )
+        actual_fractional = attention._context(
+            values, fractional, attention.optical_kv
+        )
+        torch.testing.assert_close(
+            actual_fractional,
+            expected_fractional,
+            rtol=0,
+            atol=0,
+        )
+
     def test_cmnext_selector_uses_masked_channelwise_max(self) -> None:
         selector = CMNeXtSpatialSelector(
             2,
@@ -857,16 +913,282 @@ class OAAuxSegTest(unittest.TestCase):
             ("dem", "insar_velocity"),
             ("dem", "sar_ascending", "sar_descending"),
         ]
-        sampler = AuxiliarySubsetSampler(123, 0.2)
+        sampler = AuxiliarySubsetSampler(123, 0.2, 0.1)
         first = sampler.sample(available)
         state = sampler.state_dict()
         expected_next = sampler.sample(available)
-        restored = AuxiliarySubsetSampler(999, 0.2)
+        restored = AuxiliarySubsetSampler(999, 0.2, 0.1)
         restored.load_state_dict(state)
         self.assertEqual(expected_next, restored.sample(available))
         self.assertEqual(first[0], ())
         for selected, names in zip(first, available, strict=True):
             self.assertTrue(set(selected).issubset(names))
+        self.assertEqual(
+            sum(sampler.reason_counts.values()),
+            len(available) * 2,
+        )
+
+    def test_training_batcher_is_fixed_and_resume_exact(self) -> None:
+        batcher = StatefulTrainingBatcher(
+            SMALL_ROOT,
+            batch_size=8,
+            normalization="zscore",
+            seed=123,
+            policy="uniform",
+        )
+        first = [batcher.next_indices() for _ in range(27)]
+        self.assertTrue(all(len(indices) == 8 for indices in first))
+        self.assertEqual(batcher.samples_emitted, 216)
+        state = batcher.state_dict()
+        expected = [batcher.next_indices() for _ in range(5)]
+        restored = StatefulTrainingBatcher(
+            SMALL_ROOT,
+            batch_size=8,
+            normalization="zscore",
+            seed=999,
+            policy="uniform",
+        )
+        restored.load_state_dict(state)
+        self.assertEqual(
+            expected,
+            [restored.next_indices() for _ in range(5)],
+        )
+
+        balanced = StatefulTrainingBatcher(
+            SMALL_ROOT,
+            batch_size=8,
+            normalization="zscore",
+            seed=123,
+            policy="balanced_target_presence",
+        )
+        indices = balanced.next_indices()
+        positive = sum(
+            float(balanced.dataset.rows[index]["foreground_ratio"]) > 0
+            for index in indices
+        )
+        self.assertEqual(positive, 4)
+        self.assertEqual(len(indices) - positive, 4)
+
+    def test_proposed_sampling_reaches_auxiliary_exposure_gate(self) -> None:
+        batcher = StatefulTrainingBatcher(
+            SMALL_ROOT,
+            batch_size=8,
+            normalization="zscore",
+            seed=20260725,
+            policy="uniform",
+        )
+        sampler = AuxiliarySubsetSampler(20260726, 0.2, 0.1)
+        for _ in range(300):
+            available = [
+                ordered_auxiliary_names(
+                    tuple(batcher.dataset.rows[index]["auxiliaries"])
+                )
+                for index in batcher.next_indices()
+            ]
+            sampler.sample(available)
+        self.assertEqual(sum(sampler.counts.values()), 2400)
+        self.assertEqual(sum(sampler.reason_counts.values()), 2400)
+        active = sum(
+            sampler.counts[name]
+            for name in ("single", "multi", "all")
+        )
+        self.assertGreaterEqual(active / 2400, 0.40)
+        self.assertGreater(sampler.reason_counts["native_none"], 0)
+        self.assertGreater(sampler.reason_counts["sampled_null"], 0)
+        self.assertGreater(sampler.reason_counts["dropped_to_none"], 0)
+
+    def test_optimizer_groups_extra_bands_at_new_lr_and_decay_rules(
+        self,
+    ) -> None:
+        config = RuntimeConfig(
+            schema_version=CONFIG_SCHEMA_VERSION,
+            benchmark_root="unused",
+            output_dir="unused",
+            backbone="convnext_small",
+            backbone_weights="unused",
+            variant="proposed_dropout",
+            device="cpu",
+        )
+        optimizer = make_optimizer(self.model, config)
+        parameter_group = {
+            id(parameter): group
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        }
+        rgb_group = parameter_group[id(self.model.optical_rgb_stem.weight)]
+        signature = tuple(f"B{index:02d}" for index in range(1, 13))
+        extra = self.model.optical_stems[
+            self.model._optical_stem_keys[signature]
+        ].extra_projection
+        self.assertIsNotNone(extra)
+        extra_group = parameter_group[id(extra.weight)]
+        self.assertEqual(rgb_group["group_name"], "backbone_decay")
+        self.assertEqual(rgb_group["lr"], config.backbone_lr)
+        self.assertEqual(extra_group["group_name"], "new_decay")
+        self.assertEqual(extra_group["lr"], config.new_lr)
+        classifier_bias_group = parameter_group[
+            id(self.model.decoder.classifier.bias)
+        ]
+        self.assertEqual(classifier_bias_group["weight_decay"], 0.0)
+        layer_scale = self.model.auxiliary_stages[
+            0
+        ].blocks[0].layer_scale_attention
+        self.assertEqual(
+            parameter_group[id(layer_scale)]["weight_decay"], 0.0
+        )
+
+    def test_scheduler_respects_lr_floor(self) -> None:
+        config = RuntimeConfig(
+            schema_version=CONFIG_SCHEMA_VERSION,
+            benchmark_root="unused",
+            output_dir="unused",
+            backbone="convnext_small",
+            backbone_weights="unused",
+            variant="proposed_dropout",
+            device="cpu",
+            max_steps=20,
+            warmup_ratio=0.05,
+            min_lr_ratio=0.10,
+        )
+        optimizer = make_optimizer(self.model, config)
+        scheduler = make_scheduler(
+            optimizer,
+            total_steps=config.max_steps,
+            warmup_ratio=config.warmup_ratio,
+            min_lr_ratio=config.min_lr_ratio,
+        )
+        for _ in range(config.max_steps):
+            optimizer.step()
+            scheduler.step()
+        backbone_lr, new_lr = optimizer_learning_rates(optimizer)
+        self.assertAlmostEqual(
+            backbone_lr,
+            config.backbone_lr * config.min_lr_ratio,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            new_lr,
+            config.new_lr * config.min_lr_ratio,
+            places=12,
+        )
+
+    def test_overfit_regime_and_best_checkpoint_order(self) -> None:
+        production = load_runtime_config(
+            REPO_ROOT
+            / "configs"
+            / "phase2_oa_auxseg"
+            / "small_proposed_dropout.json"
+        )
+        self.assertIs(
+            effective_training_config(
+                production, capacity_overfit=False
+            ),
+            production,
+        )
+        overfit = effective_training_config(
+            production, capacity_overfit=True
+        )
+        self.assertEqual(overfit.weight_decay, 0.0)
+        self.assertEqual(overfit.min_lr_ratio, 0.10)
+        self.assertEqual(overfit.grad_clip, 5.0)
+        self.assertEqual(overfit.optical_stochastic_depth, 0.0)
+        self.assertEqual(overfit.auxiliary_drop_path, 0.0)
+        self.assertEqual(overfit.decoder_dropout, 0.0)
+        self.assertFalse(overfit.use_bf16)
+        self.assertFalse(overfit.gradient_checkpointing)
+        self.assertEqual(self.model.decoder.fusion[-1].p, 0.1)
+        self.assertAlmostEqual(
+            max(
+                module.probability
+                for stage in self.model.auxiliary_stages
+                for block in stage.blocks
+                for module in (block.drop_path,)
+            ),
+            0.1,
+        )
+        self.assertAlmostEqual(
+            max(
+                module.p
+                for module in self.model.backbone.modules()
+                if type(module).__name__ == "StochasticDepth"
+            ),
+            0.1,
+        )
+
+        best = {
+            "dice": 0.5,
+            "loss": 0.8,
+            "no_target_false_positive_rate": 0.3,
+        }
+        self.assertTrue(
+            _validation_is_better(
+                {
+                    "dice": 0.51,
+                    "loss": 1.0,
+                    "no_target_false_positive_rate": 0.5,
+                },
+                best,
+            )
+        )
+        self.assertTrue(
+            _validation_is_better(
+                {
+                    "dice": 0.5,
+                    "loss": 0.7,
+                    "no_target_false_positive_rate": 0.5,
+                },
+                best,
+            )
+        )
+        self.assertTrue(
+            _validation_is_better(
+                {
+                    "dice": 0.5,
+                    "loss": 0.8,
+                    "no_target_false_positive_rate": 0.2,
+                },
+                best,
+            )
+        )
+        state = _training_state(
+            config=overfit,
+            loss_history=[1.0, 0.5],
+            ema_loss=0.5,
+            initial_ema_loss=1.0,
+            gradient_max={"mspa_stride4": 1.0},
+            parameter_change_max={"mspa_stride4": 0.1},
+            training_step_seconds=2.0,
+            training_samples_seen=16,
+            training_steps_timed=2,
+            clipped_steps=1,
+            clip_scale_sum=1.5,
+            clip_scale_min=0.5,
+            validation_trajectory=[],
+            best_selection=None,
+            training_subset_counts={"none": 1, "single": 1},
+            training_subset_reason_counts={
+                "native_none": 1,
+                "active": 1,
+            },
+        )
+        self.assertEqual(
+            state["parameter_change_max"]["mspa_stride4"], 0.1
+        )
+        capacity = _capacity_acceptance(
+            loss_history=[1.0] * 10 + [0.01] * 10,
+            metrics={
+                "overall": {
+                    "dice": 0.99,
+                    "positive_only_dice": 0.99,
+                    "no_target_false_positive_rate": 0.0,
+                    "empty_mean_foreground_probability": 0.0,
+                }
+            },
+            gradient_max={"module": 1.0},
+            parameter_updates={"module": 0.1},
+            required_modules=("module",),
+        )
+        self.assertTrue(all(capacity.values()))
 
     def test_six_variants_synthetic_optimizer_step(self) -> None:
         target = torch.zeros(7, 1, 32, 32)
@@ -906,7 +1228,10 @@ class OAAuxSegTest(unittest.TestCase):
         )
         optimizer = make_optimizer(self.model, config)
         scheduler = make_scheduler(
-            optimizer, total_steps=2, warmup_ratio=config.warmup_ratio
+            optimizer,
+            total_steps=2,
+            warmup_ratio=config.warmup_ratio,
+            min_lr_ratio=config.min_lr_ratio,
         )
         scaler = make_scaler(torch.device("cpu"))
         benchmark_hash = sha256_file(SMALL_ROOT / "index.jsonl")
@@ -923,9 +1248,7 @@ class OAAuxSegTest(unittest.TestCase):
                 step=1,
                 benchmark_index_sha256=benchmark_hash,
                 subset_sampler_state=None,
-                dataloader_generator_state=torch.Generator()
-                .manual_seed(8)
-                .get_state(),
+                training_batcher_state={"unit_test": True},
                 training_state={
                     "runtime_config": config.to_dict(),
                     "unit_test": True,
@@ -939,7 +1262,7 @@ class OAAuxSegTest(unittest.TestCase):
             )
             legacy_path = Path(temporary) / "legacy_checkpoint.pt"
             legacy_payload = dict(payload)
-            legacy_payload["schema_version"] = "oa_auxseg_checkpoint_v3"
+            legacy_payload["schema_version"] = "oa_auxseg_checkpoint_v4"
             torch.save(legacy_payload, legacy_path)
             with self.assertRaisesRegex(ValueError, "只支持"):
                 read_checkpoint(legacy_path)
@@ -1007,7 +1330,7 @@ class OAAuxSegTest(unittest.TestCase):
                     )
                 )
                 self.assertEqual(
-                    manifest["schema_version"], "oa_auxseg_inference_v4"
+                    manifest["schema_version"], "oa_auxseg_inference_v5"
                 )
                 self.assertEqual(manifest["region_feature_dim"], 270)
                 self.assertEqual(
@@ -1090,6 +1413,65 @@ class OAAuxSegTest(unittest.TestCase):
         self.assertEqual(result["no_target_false_positive_rate"], 0.0)
         self.assertEqual(result["empty_mean_foreground_probability"], 0.0)
 
+    def test_evaluation_reports_conditional_modality_weights(self) -> None:
+        collated = {
+            "optical": list(self.batch.optical),
+            "optical_pixel_valid": list(
+                self.batch.optical_pixel_valid
+            ),
+            "optical_channel_valid": list(
+                self.batch.optical_channel_valid
+            ),
+            "optical_channel_names": list(
+                self.batch.optical_channel_names
+            ),
+            "auxiliaries": {
+                name: {
+                    "sample_indices": packed.sample_indices,
+                    "values": packed.values,
+                    "pixel_valid": packed.pixel_valid,
+                    "channel_valid": packed.channel_valid,
+                    "channel_names": packed.channel_names,
+                }
+                for name, packed in self.batch.auxiliaries.items()
+            },
+            "mask": torch.zeros(7, 1, 32, 32),
+            "sample_id": [f"sample-{index}" for index in range(7)],
+            "metadata": [{"source": "synthetic"} for _ in range(7)],
+        }
+        config = RuntimeConfig(
+            schema_version=CONFIG_SCHEMA_VERSION,
+            benchmark_root="unused",
+            output_dir="unused",
+            backbone="convnext_small",
+            backbone_weights="unused",
+            variant="proposed_dropout",
+            device="cpu",
+            batch_size=7,
+        )
+        result = evaluate_model(
+            self.model,
+            [collated],
+            device=torch.device("cpu"),
+            config=config,
+        )
+        self.assertEqual(
+            result["conditional_weight_counts"]["sar_ascending"], 2
+        )
+        self.assertEqual(
+            result["conditional_weight_counts"]["sar_descending"], 2
+        )
+        self.assertEqual(
+            result["conditional_weight_counts"]["__null__"], 5
+        )
+        self.assertEqual(
+            set(result["conditional_stage_modality_weights"]),
+            {"stride4", "stride8", "stride16", "stride32"},
+        )
+        self.assertIn(
+            "synthetic", result["conditional_modality_weights_by_source"]
+        )
+
     def test_runtime_config_is_strict_and_weight_gate_is_explicit(self) -> None:
         invalid_model_config = self.model.config.to_dict()
         invalid_model_config["unexpected"] = True
@@ -1107,6 +1489,39 @@ class OAAuxSegTest(unittest.TestCase):
                     "unexpected": True,
                 }
             )
+        with self.assertRaisesRegex(ValueError, "schema"):
+            RuntimeConfig.from_dict(
+                {
+                    "schema_version": "oa_auxseg_runtime_config_v3",
+                    "benchmark_root": "benchmark",
+                    "output_dir": "output",
+                    "backbone": "convnext_small",
+                    "backbone_weights": "weight",
+                    "variant": "proposed_dropout",
+                }
+            )
+        production = load_runtime_config(
+            REPO_ROOT
+            / "configs"
+            / "phase2_oa_auxseg"
+            / "small_proposed_dropout.json"
+        )
+        overfit = load_runtime_config(
+            REPO_ROOT
+            / "configs"
+            / "phase2_oa_auxseg"
+            / "small_overfit.json"
+        )
+        self.assertEqual(production.optical_stochastic_depth, 0.1)
+        self.assertEqual(production.auxiliary_drop_path, 0.1)
+        self.assertEqual(production.decoder_dropout, 0.1)
+        self.assertEqual(overfit.weight_decay, 0.0)
+        self.assertEqual(overfit.optical_stochastic_depth, 0.0)
+        self.assertEqual(overfit.auxiliary_drop_path, 0.0)
+        self.assertEqual(overfit.decoder_dropout, 0.0)
+        self.assertFalse(overfit.use_bf16)
+        self.assertFalse(overfit.gradient_checkpointing)
+        self.assertEqual(overfit.grad_clip, 5.0)
         with self.assertRaises(FileNotFoundError):
             require_local_backbone(
                 REPO_ROOT / "models_zoo" / "definitely_missing.pth"
@@ -1125,6 +1540,7 @@ class OAAuxSegTest(unittest.TestCase):
             values,
             pixel_valid,
             channel_valid,
+            rgb_projection=self.model.optical_rgb_stem,
             normalization=self.model.optical_stem_norm,
         )
         generator = torch.Generator().manual_seed(97)
@@ -1134,14 +1550,11 @@ class OAAuxSegTest(unittest.TestCase):
             dtype=feature.dtype,
         )
         (feature * probe).sum().backward()
-        gradient = stem.projection.weight.grad
+        self.assertIsNotNone(stem.extra_projection)
+        gradient = stem.extra_projection.weight.grad
         self.assertIsNotNone(gradient)
-        rgb_indices = {3, 2, 1}
-        extra_indices = [
-            index for index in range(12) if index not in rgb_indices
-        ]
         self.assertGreater(
-            float(gradient[:, extra_indices].abs().sum().item()),
+            float(gradient.abs().sum().item()),
             0.0,
         )
         self.model.zero_grad(set_to_none=True)
@@ -1176,6 +1589,7 @@ class OAAuxSegTest(unittest.TestCase):
                 values,
                 torch.ones_like(values, dtype=torch.uint8),
                 torch.ones(2, 3, dtype=torch.uint8),
+                rgb_projection=model.optical_rgb_stem,
                 normalization=model.optical_stem_norm,
             )
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
@@ -1205,6 +1619,173 @@ class OAAuxSegTest(unittest.TestCase):
                 },
                 available_auxiliaries=self.registry.available_auxiliaries,
             )
+
+
+class _PseudoTTY(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class TrainingProgressTest(unittest.TestCase):
+    @staticmethod
+    def _metrics() -> dict[str, object]:
+        return {
+            "loss": 0.75,
+            "duration_seconds": 3.0,
+            "overall": {
+                "iou": 0.5,
+                "dice": 2.0 / 3.0,
+                "precision": 0.7,
+                "recall": 0.64,
+                "f1": 2.0 / 3.0,
+                "positive_only_dice": 0.61,
+                "no_target_false_positive_rate": 0.1,
+            },
+        }
+
+    @classmethod
+    def _report(cls) -> dict[str, object]:
+        metrics = cls._metrics()
+        return {
+            "command": "train",
+            "variant": "proposed_dropout",
+            "steps": 300,
+            "wall_elapsed_seconds": 125.0,
+            "peak_cuda_memory_gib": 3.8,
+            "loss_drop_fraction": 0.35,
+            "ema_drop_fraction": 0.53,
+            "train_metrics": metrics,
+            "validation_metrics": metrics,
+            "acceptance_enforced": True,
+            "acceptance_passed": True,
+            "checkpoint": "/tmp/checkpoint.pt",
+            "training_report": "/tmp/training_report.json",
+        }
+
+    def test_non_tty_progress_is_rate_limited_and_plain(self) -> None:
+        stream = io.StringIO()
+        progress = TrainingProgress(
+            log_interval=2, stream=stream, force_tty=False
+        )
+        progress.start_training(
+            variant="proposed_dropout", total_steps=5, start_step=0
+        )
+        for step in range(1, 6):
+            progress.update_training(
+                step=step,
+                loss=1.0 / step,
+                ema_loss=0.8,
+                bce=0.2,
+                dice_loss=0.6,
+                learning_rates=(3e-5, 3e-4),
+                samples_per_second=2.5,
+                estimated_remaining_seconds=float(5 - step),
+                peak_cuda_memory_gib=3.5,
+            )
+        progress.start_evaluation(label="val@step5", total_batches=2)
+        progress.update_evaluation(
+            batch=1,
+            running_loss=0.8,
+            metrics=self._metrics()["overall"],  # type: ignore[arg-type]
+        )
+        progress.finish_evaluation(
+            label="val@step5",
+            result=self._metrics(),
+            duration_seconds=3.0,
+        )
+        progress.close()
+        output = stream.getvalue()
+        train_lines = [
+            line for line in output.splitlines() if line.startswith("[train]")
+        ]
+        self.assertEqual(len(train_lines), 4)
+        for step in (1, 2, 4, 5):
+            self.assertTrue(
+                any(f"step={step}/5" in line for line in train_lines)
+            )
+        self.assertIn("[eval] phase=val@step5 batches=2 start", output)
+        self.assertIn("dice=0.6667", output)
+        self.assertNotIn("\r", output)
+        self.assertNotIn("\x1b", output)
+        self.assertTrue(progress.closed)
+
+    def test_tty_progress_resume_evaluation_and_exception_close(self) -> None:
+        stream = _PseudoTTY()
+        progress = TrainingProgress(
+            log_interval=10, stream=stream, force_tty=True
+        )
+        with self.assertRaises(KeyboardInterrupt):
+            with progress:
+                progress.start_training(
+                    variant="proposed_dropout",
+                    total_steps=3,
+                    start_step=1,
+                )
+                progress.update_training(
+                    step=2,
+                    loss=0.9,
+                    ema_loss=1.0,
+                    bce=0.2,
+                    dice_loss=0.7,
+                    learning_rates=(3e-5, 3e-4),
+                    samples_per_second=2.0,
+                    estimated_remaining_seconds=1.0,
+                    peak_cuda_memory_gib=4.0,
+                )
+                progress.start_evaluation(
+                    label="val@step2", total_batches=1
+                )
+                progress.update_evaluation(
+                    batch=1,
+                    running_loss=0.75,
+                    metrics=self._metrics()["overall"],  # type: ignore[arg-type]
+                )
+                progress.finish_evaluation(
+                    label="val@step2",
+                    result=self._metrics(),
+                    duration_seconds=3.0,
+                )
+                raise KeyboardInterrupt
+        output = stream.getvalue()
+        self.assertIn("train proposed_dropout", output)
+        self.assertIn("val@step2", output)
+        self.assertIn("loss=0.9000", output)
+        self.assertIn("\r", output)
+        self.assertTrue(progress.closed)
+
+    def test_training_cli_defaults_to_compact_and_can_emit_full_json(
+        self,
+    ) -> None:
+        from oa_groundrag.phase2 import cli as cli_module
+
+        report = self._report()
+        compact = format_compact_training_report(report)
+        self.assertIn("acceptance=PASS", compact)
+        self.assertIn("val_dice=0.6667", compact)
+        with (
+            patch.object(cli_module, "load_runtime_config", return_value=object()),
+            patch.object(cli_module, "run_training", return_value=report),
+        ):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = cli_module.main(
+                    ["train", "--config", "unused.json"]
+                )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stdout.getvalue().strip(), compact)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = cli_module.main(
+                    [
+                        "train",
+                        "--config",
+                        "unused.json",
+                        "--full-report-json",
+                    ]
+                )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(stdout.getvalue()), report)
 
 
 if __name__ == "__main__":

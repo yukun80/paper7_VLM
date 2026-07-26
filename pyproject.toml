@@ -15,6 +15,7 @@ dependencies = [
     "scipy>=1.16,<2",
     "torch>=2.8,<3",
     "torchvision>=0.23,<0.24",
+    "tqdm>=4.67,<5",
 ]
 
 [project.scripts]

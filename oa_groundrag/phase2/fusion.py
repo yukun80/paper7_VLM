@@ -1,4 +1,4 @@
-"""Phase 2 v4 的完整 DELIVER 式 MSPA、空间选择、FRM 与 FFM。"""
+"""Phase 2 v5 的完整 DELIVER 式 MSPA、空间选择、FRM 与 FFM。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ STAGE_DEPTHS = (3, 3, 27, 3)
 MSPA_MLP_RATIOS = (8, 8, 4, 4)
 FFM_HEADS = (3, 6, 12, 24)
 FUSION_CONTRACT = {
-    "name": "deliver_full_four_stage_v1",
+    "name": "deliver_full_four_stage_v2",
     "stages": list(STAGE_STRIDES),
     "channels": list(STAGE_CHANNELS),
     "mspa_depths": list(STAGE_DEPTHS),
@@ -37,6 +37,7 @@ FUSION_CONTRACT = {
     "frm_lambda_channel": 0.5,
     "frm_lambda_spatial": 0.5,
     "ffm_cross_attention": "full_channel_context",
+    "ffm_fractional_coverage": "multiply_value_without_token_renormalization",
     "ffm_reduction": 1,
     "ffm_heads": list(FFM_HEADS),
     "ffm_initialization": "deliver_linear_trunc_normal_conv_fanout_normal",
@@ -811,9 +812,7 @@ class FullChannelCrossAttention(nn.Module):
         key = self._heads(key)
         value = self._heads(value)
         weights = coverage[:, None, :, None].to(value.dtype)
-        denominator = weights.sum(dim=2, keepdim=True).clamp_min(1e-6)
         context = key.transpose(-2, -1) @ (value * weights)
-        context = context / denominator
         return torch.softmax(context * self.scale, dim=-2)
 
     def forward(

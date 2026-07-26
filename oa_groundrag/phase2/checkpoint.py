@@ -106,7 +106,7 @@ def build_checkpoint(
     step: int,
     benchmark_index_sha256: str,
     subset_sampler_state: Mapping[str, Any] | None,
-    dataloader_generator_state: torch.Tensor,
+    training_batcher_state: Mapping[str, Any],
     training_state: Mapping[str, Any],
 ) -> dict[str, Any]:
     if step < 0:
@@ -134,7 +134,7 @@ def build_checkpoint(
         "subset_sampler_state": (
             dict(subset_sampler_state) if subset_sampler_state is not None else None
         ),
-        "dataloader_generator_state": dataloader_generator_state.cpu(),
+        "training_batcher_state": dict(training_batcher_state),
         "training_state": dict(training_state),
     }
 
@@ -163,7 +163,7 @@ def read_checkpoint(
         "benchmark_index_sha256",
         "rng_state",
         "subset_sampler_state",
-        "dataloader_generator_state",
+        "training_batcher_state",
         "training_state",
     }
     unknown = set(payload) - required
@@ -190,6 +190,8 @@ def read_checkpoint(
     if not isinstance(runtime_config, dict):
         raise ValueError("checkpoint training_state 缺少 runtime_config")
     RuntimeConfig.from_dict(runtime_config)
+    if not isinstance(payload["training_batcher_state"], dict):
+        raise ValueError("checkpoint training_batcher_state 必须是对象")
     return payload
 
 
@@ -248,6 +250,11 @@ def model_from_checkpoint(
         {
             "channel_names": list(signature),
             "rgb_indices": list(optical_rgb_indices(signature)),
+            "extra_indices": [
+                index
+                for index in range(len(signature))
+                if index not in set(optical_rgb_indices(signature))
+            ],
         }
         for signature in registry.optical_signatures
     ]

@@ -1,4 +1,4 @@
-"""Phase 2 v4 的 ConvNeXt-Small 与完整 DELIVER 式四阶段 OA-AuxSeg。"""
+"""Phase 2 v5 的 ConvNeXt-Small 与完整 DELIVER 式四阶段 OA-AuxSeg。"""
 
 from __future__ import annotations
 
@@ -53,18 +53,20 @@ from .validity import (
 
 
 BACKBONE_NAME = "convnext_small"
-BACKBONE_CONTRACT_NAME = "torchvision_convnext_small_signature_stem"
+BACKBONE_CONTRACT_NAME = "torchvision_convnext_small_shared_rgb_residual_stem"
 BACKBONE_STAGE_CHANNELS = STAGE_CHANNELS
 BACKBONE_STAGE_DEPTHS = STAGE_DEPTHS
 EXPECTED_BACKBONE_SHA256 = (
     "0c510722adfd92966a2bd72b92f785ca05966bbac03cafe2f7a90b1f54bfab9a"
 )
-ARCHITECTURE_NAME = "oa_auxseg_deliver_full_v1"
+ARCHITECTURE_NAME = "oa_auxseg_deliver_full_v2"
 OPTICAL_STEM_CONTRACT = {
-    "type": "signature_direct_conv4_stride4",
+    "type": "shared_official_rgb_plus_signature_extra_residual",
     "output_channels": 96,
-    "rgb_initialization": "copy_official_rgb_kernel",
-    "extra_channel_initialization": "zero",
+    "rgb_branch": "shared_official_conv4_stride4",
+    "extra_branch": "signature_specific_conv4_stride4_no_bias",
+    "extra_branch_initialization": "zero",
+    "normalization": "shared_official_layer_norm",
 }
 DECODER_CONTRACT = {
     "type": "segformer_style_four_scale",
@@ -113,7 +115,7 @@ def optical_rgb_indices(signature: Sequence[str]) -> tuple[int, int, int]:
 
 
 class SignatureStem(nn.Module):
-    """直接 C→96 的签名专属 ConvNeXt stem。"""
+    """共享官方 RGB stem，并为非 RGB 通道学习零初始化残差。"""
 
     def __init__(
         self,
@@ -124,27 +126,25 @@ class SignatureStem(nn.Module):
     ) -> None:
         super().__init__()
         self.rgb_indices = rgb_indices
-        self.projection = nn.Conv2d(
-            in_channels,
-            official_conv.out_channels,
-            kernel_size=official_conv.kernel_size,
-            stride=official_conv.stride,
-            padding=official_conv.padding,
-            dilation=official_conv.dilation,
-            groups=1,
-            bias=official_conv.bias is not None,
+        rgb_set = set(rgb_indices)
+        self.extra_indices = tuple(
+            index for index in range(in_channels) if index not in rgb_set
         )
-        with torch.no_grad():
-            self.projection.weight.zero_()
-            for target_index, source_index in enumerate(rgb_indices):
-                self.projection.weight[:, source_index].copy_(
-                    official_conv.weight[:, target_index]
-                )
-            if self.projection.bias is not None:
-                if official_conv.bias is None:
-                    self.projection.bias.zero_()
-                else:
-                    self.projection.bias.copy_(official_conv.bias)
+        self.extra_projection: nn.Conv2d | None
+        if self.extra_indices:
+            self.extra_projection = nn.Conv2d(
+                len(self.extra_indices),
+                official_conv.out_channels,
+                kernel_size=official_conv.kernel_size,
+                stride=official_conv.stride,
+                padding=official_conv.padding,
+                dilation=official_conv.dilation,
+                groups=1,
+                bias=False,
+            )
+            nn.init.zeros_(self.extra_projection.weight)
+        else:
+            self.extra_projection = None
 
     def forward(
         self,
@@ -152,6 +152,7 @@ class SignatureStem(nn.Module):
         pixel_valid: Tensor,
         channel_valid: Tensor,
         *,
+        rgb_projection: nn.Conv2d,
         normalization: nn.Module,
         anchor_validity: FeatureValidity | None = None,
     ) -> tuple[Tensor, FeatureValidity, FeatureValidity]:
@@ -163,7 +164,11 @@ class SignatureStem(nn.Module):
             torch.bool
         )[:, :, None, None]
         clean = torch.where(channelwise, values, torch.zeros_like(values))
-        stem = normalization(self.projection(clean))
+        rgb = clean[:, self.rgb_indices]
+        stem = rgb_projection(rgb)
+        if self.extra_projection is not None:
+            stem = stem + self.extra_projection(clean[:, self.extra_indices])
+        stem = normalization(stem)
         source_anchor = (
             source_validity if anchor_validity is None else anchor_validity
         )
@@ -226,6 +231,7 @@ class SegmentationDecoder(nn.Module):
         *,
         decoder_dim: int,
         region_projection_dim: int,
+        dropout: float,
     ) -> None:
         super().__init__()
         self.lateral = nn.ModuleList(
@@ -241,7 +247,7 @@ class SegmentationDecoder(nn.Module):
             ),
             ChannelLayerNorm2d(decoder_dim),
             nn.GELU(),
-            nn.Dropout2d(0.1),
+            nn.Dropout2d(dropout),
         )
         self.classifier = nn.Conv2d(decoder_dim, 1, kernel_size=1)
         self.optical_region_projection = nn.Sequential(
@@ -337,7 +343,10 @@ class OAAuxSegModel(nn.Module):
         )
         self.gradient_checkpointing = bool(gradient_checkpointing)
 
-        base = convnext_small(weights=None)
+        base = convnext_small(
+            weights=None,
+            stochastic_depth_prob=config.optical_stochastic_depth,
+        )
         self.backbone_sha256: str | None = None
         if backbone_weights is not None:
             path = Path(backbone_weights)
@@ -370,6 +379,7 @@ class OAAuxSegModel(nn.Module):
         official_conv = official_stem[0]
         if not isinstance(official_conv, nn.Conv2d):
             raise RuntimeError("torchvision ConvNeXt stem 合同发生变化")
+        self.optical_rgb_stem = official_conv
         self.optical_stem_norm = official_stem[1]
         self.backbone = nn.ModuleList(
             list(base.features.children())[1:]
@@ -426,7 +436,11 @@ class OAAuxSegModel(nn.Module):
                 for name in self.modality_order
             }
         )
-        rates = torch.linspace(0.0, 0.1, sum(STAGE_DEPTHS)).tolist()
+        rates = torch.linspace(
+            0.0,
+            config.auxiliary_drop_path,
+            sum(STAGE_DEPTHS),
+        ).tolist()
         self.auxiliary_stages = nn.ModuleList()
         offset = 0
         for channels, depth, ratio in zip(
@@ -483,6 +497,7 @@ class OAAuxSegModel(nn.Module):
             STAGE_CHANNELS,
             decoder_dim=config.decoder_dim,
             region_projection_dim=config.region_projection_dim,
+            dropout=config.decoder_dropout,
         )
 
     def set_gradient_checkpointing(self, enabled: bool) -> None:
@@ -506,6 +521,11 @@ class OAAuxSegModel(nn.Module):
                     "channel_names": list(signature),
                     "rgb_indices": list(
                         self.optical_rgb_mapping[signature]
+                    ),
+                    "extra_indices": list(
+                        self.optical_stems[
+                            self._optical_stem_keys[signature]
+                        ].extra_indices
                     ),
                 }
                 for signature in self.registry.optical_signatures
@@ -599,6 +619,7 @@ class OAAuxSegModel(nn.Module):
                         ]
                     ),
                     normalization=self.optical_stem_norm,
+                    rgb_projection=self.optical_rgb_stem,
                 )
             )
             for local_index, sample_index in enumerate(indices):
@@ -698,6 +719,7 @@ class OAAuxSegModel(nn.Module):
                         optical_pixel_valid,
                         optical_channel_valid,
                         normalization=self.optical_stem_norm,
+                        rgb_projection=self.optical_rgb_stem,
                     )
                 )
             else:
@@ -733,6 +755,7 @@ class OAAuxSegModel(nn.Module):
                         torch.cat(pixel_valid, dim=1),
                         torch.cat(channel_valid, dim=1),
                         normalization=self.optical_stem_norm,
+                        rgb_projection=self.optical_rgb_stem,
                         anchor_validity=anchor,
                     )
                 )

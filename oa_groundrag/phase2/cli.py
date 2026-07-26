@@ -14,6 +14,7 @@ from .engine import (
     run_smoke,
     run_training,
 )
+from .progress import format_compact_training_report
 
 
 def _path_from_repo(value: str, repo_root: Path) -> Path:
@@ -30,12 +31,22 @@ def build_parser() -> argparse.ArgumentParser:
     train = subparsers.add_parser("train", help="训练任一消融或 proposed 模型")
     train.add_argument("--config", type=Path, required=True)
     train.add_argument("--resume", type=str)
+    train.add_argument(
+        "--full-report-json",
+        action="store_true",
+        help="结束时将完整训练报告 JSON 输出到 stdout",
+    )
 
     overfit = subparsers.add_parser(
         "overfit", help="全部 train、全可用辅助模态的容量验收"
     )
     overfit.add_argument("--config", type=Path, required=True)
     overfit.add_argument("--resume", type=str)
+    overfit.add_argument(
+        "--full-report-json",
+        action="store_true",
+        help="结束时将完整训练报告 JSON 输出到 stdout",
+    )
 
     evaluate = subparsers.add_parser("evaluate", help="严格重载 checkpoint 并评价")
     evaluate.add_argument("--config", type=Path, required=True)
@@ -112,7 +123,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run_smoke(config, repo_root=repo_root)
     else:
         raise AssertionError(arguments.command)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if (
+        arguments.command in {"train", "overfit"}
+        and not arguments.full_report_json
+    ):
+        print(format_compact_training_report(report))
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
 
