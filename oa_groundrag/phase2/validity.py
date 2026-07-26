@@ -1,4 +1,4 @@
-"""Phase 2 v5 的 fractional validity 表达与 masked 统计。"""
+"""Phase 2 v6 的 fractional validity 表达与 masked 统计。"""
 
 from __future__ import annotations
 

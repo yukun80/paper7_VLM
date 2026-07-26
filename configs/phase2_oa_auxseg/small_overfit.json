@@ -1,7 +1,7 @@
 {
-  "schema_version": "oa_auxseg_runtime_config_v4",
+  "schema_version": "oa_auxseg_runtime_config_v5",
   "benchmark_root": "../benchmark/oa_auxseg_hdf5_v1/small",
-  "output_dir": "outputs/phase2_oa_auxseg/small_overfit_v5",
+  "output_dir": "outputs/phase2_oa_auxseg/small_overfit_v6",
   "backbone": "convnext_small",
   "backbone_weights": "models_zoo/ConvNeXt/convnext_small-0c510722.pth",
   "variant": "proposed_dropout",
@@ -21,7 +21,6 @@
   "min_lr_ratio": 0.1,
   "grad_clip": 5.0,
   "modality_dropout": 0.0,
-  "auxiliary_null_probability": 0.0,
   "train_sampler": "uniform",
   "optical_stochastic_depth": 0.0,
   "auxiliary_drop_path": 0.0,

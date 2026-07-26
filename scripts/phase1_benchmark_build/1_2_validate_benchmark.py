@@ -21,6 +21,7 @@ import numpy as np
 
 from benchmark_common import (
     SCHEMA_VERSION,
+    SOURCE_ORDER,
     canonical_json,
     read_json,
     read_jsonl,
@@ -35,6 +36,112 @@ def _error(report: dict[str, Any], message: str) -> None:
 
 def _warning(report: dict[str, Any], message: str) -> None:
     report["warnings"].append(message)
+
+
+def _validate_source_selection(
+    report: dict[str, Any],
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    fields = ("source_selection", "included_sources", "excluded_sources")
+    presence = [
+        field in document
+        for document in (manifest, config)
+        for field in fields
+    ]
+    if not any(presence):
+        included = SOURCE_ORDER
+        excluded: tuple[str, ...] = ()
+    elif not all(presence):
+        _error(report, "manifest/config source selection 字段必须同时完整存在")
+        included = SOURCE_ORDER
+        excluded = ()
+    else:
+        manifest_included = manifest["included_sources"]
+        manifest_excluded = manifest["excluded_sources"]
+        config_included = config["included_sources"]
+        config_excluded = config["excluded_sources"]
+        if not all(
+            isinstance(value, list)
+            and all(isinstance(source, str) for source in value)
+            for value in (
+                manifest_included,
+                manifest_excluded,
+                config_included,
+                config_excluded,
+            )
+        ):
+            _error(report, "included_sources/excluded_sources 必须是字符串列表")
+            return SOURCE_ORDER, ()
+        included = tuple(manifest_included)
+        excluded = tuple(manifest_excluded)
+        if config_included != manifest_included or config_excluded != manifest_excluded:
+            _error(report, "manifest/config source selection 不一致")
+        expected_included = tuple(
+            source for source in SOURCE_ORDER if source not in set(excluded)
+        )
+        expected_excluded = tuple(
+            source for source in SOURCE_ORDER if source in set(excluded)
+        )
+        if included != expected_included or excluded != expected_excluded:
+            _error(report, "included/excluded sources 必须按 canonical 顺序互补")
+        if not included:
+            _error(report, "included_sources 不能为空")
+        expected_selection = "subset" if excluded else "all"
+        if (
+            manifest.get("source_selection") != expected_selection
+            or config.get("source_selection") != expected_selection
+        ):
+            _error(report, f"source_selection 必须为 {expected_selection!r}")
+
+    row_counts = Counter(str(row.get("source")) for row in rows)
+    unknown_rows = sorted(set(row_counts) - set(SOURCE_ORDER))
+    if unknown_rows:
+        _error(report, f"index 包含未知 source：{unknown_rows}")
+    excluded_rows = sorted(set(row_counts) & set(excluded))
+    if excluded_rows:
+        _error(report, f"index 包含已排除 source：{excluded_rows}")
+    manifest_counts = manifest.get("source_counts")
+    if not isinstance(manifest_counts, dict):
+        _error(report, "manifest source_counts 必须是对象")
+    else:
+        if set(manifest_counts) != set(included):
+            _error(report, "manifest source_counts keys 与 included_sources 不一致")
+        expected_counts = {
+            source: int(row_counts[source]) for source in included
+        }
+        try:
+            actual_counts = {
+                source: int(count) for source, count in manifest_counts.items()
+            }
+        except (TypeError, ValueError):
+            _error(report, "manifest source_counts 包含非法计数")
+        else:
+            if actual_counts != expected_counts:
+                _error(report, "manifest source_counts 与 index 不一致")
+    for field in ("source_split_counts", "full_candidate_source_counts"):
+        value = manifest.get(field)
+        if not isinstance(value, dict) or set(value) != set(included):
+            _error(report, f"manifest {field} keys 与 included_sources 不一致")
+    approved = manifest.get("approved_group_split_exceptions", {})
+    if not isinstance(approved, dict) or not set(approved).issubset(set(included)):
+        _error(report, "跨 split 例外包含未纳入 source")
+    warnings = manifest.get("warnings", [])
+    if not isinstance(warnings, list):
+        _error(report, "manifest warnings 必须是列表")
+    else:
+        invalid_warning_sources = sorted(
+            {
+                str(warning.get("source"))
+                for warning in warnings
+                if isinstance(warning, dict)
+                and warning.get("source") not in included
+            }
+        )
+        if invalid_warning_sources:
+            _error(report, f"warning 包含未纳入 source：{invalid_warning_sources}")
+    return included, excluded
 
 
 def _validate_binary(
@@ -87,6 +194,7 @@ def validate_benchmark(root: Path, *, deep: bool = False) -> dict[str, Any]:
         _error(report, f"config schema_version={config.get('schema_version')!r}")
     if manifest.get("contract", {}).get("mask_validity_stored") is not False:
         _error(report, "manifest 必须声明 mask_validity_stored=false")
+    _validate_source_selection(report, manifest, config, rows)
     index_hash = sha256_file(root / "index.jsonl")
     if manifest.get("index_sha256") != index_hash:
         _error(report, "index.jsonl SHA-256 与 manifest 不一致")

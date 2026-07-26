@@ -13,15 +13,21 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 from scripts.phase1_benchmark_build.benchmark_common import (
+    SCHEMA_VERSION,
     BenchmarkDataset,
     collate_benchmark_samples,
+    read_json,
     read_jsonl,
+    sha256_file,
 )
 
 from .contracts import (
+    BENCHMARK_SCHEMA_VERSION,
     ModelRegistry,
     OAAuxSegBatch,
     PackedAuxiliary,
+    PHASE2_EXCLUDED_SOURCES,
+    PHASE2_INCLUDED_SOURCES,
     SUPPORTED_AUXILIARY_ORDER,
     ordered_auxiliary_names,
 )
@@ -41,6 +47,63 @@ class PreparedBatch:
             sample_ids=self.sample_ids,
             metadata=self.metadata,
         )
+
+
+def benchmark_contract_from_root(root: Path | str) -> dict[str, Any]:
+    """读取并严格固化当前 Benchmark 身份与 source selection。"""
+
+    benchmark_root = Path(root)
+    manifest_path = benchmark_root / "manifest.json"
+    index_path = benchmark_root / "index.jsonl"
+    manifest = read_json(manifest_path)
+    if SCHEMA_VERSION != BENCHMARK_SCHEMA_VERSION:
+        raise RuntimeError("Phase 1B 与 Phase 2 Benchmark schema 常量不一致")
+    if manifest.get("schema_version") != BENCHMARK_SCHEMA_VERSION:
+        raise ValueError("Benchmark manifest schema_version 不受支持")
+    index_sha256 = sha256_file(index_path)
+    if manifest.get("index_sha256") != index_sha256:
+        raise ValueError("Benchmark manifest 与 index SHA-256 不一致")
+    selection = manifest.get("source_selection")
+    included = manifest.get("included_sources")
+    excluded = manifest.get("excluded_sources")
+    if selection not in {"all", "subset"}:
+        raise ValueError("Benchmark source_selection 不受支持")
+    if not (
+        isinstance(included, list)
+        and included
+        and all(isinstance(source, str) for source in included)
+        and isinstance(excluded, list)
+        and all(isinstance(source, str) for source in excluded)
+    ):
+        raise ValueError("Benchmark included/excluded sources 合同非法")
+    if set(included) & set(excluded):
+        raise ValueError("Benchmark included/excluded sources 不能重叠")
+    expected_selection = "subset" if excluded else "all"
+    if selection != expected_selection:
+        raise ValueError("Benchmark source_selection 与 excluded_sources 不一致")
+    if tuple(included) != PHASE2_INCLUDED_SOURCES:
+        raise ValueError(
+            "Phase 2 v6 只接受固定五源 Benchmark，实际 included_sources="
+            f"{included}"
+        )
+    if tuple(excluded) != PHASE2_EXCLUDED_SOURCES:
+        raise ValueError(
+            "Phase 2 v6 要求明确排除 Sen12Landslides，实际 "
+            f"excluded_sources={excluded}"
+        )
+    row_sources = {
+        str(row["source"]) for row in read_jsonl(index_path)
+    }
+    if row_sources != set(included):
+        raise ValueError("Benchmark index sources 与 included_sources 不一致")
+    return {
+        "schema_version": BENCHMARK_SCHEMA_VERSION,
+        "index_sha256": index_sha256,
+        "manifest_sha256": sha256_file(manifest_path),
+        "source_selection": str(selection),
+        "included_sources": [str(source) for source in included],
+        "excluded_sources": [str(source) for source in excluded],
+    }
 
 
 def registry_from_benchmark(root: Path | str) -> ModelRegistry:
@@ -360,23 +423,21 @@ def filter_auxiliaries(
 
 
 class AuxiliarySubsetSampler:
-    """显式 null 后在非空 cardinality 上均匀采样，再执行 dropout。"""
+    """在非空 cardinality 上均匀采样，并执行非空 modality dropout。"""
 
     def __init__(
         self,
         seed: int,
         dropout_probability: float,
-        null_probability: float,
     ) -> None:
         if not 0 <= dropout_probability < 1:
             raise ValueError("dropout_probability 必须位于 [0,1)")
-        if not 0 <= null_probability < 1:
-            raise ValueError("null_probability 必须位于 [0,1)")
         self.random = random.Random(seed)
         self.dropout_probability = dropout_probability
-        self.null_probability = null_probability
         self.counts: Counter[str] = Counter()
         self.reason_counts: Counter[str] = Counter()
+        self.cardinality_counts: Counter[str] = Counter()
+        self.dropout_counts: Counter[str] = Counter()
         self.last_reasons: list[str] = []
 
     def sample(
@@ -389,18 +450,30 @@ class AuxiliarySubsetSampler:
             if not names:
                 active: list[str] = []
                 reason = "native_none"
-            elif self.random.random() < self.null_probability:
-                active = []
-                reason = "sampled_null"
             else:
                 cardinality = self.random.randint(1, len(names))
-                active = self.random.sample(names, cardinality)
+                initially_selected = self.random.sample(names, cardinality)
+                self.cardinality_counts[str(cardinality)] += 1
+                self.dropout_counts["selected_modalities"] += len(
+                    initially_selected
+                )
                 active = [
                     name
-                    for name in active
-                    if self.random.random() >= self.dropout_probability
+                    for name in initially_selected
+                    if (
+                        self.random.random()
+                        >= self.dropout_probability
+                    )
                 ]
-                reason = "dropped_to_none" if not active else "active"
+                self.dropout_counts["dropped_modalities"] += (
+                    len(initially_selected) - len(active)
+                )
+                if not active:
+                    active = [self.random.choice(initially_selected)]
+                    self.dropout_counts["restored_samples"] += 1
+                    reason = "dropout_restored"
+                else:
+                    reason = "active"
             active_tuple = ordered_auxiliary_names(tuple(active))
             if len(active_tuple) == 0:
                 label = "none"
@@ -421,18 +494,16 @@ class AuxiliarySubsetSampler:
         return {
             "random_state": self.random.getstate(),
             "dropout_probability": self.dropout_probability,
-            "null_probability": self.null_probability,
             "counts": dict(self.counts),
             "reason_counts": dict(self.reason_counts),
+            "cardinality_counts": dict(self.cardinality_counts),
+            "dropout_counts": dict(self.dropout_counts),
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         probability = float(state["dropout_probability"])
         if probability != self.dropout_probability:
             raise ValueError("modality dropout 配置与 checkpoint 不一致")
-        null_probability = float(state["null_probability"])
-        if null_probability != self.null_probability:
-            raise ValueError("auxiliary null 概率与 checkpoint 不一致")
         self.random.setstate(state["random_state"])
         self.counts = Counter(
             {str(key): int(value) for key, value in state["counts"].items()}
@@ -441,6 +512,18 @@ class AuxiliarySubsetSampler:
             {
                 str(key): int(value)
                 for key, value in state["reason_counts"].items()
+            }
+        )
+        self.cardinality_counts = Counter(
+            {
+                str(key): int(value)
+                for key, value in state["cardinality_counts"].items()
+            }
+        )
+        self.dropout_counts = Counter(
+            {
+                str(key): int(value)
+                for key, value in state["dropout_counts"].items()
             }
         )
         self.last_reasons = []

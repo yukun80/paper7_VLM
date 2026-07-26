@@ -23,6 +23,7 @@ from oa_groundrag.phase2.checkpoint import (
 from oa_groundrag.phase2.contracts import (
     CONFIG_SCHEMA_VERSION,
     CHECKPOINT_SCHEMA_VERSION,
+    INFERENCE_SCHEMA_VERSION,
     ModelRegistry,
     OAAuxSegBatch,
     OAAuxSegConfig,
@@ -36,11 +37,13 @@ from oa_groundrag.phase2.data import (
     AuxiliarySubsetSampler,
     StatefulTrainingBatcher,
     available_auxiliaries_by_sample,
+    benchmark_contract_from_root,
     filter_auxiliaries,
     prepare_collated_batch,
     registry_from_benchmark,
 )
 from oa_groundrag.phase2.engine import (
+    _acceptance_collated,
     _capacity_acceptance,
     _training_state,
     _validation_is_better,
@@ -60,6 +63,7 @@ from oa_groundrag.phase2.model import (
     BACKBONE_STAGE_DEPTHS,
     EXPECTED_BACKBONE_SHA256,
     OAAuxSegModel,
+    optical_rgb_indices,
 )
 from oa_groundrag.phase2.fusion import (
     CMNeXtSpatialSelector,
@@ -78,7 +82,6 @@ from oa_groundrag.phase2.validity import (
 from scripts.phase1_benchmark_build.benchmark_common import (
     BenchmarkDataset,
     collate_benchmark_samples,
-    sha256_file,
 )
 
 
@@ -93,34 +96,19 @@ def synthetic_registry() -> ModelRegistry:
     rgb_short = ("R", "G", "B")
     nir = ("Blue", "Green", "Red", "NIR")
     sentinel = tuple(f"B{index:02d}" for index in range(1, 13))
-    sen12 = (
-        "s2_b02",
-        "s2_b03",
-        "s2_b04",
-        "s2_b05",
-        "s2_b06",
-        "s2_b07",
-        "s2_b08",
-        "s2_b8a",
-        "s2_b11",
-        "s2_b12",
-    )
     return ModelRegistry(
         optical_signatures=tuple(
-            sorted((rgb_short, rgb, nir, sen12, sentinel))
+            sorted((rgb_short, rgb, nir, sentinel))
         ),
         auxiliary_channels={
             "dem": ("DEM",),
             "insar_velocity": ("InSAR_mean_LOS_velocity_encoded",),
-            "sar_ascending": ("s1asc_vv", "s1asc_vh"),
-            "sar_descending": ("s1dsc_vv", "s1dsc_vh"),
             "slope": ("slope",),
         },
         available_auxiliaries={
             rgb_short: (),
             rgb: ("dem", "insar_velocity"),
             nir: (),
-            sen12: ("dem", "sar_ascending", "sar_descending"),
             sentinel: ("dem", "slope"),
         },
     )
@@ -133,42 +121,8 @@ def synthetic_batch(size: int = 32) -> OAAuxSegBatch:
         ("Blue", "Green", "Red", "NIR"),
         tuple(f"B{index:02d}" for index in range(1, 13)),
         ("Red", "Green", "Blue"),
-        (
-            "s2_b02",
-            "s2_b03",
-            "s2_b04",
-            "s2_b05",
-            "s2_b06",
-            "s2_b07",
-            "s2_b08",
-            "s2_b8a",
-            "s2_b11",
-            "s2_b12",
-        ),
-        (
-            "s2_b02",
-            "s2_b03",
-            "s2_b04",
-            "s2_b05",
-            "s2_b06",
-            "s2_b07",
-            "s2_b08",
-            "s2_b8a",
-            "s2_b11",
-            "s2_b12",
-        ),
-        (
-            "s2_b02",
-            "s2_b03",
-            "s2_b04",
-            "s2_b05",
-            "s2_b06",
-            "s2_b07",
-            "s2_b08",
-            "s2_b8a",
-            "s2_b11",
-            "s2_b12",
-        ),
+        tuple(f"B{index:02d}" for index in range(1, 13)),
+        ("Red", "Green", "Blue"),
     )
     optical = tuple(
         torch.randn(len(signature), size, size, generator=generator)
@@ -201,17 +155,11 @@ def synthetic_batch(size: int = 32) -> OAAuxSegBatch:
         optical_channel_valid=channel_valid,
         optical_channel_names=names,
         auxiliaries={
-            "dem": packed([2, 3, 4, 5, 6], ("DEM",)),
+            "dem": packed([2, 3, 4, 5], ("DEM",)),
             "insar_velocity": packed(
-                [3], ("InSAR_mean_LOS_velocity_encoded",)
+                [3, 5], ("InSAR_mean_LOS_velocity_encoded",)
             ),
-            "sar_ascending": packed(
-                [4, 6], ("s1asc_vv", "s1asc_vh")
-            ),
-            "sar_descending": packed(
-                [5, 6], ("s1dsc_vv", "s1dsc_vh")
-            ),
-            "slope": packed([2], ("slope",)),
+            "slope": packed([2, 4], ("slope",)),
         },
     )
 
@@ -247,7 +195,7 @@ class OAAuxSegTest(unittest.TestCase):
         self.model.variant = "proposed_dropout"
         self.model.eval()
 
-    def test_real_small_sparse_contract_includes_sen12_sar(self) -> None:
+    def test_real_small_sparse_contract_matches_five_sources(self) -> None:
         self.assertTrue((SMALL_ROOT / "index.jsonl").is_file())
         dataset = BenchmarkDataset(
             SMALL_ROOT,
@@ -255,9 +203,9 @@ class OAAuxSegTest(unittest.TestCase):
             auxiliary_policy="all",
             normalization="zscore",
         )
-        self.assertEqual(len(dataset), 204)
+        self.assertEqual(len(dataset), 158)
         self.assertEqual(
-            sum(bool(row["auxiliaries"]) for row in dataset.rows), 114
+            sum(bool(row["auxiliaries"]) for row in dataset.rows), 68
         )
         self.assertEqual(
             {str(row["source"]) for row in dataset.rows},
@@ -267,7 +215,6 @@ class OAAuxSegTest(unittest.TestCase):
                 "landslidebench_agent",
                 "landslide4sense",
                 "multimodal_landslide",
-                "sen12landslides",
             },
         )
         self.assertEqual(
@@ -275,7 +222,7 @@ class OAAuxSegTest(unittest.TestCase):
                 len(row["optical"]["channel_names"])
                 for row in dataset.rows
             },
-            {3, 4, 10, 12},
+            {3, 4, 12},
         )
         registry = registry_from_benchmark(SMALL_ROOT)
         self.assertEqual(registry, self.registry)
@@ -286,13 +233,31 @@ class OAAuxSegTest(unittest.TestCase):
             registry.modality_weight_order,
             (*SUPPORTED_AUXILIARY_ORDER, "__null__"),
         )
+        benchmark_contract = benchmark_contract_from_root(SMALL_ROOT)
+        self.assertEqual(
+            benchmark_contract["index_sha256"],
+            "85c86a8d09dc2f602f04dad890ca65dab59e16235415e818427673dc1483f2df",
+        )
+        self.assertEqual(
+            benchmark_contract["included_sources"],
+            [
+                "gdcld",
+                "lmhld",
+                "landslidebench_agent",
+                "landslide4sense",
+                "multimodal_landslide",
+            ],
+        )
+        self.assertEqual(
+            benchmark_contract["excluded_sources"],
+            ["sen12landslides"],
+        )
         selected_sources = (
             "gdcld",
             "lmhld",
             "landslidebench_agent",
             "landslide4sense",
             "multimodal_landslide",
-            "sen12landslides",
         )
         selected = [
             next(
@@ -305,10 +270,10 @@ class OAAuxSegTest(unittest.TestCase):
         prepared = prepare_collated_batch(
             collate_benchmark_samples(selected)
         )
-        self.assertEqual(tuple(prepared.mask.shape), (6, 1, 224, 224))
+        self.assertEqual(tuple(prepared.mask.shape), (5, 1, 224, 224))
         self.assertEqual(
             {len(names) for names in prepared.model.optical_channel_names},
-            {3, 4, 10, 12},
+            {3, 4, 12},
         )
         self.assertEqual(
             set(prepared.model.auxiliaries),
@@ -327,18 +292,50 @@ class OAAuxSegTest(unittest.TestCase):
                 packed.channel_names,
                 registry.auxiliary_channels[name],
             )
+        acceptance = _acceptance_collated(
+            SMALL_ROOT,
+            normalization="zscore",
+            batch_size=8,
+        )
+        repeated = _acceptance_collated(
+            SMALL_ROOT,
+            normalization="zscore",
+            batch_size=8,
+        )
+        self.assertEqual(
+            acceptance["sample_id"],
+            repeated["sample_id"],
+        )
+        accepted = prepare_collated_batch(acceptance)
+        self.assertEqual(
+            {metadata["source"] for metadata in accepted.metadata},
+            set(benchmark_contract["included_sources"]),
+        )
+        self.assertEqual(
+            {len(names) for names in accepted.model.optical_channel_names},
+            {3, 4, 12},
+        )
+        accepted_combinations = set(
+            available_auxiliaries_by_sample(accepted.model)
+        )
+        self.assertIn(tuple(), accepted_combinations)
+        self.assertIn(("dem", "slope"), accepted_combinations)
+        self.assertIn(
+            ("dem", "insar_velocity"),
+            accepted_combinations,
+        )
 
     def test_all_variants_forward_variable_channels_and_outputs(self) -> None:
         for variant in VARIANTS:
             with self.subTest(variant=variant):
                 self.model.variant = variant
                 output = self.model(self.batch, return_regions=True)
-                self.assertEqual(tuple(output.mask_logits.shape), (7, 1, 32, 32))
+                self.assertEqual(tuple(output.mask_logits.shape), (6, 1, 32, 32))
                 self.assertEqual(
-                    tuple(output.mask_probability.shape), (7, 1, 32, 32)
+                    tuple(output.mask_probability.shape), (6, 1, 32, 32)
                 )
-                self.assertEqual(tuple(output.no_target_score.shape), (7,))
-                self.assertEqual(tuple(output.modality_weights.shape), (7, 6))
+                self.assertEqual(tuple(output.no_target_score.shape), (6,))
+                self.assertEqual(tuple(output.modality_weights.shape), (6, 4))
                 self.assertEqual(
                     output.modality_weight_map_strides,
                     (4, 8, 16, 32),
@@ -349,10 +346,10 @@ class OAAuxSegTest(unittest.TestCase):
                         for weight_map in output.modality_weight_maps
                     ),
                     (
-                        (7, 6, 8, 8),
-                        (7, 6, 4, 4),
-                        (7, 6, 2, 2),
-                        (7, 6, 1, 1),
+                        (6, 4, 8, 8),
+                        (6, 4, 4, 4),
+                        (6, 4, 2, 2),
+                        (6, 4, 1, 1),
                     ),
                 )
                 for weight_map in output.modality_weight_maps:
@@ -364,7 +361,7 @@ class OAAuxSegTest(unittest.TestCase):
                     )
                 torch.testing.assert_close(
                     output.modality_weights.sum(dim=1),
-                    torch.ones(7),
+                    torch.ones(6),
                     rtol=0,
                     atol=1e-6,
                 )
@@ -372,10 +369,10 @@ class OAAuxSegTest(unittest.TestCase):
                     output.modality_names,
                     self.registry.modality_weight_order,
                 )
-                self.assertEqual(len(output.candidate_regions or []), 7)
-                self.assertEqual(len(output.region_features or []), 7)
+                self.assertEqual(len(output.candidate_regions or []), 6)
+                self.assertEqual(len(output.region_features or []), 6)
                 for feature in output.region_features or []:
-                    self.assertEqual(feature.shape[1:], (270,))
+                    self.assertEqual(feature.shape[1:], (268,))
 
     def test_absent_auxiliary_is_exact_optical_path(self) -> None:
         no_aux = filter_auxiliaries(
@@ -632,66 +629,58 @@ class OAAuxSegTest(unittest.TestCase):
         ):
             torch.testing.assert_close(first_map, second_map)
 
-    def test_sar_orbits_remain_sparse_and_independent(self) -> None:
+    def test_current_auxiliary_combinations_are_sparse_and_independent(
+        self,
+    ) -> None:
         available = available_auxiliaries_by_sample(self.batch)
-        self.assertEqual(available[4], ("dem", "sar_ascending"))
-        self.assertEqual(available[5], ("dem", "sar_descending"))
-        self.assertEqual(
-            available[6],
-            ("dem", "sar_ascending", "sar_descending"),
-        )
+        self.assertEqual(available[2], ("dem", "slope"))
+        self.assertEqual(available[3], ("dem", "insar_velocity"))
         self.model.variant = "mean_auxiliary_fusion"
         with torch.no_grad():
             output = self.model(self.batch)
-        ascending = output.modality_names.index("sar_ascending")
-        descending = output.modality_names.index("sar_descending")
+        slope = output.modality_names.index("slope")
+        insar = output.modality_names.index("insar_velocity")
         self.assertGreater(
-            float(output.modality_weights[4, ascending].item()), 0.0
+            float(output.modality_weights[2, slope].item()), 0.0
         )
         self.assertEqual(
-            float(output.modality_weights[4, descending].item()), 0.0
+            float(output.modality_weights[2, insar].item()), 0.0
         )
         self.assertEqual(
-            float(output.modality_weights[5, ascending].item()), 0.0
+            float(output.modality_weights[3, slope].item()), 0.0
         )
         self.assertGreater(
-            float(output.modality_weights[5, descending].item()), 0.0
-        )
-        self.assertGreater(
-            float(output.modality_weights[6, ascending].item()), 0.0
-        )
-        self.assertGreater(
-            float(output.modality_weights[6, descending].item()), 0.0
+            float(output.modality_weights[3, insar].item()), 0.0
         )
 
     def test_invalid_values_cannot_affect_features(self) -> None:
-        sar = self.batch.auxiliaries["sar_ascending"]
-        valid = sar.pixel_valid.clone()
+        insar = self.batch.auxiliaries["insar_velocity"]
+        valid = insar.pixel_valid.clone()
         valid[:, :, :, :16] = 0
-        zeros = sar.values.clone()
+        zeros = insar.values.clone()
         zeros[:, :, :, :16] = 0
-        huge = sar.values.clone()
+        huge = insar.values.clone()
         huge[:, :, :, :16] = 1e30
         zero_batch = replace_auxiliary(
             self.batch,
-            "sar_ascending",
+            "insar_velocity",
             PackedAuxiliary(
-                sar.sample_indices,
+                insar.sample_indices,
                 zeros,
                 valid,
-                sar.channel_valid,
-                sar.channel_names,
+                insar.channel_valid,
+                insar.channel_names,
             ),
         )
         huge_batch = replace_auxiliary(
             self.batch,
-            "sar_ascending",
+            "insar_velocity",
             PackedAuxiliary(
-                sar.sample_indices,
+                insar.sample_indices,
                 huge,
                 valid,
-                sar.channel_valid,
-                sar.channel_names,
+                insar.channel_valid,
+                insar.channel_names,
             ),
         )
         with torch.no_grad():
@@ -709,23 +698,23 @@ class OAAuxSegTest(unittest.TestCase):
             torch.testing.assert_close(first_map, second_map)
 
     def test_quality_selector_masks_zero_coverage(self) -> None:
-        for name in ("sar_ascending", "sar_descending"):
+        for name in ("insar_velocity", "slope"):
             with self.subTest(modality=name):
-                sar = self.batch.auxiliaries[name]
+                auxiliary = self.batch.auxiliaries[name]
                 zero_coverage = replace_auxiliary(
                     self.batch,
                     name,
                     PackedAuxiliary(
-                        sar.sample_indices,
-                        torch.full_like(sar.values, 1e30),
-                        torch.zeros_like(sar.pixel_valid),
-                        torch.zeros_like(sar.channel_valid),
-                        sar.channel_names,
+                        auxiliary.sample_indices,
+                        torch.full_like(auxiliary.values, 1e30),
+                        torch.zeros_like(auxiliary.pixel_valid),
+                        torch.zeros_like(auxiliary.channel_valid),
+                        auxiliary.channel_names,
                     ),
                 )
                 with torch.no_grad():
                     output = self.model(zero_coverage)
-                sample_index = int(sar.sample_indices[0])
+                sample_index = int(auxiliary.sample_indices[0])
                 self.assertEqual(
                     float(
                         output.modality_weights[
@@ -784,25 +773,25 @@ class OAAuxSegTest(unittest.TestCase):
                         atol=0,
                     )
 
-    def test_sar_spatial_quality_is_local(self) -> None:
-        sar = self.batch.auxiliaries["sar_ascending"]
-        local_valid = sar.pixel_valid.clone()
+    def test_auxiliary_spatial_quality_is_local(self) -> None:
+        insar = self.batch.auxiliaries["insar_velocity"]
+        local_valid = insar.pixel_valid.clone()
         local_valid[:, :, :, :16] = 0
         localized = replace_auxiliary(
             self.batch,
-            "sar_ascending",
+            "insar_velocity",
             PackedAuxiliary(
-                sar.sample_indices,
-                sar.values,
+                insar.sample_indices,
+                insar.values,
                 local_valid,
-                sar.channel_valid,
-                sar.channel_names,
+                insar.channel_valid,
+                insar.channel_names,
             ),
         )
         with torch.no_grad():
             output = self.model(localized)
-        column = output.modality_names.index("sar_ascending")
-        sample_index = int(sar.sample_indices[0])
+        column = output.modality_names.index("insar_velocity")
+        sample_index = int(insar.sample_indices[0])
         stride4 = output.modality_weight_maps[0][
             sample_index,
             column,
@@ -827,7 +816,7 @@ class OAAuxSegTest(unittest.TestCase):
         )
         optimizer = make_optimizer(self.model, config)
         optimizer.zero_grad(set_to_none=True)
-        target = torch.zeros(7, 1, 32, 32)
+        target = torch.zeros(6, 1, 32, 32)
         target[1:, :, 8:24, 8:24] = 1
         output = self.model(self.batch)
         loss, components = bce_dice_loss(output.mask_logits, target)
@@ -888,15 +877,15 @@ class OAAuxSegTest(unittest.TestCase):
                     ),
                     f"mspa_stride{stride}_block{block_index}",
                 )
-        before_sar = {
+        before_auxiliary = {
             name: self.model.auxiliary_adapters[name]
             .projection[0]
             .weight.detach()
             .clone()
-            for name in ("sar_ascending", "sar_descending")
+            for name in SUPPORTED_AUXILIARY_ORDER
         }
         optimizer.step()
-        for name, before in before_sar.items():
+        for name, before in before_auxiliary.items():
             self.assertFalse(
                 torch.equal(
                     before,
@@ -911,22 +900,40 @@ class OAAuxSegTest(unittest.TestCase):
             ("dem",),
             ("dem", "slope"),
             ("dem", "insar_velocity"),
-            ("dem", "sar_ascending", "sar_descending"),
+            ("dem", "insar_velocity", "slope"),
         ]
-        sampler = AuxiliarySubsetSampler(123, 0.2, 0.1)
+        sampler = AuxiliarySubsetSampler(123, 0.2)
         first = sampler.sample(available)
         state = sampler.state_dict()
         expected_next = sampler.sample(available)
-        restored = AuxiliarySubsetSampler(999, 0.2, 0.1)
+        restored = AuxiliarySubsetSampler(999, 0.2)
         restored.load_state_dict(state)
         self.assertEqual(expected_next, restored.sample(available))
+        self.assertEqual(sampler.state_dict(), restored.state_dict())
         self.assertEqual(first[0], ())
         for selected, names in zip(first, available, strict=True):
             self.assertTrue(set(selected).issubset(names))
+            if names:
+                self.assertTrue(selected)
         self.assertEqual(
             sum(sampler.reason_counts.values()),
             len(available) * 2,
         )
+        self.assertNotIn("sampled_null", sampler.reason_counts)
+        self.assertNotIn("dropped_to_none", sampler.reason_counts)
+        for seed in (0, 1, 97):
+            for dropout in (0.0, 0.2, 0.99):
+                candidate = AuxiliarySubsetSampler(seed, dropout)
+                for _ in range(20):
+                    active = candidate.sample(available)
+                    self.assertTrue(
+                        all(
+                            bool(selected) == bool(present)
+                            for selected, present in zip(
+                                active, available, strict=True
+                            )
+                        )
+                    )
 
     def test_training_batcher_is_fixed_and_resume_exact(self) -> None:
         batcher = StatefulTrainingBatcher(
@@ -969,7 +976,7 @@ class OAAuxSegTest(unittest.TestCase):
         self.assertEqual(positive, 4)
         self.assertEqual(len(indices) - positive, 4)
 
-    def test_proposed_sampling_reaches_auxiliary_exposure_gate(self) -> None:
+    def test_proposed_sampling_preserves_native_auxiliary_exposure(self) -> None:
         batcher = StatefulTrainingBatcher(
             SMALL_ROOT,
             batch_size=8,
@@ -977,7 +984,9 @@ class OAAuxSegTest(unittest.TestCase):
             seed=20260725,
             policy="uniform",
         )
-        sampler = AuxiliarySubsetSampler(20260726, 0.2, 0.1)
+        sampler = AuxiliarySubsetSampler(20260726, 0.2)
+        native_auxiliary_samples = 0
+        active_auxiliary_samples = 0
         for _ in range(300):
             available = [
                 ordered_auxiliary_names(
@@ -985,17 +994,39 @@ class OAAuxSegTest(unittest.TestCase):
                 )
                 for index in batcher.next_indices()
             ]
-            sampler.sample(available)
+            active = sampler.sample(available)
+            native_auxiliary_samples += sum(bool(item) for item in available)
+            active_auxiliary_samples += sum(bool(item) for item in active)
+            self.assertTrue(
+                all(
+                    bool(selected) == bool(present)
+                    for selected, present in zip(
+                        active, available, strict=True
+                    )
+                )
+            )
         self.assertEqual(sum(sampler.counts.values()), 2400)
         self.assertEqual(sum(sampler.reason_counts.values()), 2400)
-        active = sum(
+        active_count = sum(
             sampler.counts[name]
             for name in ("single", "multi", "all")
         )
-        self.assertGreaterEqual(active / 2400, 0.40)
+        self.assertEqual(active_count, native_auxiliary_samples)
+        self.assertEqual(
+            active_auxiliary_samples,
+            native_auxiliary_samples,
+        )
         self.assertGreater(sampler.reason_counts["native_none"], 0)
-        self.assertGreater(sampler.reason_counts["sampled_null"], 0)
-        self.assertGreater(sampler.reason_counts["dropped_to_none"], 0)
+        self.assertGreater(sampler.reason_counts["active"], 0)
+        self.assertGreater(
+            sampler.reason_counts["dropout_restored"],
+            0,
+        )
+        self.assertGreater(sampler.counts["single"], 0)
+        self.assertGreater(
+            sampler.counts["multi"] + sampler.counts["all"],
+            0,
+        )
 
     def test_optimizer_groups_extra_bands_at_new_lr_and_decay_rules(
         self,
@@ -1170,6 +1201,8 @@ class OAAuxSegTest(unittest.TestCase):
                 "native_none": 1,
                 "active": 1,
             },
+            training_native_auxiliary_samples=1,
+            training_active_auxiliary_samples=1,
         )
         self.assertEqual(
             state["parameter_change_max"]["mspa_stride4"], 0.1
@@ -1191,7 +1224,7 @@ class OAAuxSegTest(unittest.TestCase):
         self.assertTrue(all(capacity.values()))
 
     def test_six_variants_synthetic_optimizer_step(self) -> None:
-        target = torch.zeros(7, 1, 32, 32)
+        target = torch.zeros(6, 1, 32, 32)
         target[1:, :, 6:26, 7:25] = 1
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-5)
         for variant in VARIANTS:
@@ -1234,7 +1267,7 @@ class OAAuxSegTest(unittest.TestCase):
             min_lr_ratio=config.min_lr_ratio,
         )
         scaler = make_scaler(torch.device("cpu"))
-        benchmark_hash = sha256_file(SMALL_ROOT / "index.jsonl")
+        benchmark_contract = benchmark_contract_from_root(SMALL_ROOT)
         with torch.no_grad():
             before = self.model(self.batch)
         with tempfile.TemporaryDirectory() as temporary:
@@ -1246,7 +1279,7 @@ class OAAuxSegTest(unittest.TestCase):
                 scheduler=scheduler,
                 scaler=scaler,
                 step=1,
-                benchmark_index_sha256=benchmark_hash,
+                benchmark_contract=benchmark_contract,
                 subset_sampler_state=None,
                 training_batcher_state={"unit_test": True},
                 training_state={
@@ -1255,14 +1288,26 @@ class OAAuxSegTest(unittest.TestCase):
                 },
             )
             payload = read_checkpoint(
-                path, expected_benchmark_index_sha256=benchmark_hash
+                path,
+                expected_benchmark_contract=benchmark_contract,
             )
             self.assertEqual(
                 payload["schema_version"], CHECKPOINT_SCHEMA_VERSION
             )
+            self.assertEqual(
+                payload["benchmark_contract"],
+                benchmark_contract,
+            )
+            mismatched_contract = dict(benchmark_contract)
+            mismatched_contract["manifest_sha256"] = "b" * 64
+            with self.assertRaisesRegex(ValueError, "Benchmark 合同不一致"):
+                read_checkpoint(
+                    path,
+                    expected_benchmark_contract=mismatched_contract,
+                )
             legacy_path = Path(temporary) / "legacy_checkpoint.pt"
             legacy_payload = dict(payload)
-            legacy_payload["schema_version"] = "oa_auxseg_checkpoint_v4"
+            legacy_payload["schema_version"] = "oa_auxseg_checkpoint_v5"
             torch.save(legacy_payload, legacy_path)
             with self.assertRaisesRegex(ValueError, "只支持"):
                 read_checkpoint(legacy_path)
@@ -1286,7 +1331,6 @@ class OAAuxSegTest(unittest.TestCase):
             for source in (
                 "landslide4sense",
                 "multimodal_landslide",
-                "sen12landslides",
             ):
                 export_dir = Path(temporary) / source
                 report = run_inference(
@@ -1308,16 +1352,21 @@ class OAAuxSegTest(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 with np.load(export_dir / "predictions.npz") as arrays:
                     feature_key = rows[0]["array_keys"]["region_features"]
-                    self.assertEqual(arrays[feature_key].shape[1:], (270,))
+                    self.assertEqual(arrays[feature_key].shape[1:], (268,))
                     self.assertEqual(
                         arrays[
                             rows[0]["array_keys"]["modality_weights"]
                         ].shape,
-                        (6,),
+                        (4,),
                     )
                     for stride, shape in zip(
                         (4, 8, 16, 32),
-                        ((6, 56, 56), (6, 28, 28), (6, 14, 14), (6, 7, 7)),
+                        (
+                            (4, 56, 56),
+                            (4, 28, 28),
+                            (4, 14, 14),
+                            (4, 7, 7),
+                        ),
                         strict=True,
                     ):
                         map_key = rows[0]["array_keys"][
@@ -1330,9 +1379,13 @@ class OAAuxSegTest(unittest.TestCase):
                     )
                 )
                 self.assertEqual(
-                    manifest["schema_version"], "oa_auxseg_inference_v5"
+                    manifest["schema_version"], INFERENCE_SCHEMA_VERSION
                 )
-                self.assertEqual(manifest["region_feature_dim"], 270)
+                self.assertEqual(manifest["region_feature_dim"], 268)
+                self.assertEqual(
+                    manifest["benchmark_contract"],
+                    benchmark_contract,
+                )
                 self.assertEqual(
                     tuple(manifest["modality_weight_order"]),
                     self.registry.modality_weight_order,
@@ -1385,21 +1438,21 @@ class OAAuxSegTest(unittest.TestCase):
         probability = probability.to(torch.bfloat16)
         optical = torch.randn(1, 128, 8, 8)
         fused = torch.randn(1, 128, 8, 8)
-        weights = torch.tensor([[0.2, 0.0, 0.1, 0.1, 0.1, 0.5]])
+        weights = torch.tensor([[0.2, 0.1, 0.1, 0.6]])
         regions, features = extract_regions_and_features(
             probability=probability,
             optical_feature=optical,
             fused_feature=fused,
             modality_weights=weights,
-            expected_feature_dim=270,
+            expected_feature_dim=268,
             threshold=0.5,
             min_area=16,
         )
         self.assertEqual(len(regions[0]), 1)
         self.assertEqual(regions[0][0].bbox_xyxy, (3, 2, 10, 8))
         self.assertEqual(regions[0][0].area_pixels, 42)
-        self.assertEqual(tuple(features[0].shape), (1, 270))
-        torch.testing.assert_close(features[0][0, -6:], weights[0])
+        self.assertEqual(tuple(features[0].shape), (1, 268))
+        torch.testing.assert_close(features[0][0, -4:], weights[0])
 
     def test_metrics_include_empty_mask_contract(self) -> None:
         target = torch.zeros(2, 1, 4, 4)
@@ -1435,9 +1488,9 @@ class OAAuxSegTest(unittest.TestCase):
                 }
                 for name, packed in self.batch.auxiliaries.items()
             },
-            "mask": torch.zeros(7, 1, 32, 32),
-            "sample_id": [f"sample-{index}" for index in range(7)],
-            "metadata": [{"source": "synthetic"} for _ in range(7)],
+            "mask": torch.zeros(6, 1, 32, 32),
+            "sample_id": [f"sample-{index}" for index in range(6)],
+            "metadata": [{"source": "synthetic"} for _ in range(6)],
         }
         config = RuntimeConfig(
             schema_version=CONFIG_SCHEMA_VERSION,
@@ -1447,7 +1500,7 @@ class OAAuxSegTest(unittest.TestCase):
             backbone_weights="unused",
             variant="proposed_dropout",
             device="cpu",
-            batch_size=7,
+            batch_size=6,
         )
         result = evaluate_model(
             self.model,
@@ -1456,13 +1509,16 @@ class OAAuxSegTest(unittest.TestCase):
             config=config,
         )
         self.assertEqual(
-            result["conditional_weight_counts"]["sar_ascending"], 2
+            result["conditional_weight_counts"]["dem"], 4
         )
         self.assertEqual(
-            result["conditional_weight_counts"]["sar_descending"], 2
+            result["conditional_weight_counts"]["insar_velocity"], 2
         )
         self.assertEqual(
-            result["conditional_weight_counts"]["__null__"], 5
+            result["conditional_weight_counts"]["slope"], 2
+        )
+        self.assertEqual(
+            result["conditional_weight_counts"]["__null__"], 4
         )
         self.assertEqual(
             set(result["conditional_stage_modality_weights"]),
@@ -1492,7 +1548,7 @@ class OAAuxSegTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema"):
             RuntimeConfig.from_dict(
                 {
-                    "schema_version": "oa_auxseg_runtime_config_v3",
+                    "schema_version": "oa_auxseg_runtime_config_v4",
                     "benchmark_root": "benchmark",
                     "output_dir": "output",
                     "backbone": "convnext_small",
@@ -1599,26 +1655,86 @@ class OAAuxSegTest(unittest.TestCase):
             BACKBONE_STAGE_DEPTHS,
         )
 
-    def test_registry_rejects_unknown_sensor(self) -> None:
+    def test_registry_is_dynamic_and_rejects_sar_or_ten_channel(self) -> None:
         with self.assertRaisesRegex(ValueError, "未注册辅助模态"):
             ModelRegistry(
                 optical_signatures=self.registry.optical_signatures,
                 auxiliary_channels={
                     **self.registry.auxiliary_channels,
-                    "unknown_sensor": ("value",),
+                    "sar_ascending": ("VV", "VH"),
                 },
                 available_auxiliaries=self.registry.available_auxiliaries,
             )
-        with self.assertRaisesRegex(ValueError, "缺少固定辅助模态列"):
-            ModelRegistry(
-                optical_signatures=self.registry.optical_signatures,
-                auxiliary_channels={
-                    name: channels
-                    for name, channels in self.registry.auxiliary_channels.items()
-                    if name != "slope"
-                },
-                available_auxiliaries=self.registry.available_auxiliaries,
+        with self.assertRaisesRegex(ValueError, "没有审计过"):
+            optical_rgb_indices(tuple(f"B{index:02d}" for index in range(1, 11)))
+
+        dem_only = ModelRegistry(
+            optical_signatures=self.registry.optical_signatures,
+            auxiliary_channels={"dem": ("DEM",)},
+            available_auxiliaries={
+                signature: (
+                    ("dem",)
+                    if "dem"
+                    in self.registry.available_auxiliaries.get(signature, ())
+                    else ()
+                )
+                for signature in self.registry.optical_signatures
+            },
+        )
+        self.assertEqual(dem_only.auxiliary_order, ("dem",))
+        self.assertEqual(
+            dem_only.modality_weight_order,
+            ("dem", "__null__"),
+        )
+        self.assertEqual(dem_only.region_feature_dim(128), 266)
+        optical_only_registry = ModelRegistry(
+            optical_signatures=self.registry.optical_signatures,
+            auxiliary_channels={},
+            available_auxiliaries={
+                signature: ()
+                for signature in self.registry.optical_signatures
+            },
+        )
+        self.assertEqual(
+            optical_only_registry.modality_weight_order,
+            ("__null__",),
+        )
+        self.assertEqual(
+            optical_only_registry.region_feature_dim(128),
+            265,
+        )
+        dem_model = OAAuxSegModel(
+            OAAuxSegConfig(variant="injection_quality"),
+            dem_only,
+            backbone_weights=None,
+        )
+        dem_batch = filter_auxiliaries(
+            self.batch,
+            [
+                tuple(),
+                tuple(),
+                ("dem",),
+                ("dem",),
+                ("dem",),
+                ("dem",),
+            ],
+        )
+        dem_model.eval()
+        with torch.no_grad():
+            output = dem_model(dem_batch, return_regions=True)
+        self.assertEqual(tuple(output.modality_weights.shape), (6, 2))
+        self.assertTrue(
+            all(
+                weight_map.shape[1] == 2
+                for weight_map in output.modality_weight_maps
             )
+        )
+        self.assertTrue(
+            all(
+                features.shape[1:] == (266,)
+                for features in output.region_features or ()
+            )
+        )
 
 
 class _PseudoTTY(io.StringIO):

@@ -11,15 +11,23 @@ import torch
 from torch import Tensor
 
 
-MODEL_SCHEMA_VERSION = "oa_auxseg_model_v5"
-CHECKPOINT_SCHEMA_VERSION = "oa_auxseg_checkpoint_v5"
-CONFIG_SCHEMA_VERSION = "oa_auxseg_runtime_config_v4"
+MODEL_SCHEMA_VERSION = "oa_auxseg_model_v6"
+CHECKPOINT_SCHEMA_VERSION = "oa_auxseg_checkpoint_v6"
+INFERENCE_SCHEMA_VERSION = "oa_auxseg_inference_v6"
+CONFIG_SCHEMA_VERSION = "oa_auxseg_runtime_config_v5"
+BENCHMARK_SCHEMA_VERSION = "oa_auxseg_hdf5_v1"
 SUPPORTED_BACKBONE = "convnext_small"
+PHASE2_INCLUDED_SOURCES = (
+    "gdcld",
+    "lmhld",
+    "landslidebench_agent",
+    "landslide4sense",
+    "multimodal_landslide",
+)
+PHASE2_EXCLUDED_SOURCES = ("sen12landslides",)
 SUPPORTED_AUXILIARY_ORDER = (
     "dem",
     "insar_velocity",
-    "sar_ascending",
-    "sar_descending",
     "slope",
 )
 NULL_AUXILIARY = "__null__"
@@ -73,13 +81,6 @@ class ModelRegistry:
         unknown = set(self.auxiliary_channels) - set(SUPPORTED_AUXILIARY_ORDER)
         if unknown:
             raise ValueError(f"未注册辅助模态：{sorted(unknown)}")
-        missing = set(SUPPORTED_AUXILIARY_ORDER) - set(
-            self.auxiliary_channels
-        )
-        if missing:
-            raise ValueError(
-                f"Phase 2 v5 registry 缺少固定辅助模态列：{sorted(missing)}"
-            )
         if len(set(self.optical_signatures)) != len(self.optical_signatures):
             raise ValueError("registry 光学通道签名不能重复")
         for name, channels in self.auxiliary_channels.items():
@@ -188,9 +189,9 @@ class OAAuxSegConfig:
         if self.variant not in VARIANTS:
             raise ValueError(f"variant 必须是 {VARIANTS}，实际为 {self.variant!r}")
         if self.decoder_dim != 512:
-            raise ValueError("Phase 2 v5 固定要求 decoder_dim=512")
+            raise ValueError("Phase 2 v6 固定要求 decoder_dim=512")
         if self.region_projection_dim != 128:
-            raise ValueError("Phase 2 v5 固定要求 region_projection_dim=128")
+            raise ValueError("Phase 2 v6 固定要求 region_projection_dim=128")
         for name, probability in (
             ("optical_stochastic_depth", self.optical_stochastic_depth),
             ("auxiliary_drop_path", self.auxiliary_drop_path),
@@ -218,6 +219,10 @@ class OAAuxSegConfig:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "OAAuxSegConfig":
+        if value.get("schema_version") != MODEL_SCHEMA_VERSION:
+            raise ValueError(
+                f"模型配置 schema 错误：{value.get('schema_version')!r}"
+            )
         expected_fields = {
             "schema_version",
             "variant",
@@ -231,10 +236,6 @@ class OAAuxSegConfig:
         }
         if set(value) != expected_fields:
             raise ValueError("模型配置字段与当前 schema 不匹配")
-        if value.get("schema_version") != MODEL_SCHEMA_VERSION:
-            raise ValueError(
-                f"模型配置 schema 错误：{value.get('schema_version')!r}"
-            )
         return cls(
             variant=str(value["variant"]),
             decoder_dim=int(value["decoder_dim"]),
@@ -420,7 +421,6 @@ class RuntimeConfig:
     min_lr_ratio: float = 0.05
     grad_clip: float = 1.0
     modality_dropout: float = 0.2
-    auxiliary_null_probability: float = 0.1
     train_sampler: str = "uniform"
     optical_stochastic_depth: float = 0.1
     auxiliary_drop_path: float = 0.1
@@ -437,7 +437,7 @@ class RuntimeConfig:
             raise ValueError(f"非法 variant：{self.variant}")
         if self.backbone != SUPPORTED_BACKBONE:
             raise ValueError(
-                f"Phase 2 v5 只支持 backbone={SUPPORTED_BACKBONE!r}"
+                f"Phase 2 v6 只支持 backbone={SUPPORTED_BACKBONE!r}"
             )
         if self.normalization not in {"none", "zscore"}:
             raise ValueError("normalization 必须是 none 或 zscore")
@@ -461,8 +461,6 @@ class RuntimeConfig:
             raise ValueError("weight_decay 不能小于 0")
         if not 0 <= self.modality_dropout < 1:
             raise ValueError("modality_dropout 必须位于 [0,1)")
-        if not 0 <= self.auxiliary_null_probability < 1:
-            raise ValueError("auxiliary_null_probability 必须位于 [0,1)")
         if not 0 <= self.warmup_ratio < 1:
             raise ValueError("warmup_ratio 必须位于 [0,1)")
         if not 0 < self.min_lr_ratio <= 1:
@@ -488,6 +486,10 @@ class RuntimeConfig:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "RuntimeConfig":
+        if value.get("schema_version") != CONFIG_SCHEMA_VERSION:
+            raise ValueError(
+                f"运行配置 schema 错误：{value.get('schema_version')!r}"
+            )
         allowed = {field.name for field in cls.__dataclass_fields__.values()}
         unknown = set(value) - allowed
         missing = {

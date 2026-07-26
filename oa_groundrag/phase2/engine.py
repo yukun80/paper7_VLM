@@ -38,11 +38,11 @@ from .checkpoint import (
 )
 from .contracts import (
     CONFIG_SCHEMA_VERSION,
+    INFERENCE_SCHEMA_VERSION,
     OAAuxSegBatch,
     OAAuxSegConfig,
     RuntimeConfig,
     SUPPORTED_BACKBONE,
-    SUPPORTED_AUXILIARY_ORDER,
     VARIANTS,
 )
 from .data import (
@@ -50,6 +50,7 @@ from .data import (
     PreparedBatch,
     StatefulTrainingBatcher,
     available_auxiliaries_by_sample,
+    benchmark_contract_from_root,
     filter_auxiliaries,
     make_dataloader,
     prepare_collated_batch,
@@ -89,7 +90,6 @@ def effective_training_config(
         min_lr_ratio=0.10,
         grad_clip=5.0,
         modality_dropout=0.0,
-        auxiliary_null_probability=0.0,
         train_sampler="uniform",
         optical_stochastic_depth=0.0,
         auxiliary_drop_path=0.0,
@@ -119,7 +119,7 @@ def resolve_runtime(
 def require_local_backbone(path: Path) -> None:
     if not path.is_file():
         raise FileNotFoundError(
-            "Phase 2 v5 真实训练要求本地 torchvision ConvNeXt-Small 官方 "
+            "Phase 2 v6 真实训练要求本地 torchvision ConvNeXt-Small 官方 "
             f"state_dict，当前不存在：{path}"
         )
 
@@ -837,19 +837,55 @@ def _acceptance_collated(
         raise ValueError(
             f"acceptance batch 需要 {batch_size} 条 train，实际仅 {len(dataset)}"
         )
-    source_indices: dict[str, list[int]] = defaultdict(list)
-    for index, row in enumerate(dataset.rows):
-        source_indices[str(row["source"])].append(index)
-    chosen = [
-        max(
-            indices,
-            key=lambda index: (
-                len(dataset.rows[index]["auxiliaries"]),
-                -index,
-            ),
+    registry = registry_from_benchmark(benchmark_root)
+
+    def row_modalities(row: Mapping[str, Any]) -> tuple[str, ...]:
+        names = set(str(name) for name in row["auxiliaries"])
+        return tuple(
+            name for name in registry.auxiliary_order if name in names
         )
-        for indices in source_indices.values()
+
+    def row_features(row: Mapping[str, Any]) -> set[tuple[str, ...]]:
+        optical = tuple(
+            str(name) for name in row["optical"]["channel_names"]
+        )
+        modalities = row_modalities(row)
+        features = {
+            ("source", str(row["source"])),
+            ("optical", *optical),
+        }
+        features.update(("auxiliary", name) for name in modalities)
+        if not modalities:
+            features.add(("auxiliary_combination", "none"))
+        elif len(modalities) >= 2:
+            features.add(("auxiliary_combination", *modalities))
+        return features
+
+    features_by_index = [
+        row_features(row) for row in dataset.rows
     ]
+    required_features = set().union(*features_by_index)
+    chosen: list[int] = []
+    uncovered = set(required_features)
+    while uncovered:
+        candidates = [
+            (
+                len(features & uncovered),
+                -index,
+                index,
+            )
+            for index, features in enumerate(features_by_index)
+            if index not in chosen
+        ]
+        gain, _, best_index = max(candidates, default=(0, 0, -1))
+        if gain <= 0 or best_index < 0:
+            raise RuntimeError("acceptance batch 无法覆盖当前 Benchmark 合同")
+        chosen.append(best_index)
+        uncovered -= features_by_index[best_index]
+        if len(chosen) > batch_size:
+            raise RuntimeError(
+                "acceptance batch_size 不足以覆盖当前 Benchmark 合同"
+            )
     for index in range(len(dataset)):
         if len(chosen) >= batch_size:
             break
@@ -858,24 +894,40 @@ def _acceptance_collated(
     if len(chosen) != batch_size:
         raise RuntimeError("无法构建指定大小的 acceptance batch")
     collated = collate_benchmark_samples([dataset[index] for index in chosen])
-    channel_counts = {
-        int(value.shape[0]) for value in collated["optical"]
+    actual_optical = {
+        tuple(str(name) for name in names)
+        for names in collated["optical_channel_names"]
     }
-    if not {3, 4, 10, 12}.issubset(channel_counts):
-        raise RuntimeError("acceptance batch 未覆盖 3/4/10/12 通道光学")
+    if actual_optical != set(registry.optical_signatures):
+        raise RuntimeError("acceptance batch 未覆盖全部光学通道签名")
     auxiliary_names = set(collated["auxiliaries"])
-    expected_auxiliaries = set(SUPPORTED_AUXILIARY_ORDER)
+    expected_auxiliaries = set(registry.auxiliary_order)
     if auxiliary_names != expected_auxiliaries:
         raise RuntimeError(
             "acceptance batch 未覆盖全部已注册辅助模态："
             f"actual={sorted(auxiliary_names)} "
             f"expected={sorted(expected_auxiliaries)}"
         )
-    present_count = [0] * len(chosen)
-    for packed in collated["auxiliaries"].values():
+    present_names: list[list[str]] = [[] for _ in chosen]
+    for name, packed in collated["auxiliaries"].items():
         for sample_index in packed["sample_indices"].tolist():
-            present_count[int(sample_index)] += 1
-    if 0 not in present_count or max(present_count) < 3:
+            present_names[int(sample_index)].append(str(name))
+    present_combinations = {
+        tuple(
+            name
+            for name in registry.auxiliary_order
+            if name in set(names)
+        )
+        for names in present_names
+    }
+    expected_multi = {
+        row_modalities(row)
+        for row in dataset.rows
+        if len(row_modalities(row)) >= 2
+    }
+    if tuple() not in present_combinations or not expected_multi.issubset(
+        present_combinations
+    ):
         raise RuntimeError("acceptance batch 未同时覆盖无辅助与多辅助样本")
     return collated
 
@@ -886,7 +938,7 @@ def checkpoint_reload_difference(
     checkpoint_path: Path,
     model: OAAuxSegModel,
     collated: Mapping[str, Any],
-    benchmark_index_sha256: str,
+    benchmark_contract: Mapping[str, Any],
     device: torch.device,
 ) -> dict[str, float]:
     prepared = prepare_collated_batch(collated).to(
@@ -899,7 +951,7 @@ def checkpoint_reload_difference(
     before = model(model_batch)
     payload = read_checkpoint(
         checkpoint_path,
-        expected_benchmark_index_sha256=benchmark_index_sha256,
+        expected_benchmark_contract=benchmark_contract,
     )
     reloaded = model_from_checkpoint(payload, device=device)
     reloaded.eval()
@@ -961,6 +1013,8 @@ def _training_state(
     best_selection: Mapping[str, Any] | None,
     training_subset_counts: Mapping[str, int],
     training_subset_reason_counts: Mapping[str, int],
+    training_native_auxiliary_samples: int,
+    training_active_auxiliary_samples: int,
 ) -> dict[str, Any]:
     return {
         "runtime_config": config.to_dict(),
@@ -984,6 +1038,12 @@ def _training_state(
         "training_subset_counts": dict(training_subset_counts),
         "training_subset_reason_counts": dict(
             training_subset_reason_counts
+        ),
+        "training_native_auxiliary_samples": int(
+            training_native_auxiliary_samples
+        ),
+        "training_active_auxiliary_samples": int(
+            training_active_auxiliary_samples
         ),
     }
 
@@ -1027,7 +1087,7 @@ def _run_training_impl(
     )
     if config.num_workers != 0:
         raise ValueError(
-            "v5 可恢复定长训练 batcher 要求 num_workers=0；"
+            "v6 可恢复定长训练 batcher 要求 num_workers=0；"
             "评价与推理仍可使用多 worker"
         )
     benchmark_root, output_dir, backbone_weights, device = resolve_runtime(
@@ -1042,13 +1102,13 @@ def _run_training_impl(
         f"command={command_label} variant={config.variant} "
         f"device={device.type} output={output_dir} loading runtime"
     )
-    benchmark_hash = sha256_file(benchmark_root / "index.jsonl")
+    benchmark_contract = benchmark_contract_from_root(benchmark_root)
+    benchmark_hash = str(benchmark_contract["index_sha256"])
     set_global_seed(config.seed)
     subset_sampler = (
         AuxiliarySubsetSampler(
             config.seed + 2,
             config.modality_dropout,
-            config.auxiliary_null_probability,
         )
         if config.variant == "proposed_dropout" and not capacity_overfit
         else None
@@ -1086,12 +1146,14 @@ def _run_training_impl(
         best_selection: dict[str, Any] | None = None
         training_subset_counts: Counter[str] = Counter()
         training_subset_reason_counts: Counter[str] = Counter()
+        training_native_auxiliary_samples = 0
+        training_active_auxiliary_samples = 0
         resume_payload = None
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
         resume_payload = read_checkpoint(
             Path(resume_checkpoint),
-            expected_benchmark_index_sha256=benchmark_hash,
+            expected_benchmark_contract=benchmark_contract,
         )
         model = model_from_checkpoint(resume_payload, device=device)
         model.set_gradient_checkpointing(config.gradient_checkpointing)
@@ -1115,7 +1177,6 @@ def _run_training_impl(
             "warmup_ratio",
             "min_lr_ratio",
             "modality_dropout",
-            "auxiliary_null_probability",
             "train_sampler",
             "optical_stochastic_depth",
             "auxiliary_drop_path",
@@ -1179,6 +1240,12 @@ def _run_training_impl(
                     "training_subset_reason_counts", {}
                 ).items()
             }
+        )
+        training_native_auxiliary_samples = int(
+            state.get("training_native_auxiliary_samples", 0)
+        )
+        training_active_auxiliary_samples = int(
+            state.get("training_active_auxiliary_samples", 0)
         )
     optimizer = make_optimizer(model, config)
     scheduler = make_scheduler(
@@ -1291,7 +1358,7 @@ def _run_training_impl(
             scheduler=scheduler,
             scaler=scaler,
             step=step,
-            benchmark_index_sha256=benchmark_hash,
+            benchmark_contract=benchmark_contract,
             subset_sampler_state=(
                 subset_sampler.state_dict()
                 if subset_sampler is not None
@@ -1326,6 +1393,10 @@ def _run_training_impl(
         for active_names, available_names in zip(
             active, available, strict=True
         ):
+            training_native_auxiliary_samples += int(
+                bool(available_names)
+            )
+            training_active_auxiliary_samples += int(bool(active_names))
             training_subset_counts[
                 _subset_category(active_names, available_names)
             ] += 1
@@ -1606,6 +1677,12 @@ def _run_training_impl(
             training_subset_reason_counts=(
                 training_subset_reason_counts
             ),
+            training_native_auxiliary_samples=(
+                training_native_auxiliary_samples
+            ),
+            training_active_auxiliary_samples=(
+                training_active_auxiliary_samples
+            ),
         )
         if is_new_best:
             duration, size = save_current_checkpoint(
@@ -1674,6 +1751,11 @@ def _run_training_impl(
         != training_samples_seen
     ):
         raise RuntimeError("训练子集诊断计数与累计样本数不一致")
+    if (
+        training_active_auxiliary_samples
+        > training_native_auxiliary_samples
+    ):
+        raise RuntimeError("实际激活辅助样本数不能超过原生辅助样本数")
     for name, module in modules.items():
         parameter_change_max[name] = max(
             parameter_change_max[name],
@@ -1704,7 +1786,7 @@ def _run_training_impl(
     if selected_checkpoint_path == best_checkpoint_path:
         selected_payload = read_checkpoint(
             selected_checkpoint_path,
-            expected_benchmark_index_sha256=benchmark_hash,
+            expected_benchmark_contract=benchmark_contract,
         )
         model = model_from_checkpoint(selected_payload, device=device)
         train_metrics = evaluate_model(
@@ -1738,7 +1820,7 @@ def _run_training_impl(
             normalization=config.normalization,
             batch_size=config.batch_size,
         ),
-        benchmark_index_sha256=benchmark_hash,
+        benchmark_contract=benchmark_contract,
         device=device,
     )
     reload_seconds = time.perf_counter() - reload_started
@@ -1766,8 +1848,9 @@ def _run_training_impl(
     )
     subset_reason_summary = {
         "native_none": subset_reason_counts.get("native_none", 0),
-        "sampled_null": subset_reason_counts.get("sampled_null", 0),
-        "dropped_to_none": subset_reason_counts.get("dropped_to_none", 0),
+        "dropout_restored": subset_reason_counts.get(
+            "dropout_restored", 0
+        ),
         "variant_forced_none": subset_reason_counts.get(
             "variant_forced_none", 0
         ),
@@ -1778,7 +1861,15 @@ def _run_training_impl(
     active_auxiliary_exposures = sum(
         subset_counts.get(name, 0) for name in ("single", "multi", "all")
     )
+    if active_auxiliary_exposures != training_active_auxiliary_samples:
+        raise RuntimeError("辅助曝光分类计数与实际激活样本数不一致")
     subset_total = sum(subset_counts.values())
+    conditional_active_auxiliary_fraction = (
+        training_active_auxiliary_samples
+        / training_native_auxiliary_samples
+        if training_native_auxiliary_samples
+        else None
+    )
     training_report_path = output_dir / "training_report.json"
     report: dict[str, Any] = {
         "command": command_label,
@@ -1791,6 +1882,7 @@ def _run_training_impl(
         "maximum_steps": config.max_steps,
         "stopped_early": actual_step < config.max_steps,
         "benchmark_index_sha256": benchmark_hash,
+        "benchmark_contract": dict(benchmark_contract),
         "backbone_sha256": model.backbone_sha256,
         "modality_weight_order": list(model.modality_weight_order),
         "region_feature_dim": model.region_feature_dim,
@@ -1824,10 +1916,29 @@ def _run_training_impl(
         "subset_counts": subset_counts,
         "subset_reason_counts": subset_reason_summary,
         "subset_reason_events": subset_reason_counts,
+        "subset_sampler_cardinality_counts": (
+            dict(sorted(subset_sampler.cardinality_counts.items()))
+            if subset_sampler is not None
+            else {}
+        ),
+        "subset_sampler_dropout_counts": (
+            dict(sorted(subset_sampler.dropout_counts.items()))
+            if subset_sampler is not None
+            else {}
+        ),
+        "native_auxiliary_sample_count": (
+            training_native_auxiliary_samples
+        ),
+        "active_auxiliary_sample_count": (
+            training_active_auxiliary_samples
+        ),
         "effective_auxiliary_exposure_fraction": (
             active_auxiliary_exposures / subset_total
             if subset_total
             else None
+        ),
+        "conditional_active_auxiliary_fraction": (
+            conditional_active_auxiliary_fraction
         ),
         "train_sampler": config.train_sampler,
         "actual_batch_size": config.batch_size,
@@ -1887,12 +1998,10 @@ def _run_training_impl(
             ),
             "observed_none": subset_counts.get("none", 0) > 0,
             "observed_single": subset_counts.get("single", 0) > 0,
-            "observed_multi_or_all": (
-                subset_counts.get("multi", 0) + subset_counts.get("all", 0) > 0
-            ),
-            "effective_auxiliary_exposure_at_least_40_percent": (
-                report["effective_auxiliary_exposure_fraction"] is not None
-                and report["effective_auxiliary_exposure_fraction"] >= 0.40
+            "observed_all": subset_counts.get("all", 0) > 0,
+            "all_native_auxiliary_samples_remain_active": (
+                report["conditional_active_auxiliary_fraction"] is not None
+                and report["conditional_active_auxiliary_fraction"] == 1.0
             ),
             "fixed_batch_sample_count_exact": (
                 training_samples_seen
@@ -1937,10 +2046,11 @@ def run_evaluation(
     output_path: Path,
 ) -> dict[str, Any]:
     benchmark_root, _, _, device = resolve_runtime(config, repo_root)
-    benchmark_hash = sha256_file(benchmark_root / "index.jsonl")
+    benchmark_contract = benchmark_contract_from_root(benchmark_root)
+    benchmark_hash = str(benchmark_contract["index_sha256"])
     payload = read_checkpoint(
         checkpoint_path,
-        expected_benchmark_index_sha256=benchmark_hash,
+        expected_benchmark_contract=benchmark_contract,
     )
     model = model_from_checkpoint(payload, device=device)
     _validate_inference_config(payload, model, config)
@@ -1958,6 +2068,7 @@ def run_evaluation(
         "checkpoint": str(Path(checkpoint_path).resolve()),
         "checkpoint_step": int(payload["step"]),
         "benchmark_index_sha256": benchmark_hash,
+        "benchmark_contract": dict(benchmark_contract),
         "backbone_sha256": model.backbone_sha256,
         "metrics": evaluate_model(model, loader, device=device, config=config),
     }
@@ -1998,10 +2109,11 @@ def run_inference(
     output_dir: Path,
 ) -> dict[str, Any]:
     benchmark_root, _, _, device = resolve_runtime(config, repo_root)
-    benchmark_hash = sha256_file(benchmark_root / "index.jsonl")
+    benchmark_contract = benchmark_contract_from_root(benchmark_root)
+    benchmark_hash = str(benchmark_contract["index_sha256"])
     payload = read_checkpoint(
         checkpoint_path,
-        expected_benchmark_index_sha256=benchmark_hash,
+        expected_benchmark_contract=benchmark_contract,
     )
     model = model_from_checkpoint(payload, device=device)
     _validate_inference_config(payload, model, config)
@@ -2123,10 +2235,11 @@ def run_inference(
         atomic_write_json(
             temporary_dir / "manifest.json",
             {
-                "schema_version": "oa_auxseg_inference_v5",
+                "schema_version": INFERENCE_SCHEMA_VERSION,
                 "checkpoint": str(Path(checkpoint_path).resolve()),
                 "checkpoint_step": int(payload["step"]),
                 "benchmark_index_sha256": benchmark_hash,
+                "benchmark_contract": dict(benchmark_contract),
                 "backbone_sha256": model.backbone_sha256,
                 "backbone": SUPPORTED_BACKBONE,
                 "architecture": model.model_contract()["architecture"],
@@ -2177,7 +2290,8 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
     prepared = prepare_collated_batch(collated).to(
         device, non_blocking=device.type == "cuda"
     )
-    benchmark_hash = sha256_file(benchmark_root / "index.jsonl")
+    benchmark_contract = benchmark_contract_from_root(benchmark_root)
+    benchmark_hash = str(benchmark_contract["index_sha256"])
     reports: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(dir=output_dir) as temporary_name:
         temporary_root = Path(temporary_name)
@@ -2244,7 +2358,7 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
                 scheduler=scheduler,
                 scaler=scaler,
                 step=1,
-                benchmark_index_sha256=benchmark_hash,
+                benchmark_contract=benchmark_contract,
                 subset_sampler_state=None,
                 training_batcher_state={
                     "smoke": True,
@@ -2256,7 +2370,7 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
                 checkpoint_path=checkpoint_path,
                 model=model,
                 collated=collated,
-                benchmark_index_sha256=benchmark_hash,
+                benchmark_contract=benchmark_contract,
                 device=device,
             )
             if device.type == "cuda":
@@ -2299,6 +2413,7 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
     report = {
         "command": "smoke",
         "benchmark_index_sha256": benchmark_hash,
+        "benchmark_contract": dict(benchmark_contract),
         "backbone_sha256": sha256_file(backbone_weights),
         "backbone": config.backbone,
         "gradient_checkpointing": config.gradient_checkpointing,

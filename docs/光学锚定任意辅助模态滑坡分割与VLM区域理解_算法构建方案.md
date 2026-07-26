@@ -250,6 +250,23 @@ Fletcher32。`--shard-target-mib` 默认 512 MiB，builder 根据未压缩逻辑
 shard 的样本上限；分组样本少于上限时，一个 HDF5 可以保存该组的全部样本。该设计
 减少小文件和反复打开文件的开销，同时保留按 `row` 随机读取、内容校验和原子发布。
 
+small/full builder 可以通过可重复的 `--exclude-source` 构建显式数据源子集。source
+只接受当前 canonical ID；排除在数据发现前生效，被排除数据集不得被扫描、读取或以
+零计数占位。默认无排除时仍是 canonical 六源 Benchmark；带排除参数的 full 表示
+“所选 source 集合内的全部有效样本”，不得被误写为 canonical full。
+
+所有新产物必须在 `build_config.json` 和 `manifest.json` 同时记录：
+
+```text
+source_selection: all | subset
+included_sources: canonical 顺序的 source 列表
+excluded_sources: canonical 顺序的 source 列表
+```
+
+included/excluded 必须互斥且并集等于 canonical source 集。subset 与默认构建使用同一
+HDF5/index schema、已有 split、resize、validity 和抽样逻辑；排除 source 不授权重新
+划分剩余数据。不同 source selection 必须写入隔离、拒绝覆盖的输出根。
+
 ## 4.7 数据划分
 
 划分必须发生在统一 resize 和样本混合之前的 parent 或 source group 层级。

@@ -1,4 +1,4 @@
-"""Phase 2 v5 的完整 DELIVER 式 MSPA、空间选择、FRM 与 FFM。"""
+"""Phase 2 v6 的完整 DELIVER 式 MSPA、空间选择、FRM 与 FFM。"""
 
 from __future__ import annotations
 

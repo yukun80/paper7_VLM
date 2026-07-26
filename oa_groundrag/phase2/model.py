@@ -1,4 +1,4 @@
-"""Phase 2 v5 的 ConvNeXt-Small 与完整 DELIVER 式四阶段 OA-AuxSeg。"""
+"""Phase 2 v6 的 ConvNeXt-Small 与完整 DELIVER 式四阶段 OA-AuxSeg。"""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ BACKBONE_STAGE_DEPTHS = STAGE_DEPTHS
 EXPECTED_BACKBONE_SHA256 = (
     "0c510722adfd92966a2bd72b92f785ca05966bbac03cafe2f7a90b1f54bfab9a"
 )
-ARCHITECTURE_NAME = "oa_auxseg_deliver_full_v2"
+ARCHITECTURE_NAME = "oa_auxseg_deliver_full_v3"
 OPTICAL_STEM_CONTRACT = {
     "type": "shared_official_rgb_plus_signature_extra_residual",
     "output_channels": 96,
@@ -95,18 +95,6 @@ def optical_rgb_indices(signature: Sequence[str]) -> tuple[int, int, int]:
         ("R", "G", "B"): (0, 1, 2),
         ("Red", "Green", "Blue"): (0, 1, 2),
         ("Blue", "Green", "Red", "NIR"): (2, 1, 0),
-        (
-            "s2_b02",
-            "s2_b03",
-            "s2_b04",
-            "s2_b05",
-            "s2_b06",
-            "s2_b07",
-            "s2_b08",
-            "s2_b8a",
-            "s2_b11",
-            "s2_b12",
-        ): (2, 1, 0),
         tuple(f"B{index:02d}" for index in range(1, 13)): (3, 2, 1),
     }
     if names not in explicit:
@@ -913,6 +901,16 @@ class OAAuxSegModel(nn.Module):
         optical: Tensor,
         optical_validity: FeatureValidity,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        if not streams:
+            return (
+                optical,
+                torch.zeros_like(optical),
+                optical,
+                optical_only_weight_map(
+                    optical_validity,
+                    weight_columns=len(self.modality_weight_order),
+                ),
+            )
         selected = self._select_auxiliary(
             stage_index=stage_index,
             streams=streams,

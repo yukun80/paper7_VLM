@@ -32,6 +32,24 @@ SOURCE_ORDER = (
 SPLIT_ORDER = ("train", "val", "test")
 
 
+def resolve_source_selection(
+    excluded_sources: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """按 canonical 顺序解析 included/excluded source。"""
+
+    unknown = sorted(set(excluded_sources) - set(SOURCE_ORDER))
+    if unknown:
+        raise ValueError(
+            f"未知 --exclude-source：{unknown}；允许值为 {list(SOURCE_ORDER)}"
+        )
+    excluded_set = set(excluded_sources)
+    included = tuple(source for source in SOURCE_ORDER if source not in excluded_set)
+    excluded = tuple(source for source in SOURCE_ORDER if source in excluded_set)
+    if not included:
+        raise ValueError("不能排除全部数据源")
+    return included, excluded
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(
         value,

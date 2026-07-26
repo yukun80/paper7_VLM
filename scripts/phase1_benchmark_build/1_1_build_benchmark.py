@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """阶段 1B：构建 small/full 统一 Benchmark。
 
-命令：python 1_1_build_benchmark.py --mode small --patch-size 224
-输入：只读 ../datasets 下六个 HDF5 数据源及其 JSONL 索引。
+命令：python 1_1_build_benchmark.py --mode small [--exclude-source SOURCE]...
+输入：只读 ../datasets 下未排除 HDF5 数据源及其 JSONL 索引。
 输出：../benchmark/oa_auxseg_hdf5_v1/{small,full}。
 写入：拒绝覆盖，先写同级临时目录，完成后原子发布。
 """
@@ -33,6 +33,7 @@ from benchmark_common import (
     atomic_write_jsonl,
     canonical_json,
     iter_chunks,
+    resolve_source_selection,
     resize_binary_mask,
     resize_continuous_with_validity,
     sha256_bytes,
@@ -132,6 +133,7 @@ def estimate_logical_bytes(
                 "logical_gib": by_source[source] / (1024**3),
             }
             for source in SOURCE_ORDER
+            if source in by_source
         },
         "note": "未压缩逻辑上界；不含 JSONL/manifest，且不存储 mask validity。",
     }
@@ -438,8 +440,14 @@ def build_benchmark(
     seed: int,
     split_seed: int,
     shard_target_mib: int,
+    excluded_sources: Sequence[str] = (),
 ) -> Path:
-    all_samples, discovery = discover_all_sources(datasets_root, split_seed)
+    included_sources, excluded_sources_ordered = resolve_source_selection(
+        excluded_sources
+    )
+    all_samples, discovery = discover_all_sources(
+        datasets_root, split_seed, included_sources
+    )
     samples = (
         select_small(all_samples, per_source=small_per_source, seed=seed)
         if mode == "small"
@@ -469,6 +477,11 @@ def build_benchmark(
         },
         "shard_target_mib": shard_target_mib,
         "mask_validity_stored": False,
+        "source_selection": (
+            "subset" if excluded_sources_ordered else "all"
+        ),
+        "included_sources": list(included_sources),
+        "excluded_sources": list(excluded_sources_ordered),
     }
     records: list[dict[str, Any]] = []
     running_stats: dict[str, dict[str, RunningChannelStats]] = {}
@@ -482,7 +495,7 @@ def build_benchmark(
         for sample in samples:
             signature = tuple(sorted(sample.auxiliary_indices.items()))
             grouped[(sample.source, sample.split, signature)].append(sample)
-        for source in SOURCE_ORDER:
+        for source in included_sources:
             for split in SPLIT_ORDER:
                 signatures = sorted(
                     signature
@@ -546,7 +559,7 @@ def build_benchmark(
         source_counts = Counter(row["source"] for row in records)
         split_counts = Counter(row["split"] for row in records)
         source_split_counts: dict[str, dict[str, int]] = {}
-        for source in SOURCE_ORDER:
+        for source in included_sources:
             source_split_counts[source] = {
                 split: sum(
                     1
@@ -577,28 +590,39 @@ def build_benchmark(
             "mode": mode,
             "sample_count": len(records),
             "source_counts": {
-                source: source_counts[source] for source in SOURCE_ORDER
+                source: source_counts[source] for source in included_sources
             },
             "split_counts": {
                 split: split_counts[split] for split in SPLIT_ORDER
             },
             "source_split_counts": source_split_counts,
             "full_candidate_source_counts": discovery["source_counts"],
+            "source_selection": (
+                "subset" if excluded_sources_ordered else "all"
+            ),
+            "included_sources": list(included_sources),
+            "excluded_sources": list(excluded_sources_ordered),
             "approved_group_split_exceptions": discovery[
                 "approved_group_split_exceptions"
             ],
-            "warnings": [
-                {
-                    "code": "approved_cross_split_source_groups",
-                    "source": "landslidebench_agent",
-                    "count": len(
-                        discovery["approved_group_split_exceptions"][
-                            "landslidebench_agent"
-                        ]
-                    ),
-                    "message": "项目负责人要求保留全部源 split；这些 location_key 作为已知例外。",
-                }
-            ],
+            "warnings": (
+                [
+                    {
+                        "code": "approved_cross_split_source_groups",
+                        "source": "landslidebench_agent",
+                        "count": len(
+                            discovery["approved_group_split_exceptions"][
+                                "landslidebench_agent"
+                            ]
+                        ),
+                        "message": "项目负责人要求保留全部源 split；这些 location_key 作为已知例外。",
+                    }
+                ]
+                if discovery["approved_group_split_exceptions"].get(
+                    "landslidebench_agent"
+                )
+                else []
+            ),
             "index_sha256": sha256_file(staging / "index.jsonl"),
             "files": hashes,
             "content_sha256": sha256_bytes(
@@ -638,6 +662,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--split-seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--shard-target-mib", type=int, default=512)
+    parser.add_argument(
+        "--exclude-source",
+        action="append",
+        choices=SOURCE_ORDER,
+        default=[],
+        help="排除一个 canonical source；可重复传入",
+    )
     parser.add_argument("--estimate-only", action="store_true")
     return parser.parse_args(argv)
 
@@ -646,7 +677,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.patch_size <= 0 or args.shard_target_mib <= 0:
         raise ValueError("--patch-size 和 --shard-target-mib 必须大于 0")
-    samples, discovery = discover_all_sources(args.datasets_root, args.split_seed)
+    included_sources, excluded_sources = resolve_source_selection(
+        args.exclude_source
+    )
+    samples, discovery = discover_all_sources(
+        args.datasets_root, args.split_seed, included_sources
+    )
     selected = (
         select_small(samples, per_source=args.small_per_source, seed=args.seed)
         if args.mode == "small"
@@ -657,8 +693,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         report["source_counts"] = dict(Counter(s.source for s in selected))
         report["split_counts"] = dict(Counter(s.split for s in selected))
         report["approved_group_split_exception_count"] = len(
-            discovery["approved_group_split_exceptions"]["landslidebench_agent"]
+            discovery["approved_group_split_exceptions"].get(
+                "landslidebench_agent", []
+            )
         )
+        report["source_selection"] = (
+            "subset" if excluded_sources else "all"
+        )
+        report["included_sources"] = list(included_sources)
+        report["excluded_sources"] = list(excluded_sources)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     target = build_benchmark(
@@ -670,6 +713,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=args.seed,
         split_seed=args.split_seed,
         shard_target_mib=args.shard_target_mib,
+        excluded_sources=args.exclude_source,
     )
     manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
     print(

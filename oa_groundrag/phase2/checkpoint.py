@@ -13,9 +13,12 @@ import torch
 from torch import nn
 
 from .contracts import (
+    BENCHMARK_SCHEMA_VERSION,
     CHECKPOINT_SCHEMA_VERSION,
     ModelRegistry,
     OAAuxSegConfig,
+    PHASE2_EXCLUDED_SOURCES,
+    PHASE2_INCLUDED_SOURCES,
     RuntimeConfig,
 )
 from .fusion import FUSION_CONTRACT
@@ -97,6 +100,60 @@ def atomic_torch_save(path: Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
+def _validated_benchmark_contract(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("checkpoint Benchmark 合同必须是对象")
+    expected_fields = {
+        "schema_version",
+        "index_sha256",
+        "manifest_sha256",
+        "source_selection",
+        "included_sources",
+        "excluded_sources",
+    }
+    if set(value) != expected_fields:
+        raise ValueError("checkpoint Benchmark 合同字段不匹配")
+    if value["schema_version"] != BENCHMARK_SCHEMA_VERSION:
+        raise ValueError("checkpoint Benchmark schema 不受支持")
+    included = value["included_sources"]
+    excluded = value["excluded_sources"]
+    if not (
+        isinstance(included, list)
+        and included
+        and all(isinstance(source, str) for source in included)
+        and isinstance(excluded, list)
+        and all(isinstance(source, str) for source in excluded)
+    ):
+        raise ValueError("checkpoint Benchmark source selection 非法")
+    if set(included) & set(excluded):
+        raise ValueError("checkpoint Benchmark sources 不能重叠")
+    if tuple(included) != PHASE2_INCLUDED_SOURCES:
+        raise ValueError("checkpoint Benchmark included_sources 不匹配")
+    if tuple(excluded) != PHASE2_EXCLUDED_SOURCES:
+        raise ValueError("checkpoint Benchmark excluded_sources 不匹配")
+    selection = str(value["source_selection"])
+    if selection != ("subset" if excluded else "all"):
+        raise ValueError("checkpoint Benchmark source_selection 非法")
+    for name in ("index_sha256", "manifest_sha256"):
+        digest = value[name]
+        if not (
+            isinstance(digest, str)
+            and len(digest) == 64
+            and all(character in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError(f"checkpoint Benchmark {name} 非法")
+    return {
+        "schema_version": str(value["schema_version"]),
+        "index_sha256": str(value["index_sha256"]),
+        "manifest_sha256": str(value["manifest_sha256"]),
+        "source_selection": selection,
+        "included_sources": list(included),
+        "excluded_sources": list(excluded),
+    }
+
+
 def build_checkpoint(
     *,
     model: OAAuxSegModel,
@@ -104,7 +161,7 @@ def build_checkpoint(
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     scaler: torch.amp.GradScaler,
     step: int,
-    benchmark_index_sha256: str,
+    benchmark_contract: Mapping[str, Any],
     subset_sampler_state: Mapping[str, Any] | None,
     training_batcher_state: Mapping[str, Any],
     training_state: Mapping[str, Any],
@@ -118,6 +175,9 @@ def build_checkpoint(
     if not isinstance(runtime_config, Mapping):
         raise ValueError("checkpoint training_state 缺少 runtime_config")
     RuntimeConfig.from_dict(runtime_config)
+    frozen_benchmark_contract = _validated_benchmark_contract(
+        benchmark_contract
+    )
     return {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "model_contract": contract,
@@ -129,7 +189,7 @@ def build_checkpoint(
             "state": scaler.state_dict(),
         },
         "step": int(step),
-        "benchmark_index_sha256": str(benchmark_index_sha256),
+        "benchmark_contract": frozen_benchmark_contract,
         "rng_state": capture_rng_state(),
         "subset_sampler_state": (
             dict(subset_sampler_state) if subset_sampler_state is not None else None
@@ -146,12 +206,17 @@ def save_training_checkpoint(path: Path, **kwargs: Any) -> None:
 def read_checkpoint(
     path: Path,
     *,
-    expected_benchmark_index_sha256: str | None = None,
+    expected_benchmark_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = Path(path)
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict):
         raise ValueError("checkpoint 顶层必须是对象")
+    if payload.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError(
+            f"只支持 {CHECKPOINT_SCHEMA_VERSION}，实际为 "
+            f"{payload.get('schema_version')!r}"
+        )
     required = {
         "schema_version",
         "model_contract",
@@ -160,7 +225,7 @@ def read_checkpoint(
         "scheduler_state",
         "amp_state",
         "step",
-        "benchmark_index_sha256",
+        "benchmark_contract",
         "rng_state",
         "subset_sampler_state",
         "training_batcher_state",
@@ -172,17 +237,16 @@ def read_checkpoint(
         raise ValueError(
             f"checkpoint 字段不匹配，missing={sorted(missing)} unknown={sorted(unknown)}"
         )
-    if payload["schema_version"] != CHECKPOINT_SCHEMA_VERSION:
-        raise ValueError(
-            f"只支持 {CHECKPOINT_SCHEMA_VERSION}，实际为 "
-            f"{payload['schema_version']!r}"
+    recorded_benchmark_contract = _validated_benchmark_contract(
+        payload["benchmark_contract"]
+    )
+    payload["benchmark_contract"] = recorded_benchmark_contract
+    if expected_benchmark_contract is not None:
+        expected = _validated_benchmark_contract(
+            expected_benchmark_contract
         )
-    if (
-        expected_benchmark_index_sha256 is not None
-        and payload["benchmark_index_sha256"]
-        != expected_benchmark_index_sha256
-    ):
-        raise ValueError("checkpoint 与当前 Benchmark index SHA-256 不一致")
+        if recorded_benchmark_contract != expected:
+            raise ValueError("checkpoint 与当前 Benchmark 合同不一致")
     training_state = payload["training_state"]
     if not isinstance(training_state, dict):
         raise ValueError("checkpoint training_state 必须是对象")

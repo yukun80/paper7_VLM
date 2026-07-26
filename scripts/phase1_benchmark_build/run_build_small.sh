@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # 阶段 1B small 入口。
 # 用途：构建、验证、汇总并 smoke 统一 Benchmark。
-# 命令：bash scripts/phase1_benchmark_build/run_build_small.sh
+# 命令：bash scripts/phase1_benchmark_build/run_build_small.sh [--exclude-source SOURCE]...
 # 输入：只读 ../datasets；输出：../benchmark/oa_auxseg_hdf5_v1/small。
 # 写入：目标存在即停止，不覆盖。
+# bash scripts/phase1_benchmark_build/run_build_small.sh \
+#   --exclude-source sen12landslides
 
 set -euo pipefail
 
@@ -18,6 +20,24 @@ SEED="${SEED:-20260724}"
 SPLIT_SEED="${SPLIT_SEED:-20260724}"
 SHARD_TARGET_MIB="${SHARD_TARGET_MIB:-512}"
 
+EXCLUDE_SOURCE_ARGS=()
+while (($# > 0)); do
+  case "$1" in
+    --exclude-source)
+      if (($# < 2)); then
+        echo "错误：--exclude-source 缺少 source 值" >&2
+        exit 2
+      fi
+      EXCLUDE_SOURCE_ARGS+=("$1" "$2")
+      shift 2
+      ;;
+    *)
+      echo "错误：不支持的参数：$1" >&2
+      exit 2
+      ;;
+  esac
+done
+
 "${PYTHON_BIN}" "${SCRIPT_DIR}/1_1_build_benchmark.py" \
   --mode small \
   --datasets-root "${DATASETS_ROOT}" \
@@ -26,7 +46,8 @@ SHARD_TARGET_MIB="${SHARD_TARGET_MIB:-512}"
   --small-per-source "${SMALL_PER_SOURCE}" \
   --seed "${SEED}" \
   --split-seed "${SPLIT_SEED}" \
-  --shard-target-mib "${SHARD_TARGET_MIB}"
+  --shard-target-mib "${SHARD_TARGET_MIB}" \
+  "${EXCLUDE_SOURCE_ARGS[@]}"
 
 "${PYTHON_BIN}" "${SCRIPT_DIR}/1_2_validate_benchmark.py" \
   --benchmark-root "${OUTPUT_ROOT}/small" \

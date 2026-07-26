@@ -21,7 +21,9 @@ sys.path.insert(0, str(SCRIPT_ROOT))
 
 from benchmark_common import (  # noqa: E402
     BenchmarkDataset,
+    SOURCE_ORDER,
     collate_benchmark_samples,
+    read_json,
     read_jsonl,
     resize_binary_mask,
     resize_continuous_with_validity,
@@ -301,7 +303,12 @@ class BenchmarkPipelineTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def _build(self, name: str, mode: str = "small") -> Path:
+    def _build(
+        self,
+        name: str,
+        mode: str = "small",
+        excluded_sources: tuple[str, ...] = (),
+    ) -> Path:
         return BUILDER.build_benchmark(
             datasets_root=self.datasets,
             output_base=self.root / name,
@@ -311,6 +318,7 @@ class BenchmarkPipelineTest(unittest.TestCase):
             seed=20260724,
             split_seed=20260724,
             shard_target_mib=1,
+            excluded_sources=excluded_sources,
         )
 
     def test_resize_clears_invalid_and_mask_is_binary(self) -> None:
@@ -344,6 +352,11 @@ class BenchmarkPipelineTest(unittest.TestCase):
         )
         report = VALIDATOR.validate_benchmark(first, deep=True)
         self.assertEqual(report["errors"], [])
+        discovered, _ = BUILDER.discover_all_sources(
+            self.datasets, 20260724, SOURCE_ORDER[:-1]
+        )
+        estimate = BUILDER.estimate_logical_bytes(discovered, 8)
+        self.assertNotIn("sen12landslides", estimate["by_source"])
         self.assertEqual(report["checked_samples"], 6)
         dataset = BenchmarkDataset(first)
         batch = collate_benchmark_samples([dataset[index] for index in range(6)])
@@ -373,6 +386,93 @@ class BenchmarkPipelineTest(unittest.TestCase):
         small_keys = set(read_jsonl(small / "index.jsonl")[0])
         full_keys = set(read_jsonl(full / "index.jsonl")[0])
         self.assertEqual(small_keys, full_keys)
+
+    def test_source_exclusion_is_early_deterministic_and_recorded(self) -> None:
+        shutil.rmtree(self.datasets / "Sen12Landslides")
+        excluded = ("sen12landslides", "sen12landslides")
+        first = self._build("five-source-first", excluded_sources=excluded)
+        second = self._build("five-source-second", excluded_sources=excluded)
+        rows = read_jsonl(first / "index.jsonl")
+        self.assertEqual(len(rows), 5)
+        self.assertNotIn("sen12landslides", {row["source"] for row in rows})
+        self.assertEqual(
+            (first / "index.jsonl").read_bytes(),
+            (second / "index.jsonl").read_bytes(),
+        )
+        config = read_json(first / "build_config.json")
+        manifest = read_json(first / "manifest.json")
+        expected_included = list(SOURCE_ORDER[:-1])
+        self.assertEqual(config["source_selection"], "subset")
+        self.assertEqual(config["included_sources"], expected_included)
+        self.assertEqual(config["excluded_sources"], ["sen12landslides"])
+        self.assertEqual(manifest["included_sources"], expected_included)
+        self.assertEqual(set(manifest["source_counts"]), set(expected_included))
+        self.assertFalse(
+            any("sen12landslides" in path.as_posix() for path in first.rglob("*"))
+        )
+        report = VALIDATOR.validate_benchmark(first, deep=True)
+        self.assertEqual(report["errors"], [])
+
+        multiple = self._build(
+            "four-source",
+            excluded_sources=("landslidebench_agent", "sen12landslides"),
+        )
+        multiple_manifest = read_json(multiple / "manifest.json")
+        self.assertEqual(len(read_jsonl(multiple / "index.jsonl")), 4)
+        self.assertEqual(
+            multiple_manifest["excluded_sources"],
+            ["landslidebench_agent", "sen12landslides"],
+        )
+        self.assertEqual(multiple_manifest["approved_group_split_exceptions"], {})
+        self.assertEqual(multiple_manifest["warnings"], [])
+
+        small = self._build(
+            "subset-small", "small", ("sen12landslides",)
+        )
+        full = self._build(
+            "subset-full", "full", ("sen12landslides",)
+        )
+        self.assertEqual(
+            set(read_jsonl(small / "index.jsonl")[0]),
+            set(read_jsonl(full / "index.jsonl")[0]),
+        )
+
+    def test_invalid_source_exclusion_fails(self) -> None:
+        with self.assertRaisesRegex(ValueError, "未知 --exclude-source"):
+            self._build("unknown-source", excluded_sources=("unknown",))
+        with self.assertRaisesRegex(ValueError, "不能排除全部数据源"):
+            self._build("no-source", excluded_sources=SOURCE_ORDER)
+
+    def test_validator_detects_source_selection_tampering(self) -> None:
+        valid = self._build("valid-selection")
+        manifest_path = valid / "manifest.json"
+        manifest = read_json(manifest_path)
+        manifest["source_selection"] = "subset"
+        manifest["excluded_sources"] = ["sen12landslides"]
+        _write_json(manifest_path, manifest)
+        report = VALIDATOR.validate_benchmark(valid, deep=False)
+        self.assertTrue(
+            any("source selection" in error for error in report["errors"])
+        )
+
+    def test_validator_accepts_pre_selection_complete_six_source_metadata(
+        self,
+    ) -> None:
+        valid = self._build("implicit-all")
+        manifest = read_json(valid / "manifest.json")
+        config = read_json(valid / "build_config.json")
+        rows = read_jsonl(valid / "index.jsonl")
+        for document in (manifest, config):
+            document.pop("source_selection")
+            document.pop("included_sources")
+            document.pop("excluded_sources")
+        report = {"errors": [], "warnings": []}
+        included, excluded = VALIDATOR._validate_source_selection(
+            report, manifest, config, rows
+        )
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(included, SOURCE_ORDER)
+        self.assertEqual(excluded, ())
 
     def test_validator_detects_missing_shard_and_illegal_mask(self) -> None:
         valid = self._build("valid")

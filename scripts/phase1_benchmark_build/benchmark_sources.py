@@ -441,12 +441,21 @@ def _discover_sen12landslides(
 
 
 def discover_all_sources(
-    datasets_root: Path, split_seed: int
+    datasets_root: Path,
+    split_seed: int,
+    included_sources: Sequence[str] = SOURCE_ORDER,
 ) -> tuple[list[SourceSample], dict[str, Any]]:
     datasets_root = datasets_root.resolve()
+    requested = tuple(included_sources)
+    unknown = sorted(set(requested) - set(SOURCE_ORDER))
+    if unknown:
+        raise ValueError(f"未知 included source：{unknown}")
+    active_sources = tuple(source for source in SOURCE_ORDER if source in set(requested))
+    if not active_sources:
+        raise ValueError("included_sources 不能为空")
     samples: list[SourceSample] = []
     source_counts: dict[str, int] = {}
-    for source in SOURCE_ORDER:
+    for source in active_sources:
         if source == "landslide4sense":
             discovered = _discover_landslide4sense(datasets_root, split_seed)
         elif source == "sen12landslides":
@@ -482,11 +491,14 @@ def discover_all_sources(
     approved = sorted(
         group for group, splits in leakage_groups.items() if len(splits) > 1
     )
+    approved_exceptions = (
+        {"landslidebench_agent": approved}
+        if "landslidebench_agent" in active_sources
+        else {}
+    )
     metadata = {
         "source_counts": source_counts,
-        "approved_group_split_exceptions": {
-            "landslidebench_agent": approved
-        },
+        "approved_group_split_exceptions": approved_exceptions,
     }
     return samples, metadata
 
