@@ -2,16 +2,19 @@
 
 本项目研究光学锚定、任意辅助模态增强的滑坡分割，以及基于分割区域证据的视觉语言理解。
 
-当前已完成 Phase 2 OA-AuxSeg v6 的五源动态 registry 迁移和
-ConvNeXt-Small 官方权重 CPU 严格加载验收。当前唯一数据权威是
-`oa_auxseg_hdf5_v1/small` 的 500 条五源样本；主模型直接消费同一 batch 中
+当前已初步完成 OA-AuxSeg v6 的五源动态 registry、训练、评价、checkpoint
+和推理闭环。独立 Region Grounding 不再作为研究主线；OA-AuxSeg 验收后的下一阶段
+是 Mask-Grounded VLM Description。
+`oa_auxseg_hdf5_v1/small` 的 500 条五源样本继续作为实现与回归权威；
+负责人构建的五源 full 现已包含 53,645 条样本。主模型直接消费同一 batch 中
 3/4/12 通道光学、无辅助样本，以及 DEM、slope、encoded InSAR 的任意实际稀疏子集。
-Phase 2 明确拒绝 10 通道光学和 SAR；Benchmark builder 仍保留其通用源适配能力，
+OA-AuxSeg v6 明确拒绝 10 通道光学和 SAR；Benchmark builder 仍保留其通用源适配能力，
 两者不能混为一谈。辅助路径使用与 ConvNeXt-Small 对齐的全深度 MSPA，
 在 stride 4/8/16/32 执行空间模态选择、全宽 FRM/FFM 和逐阶段双流传播；
 `optical_only` 仅是消融。v6 不兼容旧训练或配置，不提供转换包装；既有产物保持只读。
-新五源 v6 的六消融 smoke、容量过拟合、两种 sampler 对照及 optical-only GPU 验收尚未运行，
-Phase 2 尚未整体完成。
+正式 full 训练配置使用 ConvNeXt-Small、物理 batch 16、100 个等价 epoch，
+关闭 activation checkpointing。本轮只读观察到负责人已在隔离目录启动该训练；
+当前清理工作不读取其未验收 checkpoint，也不并行占用 GPU。
 
 OA-AuxSeg 算法设计见 [`OA-GroundRAG_算法构建方案.md`](docs/OA-GroundRAG_算法构建方案.md)，
 系统设计见
@@ -34,7 +37,11 @@ tqdm 4.67.1。
 合同测试、官方 3 通道 stem 等价和官方权重严格加载已在 CPU 完成；真实训练配置使用
 单卡 bf16。
 
-## Phase 2 OA-AuxSeg
+## Phase 1：OA-AuxSeg
+
+为保持已验收配置、checkpoint 和命令兼容，现有工程路径继续使用
+`oa_groundrag/phase2/`、`scripts/phase2_oa_auxseg/` 等历史实现名；这些名称不表示
+算法主线中仍存在独立的 Region Grounding Phase 2。
 
 实现路径：
 
@@ -91,9 +98,10 @@ StatefulTrainingBatcher / BenchmarkDataset
   `p=0.2` modality dropout；若全部被丢弃，就用同一可恢复 RNG 从原选择中恢复一个
   模态，因此原生有辅助样本不会被采样成人为空辅助；网络内部空间 null selector 保留；
   原生无辅助样本保持 optical-only；
-- 训练 batcher 跨 permutation 边界补齐，每步严格为 8 个样本，并将 permutation、
-  cursor 和 RNG 写入 checkpoint；可选 `balanced_target_presence` 仅按
-  4 positive + 4 empty 采样，不使用 source；
+- 训练 batcher 跨 permutation 边界补齐，每步严格返回 runtime config 指定的
+  device batch，并将 permutation、cursor 和 RNG 写入 checkpoint；small smoke 固定
+  batch 8，正式 full 配置使用 batch 16；可选 `balanced_target_presence` 按一半
+  positive、一半 empty 采样，不使用 source；
 - 所有辅助缺失或覆盖为零时显式硬旁路，退化为完全相同的光学路径。
 
 统一支持六个 `variant`：
@@ -235,6 +243,18 @@ python scripts/phase2_oa_auxseg/run_oa_auxseg.py infer \
 和 `manifest.json`。NPZ 保存全局 probability/mask、区域 masks/features、全局模态
 权重和四尺度 float32 空间权重图；JSONL 只保存空间图对应的 NPZ key。
 
+## 下一阶段：Mask-Grounded VLM Description
+
+OA-AuxSeg 继续正式输出 global mask、candidate regions、no-target 和可选只读
+region features。Description 直接接收 global mask，或由调用方明确指定的
+candidate-region mask，并结合光学区域、可用辅助证据和问题生成结构化事实、区域描述
+与回答。
+
+首版区域输入只支持 global/all regions、region ID、bbox 或点击坐标、面积/位置规则，
+以及在编号 overlay 中选择 region ID。主线不训练独立 Region Grounding Adapter；
+只有 OA-AuxSeg、Description 和 RAG 主线完成后，才按实际需要评估可选轻量 region
+scorer，且它不作为当前论文或阶段验收条件。
+
 ## 阶段 1B 程序
 
 ```text
@@ -262,7 +282,7 @@ scripts/phase1_benchmark_build/
 ```text
 /home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/
 ├── small/      # 当前 500 条五源只读权威
-└── full/       # 当前不存在
+└── full/       # 当前 53,645 条五源只读产物
 ```
 
 每个模式内部结构：
@@ -391,7 +411,7 @@ subset 必须使用新的 `OUTPUT_ROOT`，不得与当前 canonical Benchmark �
 
 ## 当前已验收的 small
 
-当前唯一 Phase 2 数据权威为
+当前唯一 OA-AuxSeg v6 数据权威为
 `/home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/small`。它是负责人重构后的五源
 只读产物，明确排除 `sen12landslides`；本次模型迁移没有修改或重建它。
 
@@ -432,10 +452,10 @@ shard_target_mib=512
 - val 为 209 条，其中 positive/empty=`105/104`；
 - 辅助组合为 `DEM+slope` 与 `DEM+encoded InSAR`，不存在 SAR。
 
-历史六源 600 条和 Sen12 适配产物已不是当前 Phase 2 权威，不能用于 v6 训练或
+历史六源 600 条和 Sen12 适配产物已不是当前 OA-AuxSeg v6 权威，不能用于训练或
 checkpoint 恢复。
 
-目标已存在，构建入口会按设计拒绝覆盖；Phase 2 只读使用，不自动重建。
+目标已存在，构建入口会按设计拒绝覆盖；OA-AuxSeg 只读使用，不自动重建。
 
 可以随时只读重新验收：
 
@@ -451,7 +471,7 @@ python scripts/phase1_benchmark_build/1_4_smoke_dataloader.py \
   --benchmark-root ../benchmark/oa_auxseg_hdf5_v1/small
 ```
 
-## Full 空间估计与运行
+## Full Benchmark 与正式训练
 
 只读估计命令：
 
@@ -468,9 +488,21 @@ python scripts/phase1_benchmark_build/1_1_build_benchmark.py \
   --estimate-only
 ```
 
-最近一次五源只读估计为 53,645 条、未压缩逻辑上界约 59.30 GiB。该估计是在本次
-v6 迁移前完成的；本次没有访问或构建 full，实际 split、压缩体积和运行时必须由
-负责人正式运行后重新记录。
+当前负责人构建的五源 full 已存在，OA-AuxSeg 只读使用：
+
+```text
+sample_count=53,645
+train/val/test=36,761/12,375/4,509
+shard_count=126
+directory_size=32,404,761,903 bytes
+index_sha256=389877226249d2477bdda62d937950339e9fa60df35558b945d02757e8d0da42
+manifest_sha256=9a3b1478ed844f234e32b839fded67a937c49d202e3d8f5efd7db52596b5a00a
+included_sources=gdcld,lmhld,landslidebench_agent,landslide4sense,multimodal_landslide
+excluded_sources=sen12landslides
+```
+
+本次正式训练配置变更只读取 manifest 核对上述身份，没有重新构建 full，也没有重跑
+53,645 条 deep validator。
 
 项目负责人运行 full 的精确入口：
 
@@ -494,23 +526,40 @@ full 验收标准：
 7. 除已批准的 311 个 LandslideBench location 例外外，不得出现新的已知 group 跨 split；
 8. 不覆盖 small 或任何已有 full 输出。
 
-full 完成上述 Benchmark 验收、small 的四项 GPU 验收全部通过且项目负责人确认
-50,000-step 单卡日程后，正式多模态训练命令为：
+full 完成上述 Benchmark 验收后，当前正式多模态训练采用物理 batch 16 和约
+100 个等价 epoch：
 
 ```bash
 python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/full_proposed_dropout.json
+  --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json
 ```
 
-该命令当前未运行；配置仅通过严格 JSON 解析检查，没有访问 full Benchmark，也不会
-构建 full。正式训练的工程验收为：
+配置固定为 `max_steps=229757`，累计曝光 `3,676,112` 条样本，即
+`100.0003` 个 train pass；每 `4596` step（约 2 epoch）评价并保存，warmup 为
+`int(229757×0.05)=11487` steps。为提高 24 GiB 4090 的利用率，配置使用 bf16、
+关闭 activation checkpointing，并将两档 LR 相对 batch 8 线性放大 2 倍。
+原 `full_proposed_dropout.json` 及其 batch 8 日志不覆盖、不用于跨 batch 恢复。
 
-1. 全程无 NaN/Inf、OOM，真实 device batch=8 峰值显存小于 23 GiB；
+中断后只允许使用同一 batch 16 配置恢复：
+
+```bash
+python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
+  --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json \
+  --resume outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_last.pt
+```
+
+该长训练不是由本轮清理启动；本轮只读观察到对应日志正在外部增长。正式训练的
+工程验收为：
+
+1. 前 50 step 无 NaN/Inf、OOM，真实 device batch=16 峰值显存小于 20 GiB；
 2. none/single/all-or-multi 三类 active subset 均出现；
 3. 三个辅助 adapter、共享 MSPA encoder、四层 FRM/FFM 和 quality selector 均有非零梯度及更新；
 4. validation 输出 overall、source、available signature 和 active subset 分层指标；
 5. checkpoint 严格重载差异不超过 `1e-6`，推理原子导出可重载；
-6. 不以未批准的 full 科学指标阈值替代 small 容量和训练闭环验收。
+6. 后续评价、推理和 Mask-Grounded VLM Description 使用 `checkpoint_best.pt`，
+   不默认使用第 100 epoch 的 `checkpoint_last.pt`；
+7. 若峰值超过 21.5 GiB 或 OOM，回退 batch 12；不得降低 224 分辨率、删除融合尺度
+   或关闭辅助路径。
 
 ## 测试
 
@@ -533,7 +582,7 @@ python scripts/phase1_benchmark_build/1_4_smoke_dataloader.py \
 git diff --check
 ```
 
-Phase 2 测试覆盖六 variant、3/4/12 通道、当前 small 五源稀疏子集、SAR/10 通道
+OA-AuxSeg 测试覆盖六 variant、3/4/12 通道、当前 small 五源稀疏子集、SAR/10 通道
 明确拒绝、动态 registry 子集维度、官方 3 通道 stem 等价、额外波段梯度、缺失辅助退化、字典与稀疏索引
 顺序不变、invalid-value 不变、fractional coverage、masked max、空间 softmax/null、
 stride-4→8 渐进传播、四尺度权重图、DELIVER FFM 公式、定长 sampler 精确恢复、
@@ -545,23 +594,26 @@ MSPA block 及四层 FRM/FFM 的辅助梯度、checkpoint v6 严格重载、旧 
 曾在历史五源 small 完成 1-step CPU trainer、train 54/val 64 评价和差异 0.0 的重载；
 临时文件已清理，该检查不属于官方权重或训练质量验收。
 
-v6 Phase 2 测试为 33/33、阶段 1B 回归为 10/10；实际 exit code 和本次耗时见
+OA-AuxSeg v6 测试为 33/33、阶段 1B 回归为 10/10；实际 exit code 和本次耗时见
 `REBUILD_PROGRESS.md`。这些结果验证合同和数值实现，不是 CUDA 显存或分割精度结果。
 v6 尚未运行真实 small batch=8 六 variant GPU smoke，也不把旧 Benchmark 上的 GPU
 结果冒充 v6 验收。
 
 ## 当前边界
 
-- full 尚未运行；
-- Phase 2 多模态模型、Trainer、Evaluator、checkpoint 和推理已实现；
+- 五源 full 已由负责人构建；本次只读核对 manifest，没有重建或覆盖；
+- OA-AuxSeg 多模态模型、Trainer、Evaluator、checkpoint 和推理已实现；
 - 指定 ConvNeXt-Small 权重已就位并严格加载；旧 Benchmark 上的只读 v4 300-step 产物记录
   EMA 下降 53.25%、val Dice 0.4299、IoU 0.2738、峰值 3.81 GiB、重载差异 0；
   v4 1000-step overfit 的 loss 下降 79.36%、train Dice 0.9029，52 个空样本中
   仍有 1 个误报，因此没有通过容量阈值；
-- 当前 Phase 2 registry 只接受 `dem / insar_velocity / slope`，当前输出为 `[B,4]`
+- 当前 OA-AuxSeg registry 只接受 `dem / insar_velocity / slope`，当前输出为 `[B,4]`
   权重与 268 维区域特征；10 通道和 SAR 明确拒绝；
 - tqdm 已存在于当前环境，本次未下载数据、模型或依赖；
 - 未 commit、未 push；
-- 当前旧训练产物已保留；下一步在新 v6 目录补齐六 variant smoke、容量过拟合、
-  uniform/balanced 300-step 对照和 optical-only GPU 验收；
-- 验收前不构建/使用 full，也不进入 Region Grounding、VLM Description 或 RAG。
+- 本轮观察到外部 Full batch-16 训练日志持续增长；未读取为候选源、未修改产物，
+  旧 batch-8 配置不能跨 batch 恢复；
+- 当前无已验收 Small checkpoint 或正式 inference export，不能把 Full 训练中的
+  未验收中间状态作为下游区域证据；
+- 下一阶段是 Mask-Grounded VLM Description；独立 Region Grounding Adapter
+  不再实施，RAG 在 Description 闭环之后进入。

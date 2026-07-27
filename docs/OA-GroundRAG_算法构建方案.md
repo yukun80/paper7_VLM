@@ -1,71 +1,92 @@
 # OA-GroundRAG 算法构建方案
 
-> **路线全称：** Optical-Anchored Arbitrary-Auxiliary Segmentation, Region Grounding and Retrieval-Augmented Understanding for Landslides  
-> **中文名称：** 光学锚定任意辅助模态滑坡分割、区域指代与检索增强理解  
-> **建议保存路径：** `docs/OA-GroundRAG_算法构建方案.md`  
-> **文档用途：** 作为 Codex Agent 从代码清理、Benchmark 构建、分割模型、区域指代、VLM 描述到 RAG 集成的唯一实施说明。  
+> **路线全称：** Optical-Anchored Arbitrary-Auxiliary Segmentation and Mask-Grounded Retrieval-Augmented Understanding for Landslides
+>
+> **中文名称：** 光学锚定任意辅助模态滑坡分割与掩膜驱动检索增强理解
+>
+> **保存路径：** `docs/OA-GroundRAG_算法构建方案.md`
+>
+> **文档用途：** 作为 Codex Agent 从旧代码清理、HDF5 Benchmark 构建、OA-AuxSeg 分割、VLM 区域描述到 RAG 集成的唯一详细实施说明。
+>
 > **硬件边界：** 单张约 24 GB GPU；正式长训练由人工启动，Codex 只实现程序、运行短测试并给出正式命令。
 
-## 1. 路线概述
+## 1. 路线调整
 
-本研究不再构建一个同时承担任意通道输入、异尺寸融合、像素级分割、指令理解和长文本生成的单体模型，而是将问题拆成四个依次实现、可以独立训练和评价的阶段：
+本研究不再将 Region Grounding Adapter 作为独立核心阶段，也不以严格指代分割为当前论文主任务。新的主线由三个可独立训练和评价的阶段组成：
 
 ```text
 Phase 1：OA-AuxSeg
 输入：光学影像 + 任意可用辅助模态
-输出：global mask + candidate regions + region features
+输出：global mask + candidate regions + no-target + optional region features
 
-Phase 2：Region Grounding Adapter
-输入：candidate regions + text instruction
-输出：selected mask / no-target
+Phase 2：Mask-Grounded VLM Description
+输入：global mask 或明确指定的 candidate-region mask
+     + multimodal evidence + question
+输出：结构化事实、区域描述和问答
 
-Phase 3：VLM Description
-输入：selected mask + multimodal evidence
-输出：区域结构化描述、自然语言摘要和问答结果
-
-Phase 4：RAG
-输入：evidence + retrieved knowledge
-输出：带可追溯知识依据的专业回答
+Phase 3：RAG
+输入：Mask-Grounded Evidence + question + retrieved knowledge
+输出：有来源、受证据约束的专业回答
 ```
 
-四个阶段通过清晰接口连接，不进行一次性端到端联合训练。
-
-总体数据流为：
+三个阶段通过清晰接口连接，不进行一次性联合反向传播。总体数据流为：
 
 ```text
-本地 HDF5 滑坡数据
+本地 HDF5 数据
         ↓
-统一 Benchmark：固定 patch 大小、统一重采样、统一数据合同
+固定 patch 大小的统一 Benchmark
         ↓
-OA-AuxSeg 多源分割
+OA-AuxSeg
         ↓
-全局 mask、候选区域、区域特征
+global mask / candidate regions / no-target / optional region features
         ↓
-Region Grounding Adapter
+确定目标 mask：global / all regions / ID / 坐标 / 规则 / 编号 overlay
         ↓
-用户指令对应的 selected mask
-        ↓
-Mask-Grounded Multimodal Evidence
+Mask-Grounded Multimodal Evidence Builder
         ↓
 Qwen3-VL 区域描述与问答
         ↓
-RAG 检索专业知识和相似案例
+可选 RAG 检索专业知识和相似案例
         ↓
-证据受限的最终回答
+证据受限且带来源的最终回答
 ```
 
-## 2. 固定研究边界
+路线名称中的“Ground”表示描述与回答必须绑定于明确的分割 mask，而不是必须训练文本指代分割网络。
 
-### 2.1 必要模态
+## 2. 为什么取消独立 Grounding Adapter
+
+严格指代分割需要额外构建 `image + text query + target mask` 数据，并处理多候选区域、文本关系、no-target、预测候选误差和专门评价。这会显著增加数据审核、训练和实验成本，却不是当前研究要回答的首要问题。
+
+当前核心研究问题是：
+
+1. 光学锚定条件下，任意辅助模态是否能稳定改善滑坡分割；
+2. VLM 是否能在明确 mask 和多模态证据约束下生成可靠描述；
+3. RAG 是否能引入可追溯专业知识，同时减少无依据结论。
+
+首版区域选择直接采用确定性或可核验方式：
+
+- 描述 global mask；
+- 逐一描述全部 candidate regions；
+- 按 `region_id` 指定区域；
+- 按 bbox 或点击坐标指定区域；
+- 按面积排序选择；
+- 按九宫格位置规则选择；
+- 给候选区域编号后，让 Qwen3-VL 在 overlay 中返回 `region_id`。
+
+因此，Phase 1 完成后直接进入 Mask-Grounded VLM Description。只有三阶段主线完成，且真实应用证明自然语言区域选择是必要能力时，才考虑非阻塞的轻量 region scorer。
+
+## 3. 固定研究边界
+
+### 3.1 必要模态
 
 每个正式分割样本必须包含光学影像。光学影像负责：
 
 - 定义参考画布；
 - 提供滑坡边界和纹理；
 - 输出最终 mask；
-- 提供候选区域的主要视觉特征。
+- 提供候选区域的主要视觉证据。
 
-### 2.2 任意辅助模态
+### 3.2 任意辅助模态
 
 可选辅助模态包括但不限于：
 
@@ -73,72 +94,76 @@ RAG 检索专业知识和相似案例
 - SAR；
 - InSAR；
 - DEM；
-- slope。
+- slope；
+- 其他已明确物理意义和空间对应关系的数据。
 
 “任意辅助模态”表示已注册辅助模态集合中的任意可用子集。光学永不缺失，辅助模态允许全部缺失。
 
-### 2.3 明确排除
-
-不实施：
+### 3.3 当前不实施
 
 - 无光学输入的主线分割；
 - 灾前灾后变化检测；
 - 时间差分和目标跟踪；
 - Any2Seg 式 VLM 蒸馏；
-- 分割、指代、描述和 RAG 的联合反向传播；
+- 分割、描述和 RAG 联合反向传播；
+- 独立 Region Grounding Adapter；
+- 大规模指代分割数据构建；
 - 任意未知传感器自动接入；
 - 旧模型、旧 Benchmark 和旧 checkpoint 兼容层；
-- 根据单时相影像自由推断触发因素、发生时间、运动速度、未来失稳概率和风险等级。
+- 根据单时相影像自由推断触发因素、发生时间、运动速度、未来失稳概率或确定风险等级。
 
-## 3. 实施总原则
+## 4. 实施原则
 
-1. `../datasets` 中的数据视为已经统一为 HDF5 格式的原始研究数据，但其内部字段、通道数、样本大小、数值范围和 mask 编码仍需由 Codex 实际审计。
-2. Benchmark 构建时通过运行参数指定固定目标 patch 大小，例如 224×224。不同数据集的原始 patch 统一上采样或下采样到该尺寸后再混合训练。
-3. 不在方案中预设 HDF5 字段名称、归一化参数和数据源配置。Codex 必须先读取真实数据结构，再生成对应实现参数。
-4. 不在项目开始时固定最终目录结构。先按功能模块和依赖顺序实现，代码结构在接口稳定后再整理。
-5. `../external` 中的 CMNeXt、Grasp-Any-Region、PSALM 和 Qwen-VL-Series-Finetun 仅作为只读参考。新代码不得直接 import 整个外部工程。
-6. 每一阶段必须先完成最小闭环、短测试和独立验收，再进入下一阶段。
-7. Codex 不自动运行正式长训练。遇到正式训练节点时给出可复制命令、输入、输出和验收标准。
-8. 只保留一个简洁进度文件 `REBUILD_PROGRESS.md`，不生成大量 ADR、handoff、gate 和中间治理文档。
+1. `../datasets` 中的数据视为已统一为 HDF5 格式的原始研究数据，但其内部字段、通道数、尺寸、数值范围和 mask 编码必须由 Codex 实际审计。
+2. Benchmark 构建时通过 `--patch-size` 指定统一目标尺寸；不同数据集的原始 patch 上采样或下采样后再混合训练。
+3. 不预设 HDF5 字段名称、通道顺序、科学含义和归一化参数，所有 source 参数来自真实审计。
+4. 不在项目开始时固定最终代码目录；先按依赖顺序实现，接口稳定后再整理。
+5. `../external` 中 CMNeXt、Grasp-Any-Region、PSALM 和 Qwen-VL-Series-Finetun 只读参考，新代码不得直接依赖完整外部工程。
+6. 每阶段先完成最小闭环、短测试和独立验收，再进入下一阶段。
+7. Codex 不自动运行正式长训练，只给出可复制命令、输入、输出和验收标准。
+8. 只保留 `REBUILD_PROGRESS.md` 作为活动进度文件，不生成大量 ADR、handoff、重复过程报告或许可证文档。
+9. OA-AuxSeg、Description 和 RAG 保持可单独运行；下游失败不得改变上游输出。
+10. 所有专业结论必须能追溯到输入影像、确定性事实或检索知识，模型内部 quality weight 和 attention 不作为地学证据。
 
-## 4. 阶段 0：理解任务与清理当前代码库
+## 5. Stage 0：清理旧代码
 
-### 4.1 目标
+### 5.1 目标
 
-移除与 OA-GroundRAG 无关的旧活动实现，建立干净的重新实现起点。
+移除与 OA-GroundRAG 三阶段主线无关的旧活动实现，建立干净的重新实现起点。
 
-### 4.2 Codex 首先需要完成的审计
+### 5.2 开始前审计
 
-Codex 应读取：
+Codex 首先读取：
 
 - 本文档；
 - 根目录 `README.md`；
 - 根目录 `AGENTS.md`；
+- `REBUILD_PROGRESS.md`；
 - 当前代码树；
 - `../external`；
 - `../datasets` 的目录概况。
 
-只需回答：
+审计只需确定：
 
 - 当前有哪些旧模型、旧数据管线、旧 Trainer、旧 CLI 和旧测试；
 - 哪些内容与新路线直接冲突；
 - 哪些通用工具仍可保留；
 - 当前工作区是否存在未提交人工修改。
 
-### 4.3 删除范围
+### 5.3 删除范围
 
-应删除的旧活动实现包括：
+原则上删除：
 
-- 旧的多源分割模型；
-- 旧的分割—描述统一模型；
-- 旧 Benchmark 和 instruction/Bridge/SegDesc 构建脚本；
-- 旧视觉 cache 和文本 cache 协议；
+- 旧多源分割模型；
+- 旧分割—描述统一模型；
+- 旧指代分割、Bridge 和 SegDesc；
+- 旧 Benchmark builder；
+- 旧 instruction、视觉 cache 和文本 cache 协议；
 - 旧 Trainer、evaluator 和推理入口；
-- 旧配置；
-- 旧模型测试；
+- 旧配置和旧模型测试；
 - 旧算法说明和失效命令。
 
-### 4.4 保留范围
+### 5.4 保留范围
 
 必须保留：
 
@@ -147,123 +172,109 @@ Codex 应读取：
 - 仍需使用的模型权重；
 - 本文档；
 - Git 历史；
-- 与具体旧模型无关且经审查可复用的通用工具。
+- `参考文献/` 和 `docs/archive/`；
+- 经审查与旧模型无关的通用工具。
 
-### 4.5 清理红线
+### 5.5 清理红线
 
-- 不建立 `legacy/` 目录；
-- 不编写旧类名 alias；
-- 不编写旧配置转换器；
-- 不编写旧 checkpoint 兼容加载器；
-- 不让新代码 import 旧包；
-- 如果工作区存在不属于本任务的未提交修改，停止并报告。
+- 不建立 `legacy/`；
+- 不保留旧类名 alias；
+- 不写旧配置转换器；
+- 不兼容旧 checkpoint；
+- 新代码不得 import 旧包；
+- 不覆盖用户已有修改和正式训练产物；
+- 工作区存在不属于本任务的未提交修改时，保留并报告；只有无法安全绕开时才停止。
 
-### 4.6 阶段 0 验收
+### 5.6 Stage 0 验收
 
 - 当前活动代码中不再存在旧主线入口；
 - README 不再展示旧运行命令；
 - `REBUILD_PROGRESS.md` 已建立；
-- 新方案文档成为后续实现依据；
-- 暂未开始 Benchmark 和模型实现。
+- 本文档成为后续实现依据；
+- 暂未开始 Benchmark 或模型实现。
 
-## 5. 阶段 1A：真实 HDF5 数据审计
+## 6. Stage 1：HDF5 审计与统一 Benchmark
 
-### 5.1 目标
+### 6.1 真实数据审计
 
-在编写 Benchmark builder 前，先确定所有真实数据源的结构和可用性。
+在编写 Benchmark builder 前，Codex 必须只读遍历 `../datasets` 中候选 HDF5 文件，统计：
 
-### 5.2 审计内容
-
-Codex 必须只读遍历 `../datasets` 中候选 HDF5 文件，统计：
-
-- 文件数量和数据源；
+- HDF5 文件数量和数据源；
 - group 和 dataset 层级；
-- 每个 dataset 的 shape、dtype 和属性；
-- 样本数量；
-- 光学通道数；
-- 辅助模态类型和通道数；
-- 原始 patch H×W 分布；
-- mask 字段和取值范围；
-- 空 mask 数量和前景比例；
-- NaN、Inf、nodata、全零、常量通道；
+- 每个 dataset 的 shape、dtype 和 attrs；
+- 各数据源样本数量；
+- 光学和辅助模态通道数；
+- 原始 patch 的 H×W 分布；
+- mask 字段、值域、空 mask 数量和前景比例；
+- NaN、Inf、nodata、全零和常量通道；
 - 光学、辅助模态和 mask 是否逐样本对应；
 - 同一 parent 内不同模态是否表示相同地理范围；
 - 是否存在显式 valid mask；
-- 是否存在 source scene、event、region 或 parent 分组信息。
+- 是否存在 source、scene、event、region 或 parent 分组信息。
 
-### 5.3 审计产物
+审计只生成一份简洁报告，记录真实观察和待人工确认项，不研究数据授权，也不生成许可证报告。
 
-只生成一份简洁的数据审计报告，记录真实观察结果和待人工确认项。不要生成许可证报告，也不要研究数据授权。
-
-### 5.4 停止条件
-
-遇到下列情况才停止：
+只有出现以下情况才停止：
 
 - 无法判断哪个字段是光学；
 - 无法判断哪个字段是 mask；
 - 模态与 mask 无法配对；
-- 同一记录中的模态是否同空间范围无法确定；
+- 同一记录中模态是否覆盖相同空间无法确定；
 - mask 编码无法解释。
 
-普通字段差异由 source adapter 解决，不应成为停止原因。
+普通字段差异由 source adapter 解决，不作为停止原因。
 
-## 6. 阶段 1B：统一 Benchmark 构建
+### 6.2 Benchmark 定位
 
-### 6.1 Benchmark 的定位
-
-HDF5 数据是统一格式的原始数据；Benchmark 是为训练重新组织的固定尺寸样本集合。
-
-Benchmark builder 必须接收一个目标 patch 大小参数：
+HDF5 是统一容器格式的原始研究数据；Benchmark 是为训练重新组织的固定尺寸样本集合。Benchmark builder 必须接收：
 
 ```text
 --patch-size N
 ```
 
-N 可以为 224、256 或后续实验尺寸，代码中不得写死。
+`N` 可为 224、256 或后续实验尺寸，代码中不得写死。
 
-### 6.2 样本统一流程
+### 6.3 样本统一流程
 
 ```text
-读取一个 HDF5 原始样本
+读取 HDF5 原始样本
         ↓
-识别光学、mask 和可用辅助模态
+识别 optical / mask / available auxiliaries
         ↓
-验证同一空间范围和有效区域
+验证空间对应和 valid area
         ↓
-根据目标 patch 大小统一上采样或下采样
+根据目标 patch size 上采样、下采样或窗口切分
         ↓
-统一输出形状
+统一输出形状和数据合同
         ↓
 写入 Benchmark 或可随机读取的索引
 ```
 
-### 6.3 Resize 策略
+### 6.4 Resize 规则
 
-Codex 根据实际尺寸分布决定是否采用直接 resize 或保持比例后 padding，但必须遵守：
+Codex 根据实际尺寸分布决定直接 resize 或保持比例后 padding，但必须遵守：
 
-- 连续影像使用双线性或双三次插值；
-- mask 和 valid mask 使用最近邻；
-- resize 后 mask 重新二值化；
+- 连续影像使用 bilinear 或 bicubic；
+- mask 和 valid mask 使用 nearest；
+- mask resize 后重新二值化；
 - nodata 不得通过插值污染有效区域；
-- DEM、InSAR 等只改变空间采样，不改变单位；
-- 保存原始尺寸、目标尺寸和空间变换信息；
-- 同一样本所有 `aligned_dense` 模态最终得到相同 H×W。
+- DEM、InSAR 等 resize 只改变空间采样，不改变物理单位；
+- 保存原始尺寸、目标尺寸和空间变换；
+- 同一样本所有 `aligned_dense` 模态最终具有相同 H×W。
 
-### 6.4 大样本与已有 patch
+### 6.5 大样本与已有 patch
 
-如果 HDF5 记录本身已经是独立 patch，则直接统一 resize。
+若 HDF5 记录本身是独立 patch，直接统一 resize。
 
-如果某些记录明显大于普通 patch，且直接缩小会导致滑坡消失，则 Codex 应先实现窗口切分，再将窗口统一到目标 patch 大小。
+若记录明显大于普通 patch，且直接缩小会使小滑坡消失，则先窗口切分，再统一到目标 patch 大小。具体策略必须根据真实审计决定，不预设所有记录都是整图或切片。
 
-最终决定必须根据实际数据审计，不预先假设所有记录都是整图或切片。
-
-### 6.5 数据划分
+### 6.6 数据划分
 
 split 必须按原始 parent、scene、event 或 region group 进行，不能在统一 resize 后随机拆分。
 
-同一 parent 的不同模态、不同 resize 版本、不同窗口和不同任务视图必须属于同一个 split。
+同一 parent 的不同模态、不同 resize 版本、不同窗口和不同任务视图必须属于同一 split。
 
-### 6.6 Benchmark 样本合同
+### 6.7 Benchmark 样本合同
 
 每个样本至少向 DataLoader 提供：
 
@@ -271,7 +282,7 @@ split 必须按原始 parent、scene、event 或 region group 进行，不能在
 - binary mask；
 - auxiliary modality mapping；
 - modality availability；
-- 每个模态 valid mask；
+- 每个模态的 valid mask；
 - source ID；
 - parent/group ID；
 - 原始尺寸；
@@ -280,19 +291,19 @@ split 必须按原始 parent、scene、event 或 region group 进行，不能在
 - 前景比例；
 - split。
 
-保存格式由 Codex 根据数据量和 I/O 性能决定，不在本文档预先固定。
+保存格式由 Codex 根据数据规模和 I/O 性能决定，不在本文档预先固定。
 
-### 6.7 Benchmark 验收
+### 6.8 Benchmark 验收
 
 - 所有技术可用的数据源被扫描；
 - 所有输出样本具有相同目标 patch H×W；
 - 不同通道数通过数据合同保留；
 - mask 与各模态空间一致；
-- optical-only 和多辅助模态样本均可形成 batch；
+- optical-only 和多辅助模态样本均可组成 batch；
 - 同一 parent 不跨 split；
 - 两次构建产生相同样本数量和索引摘要；
 - DataLoader 可完成短批量迭代；
-- 输出中没有机器绑定绝对路径。
+- 输出不包含机器绑定绝对路径。
 
 ## 7. Phase 1：OA-AuxSeg
 
@@ -309,18 +320,14 @@ optical + arbitrary available auxiliary modalities
 ```text
 global mask
 candidate regions
-region features
 no-target score
 diagnostic modality weights
+optional region features
 ```
 
-其中 `candidate regions` 是从最终语义 mask 中提取的候选滑坡区域，不宣称是人工实例。
+`candidate regions` 从最终语义 mask 中确定性提取，不宣称为人工实例。`region features` 是可选只读输出，不是 Phase 2 的前置条件。
 
-### 7.2 实现顺序
-
-OA-AuxSeg 必须分五步实现。
-
-#### 步骤 1：光学分割基线
+### 7.2 Step 1：光学分割基线
 
 先实现纯光学二值滑坡分割：
 
@@ -346,22 +353,22 @@ optical
 - IoU、Dice、Precision、Recall 和 F1 可计算；
 - 短训练能在单卡运行。
 
-#### 步骤 2：辅助模态输入适配
+### 7.3 Step 2：辅助模态输入适配
 
-为实际审计确认存在的每种辅助模态建立轻量输入 adapter。
+为真实审计确认存在的每种辅助模态建立轻量 input adapter。
 
 原则：
 
 - adapter 解决不同通道数和基础数值统计；
 - 后续辅助 encoder 尽可能共享；
 - 不为每个模态复制完整大型 backbone；
-- 不建立庞大的 sensor/band/orbit embedding；
+- 不建立庞大的 sensor、band 或 orbit embedding；
 - 缺失模态不使用固定全零张量冒充有效输入；
 - 无效区域在第一层前被屏蔽。
 
-#### 步骤 3：CMNeXt 式任意辅助模态注入
+### 7.4 Step 3：CMNeXt 式任意辅助模态注入
 
-以光学特征为主，辅助模态提供增量信息：
+以光学特征为主，辅助模态提供增量证据：
 
 ```text
 optical feature as query
@@ -375,7 +382,7 @@ auxiliary features as evidence
 
 - 光学浅层高分辨率特征保持独立；
 - 辅助信息在中高层注入；
-- 注入为残差形式；
+- 注入采用残差形式；
 - 残差强度近零初始化；
 - 支持 0、1 或多个辅助模态；
 - 对辅助模态顺序保持不变性；
@@ -383,11 +390,9 @@ auxiliary features as evidence
 
 首版只实现一种最小注入算子，不同时维护多套复杂实现。
 
-#### 步骤 4：简化 MAGIC Quality Selection
+### 7.5 Step 4：简化 MAGIC Quality Selection
 
-在辅助模态聚合前计算一次质量分数。
-
-质量信息可以来源于：
+在辅助模态聚合前计算一次质量分数。质量信息可来自：
 
 - 辅助特征统计；
 - valid coverage；
@@ -395,7 +400,7 @@ auxiliary features as evidence
 - resize 比例；
 - 与光学特征的相容程度。
 
-具体字段由数据审计决定。
+具体字段由真实数据审计决定。
 
 要求：
 
@@ -407,7 +412,7 @@ auxiliary features as evidence
 - 质量权重不作为地学证据；
 - 不在后续模块重复 reliability。
 
-#### 步骤 5：完整训练和模态鲁棒性
+### 7.6 Step 5：完整训练与模态鲁棒性
 
 训练时随机选择辅助模态子集：
 
@@ -415,18 +420,16 @@ auxiliary features as evidence
 active_aux ⊆ available_aux
 ```
 
-光学永远存在。
-
-必须覆盖：
+光学永远存在。训练必须覆盖：
 
 - optical-only；
 - optical + 单一辅助模态；
 - optical + 多辅助模态；
 - optical + all available。
 
-主 loss 首版保持 BCE + Dice。其他 loss 只有在明确问题出现后再增加。
+主 loss 首版保持 BCE + Dice。其他 loss 只有在明确问题出现后才增加。
 
-### 7.3 OA-AuxSeg 的区域输出
+### 7.7 候选区域与只读特征接口
 
 最终语义 mask 在阈值化后进行确定性区域提取：
 
@@ -445,16 +448,19 @@ semantic mask
 - centroid；
 - area；
 - confidence；
-- masked optical feature；
-- masked fused feature；
-- geometry feature；
 - active modality summary。
 
-`region feature` 由分割模型中稳定的空间特征进行 mask pooling 获得，不单独训练大型实例 proposal head。
+如需下游分析或可选扩展，可额外只读导出：
+
+- masked optical feature；
+- masked fused feature；
+- geometry feature。
+
+region feature 由分割模型中稳定的空间特征进行 mask pooling 获得，不单独训练大型实例 proposal head。导出接口不得改变默认 forward、分割数值、loss、checkpoint schema 或训练逻辑。
 
 如果相邻滑坡在语义 mask 中被合并，该限制必须记录；首版不通过复杂实例分割强行解决。
 
-### 7.4 OA-AuxSeg 核心对照
+### 7.8 核心对照
 
 至少实现：
 
@@ -465,113 +471,29 @@ semantic mask
 5. injection + quality selection；
 6. injection + quality selection + modality dropout。
 
-### 7.5 Phase 1 验收
+### 7.9 Phase 1 验收
 
 - Benchmark 和训练闭环可运行；
 - optical-only 基线稳定；
-- 任意实际辅助模态子集可 forward；
+- 任意真实辅助模态子集可 forward；
 - 模态顺序不改变模态身份；
 - 全辅助缺失退化为 optical-only；
 - 可导出 global mask；
 - 可导出 candidate regions；
-- 可导出 region features；
 - 可导出 no-target 分数；
+- region features 在需要时可通过稳定只读接口导出；
 - 正式训练命令准备完成。
 
-## 8. Phase 2：Region Grounding Adapter
+## 8. Phase 2：Mask-Grounded VLM Description
 
 ### 8.1 任务定义
 
 输入：
 
 ```text
-candidate regions + text instruction
-```
-
-输出：
-
-```text
-selected region mask
-或 no-target
-```
-
-这一阶段实现语言驱动的目标选择，不重新训练像素级分割器。
-
-### 8.2 数据构建
-
-Region Grounding 数据必须在 OA-AuxSeg 稳定后构建。
-
-训练样本包括：
-
-- 图像和多模态输入；
-- candidate region list；
-- 文本指令；
-- target region index 或 no-target；
-- 对应 target mask。
-
-数据来源按难度递进：
-
-1. 确定性几何指令；
-2. 视觉属性指令；
-3. 简单上下文关系指令；
-4. no-target 指令；
-5. 困难负样本。
-
-不得用未审核的自由生成长文本作为正式测试真值。
-
-### 8.3 Adapter 结构
-
-首版采用小型 region-text matching 结构：
-
-```text
-text instruction
-→ frozen Qwen text/VLM representation
-→ text projection
-
-candidate region features
-→ region projection
-
-text-region interaction
-→ candidate scores + no-target score
-```
-
-可以使用 cosine similarity + MLP、小型 cross-attention 或少层 Transformer scorer。不得一开始把 Qwen3-VL 全模型和 OA-AuxSeg 联合训练。
-
-### 8.4 训练顺序
-
-- G0：规则选择基线；
-- G1：冻结分割器，训练 Grounding Adapter；
-- G2：固定预测候选区域训练；
-- G3：必要时对 Qwen 增加少量 LoRA。
-
-### 8.5 Grounding 指标
-
-- region selection accuracy；
-- no-target accuracy；
-- selected-mask IoU；
-- selected-mask Dice；
-- top-k region recall；
-- text paraphrase consistency；
-- distractor rejection；
-- GT candidate 和 predicted candidate 分层结果。
-
-### 8.6 Phase 2 验收
-
-- 能从多个候选区域中选择用户指定区域；
-- 无目标时能输出 no-target；
-- 文本同义改写保持稳定；
-- selected mask 与候选 region 一致；
-- grounding 错误和分割错误可以分别统计；
-- 不修改 OA-AuxSeg 的像素预测权重。
-
-## 9. Phase 3：VLM Description
-
-### 9.1 任务定义
-
-输入：
-
-```text
-selected mask + multimodal evidence + user question
+global mask 或明确指定的 candidate-region mask
++ multimodal evidence
++ user question
 ```
 
 输出：
@@ -582,9 +504,25 @@ natural-language description
 question answer
 ```
 
-### 9.2 Mask-Grounded Evidence Builder
+Phase 2 不训练独立 Region Grounding Adapter。进入 Evidence Builder 的目标 mask 必须是 global mask、已有 candidate-region mask 或空 mask，不新增像素级 decoder。
 
-每个 selected mask 转换为 VLM 输入证据，包括：
+### 8.2 区域选择
+
+首版支持：
+
+- 使用 global mask；
+- 逐一处理全部 candidate regions；
+- 按 `region_id` 指定；
+- 按 bbox 或点击坐标匹配已有候选；
+- 按面积排序选择；
+- 按九宫格位置规则选择；
+- 将候选编号绘制在 overlay 上，由 Qwen3-VL 返回 `region_id`。
+
+所有选择方式最终只能返回已有候选 mask 或空 mask。区域选择错误单独记录，但不作为主论文的指代分割任务，也不阻塞 Description。
+
+### 8.3 Mask-Grounded Evidence Builder
+
+目标 mask 转换为 VLM 输入证据，包括：
 
 - 光学全图；
 - 光学 mask overlay；
@@ -596,7 +534,7 @@ question answer
 - 单位和 sign convention；
 - 禁止推断列表。
 
-以下字段由程序计算，VLM 不得修改：
+以下字段由程序确定性计算，VLM 不得改写：
 
 - bbox；
 - centroid；
@@ -608,9 +546,11 @@ question answer
 - fragmentation；
 - active modality list。
 
-### 9.3 VLM 输入方式
+空 mask 和 no-target 必须作为显式状态进入 Evidence Builder，不得伪造区域 crop 或几何事实。
 
-第一版先使用 Qwen3-VL 原生多图输入：
+### 8.4 VLM 输入方式
+
+第一版使用 Qwen3-VL 原生多图输入：
 
 ```text
 full optical
@@ -619,41 +559,45 @@ full optical
 + optional auxiliary views
 + deterministic facts
 + user question
++ optional retrieved evidence cards
 ```
 
-GAR 式 RoI feature replay 作为后续增强项。只有原生多图在区域对应和细节理解上明显不足时，才实现标准 RoIAlign region replay，不直接复制整个 GAR 工程。
+GAR 式 RoI feature replay 只作为后续增强。只有原生多图不能稳定关注目标区域或局部细节时，才实现标准 RoIAlign 的轻量 region replay，不复制整个 GAR 工程。其目的仅是同时保持全局上下文与区域细节。
 
-### 9.4 描述任务
+### 8.5 描述任务与证据边界
 
 首版支持：
 
-- 描述 selected region；
-- 说明区域位置和形态；
+- 描述 global mask 或单个 candidate region；
+- 说明区域位置、大小和形态；
 - 描述光学可见扰动；
 - 说明地形、SAR 或 InSAR 是否提供支持；
 - 列出可能混淆对象；
 - 判断证据是否充分；
-- 回答与该区域有关的有限问题。
+- 回答与目标区域有关的有限问题。
 
-### 9.5 描述约束
+严格约束：
 
-- 缺失模态对应字段输出 unavailable；
-- 覆盖不足时输出 insufficient evidence；
+- 缺失模态对应字段输出 `unavailable`；
+- 覆盖不足时输出 `insufficient evidence`；
 - 无单位或 sign convention 时禁止定量物理结论；
 - 单时相数据禁止推断发生时间；
 - 无现场资料时禁止输出确定风险等级；
-- 不把质量权重或 attention 当作专业证据。
+- quality weight 和 attention 不作为专业证据；
+- deterministic facts 不得由 VLM 重算或改写。
 
-### 9.6 训练顺序
+### 8.6 训练顺序
 
-- D0：Prompt-only baseline；
+- D0：冻结 Qwen3-VL 的 prompt-only baseline；
 - D1：GT-mask description；
-- D2：fixed-predicted-mask description；
-- D3：必要时训练独立 Description LoRA。
+- D2：fixed predicted-mask description；
+- D3：只有在 prompt-only 明确不足时训练独立 Description LoRA。
 
-Description LoRA 不与 OA-AuxSeg 联合训练。
+Description LoRA 不与 OA-AuxSeg 联合训练，也不反向修改分割输出。
 
-### 9.7 评价
+### 8.7 评价与对照
+
+指标：
 
 - structured field accuracy；
 - target-status accuracy；
@@ -664,60 +608,80 @@ Description LoRA 不与 OA-AuxSeg 联合训练。
 - mask-region consistency；
 - no-target response correctness。
 
-必须加入 mask swap、wrong-region mask、empty mask、modality removal 和 cross-parent region swap。
+反事实与鲁棒性检查：
 
-### 9.8 Phase 3 验收
+- mask swap；
+- wrong-region mask；
+- empty mask；
+- modality removal；
+- cross-parent region swap。
 
-- 能针对 selected mask 描述正确区域；
+核心输入对照：
+
+- full image only；
+- crop only；
+- full + overlay + crop；
+- multimodal evidence；
+- optional RoI replay；
+- GT mask；
+- fixed predicted mask；
+- end-to-end predicted mask。
+
+GT-mask、fixed predicted-mask 和 end-to-end predicted-mask 必须分开报告，避免把分割误差混入 Description 能力结论。
+
+### 8.8 Phase 2 验收
+
+- 能描述 global mask 和单个 candidate region；
 - mask 改变后描述相应改变；
 - 移除某模态后不再生成该模态支持结论；
-- 几何事实不被 VLM 改写；
-- GT-mask 和 predicted-mask 结果分开报告；
-- Qwen3-VL 训练不是分割模型的前置条件。
+- deterministic facts 不被 VLM 改写；
+- 空 mask 和 no-target 得到正确响应；
+- GT-mask 与 predicted-mask 结果分开报告；
+- Qwen3-VL 训练不是分割模型前置条件；
+- 不依赖指代分割数据；
+- 不依赖独立 Grounding Adapter。
 
-## 10. Phase 4：RAG
+## 9. Phase 3：RAG
 
-### 10.1 任务定义
+### 9.1 任务定义
 
 输入：
 
 ```text
-Mask-Grounded Evidence + user question + external knowledge
+Mask-Grounded Evidence + user question + retrieved knowledge
 ```
 
 输出：
 
 ```text
-knowledge-grounded description and answer
+knowledge-grounded description and answer with sources
 ```
 
-RAG 不参与像素分割，也不控制 OA-AuxSeg decoder。
+RAG 不参与像素分割，不控制 OA-AuxSeg decoder，也不负责生成或选择 mask。
 
-### 10.2 知识类型
+### 9.2 知识类型
 
-知识库至少分为：
+知识库至少区分：
 
 1. 专业文本知识；
 2. 专家审核滑坡案例；
 3. 困难负样本和混淆案例；
 4. SAR、InSAR、DEM 等模态解释规则。
 
-### 10.3 检索设计边界
+### 9.3 检索设计边界
 
-不使用 OpenCLIP，不照搬 Geo-MMRAG 的统一图文向量空间。
-
-建议采用分索引检索：
+不使用 OpenCLIP，不照搬统一图文向量空间。建议采用分索引检索：
 
 - 专业文本使用适合中英文技术文档的文本 embedding，并结合关键词检索；
 - 光学案例使用自监督视觉特征或 OA-AuxSeg 光学区域特征；
 - SAR、InSAR、DEM 案例使用 OA-AuxSeg 对应辅助 encoder 的同模态区域特征；
 - 各路检索结果在后期进行排序融合。
 
-具体 embedding 模型由 Phase 4 开始时根据资源、语言和检索实验单独确定，不在当前阶段写死。
+具体 embedding 模型在 Phase 3 开始时根据资源、语言和检索实验单独评估，不在当前阶段写死。
 
-### 10.4 RAG 输入接口
+### 9.4 RAG 输入接口
 
-Phase 3 的 prompt builder 必须预留 `retrieved evidence cards`。每条证据至少含：
+Phase 2 的 prompt builder 预留 `retrieved evidence cards`。每条证据至少包含：
 
 - knowledge ID；
 - 内容；
@@ -727,9 +691,11 @@ Phase 3 的 prompt builder 必须预留 `retrieved evidence cards`。每条证�
 - 禁止的 claim；
 - 相关性分数。
 
-### 10.5 训练与评价
+检索证据只能补充或解释当前 mask-grounded evidence，不能覆盖确定性几何事实和模态可用性。
 
-RAG 首先采用无需训练的检索增强生成。
+### 9.5 训练与评价
+
+RAG 首先采用无需训练的检索增强生成；只有检索排序明显不足时才考虑轻量 reranker。
 
 核心对照：
 
@@ -737,7 +703,7 @@ RAG 首先采用无需训练的检索增强生成。
 2. text-only RAG；
 3. text + optical case retrieval；
 4. text + multimodal case retrieval；
-5. full retrieval + evidence constraint。
+5. full retrieval + evidence constraints。
 
 指标：
 
@@ -749,163 +715,139 @@ RAG 首先采用无需训练的检索增强生成。
 - irrelevant knowledge robustness；
 - confounder retrieval accuracy。
 
-### 10.6 Phase 4 验收
+### 9.6 Phase 3 验收
 
 - 知识库可构建、保存和重载；
 - 检索结果可重复；
 - 不同模态只进入正确的案例索引；
-- 回答能返回知识来源；
-- 无关知识不会明显改变正确结论；
-- RAG 失败不影响分割和 Grounding 的独立运行。
+- 回答返回知识来源；
+- 无关知识不明显改变正确结论；
+- 检索证据不覆盖确定性输入事实；
+- RAG 失败不影响分割和 Description 的独立运行。
 
-## 11. 端到端推理
+## 10. 可选扩展：轻量区域指令选择
 
-最终统一流程为：
+该扩展不是主线阶段，不是论文必需实验，也不是 Description 或 RAG 的验收条件。仅在以下条件同时具备时考虑：
+
+- 单图多滑坡且用户必须通过自然语言选择；
+- 确定性 ID、坐标、规则和 Qwen 编号 overlay 仍不能满足需求；
+- 已有足够且经过审核的文本—区域配对数据。
+
+可选结构：
 
 ```text
-用户指令
-    ↓
-判断是否需要分割、区域选择、描述或知识问答
-    ↓
-OA-AuxSeg 输出 mask、regions、region features
-    ↓
-Region Grounding Adapter 选择 selected mask
-    ↓
-Evidence Builder 生成多模态区域证据
-    ↓
-可选 RAG 检索
-    ↓
-Qwen3-VL 生成最终回答
+candidate region features + text embedding
+→ lightweight scorer
+→ selected region / no-target
 ```
 
-必须支持四种运行模式：
+实现时必须：
 
-1. segmentation only；
-2. segmentation + grounding；
-3. segmentation + grounding + description；
-4. segmentation + grounding + description + RAG。
+- 冻结 OA-AuxSeg；
+- 只使用已有候选区域；
+- 不新增或重训像素 decoder；
+- 不改变默认分割 forward、loss 和 checkpoint；
+- 不升级为大规模指代分割模型；
+- 不与 Description 或 RAG 联合反向传播；
+- 不阻塞三阶段主线。
 
-## 12. 训练阶段总结
+若无需自然语言区域选择，region features 继续只作为可选只读接口，不为该扩展预先构建正式 cache。
+
+## 11. Codex 实施顺序
+
+Codex 按以下依赖顺序实施：
+
+1. 清理旧活动实现；
+2. 审计真实 HDF5；
+3. 构建固定 patch Benchmark；
+4. 实现 optical-only baseline；
+5. 实现辅助 adapters 和共享 encoder；
+6. 实现 CMNeXt 式注入；
+7. 实现简化 MAGIC quality selection；
+8. 冻结并验收 OA-AuxSeg，导出 mask、regions 和 no-target；
+9. 实现 global、ID、坐标、规则和编号 overlay 等区域选择；
+10. 实现 Mask-Grounded Evidence Builder；
+11. 实现 Qwen3-VL Description；
+12. 在分割和描述稳定后实现 RAG；
+13. 仅在主线完成且确有必要时实现轻量区域指令选择。
+
+每阶段内部连续执行，不因普通子步骤完成而暂停。
+
+训练边界如下：
 
 | 阶段 | 训练对象 | 冻结对象 | 主要监督 |
 |---|---|---|---|
 | OA-0 | 光学分割模型 | 无 | optical + mask |
 | OA-1 | 辅助 adapter、辅助 encoder、注入模块 | 可保留光学预训练权重 | multimodal image + mask |
 | OA-2 | quality selector | 已稳定分割主干可部分冻结 | mask + modality dropout |
-| G-1 | Region Grounding Adapter | OA-AuxSeg、Qwen 主体 | text + candidate region target |
-| G-2 | 可选 Qwen LoRA | OA-AuxSeg | text + predicted candidates |
-| D-0 | 不训练 | OA-AuxSeg、Qwen | prompt-only |
-| D-1 | 可选 Description LoRA | OA-AuxSeg、Grounding | mask-grounded expert description |
+| D-0 | 不训练 | OA-AuxSeg、Qwen3-VL | prompt-only |
+| D-1 | 可选 Description LoRA | OA-AuxSeg | mask-grounded expert description |
 | R-0 | 不训练或仅训练 reranker | 分割与描述模型 | retrieval relevance |
 
-不进行四阶段联合训练。
+不得将以上阶段合并为联合训练。
 
-## 13. 最小论文实验矩阵
+## 12. 进度与停止规则
 
-### 13.1 分割实验
-
-- optical-only；
-- direct concat；
-- mean auxiliary fusion；
-- CMNeXt-style injection；
-- injection + quality selection；
-- proposed + modality dropout。
-
-### 13.2 Grounding 实验
-
-- geometry rule；
-- text-region similarity；
-- trained Grounding Adapter；
-- GT candidates；
-- predicted candidates；
-- no-target；
-- paraphrase；
-- distractor regions。
-
-### 13.3 描述实验
-
-- full image only；
-- crop only；
-- full + overlay + crop；
-- multimodal evidence；
-- optional RoI replay；
-- GT mask；
-- fixed predicted mask；
-- end-to-end selected mask。
-
-### 13.4 RAG 实验
-
-- no RAG；
-- text RAG；
-- optical cases；
-- multimodal cases；
-- full evidence-constrained RAG。
-
-## 14. 进度记录
-
-只使用根目录 `REBUILD_PROGRESS.md`，内容保持简短：
+只使用根目录 `REBUILD_PROGRESS.md`，保持简洁并记录：
 
 - 当前阶段；
 - 当前实现目标；
 - 已完成内容；
 - 主要新增、修改和删除文件；
-- 已运行测试和结果；
+- 已运行测试及结果；
 - 当前阻塞；
 - 下一条命令。
 
-普通子步骤不生成独立 handoff，不生成大量 ADR、gate、license 或审计文档。
-
-## 15. Codex 工作规则
+普通子步骤不生成独立 handoff、ADR、许可证或重复审计文档。
 
 Codex 每次开始工作时读取：
 
 1. 本文档；
 2. `REBUILD_PROGRESS.md`；
-3. 根 README；
-4. 根 AGENTS。
+3. 根目录 `README.md`；
+4. 根目录 `AGENTS.md`。
 
-然后从当前阶段继续。
-
-Codex 可在一个阶段内连续实现多个子步骤，不因普通子步骤结束而暂停。
-
-仅在以下情况停止：
+Codex 仅在以下情况停止：
 
 - HDF5 字段或通道含义无法确定；
-- 光学、mask 或辅助模态无法配对；
-- 模态空间关系无法确定；
-- 需要覆盖原始数据；
+- optical、mask 或 auxiliary 无法配对；
+- 模态空间关系无法确认；
+- 需要覆盖原始数据或正式产物；
 - 需要人工标注或地学判断；
 - 需要正式长训练；
-- 测试失败且无法根据实际错误定位。
+- 测试失败且无法从实际错误定位。
 
-遇到正式训练节点时必须给出：
+正式训练节点必须给出：
 
 - 执行目录；
 - 环境激活方式；
 - 完整命令；
 - 输入 Benchmark；
-- patch 大小；
+- patch size；
 - checkpoint；
 - 输出目录；
 - 预期报告；
 - 验收标准；
 - 需要用户返回的日志。
 
-## 16. 最终完成定义
+## 13. 最终完成定义
 
-项目完成必须同时满足：
+主线完成必须同时满足：
 
-1. 旧活动代码已从当前主线清理。
-2. 已审计真实 HDF5 数据结构。
-3. Benchmark 可通过参数统一不同原始 patch 到固定尺寸。
-4. 多个数据源可混合形成训练 batch。
-5. OA-AuxSeg 可在 optical-only 和任意辅助模态子集下运行。
-6. 模型输出 global mask、candidate regions、region features 和 no-target。
-7. Region Grounding Adapter 可根据文本选择目标 region 或 no-target。
-8. Qwen3-VL 可基于 selected mask 和多模态证据生成描述和回答。
-9. mask、region、modality 和文本错误可以分别评价。
-10. RAG 可以独立启用和关闭。
-11. 分割、Grounding、Description 和 RAG 均有独立评价入口。
-12. 正式长训练由人工启动，Codex 已提供完整命令。
-13. README 只保留 OA-GroundRAG 当前有效命令。
-14. `REBUILD_PROGRESS.md` 记录全部阶段完成。
+1. 旧活动代码已从当前主线清理；
+2. 已审计真实 HDF5 数据结构；
+3. Benchmark 可通过参数统一不同原始 patch 到固定尺寸；
+4. 多个数据源可混合组成训练 batch；
+5. OA-AuxSeg 可在 optical-only 和任意辅助模态子集下运行；
+6. OA-AuxSeg 输出 global mask、candidate regions 和 no-target，并可选只读导出 region features；
+7. 区域可通过 global、all regions、ID、坐标、规则或 Qwen 编号 overlay 明确指定；
+8. Evidence Builder 可根据 global mask、candidate-region mask 或空 mask 构建多模态证据；
+9. Qwen3-VL 可基于 mask 和证据生成结构化描述与问答；
+10. GT-mask、fixed predicted-mask 和 end-to-end predicted-mask 可分别评价；
+11. 模态缺失或证据不足时不生成对应专业结论；
+12. RAG 可独立启用和关闭，且回答返回知识来源；
+13. 主线不依赖独立 Region Grounding Adapter；
+14. 可选轻量区域指令选择不阻塞主线；
+15. 正式长训练由人工执行，Codex 提供完整命令；
+16. README 只保留 OA-GroundRAG 当前有效命令；
+17. `REBUILD_PROGRESS.md` 记录三阶段主线完成。

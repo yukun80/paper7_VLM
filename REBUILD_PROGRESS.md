@@ -3,12 +3,13 @@
 ## 当前状态
 
 - program: `OA_AUXSEG_VLM_REBUILD`
-- phase: `2`
-- phase_name: `OA_AUXSEG_MULTIMODAL`
-- phase_status: `phase2_v6_five_source_cpu_contract_passed_gpu_gates_pending`
-- execution_date: `2026-07-26`
+- phase: `1`
+- phase_name: `OA_AUXSEG`
+- phase_status: `v6_cpu_contract_passed_full_b16_e100_training_external`
+- next_phase_name: `MASK_GROUNDED_VLM_DESCRIPTION`
+- execution_date: `2026-07-27`
 - branch: `main`
-- implementation_baseline_head: `6f799c615076ec233beb5273c064f881b8b76c50`
+- implementation_baseline_head: `41e64d7f80bbcca7e2fb352ee36df748c424ef40`
 - benchmark_schema: `oa_auxseg_hdf5_v1`
 - model_schema: `oa_auxseg_model_v6`
 - checkpoint_schema: `oa_auxseg_checkpoint_v6`
@@ -17,7 +18,8 @@
 - benchmark_small_built: `true`
 - benchmark_small_access: `read_only`
 - benchmark_small_sample_count: `500`
-- benchmark_full_built: `false`
+- benchmark_full_built: `true`
+- benchmark_full_sample_count: `53645`
 - model_implemented: `true`
 - trainer_implemented: `true`
 - evaluator_implemented: `true`
@@ -28,19 +30,22 @@
 - v6_uniform_300_step_run: `false`
 - v6_balanced_300_step_run: `false`
 - v6_optical_only_train_run: `false`
+- full_b16_e100_config_prepared: `true`
+- full_b16_e100_train_started_external: `true`
+- full_b16_e100_train_complete: `false`
 - download_run: `false`
 - commit_performed: `false`
 - push_performed: `false`
 
 ## 当前 Small Benchmark
 
-唯一 Phase 2 数据权威：
+唯一 OA-AuxSeg 数据权威：
 
 ```text
 /home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/small
 ```
 
-本次只读使用，未修改、重建或访问 full。
+本次只读使用，未修改或重建。
 
 | source | train | val | test | positive | empty | total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -71,15 +76,46 @@
 - raw_dataloader_smoke: `pass`
 - zscore_dataloader_smoke: `pass`
 
-Benchmark builder 仍保留通用 Sen12/SAR 构建能力，但 Phase 2 v6 模型合同明确排除
+Benchmark builder 仍保留通用 Sen12/SAR 构建能力，但 OA-AuxSeg v6 模型合同明确排除
 Sen12、10 通道光学和 SAR。历史六源产物不再是当前训练权威。
 
-## Phase 2 v6 已完成
+## 当前 Full Benchmark
+
+负责人构建的五源 full 已存在：
+
+```text
+/home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/full
+```
+
+| source | train | val | test | total |
+| --- | ---: | ---: | ---: | ---: |
+| gdcld | 7,897 | 4,459 | 1,091 | 13,447 |
+| lmhld | 19,729 | 5,637 | 2,819 | 28,185 |
+| landslidebench_agent | 1,701 | 210 | 219 | 2,130 |
+| landslide4sense | 3,039 | 380 | 380 | 3,799 |
+| multimodal_landslide | 4,395 | 1,689 | 0 | 6,084 |
+| total | 36,761 | 12,375 | 4,509 | 53,645 |
+
+- source_selection: `subset`
+- included_sources:
+  `gdcld, lmhld, landslidebench_agent, landslide4sense, multimodal_landslide`
+- excluded_sources: `sen12landslides`
+- shard_count: `126`
+- directory_size_bytes: `32404761903`
+- index_sha256:
+  `389877226249d2477bdda62d937950339e9fa60df35558b945d02757e8d0da42`
+- manifest_sha256:
+  `9a3b1478ed844f234e32b839fded67a937c49d202e3d8f5efd7db52596b5a00a`
+
+本次只读核对 manifest、文件数量和目录大小，没有重建 full，也没有重跑完整 deep
+validator。
+
+## OA-AuxSeg v6 已完成
 
 - 将受审计辅助目录收敛为 `dem, insar_velocity, slope`；未知模态和 SAR 立即报错。
 - registry 由当前 Benchmark index 动态生成，只为实际出现的已审计模态建立 adapter；
   模态列顺序按目录确定，不能由输入字典插入顺序改变。
-- 删除 Phase 2 的 Sen12 10 通道 RGB 映射；保留 3 通道官方 stem 等价、4 通道 NIR
+- 删除 OA-AuxSeg 的 Sen12 10 通道 RGB 映射；保留 3 通道官方 stem 等价、4 通道 NIR
   和 12 通道 Sentinel-2 extra-band 残差分支。
 - 保留 ConvNeXt-Small、四尺度 `96/192/384/768`、深度 `3/3/27/3` 的完整
   validity-aware MSPA、空间 selector、FRM/FFM 和逐阶段双流传播。
@@ -120,8 +156,8 @@ Sen12、10 通道光学和 SAR。历史六源产物不再是当前训练权威�
   selector、融合和 decoder 使用 new LR。
 - train 使用带 floor 的 warmup-cosine、bf16、clip 1.0；capacity overfit 强制
   FP32、无 stochastic regularization、weight decay 0、clip 5.0。
-- `StatefulTrainingBatcher` 每步严格返回 8 个样本，跨 permutation 边界补齐；
-  permutation、cursor、RNG 和累计计数均可恢复。
+- `StatefulTrainingBatcher` 每步严格返回 runtime config 指定的 device batch，
+  跨 permutation 边界补齐；permutation、cursor、RNG 和累计计数均可恢复。
 - runtime config 已删除 `auxiliary_null_probability`。网络内部空间 null selector 保留。
 - `proposed_dropout` 对原生有辅助样本：
   1. 在 `1..N` 上均匀采样 cardinality；
@@ -138,13 +174,31 @@ Sen12、10 通道光学和 SAR。历史六源产物不再是当前训练权威�
 - `checkpoint_last.pt` 用于恢复，`checkpoint_best.pt` 按 val Dice、val loss、
   no-target FPR 依次选择。
 - train/overfit 终端继续使用低噪声 tqdm；JSONL/JSON 报告与简洁 CLI 终态不变。
+- 当前正式 full 配置为物理 batch 16、`max_steps=229757`，累计曝光
+  `3,676,112` 条样本，即 `100.0003` 个 train pass；每 `4596` step 评价和保存。
+  配置关闭 activation checkpointing、使用 bf16，并将 backbone/new LR 线性放大为
+  `6e-5/6e-4`。batch 8 checkpoint 不允许恢复到该配置。
+
+## 路线调整与下一阶段
+
+- 独立 Region Grounding Adapter 不再是研究主线，也不作为论文或阶段验收条件。
+- 为避免破坏已验收配置、checkpoint 和命令，OA-AuxSeg 工程路径暂时保留
+  `phase2` 历史实现名；算法方案中的当前阶段统一为 Phase 1。
+- OA-AuxSeg 继续输出 global mask、candidate regions、no-target，以及可选只读
+  region features；候选仍由 threshold 0.5、8 邻域和最小 16 像素的既有规则产生。
+- 下一阶段为 Mask-Grounded VLM Description：直接接收 global mask，或由调用方明确
+  指定的 candidate-region mask，并结合多模态证据和问题生成结构化事实、描述与回答。
+- 首版只支持 global/all regions、region ID、bbox/点击、面积/位置规则和编号 overlay
+  等确定性区域输入。可选轻量 region scorer 仅在完整主线之后按需评估。
+- 本轮已清理独立 Grounding 的打包入口、依赖、公共 helper、专属 Benchmark 和
+  规则基线输出；该独立模块的源码、CLI 与测试目录在清理开始时已不存在。
 
 ## 实际检查
 
 | 检查 | Exit | 结果 |
 | --- | ---: | --- |
-| Phase 2 unittest | 0 | 33/33；内部测试耗时 22.277 s |
-| Phase 1B 回归 | 0 | 10/10；内部测试耗时 4.148 s |
+| OA-AuxSeg unittest | 0 | 33/33；本轮内部测试耗时 32.982 s |
+| Phase 1B 回归 | 0 | 10/10；本轮内部测试耗时 5.716 s |
 | 当前 small deep validator | 0 | 14 shards、500/500、errors/warnings=0 |
 | raw DataLoader smoke | 0 | 五源、3/4/12 通道、none/single/all 通过 |
 | z-score DataLoader smoke | 0 | 五源、3/4/12 通道、none/single/all 通过 |
@@ -161,14 +215,17 @@ Sen12、10 通道光学和 SAR。历史六源产物不再是当前训练权威�
 | v6 推理合同 | 0 | Landslide4Sense 与 multimodal-landslide JSONL/NPZ 重载及拒绝覆盖通过 |
 | 官方 3 通道 stem | 0 | 与 torchvision ConvNeXt-Small stem 逐元素一致 |
 | official state_dict | 0 | `strict=True`，SHA-256 `0c510722...bfab9a` |
-| Python `py_compile` | 0 | Phase 1B/Phase 2 模块、CLI 与测试通过 |
-| 六份 runtime config 严格解析 | 0 | 均为 runtime v5，输出目录均迁移到 v6 |
-| CLI `--help` | 0 | train/overfit/evaluate/infer/smoke 入口正常 |
+| Python `py_compile` | 0 | Phase 1B/OA-AuxSeg 模块、CLI 与测试通过 |
+| 七份 runtime config 严格解析 | 0 | 均为 runtime v5；新增 full batch16/100-epoch 配置 |
+| CLI `--help` | 0 | OA-AuxSeg train/overfit/evaluate/infer/smoke 入口正常 |
+| 打包与公共 API 清理 | 0 | 仅保留 `oa-auxseg` 入口，独立候选 helper 不再公开 |
+| 三阶段文档合同 | 0 | canonical 共 13 章，只有 OA-AuxSeg/Description/RAG 三个 Phase |
+| 独立 Grounding 残留搜索 | 1 | 无匹配；`rg` 的 1 表示活动实现残留为零 |
 | shell `bash -n` | 0 | small/full builder 入口语法通过 |
 | CUDA/NVML probe | 0 | CUDA available=false、device_count=0，NVML 初始化失败 |
 | git diff --check | 0 | 通过 |
 
-上述均为 CPU/合同/只读数据验收，不是 GPU 显存或分割精度结果。
+上述均为 OA-AuxSeg 的 CPU、合同和只读数据验收，不是 GPU 显存或正式分割精度结果。
 
 ## 历史训练结果
 
@@ -184,14 +241,14 @@ Sen12、10 通道光学和 SAR。历史六源产物不再是当前训练权威�
 
 ## 未运行
 
-- full Benchmark 构建、验证、smoke 或任何 full 访问
+- 本次没有重跑 full deep validator、summarizer 或 DataLoader smoke
 - v6 六 variant 真实 small batch=8 GPU smoke 和 `<23 GiB` 显存验收
 - v6 全部 158 条 train、最多 1000-step capacity overfit
 - v6 uniform 与 balanced-target 两次同 seed 300-step proposed 对照
 - v6 optical-only 短训练与 val 评价
 - 训练后 Landslide4Sense 和 multimodal-landslide 正式推理导出
-- full 上的 50,000-step 正式多模态训练
-- Region Grounding、VLM Description、RAG 或端到端集成
+- 外部 Full batch16、229,757-step、100-epoch 训练尚未完成或验收
+- Mask-Grounded VLM Description、RAG 或端到端集成
 - 数据、模型或依赖下载
 - commit 或 push
 
@@ -206,54 +263,41 @@ Sen12、10 通道光学和 SAR。历史六源产物不再是当前训练权威�
 - multimodal InSAR 保留 encoded 数值和 validity，不推断未确认物理单位。
 - 当前 v6 模型没有 SAR 能力；未来若引入重新审计的高质量 SAR Benchmark，必须显式
   升级 schema 与 registry，不能静默接入。
-- full 尚不存在；五源 full 的实际 split、压缩体积、显存和耗时都必须由负责人运行后确认。
+- 五源 full 已存在，但本次没有重跑完整 deep validator；正式 batch16 的峰值显存、
+  吞吐和总耗时仍需由前50 step及后续训练确认。
 - 旧 3.81 GiB 峰值不代表 v6 六 variant 或 capacity overfit 显存。
+- 当前没有已验收 Small OA-AuxSeg checkpoint 或正式 inference export，不能将
+  Full 训练中的未验收中间状态作为正式 Description 区域证据。
+- 当前进程 CUDA 不可用且外部训练占用 GPU，本轮不并行启动 VLM 任务。
+- 语义 mask 合并相邻滑坡时，候选提取仍只能产生合并区域；candidate regions
+  不宣称为人工实例，region features 也不是 Description 的前置条件。
 
-## 下一步人工 GPU 顺序
+## 下一步 OA-AuxSeg 正式命令与恢复合同
+
+尚未完成的 Small GPU 验收仍保留，但不能与当前 Full 训练并行：
 
 ```bash
-cd /home/yukun80/codes/paper7_VLM
-conda activate qwen3vl
-
 python scripts/phase2_oa_auxseg/run_oa_auxseg.py smoke \
   --config configs/phase2_oa_auxseg/small_smoke.json
 
 python scripts/phase2_oa_auxseg/run_oa_auxseg.py overfit \
   --config configs/phase2_oa_auxseg/small_overfit.json
-
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/small_proposed_dropout.json
-
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/small_proposed_dropout_balanced.json
-
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/small_optical_only.json
 ```
 
-验收标准：
+本轮未启动、停止、恢复或修改 Full 训练；只读观察其隔离日志正在增长。OA-AuxSeg
+验收后直接进入 Mask-Grounded VLM Description，不再提供独立 Grounding 命令。
 
-1. 六 variant 均 exit 0，真实 batch=8 峰值显存各自 `<23 GiB`。
-2. capacity overfit 使用全部 158 条 train，loss 下降至少 90%、micro Dice ≥0.95、
-   positive-only Dice ≥0.90、空 mask FPR=0、空样本平均概率 ≤0.01。
-3. 三个辅助 adapter、共享 MSPA、四层 FRM/FFM 和 quality selector 均有非零梯度及更新。
-4. uniform/balanced 各运行 300 step、累计 2400 样本；
-   `conditional_active_auxiliary_fraction=1.0`，观察到 none/single/all，checkpoint
-   严格重载误差 ≤`1e-6`。
-5. balanced 仅在 val FPR 至少下降 0.10 且 positive Dice 下降不超过 0.01，或
-   overall Dice 至少提高 0.01 且其他指标不退化时采用。
-6. optical-only 完成短训练和 val；Landslide4Sense、multimodal-landslide 的全部
-   v6 推理输出可重载。
-
-未来 full 只允许同样排除 Sen12 的五源合同，且本阶段不构建或访问：
+负责人当前 Full 训练与同配置恢复合同仍为：
 
 ```bash
-bash scripts/phase1_benchmark_build/run_build_full.sh \
-  --exclude-source sen12landslides
+python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
+  --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json
 
 python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/full_proposed_dropout.json
+  --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json \
+  --resume outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_last.pt
 ```
 
-两条 full 命令均未运行。small GPU 验收完成后仍先停止，由项目负责人决定后续；
-不得进入 Region Grounding、VLM Description 或 RAG。
+batch-16 不得从旧 batch-8 checkpoint 恢复；若峰值超过 21.5 GiB 或 OOM，应另建
+batch-12 配置，不能降低 224 分辨率或关闭辅助路径。正式评价使用
+`checkpoint_best.pt`。
