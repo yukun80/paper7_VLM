@@ -1,0 +1,51 @@
+schema_version: oa_landslidedesc.build_config.v3
+profile: full
+seed: 20260727
+output_root: ../../../benchmark/oa_landslidedesc_v3
+sources:
+  rsgpt:
+    enabled: true
+    root: ../../../datasets/describe_datasets/RSGPT/dataset
+  mmrs1m:
+    enabled: true
+    root: ../../../datasets/describe_datasets/MMRS-1M
+  disasterm3:
+    enabled: true
+    root: ../../../datasets/describe_datasets/DisasterM3
+oa:
+  enabled: true
+  benchmark_root: ../../../benchmark/oa_auxseg_hdf5_v1/full
+  selection_root: ../../../benchmark/oa_auxseg_hdf5_v1/small
+  gold_annotations: ../../../benchmark/oa_landslidedesc_review_v1/oa_gold.jsonl
+  silver_annotations: null
+  expected_gold_count: 358
+external_split:
+  version: external_parent_split.v1
+  validation_percent: 5
+text_policy:
+  version: visible_claims.v1
+  forbidden_patterns:
+    - '\b(?:risk|danger|hazard level|stability|unstable|active landslide)\b'
+    - '\b(?:caused by|causal|probably|likely|potential(?:ly)?|might have|may have)\b'
+  reasoning_forbidden_patterns:
+    - '\b(?:season|summer|winter|spring|autumn)\b'
+    - '\b(?:used for|fish farming|in motion|moving fast|moving slow)\b'
+    - '\b(?:north|south|east|west)(?:\s*[-–]\s*|\s+to\s+)(?:north|south|east|west)\b'
+asset_policy:
+  image_format: jpeg
+  image_quality: 95
+  jpeg_subsampling: 0
+  target_size: null
+  mask_format: png
+  oa_preview_clip: [-3.0, 3.0]
+sharding:
+  records_per_shard: 1000
+workers: 1
+limits:
+  max_parents: null
+  max_records: null
+  max_assets: null
+  max_copied_bytes: null
+  max_validation_candidates_per_task: 1000000
+  per_task: {}
+deletion_allowlist: false

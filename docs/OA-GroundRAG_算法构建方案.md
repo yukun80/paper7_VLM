@@ -503,20 +503,28 @@ Phase 2 将通用光学遥感理解语料、OA image/mask/split 和人工评价�
 OA-AuxSeg 或 VLM，也不重新划分 OA 数据。
 
 ```text
-输入：RSGPT + MMRS-1M + DisasterM3 + OA Benchmark
-输出：external train + OA train/val/test + canonical records/assets
+输入：RSGPT + MMRS-1M + DisasterM3；可选 OA Benchmark
+输出：external train/val；可选 OA train/val/test；canonical records/assets
 ```
 
 ### 8.1 目标与评价边界
 
-- 三个外部数据集中的有效记录统一作为通用遥感理解训练语料，不保留外部 test；
+- 三个外部数据集中的有效记录按 parent 确定性划分为通用遥感理解
+  `external_train` 和训练期监控用 `external_val`，不保留外部 test；
 - OA train 用于滑坡 mask-grounded 任务适配，OA val/test 是唯一正式 Description
   验证和测试集；
-- 外部语料只学习全图描述、地物与环境理解、可见状态问答、bbox/mask 区域短语和
-  受图像支持的双时相变化，不承担滑坡专业真值；
+- 外部语料只学习全图描述、地物与环境理解、可见状态问答、数量表达、bbox 区域短语、
+  boxed object 空间关系和受图像支持的双时相变化，不承担滑坡专业真值；
+- 外部 RefSeg、phrase→bbox 和 detection 等像素或坐标输出任务不进入统一文本训练；
+  mask 只有作为输入证据且存在人工文本输出时才允许进入未来 OA mask-grounded 记录；
 - 裸地、裸土、灾害场景和相似外观不得自动解释为滑坡；
-- `external_train`、`oa_train`、`oa_val`、`oa_test` 是逻辑数据角色，不代表固定文件名、
-  目录名或物理分片方式。
+- `external_train`、`external_val`、`oa_train`、`oa_val`、`oa_test` 是逻辑数据角色，
+  不代表固定文件名、目录名或物理分片方式。
+
+三个外部源可以在 `oa.enabled=false` 时单独构建为自包含 train/val Benchmark，
+此路径不读取 OA Benchmark，也不需要 358 条 OA 人工审核。该外部组件通过自身 deep
+validation 后可用于 Phase 3 训练和训练期验证，但不等于包含 OA 正式评价真值的完整
+OA-LandslideDesc Phase 2 已验收。
 
 Phase 2 只有在全量资产完成自包含复制并通过深度验证后才算完成。代码实现、合成测试或
 真实小样本 smoke 只属于阶段内工程里程碑，不得替代正式 Benchmark 验收。
@@ -528,20 +536,30 @@ Phase 2 只有在全量资产完成自包含复制并通过深度验证后才算
 
 | 数据源 | 当前可用规模快照 | 进入训练的内容 | 不使用的内容 |
 |---|---|---|---|
-| RSGPT | RSICap 2,585 张有标注图像；RSIEval 100 条 caption、943 条 QA，去除 1 条完全重复 QA 后为 942 条 | 全图 caption，以及 presence、quantity、position、scene 和有限 reasoning QA | 415 张未引用图像、系统垃圾文件、无审核教师文本和不可由图像支持的 clause |
+| RSGPT | RSICap 2,585 张有标注图像；RSIEval 100 条 caption、943 条 QA，去除 1 条完全重复 QA 后为 942 条 | 全图 caption，以及经过可见性过滤的 presence、quantity、color、image attribute、position、area comparison、scene 和有限 reasoning QA | 415 张未引用图像、road orientation、系统垃圾文件、无审核教师文本和不可由图像支持的 clause |
 | MMRS-1M | 46,275 个 caption 父样本/198,883 条描述；28,318 个 VQA 父样本/141,163 条 QA；30,809 条有效 bbox→区域短语 | caption、VQA、bbox 指定区域短语；多参考保留在同一 parent 下 | 缺少图像资产的 classification/detection、聚合重复元数据、phrase→bbox 方向、11 个零面积 bbox、重复副本和非法对话 |
-| DisasterM3 | 光学预过滤上限 84,561 条：scene 9,097、bearing bodies 9,091、building 14,250、road 8,662、spatial 2,662、visible report 9,091、mask-region 31,708 | 光学场景与地物理解、计数和空间关系、受可见证据约束的双时相报告、post image + mask 区域描述 | SAR、灾害类型识别、恢复建议、缺少 mask 的区域任务、灾因/风险/结论，以及将稀少 Shovi 记录当作滑坡 footprint 真值 |
+| DisasterM3 | 当前重审采用 scene 18,184、building/road count 22,912、boxed spatial relation 2,661、visible report 9,089，合计 52,846 | 光学 scene、bearing-body、building/road count；红蓝框图与 bbox 输入上下文的空间关系文本；受可见证据约束的灾前/灾后报告 | SAR、disaster type、restoration advice、49,552 条 RefSeg、phrase/mask/coordinate 输出、灾因/风险/结论，以及将稀少 Shovi 记录当作滑坡 footprint 真值 |
 
 所有保留文本必须受输入图像支持；规范化时保留原记录身份和原始文本摘要，风险 clause
 只能按版本化规则删除或屏蔽。重复图像、pre/post pair 和同一 OA source group 使用稳定
 `parent_id` 聚合，多任务视图不能通过行级复制支配训练。外部源的原 train/test/bench
-身份写入 provenance，但全部有效记录的训练角色一致。
+身份只写入 provenance，不直接决定新逻辑角色。三个 source 分别按
+`sha256(seed | external_parent_split.v1 | source | parent)` 稳定排序，前 5% parent
+进入 `external_val`，其余进入 `external_train`；同一 parent 的全部任务和参考必须
+同角色。规范图像内容完全相同的不同 parent 合并为重复组件，整个组件只能进入一个
+角色，因此最终 parent 和 record 比例允许轻微偏离 95/5。
+
+该统一 Benchmark 是本项目的新多任务协议，不宣称复现原论文训练：RSGPT 原论文的
+caption 微调、源 RSIEval，以及 DisasterM3 Bench 的官方 split/指标均不由本地 95/5
+重新划分复现。原始 split 必须逐条保存在 provenance，manifest 固定声明
+`official_upstream_evaluation_reproducible=false`。
 
 ### 8.3 语料角色与评价真值
 
 | 逻辑角色 | 用途 | 约束 |
 |---|---|---|
 | `external_train` | 通用光学遥感理解预适配 | 只训练，不参与正式评价 |
+| `external_val` | 外部预适配期间的超参数选择、过拟合监控 | 使用源数据 reference；不是人工 gold，不替代 OA 正式 val/test |
 | `oa_train` | 滑坡 mask-grounded 任务适配 | 继承 OA train，不重新划分 |
 | `oa_val` | 模型、prompt 和推理配置选择 | 只使用人工审核真值 |
 | `oa_test` | 一次性正式评价 | 调优期间封存，只使用人工审核真值 |
@@ -568,6 +586,8 @@ Phase 2 只有在全量资产完成自包含复制并通过深度验证后才算
 Phase 2 不预设固定目录树。构建配置决定输出根、资产编码、分片和并行参数，manifest
 记录实际物理布局、schema 版本、构建参数及逻辑数据角色到物理产物的映射。必须满足：
 
+- 外部划分由严格 `external_split.version` 和 `validation_percent` 配置控制；
+  split 在 adapter 深度过滤后、资产复制前确定，并逐条写入 provenance；
 - `../datasets` 只读，所有采用的图像、mask 和必要来源元数据实际复制到新的输出根；
 - 禁止 symlink、hardlink、机器绑定绝对路径和源目录运行时依赖；
 - 输出目标已存在时失败，通过 staging、完整验证和原子发布避免半成品；
@@ -585,8 +605,19 @@ Phase 2 不预设固定目录树。构建配置决定输出根、资产编码、
 - JSON：schema、manifest、统计、hash 和验证摘要。
 
 canonical schema 至少表达稳定记录身份、source/parent、逻辑角色、任务类型、媒体与
-target、训练响应与参考响应、确定性事实、标注来源、审核状态、变换和质量标记。模型
-专用字段不得污染 canonical 真值。
+target、训练响应与参考响应、确定性事实、标注来源、审核状态、变换和质量标记。v3
+另外显式保存：
+
+- `supervision_kind`：
+  `long_description / short_qa / numeric_qa / region_description /
+  spatial_description / structured_report`；
+- `input_layout`：
+  `single_image / bbox_region / boxed_image / pre_post / mask_grounded`；
+- `output_modality=text`。
+
+模型专用字段不得污染 canonical 真值。MMRS caption 的全部 reference 保存在一个
+canonical record 中；训练 Dataset 按 `seed + epoch + record_id` 轮换单条响应，
+validation 返回全部 reference，不按参考数复制 parent。
 
 ### 8.5 构建、使用与源数据安全
 
@@ -599,13 +630,24 @@ target、训练响应与参考响应、确定性事实、标注来源、审核�
 
 adapter 必须记录每个 source 的采用、跳过和重复计数；缺失资产、路径逃逸、非法文本、
 mask/bbox 不对齐和 schema 错误都以稳定 reason code 报告，不能静默忽略。训练 sampler
-按 source、parent 和 task family 配置化平衡，同一 parent 的参考或任务视图不能支配
-单个 epoch；实际权重、顺序和 RNG 必须可记录和恢复，Benchmark 本身仍保存全部有效记录。
+先按 task family 平衡，再在 task 内平衡 parent；source/task 权重由 Phase 3 训练配置
+显式记录。同一 parent 的参考或任务视图不能支配单个 epoch；实际权重、顺序和 RNG
+必须可记录和恢复，Benchmark 本身仍保存全部有效记录。
 
-Phase 3 先在 `oa_val` 上运行 prompt-only baseline。只有 zero-shot gate 未通过时，
-才先用 `external_train` 进行通用光学遥感理解预适配，再用 `oa_train` 和配置化的外部
-replay 适配滑坡任务；prompt、checkpoint 和推理配置在 `oa_val` 锁定后，`oa_test`
-只运行一次。所有训练和评价通过统一 Dataset API 读取逻辑角色，不直接绑定物理路径。
+正式 `description_multitask.v1` Qwen export 必须显式列出非空 task family，并使用
+任务专用 renderer：caption/QA 使用单图，bbox region 使用全图 overlay、crop 和规范
+坐标，spatial relation 保留红蓝框及对象角色，pre/post 明确灾前灾后顺序。exporter
+遇到 pixel-mask 输出、缺失 bbox context 或不能表达的 layout 必须失败。所有任务可以
+共享 autoregressive text loss，但训练不能按原始记录数平铺，验证也不能用一个混合
+loss 代表全部能力；caption/report、QA/scene、count、relation 和 region caption
+分别使用匹配的描述、准确率、数值误差、关系和区域文本指标。
+
+外部预适配读取 `external_train` 训练，并只用 `external_val` 监控 loss、选择该阶段
+超参数和检查过拟合。进入完整 OA 路径后，Phase 3 再在 `oa_val` 上运行 prompt-only
+baseline；只有 zero-shot gate 未通过时，才继续用 `oa_train` 和配置化的外部 replay
+适配滑坡任务。prompt、checkpoint 和正式推理配置只能在 `oa_val` 锁定，`oa_test`
+只运行一次；`external_val` 不能替代这两个人工审核 OA split。所有训练和评价通过
+统一 Dataset API 读取逻辑角色，不直接绑定物理路径。
 
 构建器不得删除源数据，只能在全量 deep validator 成功后生成待人工复核的删除 allowlist。
 候选类别限于未引用或损坏资产、字节相同副本、已被解压内容覆盖的重复归档、缺少必要
@@ -618,7 +660,8 @@ replay 适配滑坡任务；prompt、checkpoint 和推理配置在 `oa_val` 锁�
 - RSGPT 未引用图像、MMRS 重复/缺失资产任务和 DisasterM3 光学任务过滤均被正确识别；
 - canonical schema、稳定 ID、parent 聚合、资产变换和 Qwen 导出可重复；
 - 图像、mask 和 bbox 的规范化结果与记录的变换一致；
-- `external_train`、`oa_gold`、`oa_auto`、`oa_silver` 和 OA split 不发生角色污染；
+- `external_train`/`external_val` 的 parent 与规范图像内容不跨角色，
+  且它们与 `oa_gold`、`oa_auto`、`oa_silver` 和 OA split 不发生角色污染；
 - 358 条人工真值的身份、选择规则、审核状态和上游 Benchmark 绑定可审计；
 - 全量 Benchmark 不依赖 symlink、hardlink、绝对源路径或外部源目录；
 - 隐藏三个外部源目录后，deep validator 和 DataLoader smoke 仍通过；
@@ -733,7 +776,8 @@ GAR 式 RoI feature replay 只作为后续增强。只有原生多图不能稳�
 - D0：冻结 Qwen3-VL，通过统一 Dataset API 读取 `oa_val`，运行 prompt-only
   zero-shot baseline；
 - D1：只有 zero-shot gate 未通过时，读取 `external_train` 训练同一个
-  Description LoRA，完成通用光学遥感理解预适配；
+  Description LoRA，并只在 `external_val` 上选择该阶段 checkpoint 与超参数，
+  完成通用光学遥感理解预适配；
 - D2：继续同一个 LoRA，读取 `oa_train` 和配置化的 `external_train` replay，
   进行 mask-grounded 目标适配；
 - D3：在 val 上锁定 prompt、checkpoint 和推理配置后，分别运行 GT-mask、
@@ -786,7 +830,8 @@ GT-mask、fixed predicted-mask 和 end-to-end predicted-mask 必须分开报告�
 - deterministic facts 不被 VLM 改写；
 - 空 mask 和 no-target 得到正确响应；
 - GT-mask 与 predicted-mask 结果分开报告；
-- `external_train` 不被当作正式验证或测试真值；
+- `external_train` 不进入验证，`external_val` 只用于外部预适配监控且不被当作
+  OA 正式验证或测试真值；
 - `oa_gold`、`oa_auto` 和 `oa_silver` 的来源及使用范围可审计；
 - Description 训练和评价可在隐藏三个外部源目录后运行；
 - Qwen3-VL 训练不是分割模型前置条件；
@@ -1003,11 +1048,13 @@ Codex 仅在以下情况停止：
 4. 多个数据源可混合组成训练 batch；
 5. OA-AuxSeg 可在 optical-only 和任意辅助模态子集下运行；
 6. OA-AuxSeg 输出 global mask、candidate regions 和 no-target，并可选只读导出 region features；
-7. RSGPT、MMRS-1M 和 DisasterM3 的有效记录已复制为统一 `external_train`；
+7. RSGPT、MMRS-1M 和 DisasterM3 的有效记录已按 parent 防泄漏划分并复制为
+   `external_train`/`external_val`；
 8. OA-LandslideDesc Benchmark 使用配置记录的规范图像、mask、bbox 和 canonical
    record 合同，manifest 可解析其实际物理布局；
 9. Benchmark 脱离三个外部源目录后仍可完成深度验证和 DataLoader smoke；
-10. `external_train`、`oa_gold`、`oa_auto` 和 `oa_silver` 的角色不可混淆；
+10. `external_train`、`external_val`、`oa_gold`、`oa_auto` 和 `oa_silver`
+    的角色不可混淆；
 11. 358 条人工真值继承 OA 固定 split，OA val/test 是唯一正式 Description 评价集；
 12. 区域可通过 global、all regions、ID、坐标、规则或 Qwen 编号 overlay 明确指定；
 13. Evidence Builder 可根据 global mask、candidate-region mask 或空 mask 构建多模态证据；

@@ -3,10 +3,12 @@
 本项目研究光学锚定、任意辅助模态增强的滑坡分割，以及基于分割区域证据的视觉语言理解。
 
 当前已初步完成 OA-AuxSeg v6 的五源动态 registry、训练、评价、checkpoint
-和推理闭环。独立 Region Grounding 不再作为研究主线；OA-AuxSeg 验收后的下一阶段
-是 Mask-Grounded VLM Description。
-`oa_auxseg_hdf5_v1/small` 的 500 条五源样本继续作为实现与回归权威；
-负责人构建的五源 full 现已包含 53,645 条样本。主模型直接消费同一 batch 中
+和推理闭环。Phase 2 OA-LandslideDesc 已完成代码、单元/合成测试和有界真实 smoke，
+但尚未运行全量资产自包含物化，358 条 OA 人工真值也未审核，因此 Phase 2 尚未正式
+完成。独立 Region Grounding 不再作为研究主线；只有 Phase 2 正式验收后才进入
+Mask-Grounded VLM Description。
+`oa_auxseg_hdf5_v1/small` 的 500 条五源合同仍是历史回归目标，但当前现场目录缺失；
+负责人构建的五源 full 仍包含 53,645 条样本。主模型直接消费同一 batch 中
 3/4/12 通道光学、无辅助样本，以及 DEM、slope、encoded InSAR 的任意实际稀疏子集。
 OA-AuxSeg v6 明确拒绝 10 通道光学和 SAR；Benchmark builder 仍保留其通用源适配能力，
 两者不能混为一谈。辅助路径使用与 ConvNeXt-Small 对齐的全深度 MSPA，
@@ -32,8 +34,8 @@ python --version
 ```
 
 实际验证版本为 Python 3.11.15、NumPy 2.1.2、h5py 3.16.0、
-SciPy 1.16.2、PyTorch 2.8.0+cu128、torchvision 0.23.0+cu128 和
-tqdm 4.67.1。
+SciPy 1.16.2、Pillow 11.3.0、PyYAML 6.0.2、PyTorch 2.8.0+cu128、
+torchvision 0.23.0+cu128 和 tqdm 4.67.1。
 合同测试、官方 3 通道 stem 等价和官方权重严格加载已在 CPU 完成；真实训练配置使用
 单卡 bf16。
 
@@ -243,7 +245,104 @@ python scripts/phase2_oa_auxseg/run_oa_auxseg.py infer \
 和 `manifest.json`。NPZ 保存全局 probability/mask、区域 masks/features、全局模态
 权重和四尺度 float32 空间权重图；JSONL 只保存空间图对应的 NPZ key。
 
-## 下一阶段：Mask-Grounded VLM Description
+## Phase 2：OA-LandslideDesc Benchmark
+
+由于仓库既有 `phase1`、`phase2` 路径已占用，Phase 2 的唯一实现位于：
+
+```text
+oa_groundrag/phase3/             # canonical、adapter、builder、validator、Dataset、exporter
+scripts/phase3_landslidedesc/    # audit/build/validate/export 薄 CLI
+configs/phase3_landslidedesc/    # smoke、full、Qwen 严格 YAML
+tests/phase3_landslidedesc/      # 单元与合成端到端测试
+```
+
+公共 API 为 `load_build_config`、`audit_sources`、`build_benchmark`、
+`validate_benchmark`、`OALandslideDescDataset`、`ParentBalancedSampler` 和
+`export_qwen`。canonical schema 为 `oa_landslidedesc.canonical.v3`；
+manifest 是物理布局唯一入口。Qwen messages 独立导出，不进入 canonical 真值。
+
+`OA-LandslideDesc` 是完整 Phase 2 规划名称：`OA` 表示未来接入 OA-AuxSeg 的
+mask-grounded 数据，`LandslideDesc` 表示下游滑坡区域描述。当前
+`external_full.yaml` 只构建三库通用视觉理解组件；它设置 `oa.enabled=false`，
+不读取 OA Benchmark，也不要求 358 条人工审核。只有完整 OA 组件才需要人工
+`oa_gold`，二者不能混用同一条构建命令。
+
+三库统一保存“视觉证据 → 文本输出”，但保留独立任务语义：
+
+- 全图 caption、视觉/属性/场景 QA、数量问答；
+- bbox 指定区域描述、红蓝框对象空间关系描述；
+- 明确灾前/灾后顺序的可见变化报告。
+
+DisasterM3 RefSeg 的输出是 pixel mask，而不是人工区域描述，因此不进入该统一文本
+Benchmark；phrase→bbox、detection、classification、灾害类型、恢复建议、SAR 和
+非视觉风险/灾因结论也不采用。统一训练只共享 autoregressive text loss，训练 sampler
+先平衡 task family、再平衡 parent；验证必须按 caption/report、QA/scene、count、
+relation 和 region caption 分任务报告，不能用一个混合 validation loss 代表全部能力。
+
+设计参考锁定 Hugging Face Datasets `4.8.5`、commit
+`a015b2fa5c1a6cda677fa46f20a54773258553ac`，仅借鉴严格配置、Features、
+确定性样本生成、ImageFolder metadata 和小 fixture 测试范式；没有引入
+`datasets`、Hub、Viewer、联网缓存或发布运行时。
+
+当前真实只读审计口径：
+
+- RSGPT：2,681 条 caption、764 条 visual QA、119 条 count、45 条 scene，
+  合计 3,609；另记录 1 条重复 QA、13 条禁止 claim、5 条不采用方向题和
+  415 张未引用图像；
+- MMRS-1M：46,275 条多参考 caption records、141,154 条 VQA、
+  30,809 条 bbox→phrase；另记录 9 条 VQA duplicate、3 条重复参考、
+  30,820 条反向 grounding、11 个零面积 bbox，并明确不读取 `total.json`
+  和 7 个 classification metadata；
+- DisasterM3：采用 scene 18,184、count 22,912、boxed relation 2,661 和 visible
+  report 9,089，合计 52,846；明确排除 49,552 条 RefSeg，不读取 mask archive；
+  另记录 8,430 条非光学记录、1 个被 2 条候选引用的零字节图像和 3 条 schema
+  错误；
+- 三库合计 274,693 records、104,954 parents；full deep audit 未拒绝记录，并发现
+  3,955 个精确内容重复组件，合并后为 100,054 components。防泄漏调整后的角色为
+  train 261,646 / val 13,047 records。源 `train/eval/benchmark` 只保存在
+  provenance；该重划分不能复现 RSGPT RSIEval 或 DisasterM3 Bench 官方结果。
+
+最终有界真实 smoke 位于临时根
+`/tmp/oa_landslidedesc_external_multitask_smoke_verified_v3`，只作为本轮可重复证据：
+RSGPT/MMRS-1M/DisasterM3 分别为 `17/6/12` 条，共 35 records、32 parents、
+34 个唯一内容资产、8,944,309 bytes。7 个 text task family 全部覆盖，deep
+validator 为 0 error / 0 warning；不传 source 配置时仍可遍历 37 个 image views、
+4 个 bbox records、2 个 pre/post records，并运行 task-parent sampler、
+DataLoader 和独立 train/val Qwen export。第二个独立构建树的 47 个文件逐项
+SHA-256 一致。manifest 明确记录 `formal_acceptance_eligible=false`，blockers 为
+`bounded_smoke_profile` 和 `oa_component_disabled`。
+
+入口示例：
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase3_landslidedesc/run_landslidedesc.py audit \
+  --config configs/phase3_landslidedesc/external_full.yaml --deep \
+  --report /tmp/oa_landslidedesc_external_full_audit.json
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase3_landslidedesc/run_landslidedesc.py build \
+  --config configs/phase3_landslidedesc/external_full.yaml
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase3_landslidedesc/run_landslidedesc.py validate \
+  --root /home/yukun80/codes/benchmark/oa_landslidedesc_external_v1 --deep
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase3_landslidedesc/run_landslidedesc.py export \
+  --config configs/phase3_landslidedesc/external_qwen_train.yaml
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase3_landslidedesc/run_landslidedesc.py export \
+  --config configs/phase3_landslidedesc/external_qwen_val.yaml
+```
+
+`build` 和 `export` 的目标根必须预先不存在；重复 smoke 时应在配置中换用新的
+`/tmp` 输出根。上面的 `external_full.yaml` 不检查 OA gold；包含 OA 的
+`full.yaml` 才会在 358 条 approved gold 缺失时预检失败。本轮没有执行全量物化、
+人工审核、Silver/teacher/RAG、训练、GPU 或正式 test，也没有生成删除 allowlist。
+
+## Phase 3（Phase 2 正式验收后）：Mask-Grounded VLM Description
 
 OA-AuxSeg 继续正式输出 global mask、candidate regions、no-target 和可选只读
 region features。Description 直接接收 global mask，或由调用方明确指定的
@@ -281,7 +380,7 @@ scripts/phase1_benchmark_build/
 
 ```text
 /home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/
-├── small/      # 当前 500 条五源只读权威
+├── small/      # 历史 500 条五源产物；当前现场缺失
 └── full/       # 当前 53,645 条五源只读产物
 ```
 
@@ -409,11 +508,11 @@ subset 必须使用新的 `OUTPUT_ROOT`，不得与当前 canonical Benchmark �
 新产物的 config/manifest 显式记录 `source_selection`、`included_sources` 和
 `excluded_sources`；index、HDF5 schema、split 和确定性抽样规则不变。
 
-## 当前已验收的 small
+## 历史已验收的 small（当前现场缺失）
 
-当前唯一 OA-AuxSeg v6 数据权威为
-`/home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/small`。它是负责人重构后的五源
-只读产物，明确排除 `sen12landslides`；本次模型迁移没有修改或重建它。
+历史 OA-AuxSeg v6 small 路径为
+`/home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/small`。它曾是负责人重构后的五源
+只读产物并明确排除 `sen12landslides`；当前现场路径缺失，本次没有修改或重建它。
 
 当前 small 参数：
 
@@ -615,5 +714,7 @@ v6 尚未运行真实 small batch=8 六 variant GPU smoke，也不把旧 Benchma
   旧 batch-8 配置不能跨 batch 恢复；
 - 当前无已验收 Small checkpoint 或正式 inference export，不能把 Full 训练中的
   未验收中间状态作为下游区域证据；
-- 下一阶段是 Mask-Grounded VLM Description；独立 Region Grounding Adapter
-  不再实施，RAG 在 Description 闭环之后进入。
+- Phase 2 OA-LandslideDesc 的代码、测试和有界真实 smoke 已闭环，但 full 自包含
+  Benchmark、358 条 approved gold 和正式 deep validation 尚未完成；
+- 只有 Phase 2 正式验收后才进入 Mask-Grounded VLM Description；独立 Region
+  Grounding Adapter 不再实施，RAG 在 Description 闭环之后进入。

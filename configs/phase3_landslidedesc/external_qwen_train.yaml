@@ -1,0 +1,17 @@
+schema_version: oa_landslidedesc.qwen_export.v3
+profile: description_multitask.v1
+benchmark_root: ../../../benchmark/oa_landslidedesc_external_v1
+output_root: ../../../benchmark/oa_landslidedesc_external_qwen_train_v1
+seed: 20260727
+purpose: training
+roles:
+  - external_train
+task_families:
+  - global_caption
+  - visual_qa
+  - bbox_region_caption
+  - scene_understanding
+  - object_count
+  - spatial_relation
+  - visible_change_report
+template_version: qwen3vl_messages.v2

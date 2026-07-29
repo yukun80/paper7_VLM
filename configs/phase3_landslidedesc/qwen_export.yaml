@@ -1,0 +1,20 @@
+schema_version: oa_landslidedesc.qwen_export.v3
+profile: description_multitask.v1
+benchmark_root: /tmp/oa_landslidedesc_smoke_v3
+output_root: /tmp/oa_landslidedesc_smoke_qwen_v3
+seed: 20260727
+purpose: training
+roles:
+  - external_train
+  - oa_train
+task_families:
+  - global_caption
+  - visual_qa
+  - bbox_region_caption
+  - scene_understanding
+  - object_count
+  - spatial_relation
+  - visible_change_report
+  - oa_mask_facts
+  - oa_mask_description
+template_version: qwen3vl_messages.v2

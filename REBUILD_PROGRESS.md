@@ -3,20 +3,30 @@
 ## 当前状态
 
 - program: `OA_AUXSEG_VLM_REBUILD`
-- phase: `1`
-- phase_name: `OA_AUXSEG`
-- phase_status: `v6_cpu_contract_passed_full_b16_e100_training_external`
-- next_phase_name: `MASK_GROUNDED_VLM_DESCRIPTION`
-- execution_date: `2026-07-27`
+- phase: `2`
+- phase_name: `OA_LANDSLIDEDESC_BENCHMARK`
+- phase_status: `code_tests_and_bounded_real_smoke_passed_formal_incomplete`
+- next_phase_name: `PHASE2_EXTERNAL_FULL_MATERIALIZATION_THEN_OA_GOLD_REVIEW`
+- execution_date: `2026-07-28`
 - branch: `main`
-- implementation_baseline_head: `41e64d7f80bbcca7e2fb352ee36df748c424ef40`
+- implementation_baseline_head: `603f4d6f831c32f2261f9cf8119f594f81c0dc7b`
+- phase2_repository_path: `oa_groundrag/phase3`
+- phase2_canonical_schema: `oa_landslidedesc.canonical.v3`
+- phase2_code_implemented: `true`
+- phase2_unit_and_synthetic_tests_passed: `true`
+- phase2_bounded_real_smoke_passed: `true`
+- phase2_full_materialization_run: `false`
+- phase2_gold_identity_count: `358`
+- phase2_gold_approved_count: `0`
+- phase2_formal_complete: `false`
 - benchmark_schema: `oa_auxseg_hdf5_v1`
 - model_schema: `oa_auxseg_model_v6`
 - checkpoint_schema: `oa_auxseg_checkpoint_v6`
 - runtime_config_schema: `oa_auxseg_runtime_config_v5`
 - inference_schema: `oa_auxseg_inference_v6`
 - benchmark_small_built: `true`
-- benchmark_small_access: `read_only`
+- benchmark_small_present: `false`
+- benchmark_small_access: `unavailable`
 - benchmark_small_sample_count: `500`
 - benchmark_full_built: `true`
 - benchmark_full_sample_count: `53645`
@@ -37,15 +47,96 @@
 - commit_performed: `false`
 - push_performed: `false`
 
-## 当前 Small Benchmark
+## Phase 2 OA-LandslideDesc 当前里程碑
 
-唯一 OA-AuxSeg 数据权威：
+本轮实现位于历史路径名 `phase3`，不表示跳过算法 Phase 2：
+
+```text
+oa_groundrag/phase3/
+scripts/phase3_landslidedesc/
+configs/phase3_landslidedesc/
+tests/phase3_landslidedesc/
+```
+
+- canonical/config/manifest/Qwen schema 均为严格版本化合同；YAML/JSON/JSONL
+  拒绝重复或未知字段、错误类型、非有限值、绝对可移植路径和路径逃逸；
+- RSGPT、MMRS-1M、DisasterM3 与可选 OA adapter 统一接入一个 builder；
+- 稳定 ID、parent 聚合、provenance、内容寻址资产、EXIF/bbox/mask 同步变换、
+  staging、拒绝覆盖、原子发布、deep validator、source-hidden Dataset API 和独立
+  Qwen exporter 已实现；
+- external canonical v3 显式保存 `supervision_kind`、`input_layout` 和
+  `output_modality=text`；训练 sampler 先平衡 task、再平衡 parent，MMRS caption
+  按 seed/epoch 轮换 reference；
+- Qwen exporter 使用 single image、bbox overlay+crop、red/blue boxed image 和
+  ordered pre/post renderer；正式 train/val export 都要求显式
+  `profile=description_multitask.v1` 和非空 task family；
+- Hugging Face Datasets 参考锁定 `4.8.5`、
+  `a015b2fa5c1a6cda677fa46f20a54773258553ac`，没有增加 `datasets` 运行时依赖。
+
+当前 full 只读审计：
+
+| source | 当前可用/采用口径 | 主要 skip |
+| --- | --- | --- |
+| RSGPT | caption 2,681；visual QA 764；count 119；scene 45；合计 3,609 | duplicate 1、禁止 claim 13、不采用 road orientation 5、未引用图像 415 |
+| MMRS-1M | caption 46,275；VQA 141,154；bbox→phrase 30,809；合计 218,238 | VQA duplicate 9、重复参考 3、反向 grounding 30,820、零面积 bbox 11、排除 metadata 8 |
+| DisasterM3 | scene 18,184；count 22,912；relation 2,661；report 9,089；合计 52,846 | RefSeg 49,552、恢复建议/灾害类型等 12,175、非光学 8,430、零字节引用 2、schema 3、禁止 claim 2 |
+| total | 274,693 records；104,954 parents | deep train/val records 261,646/13,047；内容组件 100,054 |
+
+DisasterM3 RefSeg 是 `image + text -> pixel mask`，没有人工区域描述，因此本版作为
+`UNSUPPORTED_TASK` 排除且不读取 mask archive。空间关系只采用已绘制红蓝框的光学图，
+从任意对象 key 的 bbox 中依据边框像素证据确定两个对象；relation bbox 是输入上下文，
+不是模型坐标输出。源 split 只保存在 provenance，三库按 parent/content component
+重新划分，因此不能把本地 external val 当作 RSGPT RSIEval 或 DisasterM3 Bench
+官方复现结果。
+
+full deep audit 对 274,693 条采用记录的规范图像指纹检查为：
+`deep_rejected_examples=0`、`content_fingerprint_error_count=0`；
+3,955 个精确内容重复组件使 validation records 从浅审计的 13,688 调整为 13,047，
+所有 source 和实际 task family 仍同时覆盖 train/val。审计过程中 Pillow 对一张
+94,434,015 像素源图发出大图 warning，但可正常解码，未擅自按尺寸删除。
+
+本轮外部配置固定 `oa.enabled=false`，未读取 OA Benchmark，也不需要 358 条人工审核。
+358 条只属于未来完整 OA 组件，不能成为三库 external full build 的前置条件。
+
+最终真实有界 smoke：
+
+```text
+/tmp/oa_landslidedesc_external_multitask_smoke_verified_v3
+```
+
+| source | records | 覆盖 |
+| --- | ---: | --- |
+| rsgpt | 17 | RSICap/RSIEval caption；presence/quantity/position/color/image/area/scene/reasoning |
+| mmrs1m | 6 | 多参考 caption、VQA、bbox region caption |
+| disasterm3 | 12 | scene、bearing bodies、building/road count、boxed relation、pre/post report |
+| total | 35 | 32 parents、34 unique content assets、8,944,309 bytes |
+
+- build_id:
+  `build_6b1dc16155ea4040dfd46d4fe409e6602c8c430240e09d80fc2289e0c3338228`
+- payload SHA-256:
+  `ab135769e8463d8d91637f7ed9309baea172ad28199114e96427302d7c42aaeb`
+- 独立 repeat 根的 47 个文件逐项 size/SHA-256 一致；
+- deep validation: 35 records、37 image views、errors/warnings=`0/0`；
+- source-hidden: bbox records 4、pre/post records 2、DataLoader batch 4；
+- Qwen export: train/val=`31/4` records，bbox renderer 生成 4 个独立派生资产；
+  canonical assets 不复制，canonical 中无 messages；
+- formal acceptance: `false`；
+- blockers: `bounded_smoke_profile`, `oa_component_disabled`；
+- deletion allowlist: 未生成。
+
+这些结果只证明 Phase 2 代码、测试和三库有界真实 smoke 完成。三库 full 资产尚未
+自包含复制，完整 OA 组件及 358 条人工真值也未实施，因此不得声明 Phase 2 正式完成。
+
+## 历史 Small Benchmark（当前现场缺失）
+
+历史路径：
 
 ```text
 /home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/small
 ```
 
-本次只读使用，未修改或重建。
+本次只读核对发现该目录不存在，未修改或重建。下表只保留上次验收快照，不能写成
+本轮实际可加载结果；依赖该路径的 4 项 OA-AuxSeg 既有回归因此失败，其他 29 项通过。
 
 | source | train | val | test | positive | empty | total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -197,11 +288,19 @@ validator。
 
 | 检查 | Exit | 结果 |
 | --- | ---: | --- |
-| OA-AuxSeg unittest | 0 | 33/33；本轮内部测试耗时 32.982 s |
-| Phase 1B 回归 | 0 | 10/10；本轮内部测试耗时 5.716 s |
-| 当前 small deep validator | 0 | 14 shards、500/500、errors/warnings=0 |
-| raw DataLoader smoke | 0 | 五源、3/4/12 通道、none/single/all 通过 |
-| z-score DataLoader smoke | 0 | 五源、3/4/12 通道、none/single/all 通过 |
+| Phase 3 OA-LandslideDesc unittest/合成测试 | 0 | 33/33；三 adapter、严格合同、deep-before-split、资产、staging、source-hidden、task-aware Qwen 通过 |
+| 三库 external full 浅审计 | 0 | 274,693 records、104,954 parents；三库和 7 task 均有 train/val |
+| 三库 external full deep audit | 0 | 拒绝/指纹错误=0/0；3,955 duplicate components；deep train/val=261,646/13,047 |
+| 最终 bounded smoke build ×2 | 0/0 | 35 records、34 unique assets；47 个文件逐项一致 |
+| smoke deep validator | 0 | 35 records、37 image views、errors/warnings=0/0 |
+| source-hidden Dataset/DataLoader/Qwen | 0 | bbox 4、pre/post 2、batch 4、train/val export=31/4 |
+| canonical Draft 2020-12 schema | 0 | 35 条真实 records，schema errors=0 |
+| Phase 2 Python compileall | 0 | 库、CLI 与新测试通过 |
+| Phase 2 CLI 顶层/四子命令 help | 0 | audit/build/validate/export 入口正常 |
+| Phase 1B Benchmark 回归 | 0 | 10/10 |
+| OA-AuxSeg 既有回归 | 1 | 29/33 通过；4 项仅因历史 small 的 manifest/index 当前不存在而失败 |
+| 历史 small deep validator | 0 | 上次验收 14 shards、500/500；本轮因路径缺失未重跑 |
+| 历史 raw/z-score DataLoader smoke | 0 | 上次五源、3/4/12 通道通过；本轮未重跑 |
 | 六 variant 合成 forward/backward/step | 0 | mask、4 列权重、四尺度图、268 维区域合同通过 |
 | 动态 registry 子集 | 0 | dem-only 为 2 列权重和 266 维区域特征 |
 | SAR/10 通道拒绝 | 0 | 未注册 SAR 与未审计 10 通道签名均明确失败 |
@@ -241,7 +340,12 @@ validator。
 
 ## 未运行
 
-- 本次没有重跑 full deep validator、summarizer 或 DataLoader smoke
+- 三库 external full 与完整 OA-LandslideDesc 的自包含资产物化和正式 deep validation
+- 358 条 OA 人工地学审核；当前 approved=`0/358`
+- OA Silver/teacher 生成、RAG、VLM/分割训练、GPU 和一次性正式 test
+- 正式 deletion allowlist 生成或任何源数据删除
+- 本次没有重跑 OA-AuxSeg full deep validator、summarizer 或 DataLoader smoke；
+  历史 small 路径当前缺失
 - v6 六 variant 真实 small batch=8 GPU smoke 和 `<23 GiB` 显存验收
 - v6 全部 158 条 train、最多 1000-step capacity overfit
 - v6 uniform 与 balanced-target 两次同 seed 300-step proposed 对照
@@ -254,6 +358,15 @@ validator。
 
 ## 已知限制
 
+- OA-LandslideDesc 当前只有 `/tmp` 有界 smoke；没有正式 full 产物。
+- 358 条 OA identity 属于此前规划且尚无人审；本轮 external 配置未读取或重审 OA。
+  任何未来 OA description/facts 的专业正确性仍需人工确认。
+- 无可靠 group 的 OA 样本只以 sample ID 建 parent，并做精确内容跨 split 检查；
+  不推断未知地理身份。
+- DisasterM3 当前 metadata/boxed-image 审计采用 52,846 条文本输出候选，不是已复制、
+  已发布的正式 Benchmark record 数；full deep audit 和最终构建仍可按稳定 reason
+  code 进一步拒绝损坏资产。
+- 文本可见性 policy 是版本化工程过滤器，不能替代人工判断隐含因果、风险或专业结论。
 - 当前 train 为 positive/empty=`106/52`，val 为 `105/104`。
 - GDCLD train 为 20/20 positive，而 val 为 20 positive + 20 empty；
   multimodal-landslide train 为 34/34 positive，而 val 为 33 positive + 33 empty。
@@ -271,6 +384,21 @@ validator。
 - 当前进程 CUDA 不可用且外部训练占用 GPU，本轮不并行启动 VLM 任务。
 - 语义 mask 合并相邻滑坡时，候选提取仍只能产生合并区域；candidate regions
   不宣称为人工实例，region features 也不是 Description 的前置条件。
+
+## 下一步 Phase 2 正式构建
+
+只有 identity SHA-256 保持锁定、358 条 annotation 全部为 approved 且人工审核完成，
+并由负责人另行授权后，才运行：
+
+```bash
+python scripts/phase3_landslidedesc/run_landslidedesc.py build \
+  --config configs/phase3_landslidedesc/full.yaml
+```
+
+本轮未运行该命令。目标
+`/home/yukun80/codes/benchmark/oa_landslidedesc_v1` 必须预先不存在；builder 会在
+full deep validation 全通过后才原子发布。完成全量自包含复制和正式验证前，
+`phase2_formal_complete` 必须保持 `false`。
 
 ## 下一步 OA-AuxSeg 正式命令与恢复合同
 
