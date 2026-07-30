@@ -20,6 +20,15 @@ dependencies = [
     "tqdm>=4.67,<5",
 ]
 
+[project.optional-dependencies]
+phase4 = [
+    "accelerate>=1.10,<2",
+    "peft>=0.15,<1",
+    "qwen-vl-utils>=0.0.14,<1",
+    "safetensors>=0.6,<1",
+    "transformers>=5.3,<6",
+]
+
 [project.scripts]
 oa-auxseg = "oa_groundrag.phase2.cli:main"
 
@@ -29,5 +38,6 @@ include = [
     "oa_groundrag*",
     "scripts.phase1_benchmark_build*",
     "scripts.phase3_landslidedesc*",
+    "scripts.phase4_mask_grounded_description*",
 ]
 namespaces = true

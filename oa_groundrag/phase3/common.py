@@ -43,6 +43,20 @@ def stable_hash(seed: int, *parts: object) -> str:
     return sha256_text("\0".join((str(seed), *(str(part) for part in parts))))
 
 
+def first_symlink_component(path: Path) -> Path | None:
+    """返回词法绝对路径中第一个已存在的 symlink 组件。"""
+
+    absolute = Path(os.path.abspath(path))
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            return current
+        if not current.exists():
+            break
+    return None
+
+
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -131,6 +145,71 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             f"无法读取 JSONL：{path}",
             details={"error": str(error)},
         ) from error
+    return rows
+
+
+def read_jsonl_indices(
+    path: Path,
+    indices: Sequence[int],
+) -> dict[int, dict[str, Any]]:
+    """只读取 JSONL 中指定的零基行；扫描在最大目标行后立即停止。"""
+
+    requested: set[int] = set()
+    for index in indices:
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise SchemaError(
+                ReasonCode.TYPE_MISMATCH,
+                f"{path}: JSONL 行号必须是 >= 0 的整数",
+            )
+        if index in requested:
+            raise SchemaError(
+                ReasonCode.SCHEMA_MISMATCH,
+                f"{path}: JSONL 行号不能重复：{index}",
+            )
+        requested.add(index)
+    if not requested:
+        return {}
+    last = max(requested)
+    rows: dict[int, dict[str, Any]] = {}
+    try:
+        with path.open(encoding="utf-8-sig") as handle:
+            for index, line in enumerate(handle):
+                if index > last:
+                    break
+                if not line.strip():
+                    raise SchemaError(
+                        ReasonCode.SCHEMA_MISMATCH,
+                        f"{path}:{index + 1}: JSONL 不允许空行",
+                    )
+                if index not in requested:
+                    continue
+                try:
+                    value = _strict_json_loads(line)
+                except (json.JSONDecodeError, ValueError) as error:
+                    raise SchemaError(
+                        ReasonCode.SCHEMA_MISMATCH,
+                        f"{path}:{index + 1}: 非法 JSON",
+                        details={"error": str(error)},
+                    ) from error
+                if not isinstance(value, dict):
+                    raise SchemaError(
+                        ReasonCode.TYPE_MISMATCH,
+                        f"{path}:{index + 1}: JSONL 行必须为对象",
+                    )
+                reject_nonfinite(value, location=f"{path}:{index + 1}")
+                rows[index] = value
+    except OSError as error:
+        raise SchemaError(
+            ReasonCode.SCHEMA_MISMATCH,
+            f"无法读取 JSONL：{path}",
+            details={"error": str(error)},
+        ) from error
+    missing = sorted(requested - set(rows))
+    if missing:
+        raise SchemaError(
+            ReasonCode.SCHEMA_MISMATCH,
+            f"{path}: 请求行超出 JSONL：{missing}",
+        )
     return rows
 
 
@@ -247,7 +326,11 @@ def portable_relative_path(value: str, *, location: str) -> PurePosixPath:
             ReasonCode.PATH_ABSOLUTE,
             f"{location}: 可移植合同不得使用绝对路径",
         )
-    if not value or value in {".", ".."} or any(part in {"", ".", ".."} for part in path.parts):
+    if (
+        not value
+        or value in {".", ".."}
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
         raise SchemaError(
             ReasonCode.PATH_ESCAPE,
             f"{location}: 非法相对路径 {value!r}",

@@ -21,6 +21,7 @@ from oa_groundrag.phase3.builder import audit_sources, build_benchmark
 from oa_groundrag.phase3.common import read_json, read_jsonl
 from oa_groundrag.phase3.config import load_build_config, load_export_config
 from oa_groundrag.phase3.dataset import (
+    CanonicalRecordLocation,
     OALandslideDescDataset,
     ParentBalancedSampler,
     collate_canonical_samples,
@@ -32,7 +33,7 @@ from oa_groundrag.phase3.errors import (
     ReasonCode,
     SchemaError,
 )
-from oa_groundrag.phase3.exporter import _message_row, export_qwen
+from oa_groundrag.phase3.exporter import export_qwen, render_canonical_messages
 from oa_groundrag.phase3.validator import validate_benchmark
 
 
@@ -137,6 +138,57 @@ class PipelineTests(unittest.TestCase):
         self.assertGreater(len(rows), 0)
         self.assertIn("messages", rows[0])
         self.assertNotIn("messages", dataset.records[0])
+
+    def test_bounded_locations_and_public_renderer_preserve_contract(self) -> None:
+        manifest = read_json(self.benchmark / "manifest.json")
+        first_shard = manifest["layout"]["record_shards"][0]["path"]
+        bounded = OALandslideDescDataset.from_locations(
+            self.benchmark,
+            (
+                CanonicalRecordLocation(first_shard, 0),
+                CanonicalRecordLocation(first_shard, 1),
+            ),
+            load_assets=False,
+            seed=19,
+        )
+        full = OALandslideDescDataset(
+            self.benchmark,
+            load_assets=False,
+            seed=19,
+        )
+        self.assertEqual(
+            [row["record_id"] for row in bounded.records],
+            [row["record_id"] for row in full.records[:2]],
+        )
+        export_config = load_export_config(
+            write_export_config(
+                self.base / "bounded-render-export.yaml",
+                self.benchmark,
+                self.base / "bounded-render-output",
+            )
+        )
+        public, public_assets = render_canonical_messages(
+            bounded.records[0],
+            purpose=export_config.purpose,
+            seed=export_config.seed,
+            dataset=bounded,
+            derived_root=self.base / "bounded-public-render",
+        )
+        repeated, repeated_assets = render_canonical_messages(
+            bounded.records[0],
+            purpose=export_config.purpose,
+            seed=export_config.seed,
+            dataset=bounded,
+            derived_root=self.base / "bounded-repeated-render",
+        )
+        self.assertEqual(public, repeated)
+        self.assertEqual(public_assets, repeated_assets)
+        with self.assertRaises(SchemaError):
+            OALandslideDescDataset.from_locations(
+                self.benchmark,
+                (CanonicalRecordLocation("records/not-in-manifest.jsonl", 0),),
+                load_assets=False,
+            )
 
     def test_multireference_epoch_rotation_and_validation_contract(self) -> None:
         dataset = OALandslideDescDataset(
@@ -250,11 +302,12 @@ class PipelineTests(unittest.TestCase):
                 for row in direct_dataset.records
                 if row["input_layout"] == layout
             )
-            rendered, _ = _message_row(
+            rendered, _ = render_canonical_messages(
                 record,
-                config=export_config,
+                purpose=export_config.purpose,
+                seed=export_config.seed,
                 dataset=direct_dataset,
-                staging=direct_stage,
+                derived_root=direct_stage,
             )
             rows.append(rendered)
         actual_layouts = {row["input_layout"] for row in rows}
@@ -311,11 +364,12 @@ class PipelineTests(unittest.TestCase):
         record = copy.deepcopy(dataset.records[0])
         record["output_modality"] = "pixel_mask"
         with self.assertRaises(ExportError):
-            _message_row(
+            render_canonical_messages(
                 record,
-                config=export_config,
+                purpose=export_config.purpose,
+                seed=export_config.seed,
                 dataset=dataset,
-                staging=self.base / "unused-render-stage",
+                derived_root=self.base / "unused-render-stage",
             )
         bbox_record = copy.deepcopy(
             next(
@@ -326,11 +380,12 @@ class PipelineTests(unittest.TestCase):
         )
         bbox_record["target"] = {"type": "none"}
         with self.assertRaises(ExportError):
-            _message_row(
+            render_canonical_messages(
                 bbox_record,
-                config=export_config,
+                purpose=export_config.purpose,
+                seed=export_config.seed,
                 dataset=dataset,
-                staging=self.base / "unused-render-stage",
+                derived_root=self.base / "unused-render-stage",
             )
 
     def test_source_hidden_load_uses_only_benchmark_root(self) -> None:

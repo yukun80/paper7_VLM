@@ -1,0 +1,88 @@
+schema_version: oa_mask_grounded_description.config.v1
+run:
+  name: bounded_external_processor_smoke
+  seed: 20260730
+  mode: external_generic
+  mask_mode: external_generic
+  output_root: /tmp/oa_mask_grounded_bounded_external_smoke
+  resume_checkpoint: null
+  allow_oa_test: false
+data:
+  benchmark_root: /home/yukun80/codes/benchmark/oa_landslidedesc_external_v1
+  roles: [external_train, external_val]
+  task_families: [global_caption, visual_qa, bbox_region_caption, scene_understanding, object_count, spatial_relation, visible_change_report]
+  oa_inference_root: null
+  expected_manifest_schema: oa_landslidedesc.manifest.v3
+  expected_canonical_schema: oa_landslidedesc.canonical.v3
+  expected_build_id: build_8adb325c14ed7a8419b7d0e95ab2871ee277c3eac7d0409b3dbf64a9f831f96e
+  expected_payload_sha256: f43ab63d2bb452e72648b108c43072d60b682ce936c3fbc196cde3c04fa623ec
+  parent_balanced: true
+  source_weights: {}
+  task_weights: {}
+limits:
+  max_parents: 16
+  max_records: 16
+  max_assets: 32
+  max_asset_bytes: 67108864
+  max_copied_asset_bytes: 0
+  max_images: 5
+  max_input_tokens: 2048
+  max_total_tokens: 32768
+  min_pixels: 12544
+  max_pixels: 200704
+  max_new_tokens: 32
+  max_probe_shards: 19
+  max_records_per_shard: 256
+  max_probe_records: 4864
+evidence:
+  context_margin_ratio: 0.15
+  overlay_alpha: 0.45
+  max_auxiliary_views: 2
+  min_auxiliary_coverage: 0.8
+  fragment_connectivity: 8
+  perimeter_connectivity: 4
+  rag_enabled: false
+model:
+  path: ../../models_zoo/Qwen3-VL-2B-Instruct
+  processor_path: ../../models_zoo/Qwen3-VL-2B-Instruct
+  local_files_only: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  trust_remote_code: false
+adaptation:
+  strategy: prompt_only
+  target_modules: []
+  rank: 0
+  alpha: 0
+  dropout: 0.0
+  freeze_vision: true
+  freeze_merger: true
+training:
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  gradient_checkpointing: true
+  optimizer: adamw
+  learning_rate: 0.0002
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  scheduler: cosine
+  max_grad_norm: 1.0
+  max_steps: 1
+  epochs: 1
+  num_workers: 0
+  prefetch_factor: 0
+  pin_memory: false
+  checkpoint_interval: 1
+  log_interval: 1
+  validation_interval: 100
+  validation_max_parents: 128
+generation:
+  max_new_tokens: 32
+  do_sample: false
+  temperature: 0.0
+  top_p: 1.0
+evaluation:
+  require_evidence_ids: true
+  counterfactual_checks: [mask_swap, wrong_region, empty_mask, modality_removal]
+  allow_external_as_formal_oa: false
+  seal_oa_test: true

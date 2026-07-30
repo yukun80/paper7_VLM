@@ -3,19 +3,38 @@
 ## 当前状态
 
 - program: `OA_AUXSEG_VLM_REBUILD`
-- phase: `2`
-- phase_name: `OA_LANDSLIDEDESC_BENCHMARK`
-- phase_status: `code_tests_and_bounded_real_smoke_passed_formal_incomplete`
-- next_phase_name: `PHASE2_EXTERNAL_FULL_MATERIALIZATION_THEN_OA_GOLD_REVIEW`
-- execution_date: `2026-07-28`
+- phase: `3`
+- phase_name: `MASK_GROUNDED_VLM_DESCRIPTION`
+- repository_phase_path: `phase4`
+- phase_status: `framework_synthetic_external_smoke_lora_gate_complete_oa_formal_incomplete`
+- next_phase_name: `OA_MASK_GROUNDED_DATA_AND_FORMAL_GATE`
+- execution_date: `2026-07-30`
 - branch: `main`
-- implementation_baseline_head: `603f4d6f831c32f2261f9cf8119f594f81c0dc7b`
+- implementation_baseline_head: `85fb8b38f71eeb9a903374d0609b69aac0d3ab2b`
+- phase4_repository_path: `oa_groundrag/phase4`
+- phase4_config_schema: `oa_mask_grounded_description.config.v1`
+- phase4_evidence_schema: `oa_mask_grounded_description.evidence.v1`
+- phase4_output_schema: `oa_mask_grounded_description.model_output.v1`
+- phase4_checkpoint_schema: `oa_mask_grounded_description.checkpoint.v1`
+- phase4_code_implemented: `true`
+- phase4_unit_and_synthetic_tests_passed: `true`
+- phase4_external_bounded_processor_smoke_passed: `true`
+- phase4_real_qwen_forward_run: `true`
+- phase4_external_lora_one_step_gate_passed: `true`
+- phase4_input_prefetch_two_step_gate_passed: `true`
+- phase4_input_workers4_configured: `true`
+- phase4_input_workers4_tests_run: `false`
+- phase4_external_lora_1000_step_complete: `false`
+- phase4_oa_mask_grounded_training_run: `false`
+- phase4_formal_evaluation_run: `false`
+- phase4_formal_complete: `false`
 - phase2_repository_path: `oa_groundrag/phase3`
 - phase2_canonical_schema: `oa_landslidedesc.canonical.v3`
 - phase2_code_implemented: `true`
 - phase2_unit_and_synthetic_tests_passed: `true`
 - phase2_bounded_real_smoke_passed: `true`
-- phase2_full_materialization_run: `false`
+- phase2_external_full_materialization_run: `true`
+- phase2_oa_component_materialization_run: `false`
 - phase2_gold_identity_count: `358`
 - phase2_gold_approved_count: `0`
 - phase2_formal_complete: `false`
@@ -46,6 +65,100 @@
 - download_run: `false`
 - commit_performed: `false`
 - push_performed: `false`
+
+## 算法 Phase 3 / 仓库 phase4 当前里程碑
+
+当前授权编号固定为“算法 Phase 3、仓库 phase4”。旧十阶段方案把 VLM 描述工作放在
+阶段 8/9；该矛盾只记录，不修改权威方案消除。
+
+唯一实现位于：
+
+```text
+oa_groundrag/phase4/
+scripts/phase4_mask_grounded_description/
+configs/phase4_mask_grounded_description/
+tests/phase4_mask_grounded_description/
+```
+
+- 严格 config/evidence/model-output/prediction/failure/checkpoint/run-manifest 合同、
+  稳定 reason code、拒绝未知字段/bool-as-int/非有限值/链接/路径逃逸/覆盖已实现；
+- Phase 2 增加 `CanonicalRecordLocation`、`OALandslideDescDataset.from_locations()`
+  和公共 task-aware renderer；默认全量 Dataset 与 exporter 行为保持不变；
+- `RegionSelector` 只匹配已有 global/candidate mask 或 empty，不生成新像素；
+  `EvidenceBuilder` 程序计算几何/位置/形态事实，no-target 不生成几何、overlay 或 crop；
+- 辅助模态的 registration/coverage/unit/sign convention 缺失会限制结论，内部
+  attention/quality weight/feature 不作为地学证据，RAG 强制关闭；
+- External 与 OA 数据路径隔离，共享 processor、collator、model、trainer、
+  checkpoint、inference 和 evaluator；External bbox/caption/QA 不制造 OA mask；
+- prompt-only baseline 固定 0 trainable parameters；唯一适配主线为冻结视觉与 merger
+  的 LLM attention LoRA，`r=8/alpha=16/dropout=0.05`，锁定 trainable count
+  3,211,264（base 2,127,532,032，约 0.151%）；
+- checkpoint 原子保存 adapter、optimizer/scheduler、RNG、epoch/sample cursor、
+  task-parent sampler、多参考 epoch、配置/Benchmark/model/processor 身份和文件 hash；
+  resume 身份不一致明确拒绝；
+- External 训练每 100 optimizer step 在确定性 `external_val` 子集上计算
+  assistant-only teacher-forced loss；子集至多 128 个不同 parent，并覆盖 3 个 source
+  和 7 个 task family。主选择指标为 7 类任务 macro loss，并列时依次比较 overall
+  loss 和更早 step；验证恢复模型训练状态且不改变训练 sampler、RNG 或多参考状态；
+- TTY 使用进度条，非 TTY 每 10 step 输出 loss/EMA/LR/梯度范数、样本/token/image、
+  吞吐、耗时/ETA、CUDA 显存和输入等待比例；完整 trace 仅写 artifact。正式输入为
+  `ordered_thread_prefetch.v1`，四个独立 processor worker、prefetch factor 2、
+  最多八个待处理物理 batch 和 pinned memory，完成乱序不改变 sampler 消费顺序。
+  每 100 step 保存不可变 checkpoint，`best_checkpoint.json` 只引用已有目录；
+- 非预期中断后只从显式 checkpoint 恢复；更晚但无权重对应的 train log/sample trace
+  会先写入不可变 `resume_recoveries/`，再原子回滚活动 artifact。checkpoint 写入前
+  先原子落 trace，resume 仍拒绝任何 trace 落后、身份错配或更早 validation 缺口；
+- prediction/failure/provenance 写 JSONL，manifest/config/metrics 写 JSON，图像、
+  mask 和 tensor 为独立二进制资产；三种 mask mode 使用隔离运行根；
+- 主参考为 Qwen3-VL，revision
+  `96588727e44c78b25ba03ea03b8e12f7e64fd0da`，revision date 2026-01-30，
+  inspected 2026-07-30，Apache-2.0。读取 `argument.py`、Dataset/data processor、
+  `train_qwen.py`、trainer、Transformers quickstart、
+  `evaluation/RealWorldQA/{README.md,run_realworldqa.py}` 和 license，追踪配置
+  →Dataset→messages→processor→collator→forward/loss→checkpoint/resume→generate
+  →prediction JSONL→evaluator；本地拒绝 vLLM/自动下载/外部 judge，独立实现离线
+  inference/evaluator 和更严格的 artifact/test 合同。
+
+此前完成的 External source-hidden processor smoke 临时产物已按负责人要求清理；
+以下统计来自其已记录结果，不是本轮重新全量读取：
+
+| 有界项 | 实际值 |
+| --- | ---: |
+| deterministic probe | 19 shards；每 shard 前 256；共 4,864 records |
+| selected | 7 records；7 parents |
+| roles | external_train 3；external_val 4 |
+| sources | RSGPT 1；MMRS-1M 2；DisasterM3 4 |
+| task families | 7/7，各 1 |
+| assets | 8 unique；2,430,960 bytes；copied 0 bytes |
+| processor | 2,155 input tokens；9 images；219 supervised tokens |
+| real Qwen forward | 该 bounded smoke 未运行；后续 worker-2 2-step LoRA gate 已运行 |
+
+该 smoke 只证明 External 通用遥感描述入口连通。`oa_component_disabled` 使 OA preflight
+按设计失败；没有 OA val，不能用 synthetic/external 结果决定正式 D0/D1 gate。
+
+当前正式配置的真实 2-step 输入并行 LoRA gate 位于：
+
+```text
+outputs/phase4_mask_grounded_description/
+└── external_lora_qwen3vl_2b_workers2_gate_20260730_190209/
+```
+
+该 gate 使用 RTX 4090 D，以 physical batch 4、accumulation 4、workers 2、
+prefetch factor 2 和 pinned memory 完成 2 次 optimizer step/32 个样本。
+step 2 loss=`3.245582699775696`，gradient norm=`4.2528815269470215`，
+trainable=`3,211,264`，累计 input/supervised tokens=`9,343/840`，images=`41`，
+CUDA peak=`8.803 GiB`。冷启动后的 step 2 耗时=`1.5988s`，输入等待
+`0.00024s`（`0.015%`），无 OOM/NaN/Inf。`step-00000002` 已由严格
+`CheckpointManager` 核验全部 identity/hash 并重载 224 个 trainable tensor。
+验证首次发生在 step 100，因此 gate 阶段尚无
+`validation_results.jsonl` 或 `best_checkpoint.json`，这是预期行为。
+
+`sample_trace.jsonl` 已升级为 v2，16 行严格对应 micro-step `1..4` 与每批
+`batch_slot=0..3`；checkpoint、run manifest 和 training report 均记录
+physical/accumulation/effective batch=`4/4/16`。CPU fixture 已验证 Batch-4 与
+Batch-1 消费相同的前 16 条确定性 sampler 序列且参数更新数值等价，并验证跨 epoch、
+中断恢复和超前 trace recovery。此前 Batch-1 gate 输出根在本轮写入前的现场复查中
+已经不存在，本轮未删除或改写它，因此无法再做两个真实 trace 文件的逐行对照。
 
 ## Phase 2 OA-LandslideDesc 当前里程碑
 
@@ -124,8 +237,32 @@ full deep audit 对 274,693 条采用记录的规范图像指纹检查为：
 - blockers: `bounded_smoke_profile`, `oa_component_disabled`；
 - deletion allowlist: 未生成。
 
-这些结果只证明 Phase 2 代码、测试和三库有界真实 smoke 完成。三库 full 资产尚未
-自包含复制，完整 OA 组件及 358 条人工真值也未实施，因此不得声明 Phase 2 正式完成。
+上述 `/tmp` 结果是 Phase 2 早期有界 smoke。此后负责人已完成并原子发布 External
+full Benchmark；本轮仅按给定快照轻量核对 identity，没有重跑全量构建、payload hash
+或 deep validation。完整 OA 组件及 358 条人工真值仍未实施，因此 Phase 2 的 OA
+正式验收仍未完成。
+
+已发布 External Benchmark：
+
+```text
+/home/yukun80/codes/benchmark/oa_landslidedesc_external_v1
+```
+
+- manifest/canonical schema:
+  `oa_landslidedesc.manifest.v3` / `oa_landslidedesc.canonical.v3`
+- build_id:
+  `build_8adb325c14ed7a8419b7d0e95ab2871ee277c3eac7d0409b3dbf64a9f831f96e`
+- payload SHA-256:
+  `f43ab63d2bb452e72648b108c43072d60b682ce936c3fbc196cde3c04fa623ec`
+- 274,693 records、104,954 parents、109,150 unique assets、
+  40,526,900,921 asset bytes
+- external_train/external_val: 261,646 / 13,047 records
+- source: RSGPT 3,609、MMRS-1M 218,238、DisasterM3 52,846
+- saved validation: deep=true、errors/warnings=`0/0`
+- `source_roots_embedded=false`、scope validation complete
+- `formal_acceptance_eligible=false`、blocker=`oa_component_disabled`
+
+这些是 2026-07-30 此前已完成的正式构建验证快照，不是本轮重新全量验证的结果。
 
 ## 历史 Small Benchmark（当前现场缺失）
 
@@ -136,7 +273,8 @@ full deep audit 对 274,693 条采用记录的规范图像指纹检查为：
 ```
 
 本次只读核对发现该目录不存在，未修改或重建。下表只保留上次验收快照，不能写成
-本轮实际可加载结果；依赖该路径的 4 项 OA-AuxSeg 既有回归因此失败，其他 29 项通过。
+本轮实际可加载结果；依赖该路径的既有回归不能通过。本轮只定向运行 3 项相关回归，
+区域与 registry 两项通过，checkpoint 项仅因缺少该目录的 `manifest.json` 失败。
 
 | source | train | val | test | positive | empty | total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -277,18 +415,30 @@ validator。
   `phase2` 历史实现名；算法方案中的当前阶段统一为 Phase 1。
 - OA-AuxSeg 继续输出 global mask、candidate regions、no-target，以及可选只读
   region features；候选仍由 threshold 0.5、8 邻域和最小 16 像素的既有规则产生。
-- 下一阶段为 Mask-Grounded VLM Description：直接接收 global mask，或由调用方明确
-  指定的 candidate-region mask，并结合多模态证据和问题生成结构化事实、描述与回答。
-- 首版只支持 global/all regions、region ID、bbox/点击、面积/位置规则和编号 overlay
-  等确定性区域输入。可选轻量 region scorer 仅在完整主线之后按需评估。
+- Mask-Grounded VLM Description 框架现已实现：直接接收 global mask，或由调用方
+  明确指定的 candidate-region mask，并结合多模态证据和问题生成受约束描述与回答。
+- 下一 gate 是构建并审核 OA mask-grounded train/val、锁定 mask mode 和科学语义，
+  然后运行 prompt-only baseline 与 LoRA；oa_test 继续封存。
 - 本轮已清理独立 Grounding 的打包入口、依赖、公共 helper、专属 Benchmark 和
   规则基线输出；该独立模块的源码、CLI 与测试目录在清理开始时已不存在。
 
 ## 实际检查
 
+以下检查记录来自 worker-4 配置切换前的 worker-2 实现。本次按负责人要求未运行
+worker-4 单元测试、配置解析、Qwen forward、GPU gate 或性能测试。
+
 | 检查 | Exit | 结果 |
 | --- | ---: | --- |
-| Phase 3 OA-LandslideDesc unittest/合成测试 | 0 | 33/33；三 adapter、严格合同、deep-before-split、资产、staging、source-hidden、task-aware Qwen 通过 |
+| phase4 unittest/合成端到端 | 0 | 46/46；新增有序 worker 预取、乱序完成/顺序消费、worker 异常、跨 epoch committed cursor；Batch-4、resume/recovery 均通过 |
+| phase4 External bounded processor smoke | 0 | probe 19 shards/4,864 records；选择 7 records；2 roles/3 sources/7 tasks；copied 0 bytes |
+| phase4 External preflight | 0 | manifest/canonical/saved-validation identity 与给定发布快照一致；未重算 payload |
+| phase4 OA preflight gate | 2（预期） | `OA_COMPONENT_DISABLED`，未绕过 OA 数据 gate |
+| phase4 External LoRA worker-2 2-step gate | 0 | step2 loss=3.245583；32 samples；3,211,264 trainable；peak=8.803 GiB；step2 data wait=0.00024s/0.015% |
+| phase4 真实 checkpoint 重载 | 0 | 严格核验布局/hash 并重载 `step-00000002` 的 224 个 trainable tensor；旧同步 step-100 以 `CHECKPOINT_INCOMPATIBLE` 拒绝 |
+| phase4 三份 YAML 严格解析 | 0 | bounded/prompt-only/External-LoRA schema 与 semantic SHA 通过 |
+| phase4 CLI help | 0 | 顶层及五个子命令通过；train 的 output/stop/log/resume 参数可见 |
+| phase4 compileall / `git diff --check` | 0/0 | phase3/phase4 库、CLI、测试通过；diff whitespace 通过 |
+| Phase 3 OA-LandslideDesc unittest/合成测试 | 0 | 34/34；三 adapter、严格合同、deep-before-split、资产、staging、source-hidden、task-aware Qwen 通过 |
 | 三库 external full 浅审计 | 0 | 274,693 records、104,954 parents；三库和 7 task 均有 train/val |
 | 三库 external full deep audit | 0 | 拒绝/指纹错误=0/0；3,955 duplicate components；deep train/val=261,646/13,047 |
 | 最终 bounded smoke build ×2 | 0/0 | 35 records、34 unique assets；47 个文件逐项一致 |
@@ -298,7 +448,7 @@ validator。
 | Phase 2 Python compileall | 0 | 库、CLI 与新测试通过 |
 | Phase 2 CLI 顶层/四子命令 help | 0 | audit/build/validate/export 入口正常 |
 | Phase 1B Benchmark 回归 | 0 | 10/10 |
-| OA-AuxSeg 既有回归 | 1 | 29/33 通过；4 项仅因历史 small 的 manifest/index 当前不存在而失败 |
+| OA-AuxSeg phase4 相关定向回归 | 1 | 2/3 通过；region/registry 通过，checkpoint 项仅因历史 small `manifest.json` 当前不存在而失败 |
 | 历史 small deep validator | 0 | 上次验收 14 shards、500/500；本轮因路径缺失未重跑 |
 | 历史 raw/z-score DataLoader smoke | 0 | 上次五源、3/4/12 通道通过；本轮未重跑 |
 | 六 variant 合成 forward/backward/step | 0 | mask、4 列权重、四尺度图、268 维区域合同通过 |
@@ -321,7 +471,7 @@ validator。
 | 三阶段文档合同 | 0 | canonical 共 13 章，只有 OA-AuxSeg/Description/RAG 三个 Phase |
 | 独立 Grounding 残留搜索 | 1 | 无匹配；`rg` 的 1 表示活动实现残留为零 |
 | shell `bash -n` | 0 | small/full builder 入口语法通过 |
-| CUDA/NVML probe | 0 | CUDA available=false、device_count=0，NVML 初始化失败 |
+| 初始隔离 CUDA/NVML probe | 0 | 隔离环境不可见；随后宿主检查确认 RTX 4090 D 空闲并完成有界 worker-2 2-step gate |
 | git diff --check | 0 | 通过 |
 
 上述均为 OA-AuxSeg 的 CPU、合同和只读数据验收，不是 GPU 显存或正式分割精度结果。
@@ -340,9 +490,10 @@ validator。
 
 ## 未运行
 
-- 三库 external full 与完整 OA-LandslideDesc 的自包含资产物化和正式 deep validation
+- 本轮没有重跑已发布 External Benchmark 的 build、全量读取、payload hash 或 full
+  deep validation
 - 358 条 OA 人工地学审核；当前 approved=`0/358`
-- OA Silver/teacher 生成、RAG、VLM/分割训练、GPU 和一次性正式 test
+- OA Silver/teacher 生成、RAG、OA mask-grounded VLM 训练和一次性正式 test
 - 正式 deletion allowlist 生成或任何源数据删除
 - 本次没有重跑 OA-AuxSeg full deep validator、summarizer 或 DataLoader smoke；
   历史 small 路径当前缺失
@@ -351,21 +502,24 @@ validator。
 - v6 uniform 与 balanced-target 两次同 seed 300-step proposed 对照
 - v6 optical-only 短训练与 val 评价
 - 训练后 Landslide4Sense 和 multimodal-landslide 正式推理导出
-- 外部 Full batch16、229,757-step、100-epoch 训练尚未完成或验收
-- Mask-Grounded VLM Description、RAG 或端到端集成
+- 外部 Full batch16、229,757-step、100-epoch 训练没有在本轮启动、停止、恢复或验收
+- 新并行输入配置的 External LoRA 正式 1000-step、step 100 起的有界 External 验证、OA
+  prompt-only/LoRA 训练和正式评价
+- worker-4 配置的单元测试、严格配置解析、真实 Qwen forward、GPU gate 和吞吐对照
+- RAG 或分割→Description 端到端正式集成
 - 数据、模型或依赖下载
 - commit 或 push
 
 ## 已知限制
 
-- OA-LandslideDesc 当前只有 `/tmp` 有界 smoke；没有正式 full 产物。
+- External OA-LandslideDesc full 已发布；它没有 OA mask-grounded train/val/test，
+  不能承担算法 Phase 3 正式评价。
 - 358 条 OA identity 属于此前规划且尚无人审；本轮 external 配置未读取或重审 OA。
   任何未来 OA description/facts 的专业正确性仍需人工确认。
 - 无可靠 group 的 OA 样本只以 sample ID 建 parent，并做精确内容跨 split 检查；
   不推断未知地理身份。
-- DisasterM3 当前 metadata/boxed-image 审计采用 52,846 条文本输出候选，不是已复制、
-  已发布的正式 Benchmark record 数；full deep audit 和最终构建仍可按稳定 reason
-  code 进一步拒绝损坏资产。
+- DisasterM3 的 52,846 条采用记录已进入发布的 External Benchmark；它们只承担通用
+  视觉描述监督，不能转成 OA mask-grounded 样本。
 - 文本可见性 policy 是版本化工程过滤器，不能替代人工判断隐含因果、风险或专业结论。
 - 当前 train 为 positive/empty=`106/52`，val 为 `105/104`。
 - GDCLD train 为 20/20 positive，而 val 为 20 positive + 20 empty；
@@ -381,24 +535,63 @@ validator。
 - 旧 3.81 GiB 峰值不代表 v6 六 variant 或 capacity overfit 显存。
 - 当前没有已验收 Small OA-AuxSeg checkpoint 或正式 inference export，不能将
   Full 训练中的未验收中间状态作为正式 Description 区域证据。
-- 当前进程 CUDA 不可用且外部训练占用 GPU，本轮不并行启动 VLM 任务。
+- Batch-4/worker-2 2-step Qwen LoRA gate 已结束；现场进程检查没有发现其他构建或训练任务。
+  当前 worker-4 仅完成配置切换，未实测且不继承 worker-2 gate 结论；本轮没有启动或
+  恢复 1000-step 长训练。
 - 语义 mask 合并相邻滑坡时，候选提取仍只能产生合并区域；candidate regions
   不宣称为人工实例，region features 也不是 Description 的前置条件。
 
-## 下一步 Phase 2 正式构建
+## 下一步 External LoRA 训练
 
-只有 identity SHA-256 保持锁定、358 条 annotation 全部为 approved 且人工审核完成，
-并由负责人另行授权后，才运行：
+历史 worker-2 gate 已通过，但当前 worker-4 配置按负责人要求未实测。旧同步 step-100
+和 worker-2 checkpoint 的 semantic SHA/training layout 均与 worker-4 不兼容，只读
+保留且不得 resume。正式训练新建输出根，先完成 1-step 停机点，然后只从该新根的显式
+`step-00000001` 继续：
 
 ```bash
-python scripts/phase3_landslidedesc/run_landslidedesc.py build \
-  --config configs/phase3_landslidedesc/full.yaml
+cd /home/yukun80/codes/paper7_VLM
+RUN_ROOT="outputs/phase4_mask_grounded_description/external_lora_qwen3vl_2b_workers4_$(date +%Y%m%d_%H%M%S)"
+
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONUNBUFFERED=1 \
+TOKENIZERS_PARALLELISM=false \
+CUDA_VISIBLE_DEVICES=0 \
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_mask_grounded_description/run_mask_grounded_description.py train \
+  --config configs/phase4_mask_grounded_description/external_lora_qwen3vl_2b.yaml \
+  --output-root "$RUN_ROOT" \
+  --stop-after-steps 1
+
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONUNBUFFERED=1 \
+TOKENIZERS_PARALLELISM=false \
+CUDA_VISIBLE_DEVICES=0 \
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_mask_grounded_description/run_mask_grounded_description.py train \
+  --config configs/phase4_mask_grounded_description/external_lora_qwen3vl_2b.yaml \
+  --output-root "$RUN_ROOT" \
+  --resume-checkpoint "$RUN_ROOT/checkpoints/step-00000001"
 ```
 
-本轮未运行该命令。目标
-`/home/yukun80/codes/benchmark/oa_landslidedesc_v1` 必须预先不存在；builder 会在
-full deep validation 全通过后才原子发布。完成全量自包含复制和正式验证前，
-`phase2_formal_complete` 必须保持 `false`。
+该命令由负责人在确认 GPU 空闲后运行至 step 1000；框架会在 step
+100/200/.../1000 验证并保存 checkpoint。它最多消费 16,000 个训练样本，不代表
+完整遍历 External Benchmark。训练期间不生成文本、不访问 OA 数据，也不运行正式评价。
+
+## 下一步 OA mask-grounded gate
+
+当前可重复确认 OA blocker：
+
+```bash
+python scripts/phase4_mask_grounded_description/run_mask_grounded_description.py \
+  preflight \
+  --config configs/phase4_mask_grounded_description/prompt_only_qwen3vl_2b.yaml
+```
+
+该命令当前必须以 `OA_COMPONENT_DISABLED` 退出，不应通过修改 External Benchmark 或
+伪造 bbox/caption mask 绕过。下一步需要负责人提供并审核 OA train/val canonical mask
+或锁定的 `oa_auxseg_inference_v6` artifact，确认 parent/split/配准/unit/sign 语义，
+再新建指向该发布根和 identity 的配置。只有 OA preflight、prompt-only baseline 和
+OA val gate 通过后，才运行 LoRA 训练；`oa_test` 继续封存。
 
 ## 下一步 OA-AuxSeg 正式命令与恢复合同
 
@@ -412,8 +605,8 @@ python scripts/phase2_oa_auxseg/run_oa_auxseg.py overfit \
   --config configs/phase2_oa_auxseg/small_overfit.json
 ```
 
-本轮未启动、停止、恢复或修改 Full 训练；只读观察其隔离日志正在增长。OA-AuxSeg
-验收后直接进入 Mask-Grounded VLM Description，不再提供独立 Grounding 命令。
+本轮未启动、停止、恢复或修改 Full 训练；当前进程检查没有发现可见训练任务。
+Mask-Grounded VLM Description 框架已进入 phase4，不提供独立 Grounding 命令。
 
 负责人当前 Full 训练与同配置恢复合同仍为：
 

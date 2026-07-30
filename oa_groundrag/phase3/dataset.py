@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import random
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -13,7 +14,14 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset, Sampler
 
-from .common import portable_relative_path, read_json, read_jsonl, stable_hash
+from .common import (
+    first_symlink_component,
+    portable_relative_path,
+    read_json,
+    read_jsonl,
+    read_jsonl_indices,
+    stable_hash,
+)
 from .contracts import (
     CANONICAL_SCHEMA_VERSION,
     MANIFEST_VERSION,
@@ -23,6 +31,29 @@ from .contracts import (
     validate_canonical_record,
 )
 from .errors import ReasonCode, SchemaError
+
+
+@dataclass(frozen=True)
+class CanonicalRecordLocation:
+    """manifest 所列 canonical 分片中的零基记录位置。"""
+
+    shard_path: str
+    line_index: int
+
+    def __post_init__(self) -> None:
+        portable_relative_path(
+            self.shard_path,
+            location="CanonicalRecordLocation.shard_path",
+        )
+        if (
+            isinstance(self.line_index, bool)
+            or not isinstance(self.line_index, int)
+            or self.line_index < 0
+        ):
+            raise SchemaError(
+                ReasonCode.TYPE_MISMATCH,
+                "CanonicalRecordLocation.line_index 必须是 >= 0 的整数",
+            )
 
 
 class OALandslideDescDataset(Dataset[dict[str, Any]]):
@@ -39,20 +70,32 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         load_assets: bool = True,
         seed: int = 0,
         epoch: int = 0,
+        record_locations: Sequence[CanonicalRecordLocation] | None = None,
     ) -> None:
-        input_root = Path(root)
-        if input_root.is_symlink():
+        input_root = Path(root).absolute()
+        linked_root = first_symlink_component(input_root)
+        if linked_root is not None:
             raise SchemaError(
                 ReasonCode.OUTPUT_LINK,
-                "Benchmark root 不能是 symlink",
+                f"Benchmark root 含 symlink 组件：{linked_root}",
             )
-        self.root = input_root.resolve()
+        self.root = input_root
         if not self.root.is_dir():
             raise SchemaError(
                 ReasonCode.OUTPUT_LINK,
                 "Benchmark root 必须是普通目录",
             )
-        self.manifest = read_json(self.root / "manifest.json")
+        manifest_path = self.root / "manifest.json"
+        if (
+            not manifest_path.is_file()
+            or manifest_path.is_symlink()
+            or manifest_path.stat().st_nlink != 1
+        ):
+            raise SchemaError(
+                ReasonCode.OUTPUT_LINK,
+                "Benchmark manifest 必须是普通单链接文件",
+            )
+        self.manifest = read_json(manifest_path)
         if (
             self.manifest.get("schema_version") != MANIFEST_VERSION
             or self.manifest.get("canonical_schema_version")
@@ -70,30 +113,100 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
                 ReasonCode.SCHEMA_MISMATCH,
                 "manifest 缺少 record_shards layout",
             )
-        rows: list[dict[str, Any]] = []
+        shard_contracts: dict[str, tuple[Path, int]] = {}
         for shard in layout["record_shards"]:
             if not isinstance(shard, dict) or not isinstance(shard.get("path"), str):
                 raise SchemaError(
                     ReasonCode.SCHEMA_MISMATCH,
                     "manifest record shard 合同非法",
                 )
-            shard_path = self._resolve_contract_path(
-                shard["path"],
-                location="manifest.record_shards.path",
-            )
-            shard_rows = read_jsonl(shard_path)
+            if set(shard) != {"path", "record_count"}:
+                raise SchemaError(
+                    ReasonCode.SCHEMA_MISMATCH,
+                    "manifest record shard 字段非法",
+                )
+            record_count = shard.get("record_count")
             if (
-                isinstance(shard.get("record_count"), bool)
-                or not isinstance(shard.get("record_count"), int)
-                or shard["record_count"] != len(shard_rows)
+                isinstance(record_count, bool)
+                or not isinstance(record_count, int)
+                or record_count <= 0
             ):
                 raise SchemaError(
                     ReasonCode.SCHEMA_MISMATCH,
-                    f"record shard count 不一致：{shard['path']}",
+                    f"manifest record shard count 非法：{shard['path']}",
                 )
-            for row in shard_rows:
-                validate_canonical_record(row)
-            rows.extend(shard_rows)
+            shard_path = self.resolve_contract_path(
+                shard["path"],
+                location="manifest.record_shards.path",
+            )
+            relative = str(shard["path"])
+            if relative in shard_contracts:
+                raise SchemaError(
+                    ReasonCode.SCHEMA_MISMATCH,
+                    f"manifest record shard 重复：{relative}",
+                )
+            shard_contracts[relative] = (shard_path, record_count)
+        located_rows: list[
+            tuple[CanonicalRecordLocation | None, dict[str, Any]]
+        ] = []
+        if record_locations is None:
+            for relative, (shard_path, record_count) in shard_contracts.items():
+                shard_rows = read_jsonl(shard_path)
+                if record_count != len(shard_rows):
+                    raise SchemaError(
+                        ReasonCode.SCHEMA_MISMATCH,
+                        f"record shard count 不一致：{relative}",
+                    )
+                located_rows.extend((None, row) for row in shard_rows)
+        else:
+            locations = tuple(record_locations)
+            if not locations:
+                raise SchemaError(
+                    ReasonCode.SCHEMA_MISMATCH,
+                    "record_locations 不能为空",
+                )
+            if not all(
+                isinstance(location, CanonicalRecordLocation)
+                for location in locations
+            ):
+                raise SchemaError(
+                    ReasonCode.TYPE_MISMATCH,
+                    "record_locations 必须全部是 CanonicalRecordLocation",
+                )
+            if len(set(locations)) != len(locations):
+                raise SchemaError(
+                    ReasonCode.SCHEMA_MISMATCH,
+                    "record_locations 不能重复",
+                )
+            grouped: dict[str, list[int]] = defaultdict(list)
+            for location in locations:
+                contract = shard_contracts.get(location.shard_path)
+                if contract is None:
+                    raise SchemaError(
+                        ReasonCode.PATH_ESCAPE,
+                        f"location shard 不在 manifest：{location.shard_path}",
+                    )
+                if location.line_index >= contract[1]:
+                    raise SchemaError(
+                        ReasonCode.SCHEMA_MISMATCH,
+                        f"location 超出 manifest record_count：{location}",
+                    )
+                grouped[location.shard_path].append(location.line_index)
+            selected: dict[CanonicalRecordLocation, dict[str, Any]] = {}
+            for relative, indices in grouped.items():
+                shard_path = shard_contracts[relative][0]
+                for index, row in read_jsonl_indices(
+                    shard_path,
+                    indices,
+                ).items():
+                    selected[
+                        CanonicalRecordLocation(relative, index)
+                    ] = row
+            located_rows = [
+                (location, selected[location]) for location in locations
+            ]
+        for _, row in located_rows:
+            validate_canonical_record(row)
         role_set = set(roles or ())
         source_set = set(sources or ())
         task_set = set(task_families or ())
@@ -107,25 +220,54 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         if layer_set:
             for value in layer_set:
                 AnnotationLayer(value)
-        self.records = [
-            row
-            for row in rows
+        selected_rows = [
+            (location, row)
+            for location, row in located_rows
             if (not role_set or row["logical_role"] in role_set)
             and (not source_set or row["source"] in source_set)
             and (not task_set or row["task_family"] in task_set)
             and (not layer_set or row["annotation"]["layer"] in layer_set)
         ]
+        self.record_locations = tuple(location for location, _ in selected_rows)
+        self.records = [row for _, row in selected_rows]
         self.load_assets = load_assets
         if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
-            raise ValueError("Dataset seed 必须是 >= 0 的整数")
+            raise SchemaError(
+                ReasonCode.TYPE_MISMATCH,
+                "Dataset seed 必须是 >= 0 的整数",
+            )
         self.seed = seed
         self.set_epoch(epoch)
 
-    def _resolve_contract_path(self, relative: str, *, location: str) -> Path:
+    @classmethod
+    def from_locations(
+        cls,
+        root: Path | str,
+        locations: Sequence[CanonicalRecordLocation],
+        **kwargs: Any,
+    ) -> "OALandslideDescDataset":
+        """由 manifest 内已知位置构造严格有界 Dataset。"""
+
+        if "record_locations" in kwargs:
+            raise SchemaError(
+                ReasonCode.TYPE_MISMATCH,
+                "from_locations 不接受重复的 record_locations 参数",
+            )
+        return cls(root, record_locations=locations, **kwargs)
+
+    def resolve_contract_path(self, relative: str, *, location: str) -> Path:
+        """解析 manifest 路径；拒绝路径逃逸、链接组件和多硬链接。"""
+
         pure = portable_relative_path(relative, location=location)
         path = self.root.joinpath(*pure.parts)
+        linked = first_symlink_component(path)
+        if linked is not None:
+            raise SchemaError(
+                ReasonCode.OUTPUT_LINK,
+                f"{location}: 路径含 symlink 组件 {linked}",
+            )
         try:
-            path.resolve().relative_to(self.root)
+            path.resolve().relative_to(self.root.resolve())
         except ValueError as error:
             raise SchemaError(
                 ReasonCode.PATH_ESCAPE,
@@ -143,10 +285,15 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
 
     def set_epoch(self, epoch: int) -> None:
         if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
-            raise ValueError("Dataset epoch 必须是 >= 0 的整数")
+            raise SchemaError(
+                ReasonCode.TYPE_MISMATCH,
+                "Dataset epoch 必须是 >= 0 的整数",
+            )
         self.epoch = epoch
 
-    def _training_response(self, record: Mapping[str, Any]) -> str | None:
+    def training_response(self, record: Mapping[str, Any]) -> str | None:
+        """按 seed/epoch 稳定选择 train reference；val/test 返回 null。"""
+
         if record["logical_role"] not in {
             LogicalRole.EXTERNAL_TRAIN.value,
             LogicalRole.OA_TRAIN.value,
@@ -170,7 +317,7 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         return str(values[rank % len(values)])
 
     def _resolve_asset(self, media: Mapping[str, Any]) -> Path:
-        return self._resolve_contract_path(
+        return self.resolve_contract_path(
             str(media["path"]),
             location=f"asset[{media.get('asset_id', 'unknown')}].path",
         )
@@ -209,7 +356,7 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
             "supervision_kind": record["supervision_kind"],
             "input_layout": record["input_layout"],
             "output_modality": record["output_modality"],
-            "training_response": self._training_response(record),
+            "training_response": self.training_response(record),
             "reference_responses": tuple(record["reference_responses"]),
             "bboxes": (
                 list(record["target"].get("boxes", []))

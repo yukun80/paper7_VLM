@@ -35,22 +35,27 @@ from .errors import ExportError, ReasonCode
 EXPORT_STAGING_SENTINEL = ".oa_landslidedesc_export_staging"
 
 
-def _response(record: Mapping[str, Any], *, config: ExportConfig) -> str:
+def _response(
+    record: Mapping[str, Any],
+    *,
+    purpose: str,
+    seed: int,
+) -> str:
     values = (
         record["training_responses"]
-        if config.purpose == "training"
+        if purpose == "training"
         else record["reference_responses"]
     )
     if not isinstance(values, list) or not values:
         raise ExportError(
             ReasonCode.SCHEMA_MISMATCH,
-            f"{record['record_id']}: export purpose={config.purpose} 缺少响应",
+            f"{record['record_id']}: export purpose={purpose} 缺少响应",
         )
     rank = int(
         stable_hash(
-            config.seed,
+            seed,
             record["record_id"],
-            config.purpose,
+            purpose,
             "response",
         ),
         16,
@@ -301,13 +306,26 @@ def _render_mask_grounded(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _message_row(
+def render_canonical_messages(
     record: Mapping[str, Any],
     *,
-    config: ExportConfig,
+    purpose: str,
+    seed: int,
     dataset: OALandslideDescDataset,
-    staging: Path,
+    derived_root: Path,
 ) -> tuple[dict[str, Any], list[str]]:
+    """使用唯一的 Phase 2 task-aware 模板渲染一条 canonical record。"""
+
+    if purpose not in {"training", "validation", "formal_test"}:
+        raise ExportError(
+            ReasonCode.INVALID_ENUM,
+            f"不支持 renderer purpose={purpose!r}",
+        )
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ExportError(
+            ReasonCode.TYPE_MISMATCH,
+            "renderer seed 必须是 >= 0 的整数",
+        )
     if record.get("output_modality") != OutputModality.TEXT.value:
         raise ExportError(
             ReasonCode.UNSUPPORTED_TASK,
@@ -327,7 +345,7 @@ def _message_row(
         user_content, derived = _render_bbox_region(
             record,
             dataset=dataset,
-            staging=staging,
+            staging=derived_root,
         )
     elif layout is InputLayout.BOXED_IMAGE:
         user_content = _render_boxed_image(record)
@@ -352,12 +370,19 @@ def _message_row(
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "text", "text": _response(record, config=config)}
+                    {
+                        "type": "text",
+                        "text": _response(
+                            record,
+                            purpose=purpose,
+                            seed=seed,
+                        ),
+                    }
                 ],
             },
         ],
     }
-    if config.purpose != "training":
+    if purpose != "training":
         row["reference_responses"] = list(record["reference_responses"])
     return row, derived
 
@@ -454,11 +479,12 @@ def export_qwen(config: ExportConfig) -> Path:
         rows: list[dict[str, Any]] = []
         derived_assets: list[str] = []
         for record in dataset.records:
-            row, derived = _message_row(
+            row, derived = render_canonical_messages(
                 record,
-                config=config,
+                purpose=config.purpose,
+                seed=config.seed,
                 dataset=dataset,
-                staging=staging,
+                derived_root=staging,
             )
             rows.append(row)
             derived_assets.extend(derived)
