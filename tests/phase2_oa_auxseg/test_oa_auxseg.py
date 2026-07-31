@@ -9,6 +9,7 @@ import unittest
 from collections import OrderedDict
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
@@ -30,6 +31,7 @@ from oa_groundrag.phase2.contracts import (
     PackedAuxiliary,
     RuntimeConfig,
     SUPPORTED_AUXILIARY_ORDER,
+    TRAINING_REPORT_SCHEMA_VERSION,
     VARIANTS,
     ordered_auxiliary_names,
 )
@@ -45,10 +47,14 @@ from oa_groundrag.phase2.data import (
 from oa_groundrag.phase2.engine import (
     _acceptance_collated,
     _capacity_acceptance,
+    _metric_replay_delta,
+    _read_finalization_log,
     _training_state,
+    _validate_finalization_evidence,
     _validation_is_better,
     effective_training_config,
     evaluate_model,
+    finalize_training_run,
     load_runtime_config,
     make_optimizer,
     make_scaler,
@@ -73,6 +79,7 @@ from oa_groundrag.phase2.fusion import (
 from oa_groundrag.phase2.regions import extract_regions_and_features
 from oa_groundrag.phase2.progress import (
     TrainingProgress,
+    format_compact_finalization_report,
     format_compact_training_report,
 )
 from oa_groundrag.phase2.validity import (
@@ -1902,6 +1909,360 @@ class TrainingProgressTest(unittest.TestCase):
                 )
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(stdout.getvalue()), report)
+
+
+class FinalizationTest(unittest.TestCase):
+    @staticmethod
+    def _config() -> RuntimeConfig:
+        return load_runtime_config(
+            REPO_ROOT
+            / "configs/phase2_oa_auxseg/"
+            "full_proposed_dropout_b16_nockpt_e100.json"
+        )
+
+    @staticmethod
+    def _metrics(
+        *,
+        dice: float = 0.6,
+        loss: float = 0.4,
+        false_positive_rate: float = 0.2,
+        sample_count: int = 2,
+    ) -> dict[str, object]:
+        overall = {
+            "sample_count": sample_count,
+            "iou": 0.5,
+            "dice": dice,
+            "precision": 0.7,
+            "recall": 0.65,
+            "f1": dice,
+            "positive_only_iou": 0.52,
+            "positive_only_dice": 0.61,
+            "no_target_count": 1,
+            "no_target_false_positive_rate": false_positive_rate,
+            "empty_mean_foreground_probability": 0.03,
+        }
+        return {
+            "loss": loss,
+            "duration_seconds": 1.0,
+            "overall": overall,
+            "by_source": {"synthetic": dict(overall)},
+            "by_available_modality_signature": {"none": dict(overall)},
+            "by_active_subset": {"none": dict(overall)},
+            "mean_modality_weights": {"__null__": 1.0},
+            "conditional_mean_modality_weights": {"__null__": None},
+            "conditional_weight_counts": {"__null__": 0},
+            "conditional_stage_modality_weights": {
+                "stride4": {"__null__": None}
+            },
+            "conditional_modality_weights_by_source": {},
+        }
+
+    @classmethod
+    def _evidence(cls) -> tuple[
+        RuntimeConfig,
+        list[dict[str, object]],
+        dict[str, object],
+        dict[str, object],
+    ]:
+        config = cls._config()
+        first = {
+            "step": 1,
+            "validation": cls._metrics(dice=0.5, loss=0.5),
+            "is_new_best": True,
+        }
+        selected = {
+            "step": 2,
+            "validation": cls._metrics(dice=0.6, loss=0.4),
+            "is_new_best": True,
+        }
+        later = {
+            "step": 3,
+            "validation": cls._metrics(dice=0.59, loss=0.39),
+            "is_new_best": False,
+        }
+        rows: list[dict[str, object]] = [
+            first,
+            selected,
+            {"step": 2, "checkpoint_best": {"path": "best"}},
+            later,
+            {"step": 4, "loss": 0.2},
+        ]
+        best_selection = {
+            "step": 2,
+            "dice": 0.6,
+            "loss": 0.4,
+            "no_target_false_positive_rate": 0.2,
+        }
+
+        def state(
+            step: int, trajectory: list[dict[str, object]]
+        ) -> dict[str, object]:
+            return {
+                "runtime_config": config.to_dict(),
+                "loss_history": [1.0 / index for index in range(1, step + 1)],
+                "ema_loss": 0.2,
+                "initial_ema_loss": 1.0,
+                "gradient_max": {"decoder": 0.5},
+                "parameter_change_max": {"decoder": 0.1},
+                "training_step_seconds": float(step),
+                "training_samples_seen": step * config.batch_size,
+                "training_steps_timed": step,
+                "clipped_steps": 0,
+                "clip_scale_sum": float(step),
+                "clip_scale_min": 1.0,
+                "validation_trajectory": trajectory,
+                "best_selection": dict(best_selection),
+                "training_subset_counts": {"none": step * config.batch_size},
+                "training_subset_reason_counts": {
+                    "native_none": step * config.batch_size
+                },
+                "training_native_auxiliary_samples": 0,
+                "training_active_auxiliary_samples": 0,
+            }
+
+        contract = {"architecture": "synthetic"}
+        selected_payload = {
+            "step": 2,
+            "training_state": state(2, [first, selected]),
+            "model_contract": contract,
+        }
+        last_payload = {
+            "step": 3,
+            "training_state": state(3, [first, selected, later]),
+            "model_contract": contract,
+        }
+        return config, rows, selected_payload, last_payload
+
+    def test_manual_stop_evidence_keeps_log_tail_without_resume(self) -> None:
+        config, rows, selected_payload, last_payload = self._evidence()
+        evidence = _validate_finalization_evidence(
+            config=config,
+            rows=rows,
+            selected_payload=selected_payload,
+            last_payload=last_payload,
+        )
+        self.assertEqual(evidence["selected_checkpoint_step"], 2)
+        self.assertEqual(evidence["last_checkpoint_step"], 3)
+        self.assertEqual(evidence["last_logged_step"], 4)
+        self.assertEqual(
+            evidence["logged_but_not_checkpointed"],
+            {
+                "after_step": 3,
+                "through_step": 4,
+                "step_count": 1,
+                "included_in_final_weights": False,
+            },
+        )
+
+    def test_finalization_rejects_best_selection_mismatch(self) -> None:
+        config, rows, selected_payload, last_payload = self._evidence()
+        last_payload["training_state"]["best_selection"][  # type: ignore[index]
+            "dice"
+        ] = 0.7
+        with self.assertRaisesRegex(
+            ValueError, "best/last checkpoint 的 best_selection"
+        ):
+            _validate_finalization_evidence(
+                config=config,
+                rows=rows,
+                selected_payload=selected_payload,
+                last_payload=last_payload,
+            )
+
+    def test_finalization_log_accepts_same_step_and_rejects_regression(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "train_log.jsonl"
+            path.write_text(
+                '{"step":1}\n{"step":1,"checkpoint_last":{}}\n'
+                '{"step":2}\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(len(_read_finalization_log(path)), 3)
+            path.write_text(
+                '{"step":2}\n{"step":1}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "单调不下降"):
+                _read_finalization_log(path)
+
+    def test_metric_replay_delta_records_values_without_gate(self) -> None:
+        stored = self._metrics(dice=0.6, loss=0.4)
+        fresh = self._metrics(dice=0.61, loss=0.39)
+        delta = _metric_replay_delta(stored, fresh)
+        self.assertAlmostEqual(delta["loss"], -0.01)
+        self.assertAlmostEqual(delta["overall"]["dice"], 0.01)
+
+    def test_finalize_writes_atomic_report_without_training_calls(self) -> None:
+        config, rows, selected_payload, last_payload = self._evidence()
+        train_metrics = self._metrics(sample_count=3)
+        validation_metrics = self._metrics(sample_count=2)
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            best_path = output_dir / "checkpoint_best.pt"
+            last_path = output_dir / "checkpoint_last.pt"
+            log_path = output_dir / "train_log.jsonl"
+            best_path.touch()
+            last_path.touch()
+            log_path.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            model = SimpleNamespace(
+                backbone_sha256="b" * 64,
+                modality_weight_order=("__null__",),
+                region_feature_dim=10,
+                model_contract=lambda: {"architecture": "synthetic"},
+            )
+            loaders = [
+                SimpleNamespace(dataset=[0, 1, 2]),
+                SimpleNamespace(dataset=[0, 1]),
+            ]
+            with (
+                patch(
+                    "oa_groundrag.phase2.engine.resolve_runtime",
+                    return_value=(
+                        output_dir / "benchmark",
+                        output_dir,
+                        output_dir / "backbone.pt",
+                        torch.device("cpu"),
+                    ),
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.benchmark_contract_from_root",
+                    return_value={"index_sha256": "i" * 64},
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.read_checkpoint",
+                    side_effect=[selected_payload, last_payload],
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.model_from_checkpoint",
+                    return_value=model,
+                ),
+                patch("oa_groundrag.phase2.engine._validate_inference_config"),
+                patch("oa_groundrag.phase2.engine._validate_benchmark_registry"),
+                patch(
+                    "oa_groundrag.phase2.engine.make_dataloader",
+                    side_effect=loaders,
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.evaluate_model",
+                    side_effect=[train_metrics, validation_metrics],
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.checkpoint_reload_difference",
+                    return_value={"mask_probability": 0.0},
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine._acceptance_collated",
+                    return_value={},
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.sha256_file",
+                    return_value="f" * 64,
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.make_optimizer",
+                    side_effect=AssertionError("finalize 不能创建 optimizer"),
+                ),
+                patch(
+                    "oa_groundrag.phase2.engine.save_training_checkpoint",
+                    side_effect=AssertionError("finalize 不能保存 checkpoint"),
+                ),
+            ):
+                report = finalize_training_run(
+                    config,
+                    repo_root=REPO_ROOT,
+                    checkpoint_path=best_path,
+                    termination_reason="project_owner_manual_stop",
+                )
+            self.assertEqual(
+                report["schema_version"], TRAINING_REPORT_SCHEMA_VERSION
+            )
+            self.assertEqual(report["status"], "completed")
+            self.assertFalse(report["resume_required"])
+            self.assertFalse(report["gate_a_evaluated"])
+            self.assertFalse(report["formal_acceptance"])
+            self.assertFalse(report["test_evaluated"])
+            self.assertTrue(report["engineering_checks_passed"])
+            self.assertTrue((output_dir / "training_report.json").is_file())
+            self.assertEqual(best_path.stat().st_size, 0)
+            self.assertEqual(last_path.stat().st_size, 0)
+
+    def test_finalize_refuses_existing_report(self) -> None:
+        config = self._config()
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            best_path = output_dir / "checkpoint_best.pt"
+            (output_dir / "checkpoint_last.pt").touch()
+            (output_dir / "train_log.jsonl").touch()
+            (output_dir / "training_report.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            best_path.touch()
+            with patch(
+                "oa_groundrag.phase2.engine.resolve_runtime",
+                return_value=(
+                    output_dir / "benchmark",
+                    output_dir,
+                    output_dir / "backbone.pt",
+                    torch.device("cpu"),
+                ),
+            ):
+                with self.assertRaisesRegex(FileExistsError, "拒绝覆盖"):
+                    finalize_training_run(
+                        config,
+                        repo_root=REPO_ROOT,
+                        checkpoint_path=best_path,
+                        termination_reason="project_owner_manual_stop",
+                    )
+
+    def test_finalize_cli_defaults_to_compact_report(self) -> None:
+        from oa_groundrag.phase2 import cli as cli_module
+
+        report = {
+            "status": "completed",
+            "completion_mode": "project_owner_manual_stop",
+            "selected_checkpoint_step": 2,
+            "last_checkpoint_step": 3,
+            "last_logged_step": 4,
+            "train_metrics": self._metrics(sample_count=3),
+            "validation_metrics": self._metrics(sample_count=2),
+            "peak_cuda_memory_gib": None,
+            "engineering_checks_passed": True,
+            "checkpoint": "/tmp/checkpoint_best.pt",
+            "training_report": "/tmp/training_report.json",
+        }
+        compact = format_compact_finalization_report(report)
+        with (
+            patch.object(cli_module, "load_runtime_config", return_value=object()),
+            patch.object(
+                cli_module,
+                "finalize_training_run",
+                return_value=report,
+            ) as finalize,
+        ):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = cli_module.main(
+                    [
+                        "finalize",
+                        "--config",
+                        "unused.json",
+                        "--checkpoint",
+                        "best.pt",
+                        "--termination-reason",
+                        "project_owner_manual_stop",
+                    ]
+                )
+        self.assertEqual(result, 0)
+        self.assertEqual(stdout.getvalue().strip(), compact)
+        self.assertEqual(
+            finalize.call_args.kwargs["termination_reason"],
+            "project_owner_manual_stop",
+        )
 
 
 if __name__ == "__main__":

@@ -1044,12 +1044,23 @@ InSAR 和 DEM 是否支持该候选区域？
 
 ### Stage 1：OA-AuxSeg 正式验收
 
-- 完成 optical-only；
-- 完成 proposed；
-- 完成不同模态组合；
-- 完成 no-target；
-- 完成 full 训练和评价；
-- 导出固定预测 mask。
+- 冻结项目负责人确认的 proposed `checkpoint_best.pt`；
+- 完成训练报告、严格重载以及 train/val 工程评价；
+- 保留 optical-only、不同融合方式、模态组合和 no-target 的代码能力；
+- 在完整框架搭建后再执行分割消融、多随机种子和 Gate A；
+- Gate A 通过后才运行 sealed test 并导出固定预测 mask。
+
+训练配置中的 `max_steps` 是计划预算上限，不是必须跑满的权重有效性或 Gate A
+判据。项目负责人可以依据训练轨迹主动停止优化，并按训练开始前已实现的 checkpoint
+选择规则定版既有 best checkpoint。人工停止必须在报告中记录为
+`project_owner_manual_stop`，不能伪装为跑满计划或自动 early stopping，也不自动要求
+恢复训练。
+
+当前 batch-16 proposed 训练已由项目负责人宣布结束，不再续训。既有
+`checkpoint_best.pt` 作为当前最终权重，`checkpoint_last.pt` 和其后的未 checkpoint
+日志只保留为轨迹证据；不得复制、重命名或改写 checkpoint。权重工程定版与 Gate A
+是两个不同结论：前者不因消融和 Gate 尚未执行而失效，后者也不能由 checkpoint
+存在或当前 validation 指标替代。
 
 ### Stage 2：RS-GeneralDesc Benchmark 验收
 
@@ -1135,6 +1146,10 @@ InSAR 和 DEM 是否支持该候选区域？
 - no-target FPR 可接受；
 - auxiliary 模态不会系统性降低性能；
 - checkpoint 可严格恢复。
+
+跑满计划 `max_steps` 不是 Gate A 的独立要求。当前 best checkpoint 的负责人定版不
+表示 Gate A 已执行或通过；Gate A 必须在首次正式 test 前只使用 train/val 预注册，
+不得读取 test 或根据当前 validation 快照反推门槛。
 
 ### Gate B：通用遥感微调是否有效
 
@@ -1353,7 +1368,8 @@ Codex 不因普通子任务结束而暂停。仅在以下情况停止：
 
 主线完成必须满足：
 
-1. OA-AuxSeg 完成正式训练和评价；
+1. OA-AuxSeg 完成负责人定版的训练报告、正式评价和 Gate A；跑满计划
+   `max_steps` 不是独立完成条件；
 2. RS-GeneralDesc Benchmark 完成 external-only 验收；
 3. RS-General Adapter 完成训练并通过通用遥感 gate；
 4. Landslide Evidence Corpus 完成 Auto、Silver 和必要 Gold；

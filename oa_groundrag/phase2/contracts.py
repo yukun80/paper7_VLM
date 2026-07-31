@@ -15,6 +15,7 @@ MODEL_SCHEMA_VERSION = "oa_auxseg_model_v6"
 CHECKPOINT_SCHEMA_VERSION = "oa_auxseg_checkpoint_v6"
 INFERENCE_SCHEMA_VERSION = "oa_auxseg_inference_v6"
 CONFIG_SCHEMA_VERSION = "oa_auxseg_runtime_config_v5"
+TRAINING_REPORT_SCHEMA_VERSION = "oa_auxseg.training_report.v1"
 BENCHMARK_SCHEMA_VERSION = "oa_auxseg_hdf5_v1"
 SUPPORTED_BACKBONE = "convnext_small"
 PHASE2_INCLUDED_SOURCES = (

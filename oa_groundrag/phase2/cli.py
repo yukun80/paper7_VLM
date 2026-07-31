@@ -8,13 +8,17 @@ from pathlib import Path
 from typing import Sequence
 
 from .engine import (
+    finalize_training_run,
     load_runtime_config,
     run_evaluation,
     run_inference,
     run_smoke,
     run_training,
 )
-from .progress import format_compact_training_report
+from .progress import (
+    format_compact_finalization_report,
+    format_compact_training_report,
+)
 
 
 def _path_from_repo(value: str, repo_root: Path) -> Path:
@@ -46,6 +50,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--full-report-json",
         action="store_true",
         help="结束时将完整训练报告 JSON 输出到 stdout",
+    )
+
+    finalize = subparsers.add_parser(
+        "finalize",
+        help="不更新权重，冻结人工终止训练并生成 train/val 工程报告",
+    )
+    finalize.add_argument("--config", type=Path, required=True)
+    finalize.add_argument("--checkpoint", type=str, required=True)
+    finalize.add_argument(
+        "--termination-reason",
+        choices=("project_owner_manual_stop",),
+        required=True,
+    )
+    finalize.add_argument(
+        "--full-report-json",
+        action="store_true",
+        help="结束时将完整定版报告 JSON 输出到 stdout",
     )
 
     evaluate = subparsers.add_parser("evaluate", help="严格重载 checkpoint 并评价")
@@ -99,6 +120,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else None
             ),
         )
+    elif arguments.command == "finalize":
+        report = finalize_training_run(
+            config,
+            repo_root=repo_root,
+            checkpoint_path=_path_from_repo(
+                arguments.checkpoint, repo_root
+            ),
+            termination_reason=arguments.termination_reason,
+        )
     elif arguments.command == "evaluate":
         report = run_evaluation(
             config,
@@ -123,11 +153,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run_smoke(config, repo_root=repo_root)
     else:
         raise AssertionError(arguments.command)
-    if (
-        arguments.command in {"train", "overfit"}
-        and not arguments.full_report_json
-    ):
-        print(format_compact_training_report(report))
+    if arguments.command in {"train", "overfit", "finalize"}:
+        if arguments.full_report_json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        elif arguments.command == "finalize":
+            print(format_compact_finalization_report(report))
+        else:
+            print(format_compact_training_report(report))
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

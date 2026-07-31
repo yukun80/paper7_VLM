@@ -4,24 +4,28 @@
 
 - program: `OA_GROUNDRAG_V2`
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
-- stage: `0`
-- stage_name: `ASSET_FREEZE_AND_ROUTE_MIGRATION`
-- stage_status: `complete`
-- next_stage: `1`
-- next_stage_name: `OA_AUXSEG_FORMAL_ACCEPTANCE`
+- stage: `1`
+- stage_name: `OA_AUXSEG_FORMAL_ACCEPTANCE`
+- stage_status: `in_progress`
+- current_task: `OA_AUXSEG_MANUAL_FINALIZATION`
+- current_task_status: `complete`
 - next_gate: `A`
-- scientific_status: `Stage 0 complete / Stage 1 OA-AuxSeg formal acceptance pending`
+- scientific_status: `Stage 1 OA-AuxSeg proposed final checkpoint frozen and training report completed / Gate A, ablations, sealed test and formal fixed masks pending`
 - execution_date: `2026-07-31`
 - branch: `main`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
+- stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - active_training_process_found: `false`
-- gpu_run_performed: `false`
+- gpu_inference_only_run_performed: `true`
+- training_or_optimizer_step_performed: `false`
 - formal_evaluation_performed: `false`
+- test_split_evaluated: `false`
 - commit_performed: `false`
 - push_performed: `false`
 
-当前状态只表示 Stage 0 文档迁移和只读资产冻结完成，不表示 Stage 1–9 已获授权或通过
-验收。代码存在、checkpoint 存在、训练结束或中途指标都不能单独作为科学验收。
+Stage 0 权威迁移已经完成。当前状态表示项目负责人已定版 OA-AuxSeg proposed 主模型并
+完成 train/val 工程报告，不表示 Gate A 已执行或通过。代码存在、checkpoint 定版和
+工程指标都不能单独替代科学验收。
 
 ## Stage 0 已完成
 
@@ -64,20 +68,33 @@ hash 或数据源扫描。
   `outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100`
 - configured max steps: `229757`
 - last logged training step: `213200`
-- `checkpoint_best.pt`: present
-- `checkpoint_last.pt`: present
-- final `training_report.json`: absent
+- `checkpoint_best.pt`: final, step `206820`
+- `checkpoint_last.pt`: trace only, step `211416`
+- logged but not checkpointed: `211417–213200` (`1784` steps)
+- final `training_report.json`: present
+- report schema: `oa_auxseg.training_report.v1`
+- completion mode: `project_owner_manual_stop`
+- resume required: `false`
+- final checkpoint SHA-256:
+  `672d39ab4220d8e1b4f949ca8d1d5dcd34f58898cecd1553dd56cdd9d84fb038`
 - visible training process on 2026-07-31: absent
 
-最近一次已记录 validation 位于 step `211416`：
+项目负责人确认本次训练是主动手动停止，计划 `max_steps` 仅为预算上限，不要求续训。
+既有选择规则冻结的 step `206820` best validation 为：
 
-- Dice: `0.8249502019193231`
-- positive-only Dice: `0.8334839149584277`
-- no-target FPR: `0.41858367162832655`
+- Dice: `0.8254104937535791`
+- IoU: `0.7027225165592563`
+- positive-only Dice: `0.8343047072386582`
+- no-target FPR: `0.4239963915200722`
 - sample_count: `12375`
 
-它是未完成训练中的 validation 快照，不是 Gate A 结果。当前没有已验收 OA-AuxSeg
-checkpoint，也不能从该输出导出正式 fixed predicted masks。
+离线 fresh val 与上述训练期 selection snapshot 的指标差值为 0。完整 train 工程评价为
+36,761 samples、Dice `0.9753234910697791`、IoU `0.9518355135202943`、no-target FPR
+`0.0011661807580174927`。严格重载的 mask logits、probability、modality weights 和
+四尺度 weight maps 差值均为 0。
+
+该 `checkpoint_best.pt` 是项目负责人定版的当前最终权重，但不是 Gate-A-accepted
+checkpoint。Gate A、消融、sealed test 和正式 fixed predicted masks 仍未执行。
 
 ### RS-GeneralDesc External Benchmark
 
@@ -160,8 +177,26 @@ PDF 实体，因此 Stage 0 不重新下载或做逐文件 hash 对照。后续�
 
 ## 当前科学任务：Stage 1 / Gate A
 
-Stage 1 目标是正式验收 OA-AuxSeg，不是继续 Phase 3 模型或提前接入 RAG。进入首次
-正式 test 前，必须只使用 train/val 预注册并冻结：
+Stage 1 的 proposed 主模型训练已经由负责人定版完成，不再续训。本轮新增的
+`finalize` 入口不创建 optimizer、不执行 backward 或 scheduler step，只核对
+best/last/log/Benchmark 身份，运行 train/val inference-only 评价、严格重载并原子
+生成报告：
+
+```bash
+cd /home/yukun80/codes/paper7_VLM
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase2_oa_auxseg/run_oa_auxseg.py finalize \
+  --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json \
+  --checkpoint outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_best.pt \
+  --termination-reason project_owner_manual_stop
+```
+
+该命令已经成功完成，不得重复覆盖报告。`checkpoint_best.pt`、`checkpoint_last.pt` 和
+`train_log.jsonl` 的 size/mtime 在运行前后完全一致，未创建 `checkpoint_final.pt`。
+
+Stage 1 剩余科学任务不是恢复训练。进入首次正式 test 前，必须只使用 train/val
+预注册并冻结：
 
 - checkpoint 选择规则；
 - aggregate 与 positive-only 分割指标门槛；
@@ -170,26 +205,9 @@ Stage 1 目标是正式验收 OA-AuxSeg，不是继续 Phase 3 模型或提前�
 - source、模态组合和低质量子组报告规则；
 - 多随机种子与统计汇总规则。
 
-不得根据 test 或当前 step 211416 的 validation 快照反推门槛。正式长训练由项目负责人
-启动。当前同配置恢复入口为：
-
-```bash
-cd /home/yukun80/codes/paper7_VLM
-
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
-  scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json \
-  --resume outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_last.pt
-```
-
-恢复前必须严格核对 config、Benchmark、checkpoint identity、日志 cursor、GPU 空闲和
-输出根；batch-16 不得从旧 batch-8 checkpoint 恢复。训练完成后依次：
-
-1. 生成最终 `training_report.json` 并严格重载 accepted candidate；
-2. 完成 optical-only、proposed、必要融合/quality/dropout 消融与多随机种子；
-3. 完成模态组合、低质量模态、source 和 no-target 分层评价；
-4. 只在 val 锁定门槛、checkpoint 和推理配置后运行一次 sealed test；
-5. Gate A 通过后才导出固定 predicted masks，供 Stage 5 使用。
+不得根据 test 或当前 best validation 快照反推门槛。分割消融和多随机种子实验按项目
+负责人指令延后到完整框架搭建后；只有未来 Gate A 通过，才运行一次 sealed test 并
+导出供 Stage 5 使用的正式 fixed predicted masks。
 
 ## 后续冻结顺序
 
@@ -218,8 +236,9 @@ cd /home/yukun80/codes/paper7_VLM
   不得生成定量位移或物理方向结论。
 - LMHLD 和 Landslide4Sense 缺少可靠地理 group；不得从文件名或 sample ID 伪造空间
   身份。
-- 当前没有 accepted OA-AuxSeg checkpoint、fixed predicted mask、OA-GroundedEval、
-  Landslide Evidence Corpus 或正式 mask-grounded test。
+- 当前有负责人定版的 OA-AuxSeg final checkpoint，但没有 Gate-A-accepted checkpoint、
+  fixed predicted mask、OA-GroundedEval、Landslide Evidence Corpus 或正式
+  mask-grounded test。
 - Gate C 通过前不得接入 RAG；RAG 不能为候选 mask 直接寻找支持理由，必须同时检索
   反对证据、混淆对象、困难负样本和传感器限制。
 
@@ -235,13 +254,29 @@ cd /home/yukun80/codes/paper7_VLM
 | OA Benchmark 轻量身份 | 0 | schema 与 `sample_count=53645` 匹配 |
 | RS-GeneralDesc 轻量身份 | 0 | schema/scope/build/payload、saved validation `0/0` 匹配 |
 | External LoRA 轻量身份 | 0 | `completed`、step 1000、16,000 samples、formal false 匹配 |
-| OA-AuxSeg 训练状态 | 0 | 日志末步 213200，最终 training report 仍不存在 |
+| OA-AuxSeg 训练状态（Stage 0 快照） | 0 | 当时日志末步 213200，training report 尚不存在 |
 | Git 变化范围 | 0 | 仅 AGENTS、README、进度、canonical 方案和 v1 archive |
 
-本阶段只修改 Markdown，因此未运行 Python 单元测试、模型 forward 或 GPU smoke；这与
-Stage 0 的静态验证边界一致。
+以上是 Stage 0 当时的验收记录；此后 Stage 1 已新增代码、测试和人工定版报告。
 
-## 本次未运行
+## Stage 1 人工定版验收
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| 新增 finalization 定向测试 | 0 | 7/7 |
+| 不依赖历史 small 的 Phase 2 回归 | 0 | 36/36 |
+| Phase 2 全量发现 | 1 | 40 个中 36 通过；4 个仅因 `../benchmark/oa_auxseg_hdf5_v1/small` 不存在而失败 |
+| 真实 `finalize` train/val | 0 | train 36,761 / val 12,375，工程检查全部通过 |
+| fresh val replay | 0 | selection loss 与 overall 全指标差值均为 0 |
+| checkpoint 严格重载 | 0 | 四类输出最大绝对差值均为 0 |
+| best/last/log 资产不变 | 0 | size 与 mtime 前后完全一致 |
+| sealed test | 未运行 | `test_evaluated=false` |
+| formal Gate A | 未运行 | `gate_a_evaluated=false`、`formal_acceptance=false` |
+
+缺失的 historical small 资产不是本次改动造成，也不为通过测试而重建、复制或修改
+Benchmark。当前 full Benchmark 和真实 final checkpoint 已完成本任务所需验证。
+
+## Stage 0 当时未运行
 
 - GPU、训练、正式评价或长时间任务
 - OA-AuxSeg 恢复、test 或 predicted-mask 导出
@@ -250,3 +285,11 @@ Stage 0 的静态验证边界一致。
 - OA-GroundedEval、Silver/Gold、RAG 或端到端集成
 - 数据、模型、依赖或 PDF 下载
 - commit 或 push
+
+## 本次人工定版未运行
+
+- resume、optimizer step、backward、scheduler step 或任何训练
+- checkpoint 保存、复制、重命名或 train log 裁剪
+- test、Gate A、分割消融、多随机种子或正式 predicted-mask 导出
+- Benchmark build、deep validation、payload 重算或源数据扫描
+- Stage 2–9 算法开发、外部下载、commit 或 push

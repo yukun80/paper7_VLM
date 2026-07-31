@@ -299,3 +299,38 @@ def format_compact_training_report(report: Mapping[str, Any]) -> str:
             f"report={report['training_report']}",
         )
     )
+
+
+def format_compact_finalization_report(report: Mapping[str, Any]) -> str:
+    """人工定版 CLI 默认的人类可读终态摘要。"""
+
+    train = report["train_metrics"]["overall"]
+    validation = report["validation_metrics"]["overall"]
+    peak_memory = report.get("peak_cuda_memory_gib")
+    peak_label = "-" if peak_memory is None else f"{float(peak_memory):.2f} GiB"
+    engineering_label = (
+        "PASS" if bool(report.get("engineering_checks_passed")) else "FAIL"
+    )
+    return "\n".join(
+        (
+            "[done] "
+            f"command=finalize status={report['status']} "
+            f"completion={report['completion_mode']} "
+            f"selected_step={report['selected_checkpoint_step']} "
+            f"last_checkpoint_step={report['last_checkpoint_step']} "
+            f"last_logged_step={report['last_logged_step']}",
+            "[done] "
+            f"train_dice={_float(train.get('dice')):.4f} "
+            f"train_iou={_float(train.get('iou')):.4f} "
+            f"val_dice={_float(validation.get('dice')):.4f} "
+            f"val_iou={_float(validation.get('iou')):.4f} "
+            "empty_fpr="
+            f"{_float(validation.get('no_target_false_positive_rate')):.4f} "
+            f"peak_cuda={peak_label}",
+            "[done] "
+            f"engineering_checks={engineering_label} "
+            "gate_a=NOT_EVALUATED formal_acceptance=false "
+            f"checkpoint={report['checkpoint']} "
+            f"report={report['training_report']}",
+        )
+    )

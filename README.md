@@ -9,9 +9,10 @@
 既有 `phase2/phase3/phase4` 路径；它们在新路线中分别继续承载 OA-AuxSeg、
 RS-GeneralDesc Benchmark 和 Mask-Grounded VLM 基础。
 
-- **Stage 1 / OA-AuxSeg：** 五源 full Benchmark 有 53,645 条样本。batch-16 正式训练
-  日志停在 step `213200/229757`，存在 `checkpoint_best.pt` 和
-  `checkpoint_last.pt`，但没有最终 `training_report.json`，因此 Gate A 未完成。
+- **Stage 1 / OA-AuxSeg：** 五源 full Benchmark 有 53,645 条样本。batch-16 proposed
+  训练由项目负责人在日志 step `213200` 主动停止，不再续训；step `206820` 的
+  `checkpoint_best.pt` 已冻结为最终权重。离线 `training_report.json` 已完成，
+  train/val Dice 分别为 `0.9753235/0.8254105`；Gate A 和 sealed test 尚未执行。
 - **Stage 2 / RS-GeneralDesc：** 已发布 External Benchmark 有 274,693 records、
   104,954 parents，saved deep validation 为 0 error / 0 warning。其 v3 manifest
   仍保存旧组合范围的 `formal_acceptance_eligible=false` 和
@@ -26,8 +27,9 @@ RS-GeneralDesc Benchmark 和 Mask-Grounded VLM 基础。
   `4241140a8005bb79b8d8ebce982c645b096b7aca` 仅作外部工程原型。它不复制进仓库、
   不作为运行时依赖，也不在 Gate C 前接入。
 
-当前没有可见训练进程。本次 Stage 0 没有读取或修改 Benchmark、checkpoint、训练输出、
-模型权重或 `docs/RAG_knowledge/`，也没有启动 GPU、正式评价、下载、commit 或 push。
+当前没有可见训练进程。人工定版只运行了 train/val inference-only 评价并新增
+`training_report.json`；未执行 optimizer/backward，未读取 test，也未修改 Benchmark、
+checkpoint、训练日志、模型权重或 `docs/RAG_knowledge/`。
 
 ## 环境
 
@@ -200,6 +202,12 @@ checkpoint。`training_report.json` 额外记录 native-none、dropout-restored�
 single/multi/all、原生/实际激活辅助样本、全局与条件辅助曝光、实际 batch/累计样本、
 梯度裁剪比例与缩放、extra-band 梯度和更新、
 有覆盖辅助样本条件下的全局/分尺度/分 source 权重，以及完整 best/last 验证轨迹。
+
+负责人主动停止训练时使用 `finalize`，它不创建 optimizer、不更新权重、不裁剪日志，
+只严格核对 best/last/log/Benchmark 身份，重新评价 train/val、检查 checkpoint
+严格重载并原子写入 `training_report.json`。计划 `max_steps` 是预算上限，不是要求
+续训的充分理由。报告分别记录 last logged、last checkpoint 和 selected best step；
+Gate A、test 和 formal acceptance 状态保持未执行。
 
 ### 训练终端进度
 
@@ -759,7 +767,7 @@ full 验收标准：
 7. 除已批准的 311 个 LandslideBench location 例外外，不得出现新的已知 group 跨 split；
 8. 不覆盖 small 或任何已有 full 输出。
 
-full 完成上述 Benchmark 验收后，当前正式多模态训练采用物理 batch 16 和约
+full 完成上述 Benchmark 验收后，本次多模态训练原计划采用物理 batch 16 和最多约
 100 个等价 epoch：
 
 ```bash
@@ -767,32 +775,40 @@ python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
   --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json
 ```
 
-配置固定为 `max_steps=229757`，累计曝光 `3,676,112` 条样本，即
+配置的预算上限为 `max_steps=229757`，若跑满会累计曝光 `3,676,112` 条样本，即
 `100.0003` 个 train pass；每 `4596` step（约 2 epoch）评价并保存，warmup 为
 `int(229757×0.05)=11487` steps。为提高 24 GiB 4090 的利用率，配置使用 bf16、
 关闭 activation checkpointing，并将两档 LR 相对 batch 8 线性放大 2 倍。
 原 `full_proposed_dropout.json` 及其 batch 8 日志不覆盖、不用于跨 batch 恢复。
 
-中断后只允许使用同一 batch 16 配置恢复：
+项目负责人在日志 step `213200` 主动停止本次训练，并确认不再续训。已有
+`checkpoint_best.pt` step `206820` 按既定 validation Dice、loss、no-target FPR
+顺序选出并冻结为最终权重；`checkpoint_last.pt` 为 step `211416`，其后的 1784 个
+已记录 step 没有进入任何 checkpoint，也不进入最终权重。离线定版命令为：
 
 ```bash
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
+python scripts/phase2_oa_auxseg/run_oa_auxseg.py finalize \
   --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json \
-  --resume outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_last.pt
+  --checkpoint outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_best.pt \
+  --termination-reason project_owner_manual_stop
 ```
 
-该长训练不是由本轮清理启动；本轮只读观察到对应日志正在外部增长。正式训练的
-工程验收为：
+该命令不执行训练或 test，只生成 schema `oa_auxseg.training_report.v1` 报告。当前
+实测工程结果为：
 
-1. 前 50 step 无 NaN/Inf、OOM，真实 device batch=16 峰值显存小于 20 GiB；
-2. none/single/all-or-multi 三类 active subset 均出现；
-3. 三个辅助 adapter、共享 MSPA encoder、四层 FRM/FFM 和 quality selector 均有非零梯度及更新；
-4. validation 输出 overall、source、available signature 和 active subset 分层指标；
-5. checkpoint 严格重载差异不超过 `1e-6`，推理原子导出可重载；
-6. 后续评价、推理和 Mask-Grounded VLM Description 使用 `checkpoint_best.pt`，
-   不默认使用第 100 epoch 的 `checkpoint_last.pt`；
-7. 若峰值超过 21.5 GiB 或 OOM，回退 batch 12；不得降低 224 分辨率、删除融合尺度
-   或关闭辅助路径。
+1. final checkpoint SHA-256：
+   `672d39ab4220d8e1b4f949ca8d1d5dcd34f58898cecd1553dd56cdd9d84fb038`；
+2. train：36,761 samples，Dice `0.9753234911`，IoU `0.9518355135`，
+   no-target FPR `0.0011661808`；
+3. val：12,375 samples，Dice `0.8254104938`，IoU `0.7027225166`，
+   positive-only Dice `0.8343047072`，no-target FPR `0.4239963915`；
+4. fresh val 与训练期 step-206820 selection snapshot 的指标差值为 0；
+5. mask logits、probability、模态权重和四尺度权重图严格重载差值均为 0；
+6. train/val、身份、日志证据和输入资产不变等工程检查全部通过；
+7. `gate_a_evaluated=false`、`formal_acceptance=false`、`test_evaluated=false`。
+
+后续评价、推理和 Mask-Grounded VLM Description 使用上述 `checkpoint_best.pt`，不
+使用 `checkpoint_last.pt`，也不复制一份 `checkpoint_final.pt`。
 
 ## 测试
 
@@ -830,18 +846,20 @@ MSPA block 及四层 FRM/FFM 的辅助梯度、checkpoint v6 严格重载、旧 
 曾在历史五源 small 完成 1-step CPU trainer、train 54/val 64 评价和差异 0.0 的重载；
 临时文件已清理，该检查不属于官方权重或训练质量验收。
 
-OA-AuxSeg v6 测试为 33/33、阶段 1B 回归为 10/10；实际 exit code 和本次耗时见
-`REBUILD_PROGRESS.md`。这些结果验证合同和数值实现，不是 CUDA 显存或分割精度结果。
-v6 尚未运行真实 small batch=8 六 variant GPU smoke，也不把旧 Benchmark 上的 GPU
-结果冒充 v6 验收。
+当前 Phase 2 共发现 40 个单元测试；其中 36 个不依赖历史 small 资产的测试全部通过，
+包括 7 个新增 finalization 测试。另 4 个测试因当前不存在
+`../benchmark/oa_auxseg_hdf5_v1/small` 而未能运行，不冒充通过；它们不是本次代码失败。
+阶段 1B 历史回归结果仍为 10/10。实际命令和边界见 `REBUILD_PROGRESS.md`。
 
 ## 当前边界
 
 - Stage 0 已完成；下一科学状态是 `Stage 1 OA-AuxSeg formal acceptance pending`。
-- 五源 full Benchmark、RS-GeneralDesc v3、现有 checkpoint、输出、模型权重和
-  `docs/RAG_knowledge/` 均保持只读，未重建或覆盖。
-- OA-AuxSeg 模型、Trainer、Evaluator、checkpoint 和推理已实现，但 full 正式训练停在
-  step `213200/229757` 且没有最终报告；Gate A 未通过。
+- 五源 full Benchmark、RS-GeneralDesc v3、现有 checkpoint、训练日志、模型权重和
+  `docs/RAG_knowledge/` 均未重建或覆盖；仅新增人工定版训练报告。
+- OA-AuxSeg proposed 主模型已由项目负责人定版：final 权重为
+  `checkpoint_best.pt` step `206820`，不再续训，工程报告已完成。
+- Gate A、分割消融、多随机种子、sealed test 和正式 fixed predicted masks 仍未执行；
+  权重工程定版不等于科学正式验收。
 - 当前 OA-AuxSeg registry 只接受 `dem / insar_velocity / slope`；10 通道光学和 SAR
   明确拒绝。encoded InSAR 无可靠物理单位时不得输出定量物理结论。
 - RS-GeneralDesc External 数据已经 deep-validated；Stage 2 只迁移作用域验收合同，
@@ -851,4 +869,5 @@ v6 尚未运行真实 small batch=8 六 variant GPU smoke，也不把旧 Benchma
 - OA-GroundedEval、Landslide Evidence Corpus、正式 mask-grounded 评价、RAG 和统一
   推理仍未实施。
 - Gate C 通过前不接入 RAG；`RAG_tmp` 不作为当前算法组件或运行时依赖。
-- 本次未运行 GPU、训练、正式评价、全量扫描或下载，也未 commit、push。
+- 本次运行了授权的 GPU train/val inference-only 定版评价；未训练、未运行 test、
+  未全量重扫 Benchmark、未下载，也未 commit、push。

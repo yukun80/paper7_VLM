@@ -33,9 +33,13 @@ Stage 9  统一推理与报告
 ## 3. 当前边界
 
 Stage 0 已完成权威迁移；当前科学状态是
-`Stage 1 OA-AuxSeg formal acceptance pending`。进入 Stage 1 或更后阶段前，
-必须重新核对 `REBUILD_PROGRESS.md` 并取得项目负责人对相应写入、正式评价或长训练的
-明确授权。未经新授权禁止：
+`Stage 1 OA-AuxSeg proposed final checkpoint frozen and training report completed /
+Gate A pending`。项目负责人已将 batch-16 proposed 训练主动停止，并冻结
+`checkpoint_best.pt` step 206820 为当前最终权重；不再续训。离线 train/val 工程报告
+已经完成，但 Gate A、消融、sealed test 和正式 fixed masks 尚未执行。
+
+进入后续任务前，必须重新核对 `REBUILD_PROGRESS.md` 并取得项目负责人对相应写入、
+正式评价或长训练的明确授权。未经新授权禁止：
 
 - 运行 GPU、训练、正式评估或长时间任务；
 - 下载数据、模型或依赖；
@@ -46,7 +50,8 @@ Stage 0 已完成权威迁移；当前科学状态是
 - 创建 legacy 目录、兼容包装、alias 或旧接口适配层。
 
 Gate A/B 的科学判据必须只基于 train/val 预注册并在首次正式 test 前冻结，不得读取
-test 后反推阈值。
+test 后反推阈值。计划 `max_steps` 是预算上限，不是权重有效性或 Gate A 的独立条件；
+负责人定版 final checkpoint 也不等于 Gate A 已通过。
 
 ## 4. 数据与外部资产
 
