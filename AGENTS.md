@@ -2,45 +2,51 @@
 
 ## 1. 当前研究主线
 
-本仓库正在从零重建 OA-AuxSeg + VLM 滑坡遥感研究系统。当前设计权威为：
+本仓库基于现有 OA-AuxSeg、RS-GeneralDesc 和 Mask-Grounded VLM 资产，按
+OA-GroundRAG v2 路线继续开发。当前设计权威为：
 
 1. 项目负责人当前明确指令；
-2. `docs/光学锚定任意辅助模态滑坡分割与VLM区域理解_算法构建方案.md`；
-3. `README.md`；
-4. `REBUILD_PROGRESS.md`。
+2. `docs/OA-GroundRAG_算法构建方案.md`；
+3. `REBUILD_PROGRESS.md`；
+4. `README.md`。
 
 `docs/archive/` 仅保存历史资料，不是当前设计、接口或验收依据。
 
 ## 2. 阶段顺序
 
 ```text
-阶段 0  清理旧实现并建立最小工程基线
-阶段 1  只读审计真实 HDF5
-阶段 2  构建统一 Benchmark
-阶段 3  光学分割 baseline
-阶段 4  辅助模态编码
-阶段 5  任意辅助模态注入
-阶段 6  质量选择
-阶段 7  完整分割训练与评价
-阶段 8  VLM 指令路由与区域证据
-阶段 9  VLM 区域描述与问答
-阶段 10 端到端集成
+Stage 0  冻结现有资产并切换权威路线
+Stage 1  OA-AuxSeg 正式验收
+Stage 2  RS-GeneralDesc Benchmark 验收
+Stage 3  RS-General Adapter 评价
+Stage 4  Landslide Evidence Corpus 与 OA-GroundedEval
+Stage 5  Mask-Grounded Baseline
+Stage 6  文本 RAG
+Stage 7  案例 RAG
+Stage 8  可选 Landslide-Evidence Adapter
+Stage 9  统一推理与报告
 ```
 
-不得跳过数据审计直接继承旧字段、通道顺序、归一化参数或 Benchmark 协议。
+这些 Stage 是科学依赖顺序，不要求重命名已有 `phase2/phase3/phase4` 工程目录。
+不得跳过 Gate，不得把代码存在、checkpoint 文件存在或中途指标当作正式验收。
 
 ## 3. 当前边界
 
-阶段 0 只允许清理、文档整理和静态验证。禁止：
+Stage 0 已完成权威迁移；当前科学状态是
+`Stage 1 OA-AuxSeg formal acceptance pending`。进入 Stage 1 或更后阶段前，
+必须重新核对 `REBUILD_PROGRESS.md` 并取得项目负责人对相应写入、正式评价或长训练的
+明确授权。未经新授权禁止：
 
-- 编写模型、Trainer、Evaluator、Benchmark builder 或 RAG；
 - 运行 GPU、训练、正式评估或长时间任务；
 - 下载数据、模型或依赖；
 - 修改 `../datasets`、`../benchmark` 或 `../external`；
 - 修改或复制第三方参考实现；
+- 修改既有 Benchmark、checkpoint、训练输出或模型权重；
+- 提前实施 Stage 2 的合同迁移、Stage 4 的数据构建或 Stage 6/7 的 RAG；
 - 创建 legacy 目录、兼容包装、alias 或旧接口适配层。
 
-进入后续阶段前，先读取新算法方案和 `REBUILD_PROGRESS.md`，并核对项目负责人的当前授权。
+Gate A/B 的科学判据必须只基于 train/val 预注册并在首次正式 test 前冻结，不得读取
+test 后反推阈值。
 
 ## 4. 数据与外部资产
 
@@ -58,7 +64,9 @@
 - `../benchmark` 的写入必须由后续 Benchmark 阶段明确授权，且不得覆盖已有输出。
 - `../external` 只作阅读参考，不得作为运行时依赖或复制进项目代码。
 - `models_zoo/` 保存本地模型权重与元数据；未经明确授权不得删除或改写。
-- `参考文献/` 和 `docs/archive/` 必须保留。
+- `参考文献/`、`docs/RAG_knowledge/` 和 `docs/archive/` 必须保留。
+- GitHub `yukun80/RAG_tmp` 只作为外部工程原型；不得直接导入、复制或作为运行时依赖。
+- `outputs/` 中既有产物默认只读；正式发布身份不得因文档改名而重写。
 
 HDF5 格式统一不代表字段、模态、配准、数值范围或科学语义统一。任何读取合同必须来自现场只读审计。
 
@@ -67,8 +75,11 @@ HDF5 格式统一不代表字段、模态、配准、数值范围或科学语义
 - 光学影像是分割主模态和空间边界基准。
 - SAR、InSAR、DEM、多光谱等只能作为可选辅助证据。
 - 分割模型只输出概率图、mask、no-target 状态和区域信息。
-- VLM 在分割稳定后，基于 mask、光学区域和可用辅助证据完成区域理解。
-- RAG 只预留接口，不是当前实现重点。
+- RS-General VLM 先完成通用遥感视觉理解，再基于 mask、光学区域和可用辅助证据完成
+  候选区域观察。
+- Landslide RAG 只检索专业规则、案例、反例和限制，不生成 mask、不改写确定性事实，
+  也不得把错误候选稳定合理化为滑坡。
+- Landslide-Evidence Adapter 仅在 Gate E 失败时实施，不作为默认训练阶段。
 
 旧 SANE、QMEF、PMRD、MGRR、SegDesc、Bridge、proposal、query 和 reliability 路线不得恢复到活动代码。
 
@@ -85,7 +96,7 @@ HDF5 格式统一不代表字段、模态、配准、数值范围或科学语义
 
 ## 7. 文档职责
 
-- 新算法方案：唯一详细设计。
+- `docs/OA-GroundRAG_算法构建方案.md`：唯一详细算法设计。
 - `README.md`：当前项目概览和有效运行入口。
 - `REBUILD_PROGRESS.md`：唯一活动进度文件。
 - `docs/archive/`：只读历史资料。

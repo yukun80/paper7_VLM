@@ -1,1069 +1,1398 @@
-# OA-GroundRAG 算法构建方案
+# OA-GroundRAG 算法完整构建方案（重构版）
 
 > **路线全称：** Optical-Anchored Arbitrary-Auxiliary Segmentation and Mask-Grounded Retrieval-Augmented Understanding for Landslides
->
 > **中文名称：** 光学锚定任意辅助模态滑坡分割与掩膜驱动检索增强理解
->
-> **保存路径：** `docs/OA-GroundRAG_算法构建方案.md`
->
-> **文档用途：** 作为 Codex Agent 从旧代码清理、HDF5 Benchmark 构建、OA-AuxSeg 分割、VLM 区域描述到 RAG 集成的唯一详细实施说明。
->
-> **硬件边界：** 单张约 24 GB GPU；正式长训练由人工启动，Codex 只实现程序、运行短测试并给出正式命令。
+> **版本：** 2.0
+> **日期：** 2026-07-31
+> **文档定位：** 本文件已替代旧版 OA-GroundRAG 方案，是后续 Codex Agent 继续开发、实验和整合的唯一算法实施依据。
+> **硬件边界：** 单张约 24 GB GPU；正式长训练由项目负责人启动，Coding Agent 只运行短测试、工程门和有界 smoke。
 
-## 1. 路线调整
+---
 
-本研究不再将 Region Grounding Adapter 作为独立核心阶段，也不以严格指代分割为当前论文主任务。新的主线由四个可独立构建、训练和评价的阶段组成：
+## 1. 研究定位与本轮核心决策
+
+本研究不再以“构建一个端到端统一训练、同时完成多源分割、指代分割、滑坡描述和知识问答的单体大模型”为目标。
+
+新的主线采用模块化多任务框架：
 
 ```text
-Phase 1：OA-AuxSeg
-输入：光学影像 + 任意可用辅助模态
-输出：global mask + candidate regions + no-target + optional region features
-
-Phase 2：OA-LandslideDesc Benchmark
-输入：三库通用光学理解语料 + OA image/mask/split
-输出：自包含的 external train、OA train/val/test 与统一数据合同
-
-Phase 3：Mask-Grounded VLM Description
-输入：global mask 或明确指定的 candidate-region mask
-     + multimodal evidence + question
-输出：结构化事实、区域描述和问答
-
-Phase 4：RAG
-输入：Mask-Grounded Evidence + question + retrieved knowledge
-输出：有来源、受证据约束的专业回答
+多源遥感图像 + 用户指令
+            ↓
+任务控制与输入检查
+            ↓
+OA-AuxSeg 专用多源滑坡分割
+            ↓
+global mask / candidate regions / no-target
+            ↓
+Mask-Grounded Evidence Builder
+            ↓
+通用遥感 VLM 进行视觉观察
+            ↓
+滑坡知识与案例 RAG 检索
+            ↓
+VLM 生成证据受限的描述、问答和报告
 ```
 
-四个阶段通过清晰接口连接，不进行一次性联合反向传播。总体数据流为：
+本轮冻结以下决定：
+
+1. **光学影像是滑坡分割必要主模态。** SAR、InSAR、DEM、坡度和多波段影像是任意可选辅助模态。
+2. **OA-AuxSeg 与 VLM 保持独立。** 分割模型负责像素空间感知；VLM 负责语言理解和区域视觉理解；RAG 负责专业知识解释。
+3. **不将严格指代分割设为核心任务。** 不默认构建大规模“自然语言指令—滑坡 mask”训练集，也不训练独立 Region Grounding Adapter。
+4. **通用遥感描述微调与滑坡专业知识分开。** 通用遥感数据用于训练 RS-General Description Adapter；滑坡规范、环境差异、传感器解释和典型案例主要进入 RAG。
+5. **不默认构建大规模真实滑坡 mask-grounded 训练集。** 先使用通用遥感 VLM、mask evidence 和 RAG 完成零样本或少样本验证。只有 mask 对应或证据约束能力不足时，才启用小规模 Landslide-Evidence Adapter。
+6. **必须保留真实滑坡 mask-grounded 评价集。** 不训练不等于不评价。必须用人工审核的 OA-GroundedEval 验证模型是否真正关注 mask、正确使用辅助模态并拒绝不支持结论。
+7. **RAG 不直接替分割结果寻找理由。** 分割输出始终称为“候选滑坡区域”，最终系统需要同时报告支持证据、反对证据、混淆对象和证据限制。
+
+---
+
+## 2. 论文问题与核心贡献
+
+### 2.1 核心科学问题
+
+给定一幅必要光学影像和任意可用的辅助遥感观测，能否：
+
+1. 通过光学主分支、任意辅助模态注入和质量选择稳定分割疑似滑坡；
+2. 将分割 mask 转换为可审计的多模态区域证据；
+3. 利用通用遥感 VLM 识别当前区域的可见特征；
+4. 根据环境、传感器、数据质量和相似案例检索滑坡专业知识；
+5. 生成只陈述当前输入和检索证据所支持事实的描述与报告？
+
+### 2.2 推荐论文贡献
+
+#### 贡献一：光学锚定任意辅助模态滑坡分割
+
+构建 OA-AuxSeg，在光学必要条件下支持 DEM、坡度、InSAR、SAR 和多光谱等任意辅助模态子集，并处理缺失模态、有效覆盖和质量差异。
+
+#### 贡献二：Mask-Grounded Multimodal Evidence Interface
+
+建立从专业分割模型到 VLM 的标准接口，将 mask、区域视觉输入、确定性几何事实、辅助模态统计、可用性和禁止结论组织为可审计 Evidence Packet。
+
+#### 贡献三：环境与传感器条件化的滑坡知识—案例 RAG
+
+将滑坡规范、专业论文、传感器解释规则、正案例和困难负样本组织为分层知识库，根据当前环境、模态和候选区域进行检索，减少大规模滑坡领域微调需求。
+
+---
+
+## 3. 整体算法框架
+
+### 3.1 统一推理流程
 
 ```text
-本地 HDF5 数据
-        ↓
-固定 patch 大小的统一 Benchmark
-        ↓
+用户指令
+    ↓
+Task Controller
+    ├── 仅分割
+    ├── 分割并描述
+    ├── 评价候选区域
+    ├── 解释多模态证据
+    ├── 生成报告
+    └── 纯知识问答
+    ↓
+输入检查与模态注册
+    ↓
 OA-AuxSeg
-        ↓
-global mask / candidate regions / no-target / optional region features
-        ↓
-OA-LandslideDesc Benchmark
-external train + OA train/val/test + canonical records
-        ↓
-确定目标 mask：global / all regions / ID / 坐标 / 规则 / 编号 overlay
-        ↓
-Mask-Grounded Multimodal Evidence Builder
-        ↓
-Qwen3-VL 区域描述与问答
-        ↓
-可选 RAG 检索专业知识和相似案例
-        ↓
-证据受限且带来源的最终回答
+    ↓
+global mask / candidate regions / no-target
+    ↓
+目标区域确定
+    ├── global mask
+    ├── 全部 candidate regions
+    ├── region_id
+    ├── bbox / 点击坐标
+    ├── 面积或位置规则
+    └── 编号 overlay 上由 VLM 返回 region_id
+    ↓
+Mask-Grounded Evidence Builder
+    ↓
+第一遍 VLM：视觉观察
+    ↓
+RAG Query Builder
+    ↓
+文本规则检索 + 同域案例检索 + 困难负样本检索
+    ↓
+第二遍 VLM：专业解释、问答和报告
 ```
 
-路线名称中的“Ground”表示描述与回答必须绑定于明确的分割 mask，而不是必须训练文本指代分割网络。
+### 3.2 模块职责边界
 
-## 2. 为什么取消独立 Grounding Adapter
+| 模块 | 唯一职责 | 不承担的职责 |
+|---|---|---|
+| Task Controller | 解析用户任务并编排模块 | 不输出像素 mask |
+| OA-AuxSeg | 滑坡语义分割和候选区域提取 | 不解释成因，不访问知识库 |
+| Evidence Builder | 计算确定性事实并组织区域证据 | 不自由生成专业结论 |
+| RS-General VLM | 通用遥感场景和区域视觉理解 | 不替代专业分割模型 |
+| Landslide RAG | 检索专业知识、案例和限制条件 | 不生成 mask，不改写确定性事实 |
+| Final Generator | 综合视觉证据和检索知识生成回答 | 不把候选 mask 当作已确认滑坡 |
 
-严格指代分割需要额外构建 `image + text query + target mask` 数据，并处理多候选区域、文本关系、no-target、预测候选误差和专门评价。这会显著增加数据审核、训练和实验成本，却不是当前研究要回答的首要问题。
+---
 
-当前核心研究问题是：
+## 4. 当前代码资产与新方案的对应关系
 
-1. 光学锚定条件下，任意辅助模态是否能稳定改善滑坡分割；
-2. VLM 是否能在明确 mask 和多模态证据约束下生成可靠描述；
-3. RAG 是否能引入可追溯专业知识，同时减少无依据结论。
+### 4.1 `oa_groundrag/phase2`
 
-首版区域选择直接采用确定性或可核验方式：
+继续作为 **OA-AuxSeg** 主实现。
 
-- 描述 global mask；
-- 逐一描述全部 candidate regions；
-- 按 `region_id` 指定区域；
-- 按 bbox 或点击坐标指定区域；
-- 按面积排序选择；
-- 按九宫格位置规则选择；
-- 给候选区域编号后，让 Qwen3-VL 在 overlay 中返回 `region_id`。
+保留：
 
-因此，Phase 1 完成后进入独立的 Phase 2，构建并验收自包含的
-OA-LandslideDesc Benchmark；Phase 2 通过后才进入 Mask-Grounded VLM Description。
-只有四阶段主线完成，且真实应用证明自然语言区域选择是必要能力时，才考虑非阻塞的
-轻量 region scorer。
+- 光学主分支；
+- 多通道输入；
+- 辅助模态 registry；
+- CMNeXt 式任意辅助模态注入；
+- 简化 MAGIC quality selection；
+- modality dropout；
+- mask、no-target、candidate regions 和 region features；
+- 训练、评价、checkpoint 和推理。
 
-## 3. 固定研究边界
+需要继续验证：
 
-### 3.1 必要模态
+- optical-only 基线；
+- direct concat；
+- mean fusion；
+- CMNeXt injection；
+- quality selection；
+- proposed dropout；
+- 不同模态组合与低质量模态子集；
+- full 正式训练和多随机种子。
 
-每个正式分割样本必须包含光学影像。光学影像负责：
+### 4.2 `oa_groundrag/phase3`
 
-- 定义参考画布；
-- 提供滑坡边界和纹理；
-- 输出最终 mask；
-- 提供候选区域的主要视觉证据。
+旧名称 `OA-LandslideDesc Benchmark` 不再准确。
 
-### 3.2 任意辅助模态
+应重新定位为：
 
-可选辅助模态包括但不限于：
+> **RS-GeneralDesc Benchmark**
 
-- 多波段光学或 Sentinel-2；
-- SAR；
-- InSAR；
-- DEM；
-- slope；
-- 其他已明确物理意义和空间对应关系的数据。
+只负责整合通用遥感描述和问答数据，用于训练与监控 RS-General Description Adapter。
 
-“任意辅助模态”表示已注册辅助模态集合中的任意可用子集。光学永不缺失，辅助模态允许全部缺失。
+默认不再要求包含 OA 真实 mask-grounded 训练记录，也不因为 `oa_component_disabled` 判定 external-only Benchmark 不完整。
 
-### 3.3 当前不实施
+### 4.3 `oa_groundrag/phase4`
 
-- 无光学输入的主线分割；
-- 灾前灾后变化检测；
-- 时间差分和目标跟踪；
-- Any2Seg 式 VLM 蒸馏；
-- 分割、描述和 RAG 联合反向传播；
-- 独立 Region Grounding Adapter；
-- 大规模指代分割数据构建；
-- 任意未知传感器自动接入；
-- 旧模型、旧 Benchmark 和旧 checkpoint 兼容层；
-- 根据单时相影像自由推断触发因素、发生时间、运动速度、未来失稳概率或确定风险等级。
+继续作为 **Mask-Grounded VLM Description** 实现基础。
 
-## 4. 实施原则
-
-1. `../datasets` 中的数据视为已统一为 HDF5 格式的原始研究数据，但其内部字段、通道数、尺寸、数值范围和 mask 编码必须由 Codex 实际审计。
-2. Benchmark 构建时通过 `--patch-size` 指定统一目标尺寸；不同数据集的原始 patch 上采样或下采样后再混合训练。
-3. 不预设 HDF5 字段名称、通道顺序、科学含义和归一化参数，所有 source 参数来自真实审计。
-4. 不在项目开始时固定最终代码目录；先按依赖顺序实现，接口稳定后再整理。
-5. `../external` 中 CMNeXt、Grasp-Any-Region、PSALM 和 Qwen-VL-Series-Finetun 只读参考，新代码不得直接依赖完整外部工程。
-6. 每阶段先完成最小闭环、短测试和独立验收，再进入下一阶段。
-7. Codex 不自动运行正式长训练，只给出可复制命令、输入、输出和验收标准。
-8. 只保留 `REBUILD_PROGRESS.md` 作为活动进度文件，不生成大量 ADR、handoff、重复过程报告或许可证文档。
-9. OA-AuxSeg、OA-LandslideDesc Benchmark、Description 和 RAG 保持可单独运行；下游失败不得改变上游输出。
-10. 所有专业结论必须能追溯到输入影像、确定性事实或检索知识，模型内部 quality weight 和 attention 不作为地学证据。
-11. Description Benchmark 必须复制并规范化所用资产，不得以 symlink、hardlink 或
-    运行时绝对路径依赖 `../datasets`；外部通用语料不承担正式评价。
+保留：
 
-## 5. Stage 0：清理旧代码
+- RegionSelector；
+- EvidenceBuilder；
+- Qwen3-VL processor/model；
+- prompt-only；
+- LoRA；
+- checkpoint/resume；
+- 推理和评价；
+- GT、fixed predicted 和 end-to-end mask 隔离；
+- mask swap、modality removal 等反事实接口。
 
-### 5.1 目标
+需要新增：
 
-移除与 OA-GroundRAG 四阶段主线无关的旧活动实现，建立干净的重新实现起点。
+- RS-General Adapter 与可选 Landslide-Evidence Adapter 的路由；
+- 两遍式 VLM 推理；
+- RAG Evidence Provider；
+- retrieved evidence cards；
+- 最终带引用输出；
+- wrong-mask + RAG 防合理化评价。
 
-### 5.2 开始前审计
+### 4.4 `RAG_tmp`
 
-Codex 首先读取：
+`RAG_tmp` 作为工程原型保留，但不直接作为最终算法实现。
 
-- 本文档；
-- 根目录 `README.md`；
-- 根目录 `AGENTS.md`；
-- `REBUILD_PROGRESS.md`；
-- 当前代码树；
-- `../external`；
-- `../datasets` 的目录概况。
+可复用：
 
-审计只需确定：
+- PDF/OCR；
+- 最小知识单元；
+- SQLite FTS5；
+- BGE-M3；
+- Qdrant Embedded；
+- RRF；
+- BGE reranker；
+- authority boost；
+- 文件、页码和章节引用；
+- 证据不足和越界拒答。
 
-- 当前有哪些旧模型、旧数据管线、旧 Trainer、旧 CLI 和旧测试；
-- 哪些内容与新路线直接冲突；
-- 哪些通用工具仍可保留；
-- 当前工作区是否存在未提交人工修改。
-
-### 5.3 删除范围
-
-原则上删除：
-
-- 旧多源分割模型；
-- 旧分割—描述统一模型；
-- 旧指代分割、Bridge 和 SegDesc；
-- 旧 Benchmark builder；
-- 旧 instruction、视觉 cache 和文本 cache 协议；
-- 旧 Trainer、evaluator 和推理入口；
-- 旧配置和旧模型测试；
-- 旧算法说明和失效命令。
-
-### 5.4 保留范围
-
-必须保留：
+需要调整：
 
-- `../datasets`；
-- `../external`；
-- 仍需使用的模型权重；
-- 本文档；
-- Git 历史；
-- `参考文献/` 和 `docs/archive/`；
-- 经审查与旧模型无关的通用工具。
+- 从独立问答应用改为 Evidence Retrieval Provider；
+- 最终生成不再由其中的 Ollama Qwen3-8B负责；
+- 返回结构化 Evidence Cards；
+- 增加案例索引和模态索引；
+- 接收 EvidenceBuilder 生成的结构化查询；
+- 与 `paper7_VLM` 建立稳定接口。
 
-### 5.5 清理红线
+---
 
-- 不建立 `legacy/`；
-- 不保留旧类名 alias；
-- 不写旧配置转换器；
-- 不兼容旧 checkpoint；
-- 新代码不得 import 旧包；
-- 不覆盖用户已有修改和正式训练产物；
-- 工作区存在不属于本任务的未提交修改时，保留并报告；只有无法安全绕开时才停止。
+## 5. Benchmark 与数据资产重新划分
 
-### 5.6 Stage 0 验收
+新方案不再把所有数据放入一个“OA-LandslideDesc Benchmark”。应建立五类独立资产。
 
-- 当前活动代码中不再存在旧主线入口；
-- README 不再展示旧运行命令；
-- `REBUILD_PROGRESS.md` 已建立；
-- 本文档成为后续实现依据；
-- 暂未开始 Benchmark 或模型实现。
+### 5.1 OA-AuxSeg Benchmark
 
-## 6. Stage 1：HDF5 审计与统一 Benchmark
+用于：
 
-### 6.1 真实数据审计
+- optical-only 分割；
+- 任意辅助模态分割；
+- no-target；
+- 模态缺失；
+- 质量选择；
+- candidate region 和 region feature 导出。
 
-在编写 Benchmark builder 前，Codex 必须只读遍历 `../datasets` 中候选 HDF5 文件，统计：
+保持当前 HDF5 和固定 patch 构建逻辑。
 
-- HDF5 文件数量和数据源；
-- group 和 dataset 层级；
-- 每个 dataset 的 shape、dtype 和 attrs；
-- 各数据源样本数量；
-- 光学和辅助模态通道数；
-- 原始 patch 的 H×W 分布；
-- mask 字段、值域、空 mask 数量和前景比例；
-- NaN、Inf、nodata、全零和常量通道；
-- 光学、辅助模态和 mask 是否逐样本对应；
-- 同一 parent 内不同模态是否表示相同地理范围；
-- 是否存在显式 valid mask；
-- 是否存在 source、scene、event、region 或 parent 分组信息。
+### 5.2 RS-GeneralDesc Benchmark
 
-审计只生成一份简洁报告，记录真实观察和待人工确认项，不研究数据授权，也不生成许可证报告。
+只整合通用遥感视觉语言数据：
 
-只有出现以下情况才停止：
+- RSGPT / RSICap / RSIEval 中适合的 Caption 和 QA；
+- MMRS-1M 中 Caption、VQA 和 bbox→短语；
+- DisasterM3 中受图像支持的 scene、count、relation 和 visible report。
 
-- 无法判断哪个字段是光学；
-- 无法判断哪个字段是 mask；
-- 模态与 mask 无法配对；
-- 同一记录中模态是否覆盖相同空间无法确定；
-- mask 编码无法解释。
+职责：
 
-普通字段差异由 source adapter 解决，不作为停止原因。
+- 学习遥感图像语言；
+- 学习场景和地物；
+- 学习数量、颜色、位置和空间关系；
+- 学习遥感问答和报告表达；
+- 为 RS-General Adapter 提供训练与监控。
 
-### 6.2 Benchmark 定位
+不承担：
 
-HDF5 是统一容器格式的原始研究数据；Benchmark 是为训练重新组织的固定尺寸样本集合。Benchmark builder 必须接收：
+- 滑坡专业知识；
+- 滑坡区域真值；
+- 滑坡正式评价；
+- 真实 OA mask-grounded 训练。
 
-```text
---patch-size N
-```
+### 5.3 Landslide Evidence Corpus
 
-`N` 可为 224、256 或后续实验尺寸，代码中不得写死。
+用于补充当前 Benchmark 缺少的滑坡文本语料。
 
-### 6.3 样本统一流程
+它不是一个大规模自由报告数据集，而是以**结构化事实为中心**的滑坡区域证据语料。
 
-```text
-读取 HDF5 原始样本
-        ↓
-识别 optical / mask / available auxiliaries
-        ↓
-验证空间对应和 valid area
-        ↓
-根据目标 patch size 上采样、下采样或窗口切分
-        ↓
-统一输出形状和数据合同
-        ↓
-写入 Benchmark 或可随机读取的索引
-```
+数据来源：
 
-### 6.4 Resize 规则
+- OA-AuxSeg train split 中的 GT mask；
+- 必要时加入高质量 OOF predicted mask；
+- 只使用 train parent；
+- val/test parent、同事件、同区域近重复不得进入。
 
-Codex 根据实际尺寸分布决定直接 resize 或保持比例后 padding，但必须遵守：
+内容分三层。
 
-- 连续影像使用 bilinear 或 bicubic；
-- mask 和 valid mask 使用 nearest；
-- mask resize 后重新二值化；
-- nodata 不得通过插值污染有效区域；
-- DEM、InSAR 等 resize 只改变空间采样，不改变物理单位；
-- 保存原始尺寸、目标尺寸和空间变换；
-- 同一样本所有 `aligned_dense` 模态最终具有相同 H×W。
+#### A. Programmatic Facts
 
-### 6.5 大样本与已有 patch
+由程序直接生成：
 
-若 HDF5 记录本身是独立 patch，直接统一 resize。
-
-若记录明显大于普通 patch，且直接缩小会使小滑坡消失，则先窗口切分，再统一到目标 patch 大小。具体策略必须根据真实审计决定，不预设所有记录都是整图或切片。
-
-### 6.6 数据划分
-
-split 必须按原始 parent、scene、event 或 region group 进行，不能在统一 resize 后随机拆分。
-
-同一 parent 的不同模态、不同 resize 版本、不同窗口和不同任务视图必须属于同一 split。
-
-### 6.7 Benchmark 样本合同
-
-每个样本至少向 DataLoader 提供：
-
-- optical；
-- binary mask；
-- auxiliary modality mapping；
-- modality availability；
-- 每个模态的 valid mask；
-- source ID；
-- parent/group ID；
-- 原始尺寸；
-- 目标 patch 大小；
-- resize 或窗口变换；
-- 前景比例；
-- split。
-
-保存格式由 Codex 根据数据规模和 I/O 性能决定，不在本文档预先固定。
-
-### 6.8 Benchmark 验收
-
-- 所有技术可用的数据源被扫描；
-- 所有输出样本具有相同目标 patch H×W；
-- 不同通道数通过数据合同保留；
-- mask 与各模态空间一致；
-- optical-only 和多辅助模态样本均可组成 batch；
-- 同一 parent 不跨 split；
-- 两次构建产生相同样本数量和索引摘要；
-- DataLoader 可完成短批量迭代；
-- 输出不包含机器绑定绝对路径。
-
-## 7. Phase 1：OA-AuxSeg
-
-### 7.1 任务定义
-
-输入：
-
-```text
-optical + arbitrary available auxiliary modalities
-```
-
-输出：
-
-```text
-global mask
-candidate regions
-no-target score
-diagnostic modality weights
-optional region features
-```
-
-`candidate regions` 从最终语义 mask 中确定性提取，不宣称为人工实例。`region features` 是可选只读输出，不是 Phase 3 的前置条件。
-
-### 7.2 Step 1：光学分割基线
-
-先实现纯光学二值滑坡分割：
-
-```text
-optical
-→ hierarchical encoder
-→ lightweight decoder
-→ mask logits
-```
-
-要求：
-
-- 只选择一个成熟 backbone 主线；
-- 使用有效区域 BCE 和 Dice；
-- 实现 checkpoint、评价和推理；
-- 不加入辅助模态、质量选择、文本或 VLM。
-
-验收：
-
-- 32–64 样本可以过拟合；
-- checkpoint reload 后输出一致；
-- no-target 样本能输出近空 mask；
-- IoU、Dice、Precision、Recall 和 F1 可计算；
-- 短训练能在单卡运行。
-
-### 7.3 Step 2：辅助模态输入适配
-
-为真实审计确认存在的每种辅助模态建立轻量 input adapter。
-
-原则：
-
-- adapter 解决不同通道数和基础数值统计；
-- 后续辅助 encoder 尽可能共享；
-- 不为每个模态复制完整大型 backbone；
-- 不建立庞大的 sensor、band 或 orbit embedding；
-- 缺失模态不使用固定全零张量冒充有效输入；
-- 无效区域在第一层前被屏蔽。
-
-### 7.4 Step 3：CMNeXt 式任意辅助模态注入
-
-以光学特征为主，辅助模态提供增量证据：
-
-```text
-optical feature as query
-auxiliary features as evidence
-→ auxiliary aggregation
-→ residual injection
-→ enhanced optical feature
-```
-
-要求：
-
-- 光学浅层高分辨率特征保持独立；
-- 辅助信息在中高层注入；
-- 注入采用残差形式；
-- 残差强度近零初始化；
-- 支持 0、1 或多个辅助模态；
-- 对辅助模态顺序保持不变性；
-- 注入模块可完全关闭用于消融。
-
-首版只实现一种最小注入算子，不同时维护多套复杂实现。
-
-### 7.5 Step 4：简化 MAGIC Quality Selection
-
-在辅助模态聚合前计算一次质量分数。质量信息可来自：
-
-- 辅助特征统计；
-- valid coverage；
-- HDF5 中真实存在的质量字段；
-- resize 比例；
-- 与光学特征的相容程度。
-
-具体字段由真实数据审计决定。
-
-要求：
-
-- 对当前可用辅助模态进行 permutation-invariant 评分；
-- 加入 null auxiliary 状态；
-- 零覆盖或严重异常模态可被抑制；
-- 全辅助缺失时退化为 optical-only；
-- 不实现复杂离散 top-k；
-- 质量权重不作为地学证据；
-- 不在后续模块重复 reliability。
-
-### 7.6 Step 5：完整训练与模态鲁棒性
-
-训练时随机选择辅助模态子集：
-
-```text
-active_aux ⊆ available_aux
-```
-
-光学永远存在。训练必须覆盖：
-
-- optical-only；
-- optical + 单一辅助模态；
-- optical + 多辅助模态；
-- optical + all available。
-
-主 loss 首版保持 BCE + Dice。其他 loss 只有在明确问题出现后才增加。
-
-### 7.7 候选区域与只读特征接口
-
-最终语义 mask 在阈值化后进行确定性区域提取：
-
-```text
-semantic mask
-→ connected-region extraction
-→ small-region filtering
-→ candidate regions
-```
-
-每个候选区域至少包含：
-
-- region ID；
-- binary mask；
+- target status；
 - bbox；
 - centroid；
-- area；
-- confidence；
-- active modality summary。
+- area 和 area ratio；
+- image location；
+- component count；
+- elongation；
+- compactness；
+- valid coverage；
+- modality availability；
+- DEM 高程统计；
+- slope 统计；
+- InSAR mask 内外统计；
+- SAR mask 内外统计；
+- no-target；
+- 数值单位和 sign convention；
+- 允许和禁止的 claim。
 
-如需下游分析或可选扩展，可额外只读导出：
+这部分可以覆盖全部可用 train 样本。
 
-- masked optical feature；
-- masked fused feature；
-- geometry feature。
+#### B. Teacher Silver Observations
 
-region feature 由分割模型中稳定的空间特征进行 mask pooling 获得，不单独训练大型实例 proposal head。导出接口不得改变默认 forward、分割数值、loss、checkpoint schema 或训练逻辑。
+使用本地 VLM 或外部多模态 API 自动生成候选视觉观察。
 
-如果相邻滑坡在语义 mask 中被合并，该限制必须记录；首版不通过复杂实例分割强行解决。
+输入必须包括：
 
-### 7.8 核心对照
+- 光学全图；
+- mask overlay；
+- context crop；
+- 可用辅助模态视图；
+- Programmatic Facts；
+- 模态可用性；
+- 禁止结论。
 
-至少实现：
+模型只生成：
 
-1. optical-only；
-2. optical + direct input concatenation；
-3. optical + auxiliary mean fusion；
-4. optical + CMNeXt-style injection；
-5. injection + quality selection；
-6. injection + quality selection + modality dropout。
+- 光学可见特征；
+- 地形视觉观察；
+- InSAR/SAR 定性空间观察；
+- 可能混淆对象；
+- 证据充分性；
+- 简短摘要。
 
-### 7.9 Phase 1 验收
+禁止教师自由生成：
 
-- Benchmark 和训练闭环可运行；
-- optical-only 基线稳定；
-- 任意真实辅助模态子集可 forward；
-- 模态顺序不改变模态身份；
-- 全辅助缺失退化为 optical-only；
-- 可导出 global mask；
-- 可导出 candidate regions；
-- 可导出 no-target 分数；
-- region features 在需要时可通过稳定只读接口导出；
-- 正式训练命令准备完成。
+- 发生时间；
+- 触发原因；
+- 精确运动速度；
+- 稳定性等级；
+- 风险等级；
+- 无输入模态支持的结论。
 
-## 8. Phase 2：OA-LandslideDesc Benchmark
+#### C. Expert Gold
 
-Phase 2 将通用光学遥感理解语料、OA image/mask/split 和人工评价真值构建为自包含、
-可审计、可供 Phase 3 统一读取的 Description Benchmark。它是独立阶段，不训练
-OA-AuxSeg 或 VLM，也不重新划分 OA 数据。
+专家审核少量代表样本，重点审核：
 
-```text
-输入：RSGPT + MMRS-1M + DisasterM3；可选 OA Benchmark
-输出：external train/val；可选 OA train/val/test；canonical records/assets
-```
+- mask 对应；
+- 光学可见滑坡特征；
+- 困难负样本；
+- 地形支持；
+- 形变支持；
+- SAR 支持；
+- 证据充分性；
+- 混淆对象；
+- 不允许生成的结论；
+- 一段简短摘要。
 
-### 8.1 目标与评价边界
+Expert Gold 主要用于 OA-GroundedEval，也可少量用于可选 adapter 训练。
 
-- 三个外部数据集中的有效记录按 parent 确定性划分为通用遥感理解
-  `external_train` 和训练期监控用 `external_val`，不保留外部 test；
-- OA train 用于滑坡 mask-grounded 任务适配，OA val/test 是唯一正式 Description
-  验证和测试集；
-- 外部语料只学习全图描述、地物与环境理解、可见状态问答、数量表达、bbox 区域短语、
-  boxed object 空间关系和受图像支持的双时相变化，不承担滑坡专业真值；
-- 外部 RefSeg、phrase→bbox 和 detection 等像素或坐标输出任务不进入统一文本训练；
-  mask 只有作为输入证据且存在人工文本输出时才允许进入未来 OA mask-grounded 记录；
-- 裸地、裸土、灾害场景和相似外观不得自动解释为滑坡；
-- `external_train`、`external_val`、`oa_train`、`oa_val`、`oa_test` 是逻辑数据角色，
-  不代表固定文件名、目录名或物理分片方式。
+### 5.4 Landslide Mask-Case Knowledge Base
 
-三个外部源可以在 `oa.enabled=false` 时单独构建为自包含 train/val Benchmark，
-此路径不读取 OA Benchmark，也不需要 358 条 OA 人工审核。该外部组件通过自身 deep
-validation 后可用于 Phase 3 训练和训练期验证，但不等于包含 OA 正式评价真值的完整
-OA-LandslideDesc Phase 2 已验收。
+保存代表性滑坡正案例、边界案例和困难负样本。
 
-Phase 2 只有在全量资产完成自包含复制并通过深度验证后才算完成。代码实现、合成测试或
-真实小样本 smoke 只属于阶段内工程里程碑，不得替代正式 Benchmark 验收。
+每个案例至少包括：
 
-### 8.2 三个外部数据集的采用范围
+- 原始光学图像；
+- GT mask；
+- mask overlay；
+- context crop；
+- 可用辅助模态；
+- Programmatic Facts；
+- 专家观察；
+- 支持证据；
+- 反对证据；
+- 混淆对象；
+- 适用环境；
+- 传感器和产品信息；
+- 证据限制；
+- 来源和 split。
 
-下表记录当前只读审计快照；正式构建前必须重新核对源记录、资产存在性、重复项和实际
-采用数量。
+知识库案例只能从 train split 选取。
 
-| 数据源 | 当前可用规模快照 | 进入训练的内容 | 不使用的内容 |
-|---|---|---|---|
-| RSGPT | RSICap 2,585 张有标注图像；RSIEval 100 条 caption、943 条 QA，去除 1 条完全重复 QA 后为 942 条 | 全图 caption，以及经过可见性过滤的 presence、quantity、color、image attribute、position、area comparison、scene 和有限 reasoning QA | 415 张未引用图像、road orientation、系统垃圾文件、无审核教师文本和不可由图像支持的 clause |
-| MMRS-1M | 46,275 个 caption 父样本/198,883 条描述；28,318 个 VQA 父样本/141,163 条 QA；30,809 条有效 bbox→区域短语 | caption、VQA、bbox 指定区域短语；多参考保留在同一 parent 下 | 缺少图像资产的 classification/detection、聚合重复元数据、phrase→bbox 方向、11 个零面积 bbox、重复副本和非法对话 |
-| DisasterM3 | 当前重审采用 scene 18,184、building/road count 22,912、boxed spatial relation 2,661、visible report 9,089，合计 52,846 | 光学 scene、bearing-body、building/road count；红蓝框图与 bbox 输入上下文的空间关系文本；受可见证据约束的灾前/灾后报告 | SAR、disaster type、restoration advice、49,552 条 RefSeg、phrase/mask/coordinate 输出、灾因/风险/结论，以及将稀少 Shovi 记录当作滑坡 footprint 真值 |
+### 5.5 OA-GroundedEval
 
-所有保留文本必须受输入图像支持；规范化时保留原记录身份和原始文本摘要，风险 clause
-只能按版本化规则删除或屏蔽。重复图像、pre/post pair 和同一 OA source group 使用稳定
-`parent_id` 聚合，多任务视图不能通过行级复制支配训练。外部源的原 train/test/bench
-身份只写入 provenance，不直接决定新逻辑角色。三个 source 分别按
-`sha256(seed | external_parent_split.v1 | source | parent)` 稳定排序，前 5% parent
-进入 `external_val`，其余进入 `external_train`；同一 parent 的全部任务和参考必须
-同角色。规范图像内容完全相同的不同 parent 合并为重复组件，整个组件只能进入一个
-角色，因此最终 parent 和 record 比例允许轻微偏离 95/5。
+小规模正式滑坡区域理解评价集，不用于通用遥感训练。
 
-该统一 Benchmark 是本项目的新多任务协议，不宣称复现原论文训练：RSGPT 原论文的
-caption 微调、源 RSIEval，以及 DisasterM3 Bench 的官方 split/指标均不由本地 95/5
-重新划分复现。原始 split 必须逐条保存在 provenance，manifest 固定声明
-`official_upstream_evaluation_reproducible=false`。
+覆盖：
 
-### 8.3 语料角色与评价真值
+- 正确滑坡 mask；
+- no-target；
+- 单滑坡与多滑坡；
+- 小目标与大目标；
+- 清晰边界与模糊边界；
+- optical-only；
+- optical + DEM；
+- optical + InSAR；
+- optical + SAR；
+- 多辅助模态；
+- 低质量和低覆盖；
+- 采石场；
+- 道路切坡；
+- 裸岩；
+- 河滩；
+- 云影、山影和噪声；
+- 错误预测 mask。
 
-| 逻辑角色 | 用途 | 约束 |
-|---|---|---|
-| `external_train` | 通用光学遥感理解预适配 | 只训练，不参与正式评价 |
-| `external_val` | 外部预适配期间的超参数选择、过拟合监控 | 使用源数据 reference；不是人工 gold，不替代 OA 正式 val/test |
-| `oa_train` | 滑坡 mask-grounded 任务适配 | 继承 OA train，不重新划分 |
-| `oa_val` | 模型、prompt 和推理配置选择 | 只使用人工审核真值 |
-| `oa_test` | 一次性正式评价 | 调优期间封存，只使用人工审核真值 |
+评价内容：
 
-首版 OA 人工真值共 358 条：现有 train 158 条全部审核，val/test 分别按 source、
-空/非空 mask、区域数量、前景比例和辅助模态稳定选取 100 条。每条记录继承 OA
-`sample_id`、`source_group_id`、source、split 及上游 Benchmark 身份；同一 parent
-不能跨 split。
+- mask-region consistency；
+- modality attribution；
+- unsupported claim；
+- confounder recognition；
+- evidence sufficiency；
+- citation correctness；
+- wrong-mask resistance。
 
-训练监督严格区分：
+---
 
-- `oa_gold`：人工审核的结构化事实和描述；val/test 只能使用该层；
-- `oa_auto`：由 mask 确定性推导的目标状态、位置、面积、形态和数量监督；
-- `oa_silver`：teacher 基于光学图、mask 证据和确定性事实生成，并通过结构、数值、
-  空 mask、mask swap、模态移除、禁止 claim 和重复一致性过滤。
+## 6. 滑坡文本语料自动生成方案
 
-`oa_auto` 和 `oa_silver` 只能进入 OA train，不得与人工 gold 合并统计，RAG 不参与
-评价真值或 Silver 生成。上下文 crop、邻域范围和 renderer 均由版本化配置确定；
-无 DEM 或方向证据时不得把图像上下位置写成物理“上坡/下坡”，灾因、发生时间、活动性、
-稳定性和风险等级默认属于禁止结论。
-
-### 8.4 配置驱动的构建合同
-
-Phase 2 不预设固定目录树。构建配置决定输出根、资产编码、分片和并行参数，manifest
-记录实际物理布局、schema 版本、构建参数及逻辑数据角色到物理产物的映射。必须满足：
-
-- 外部划分由严格 `external_split.version` 和 `validation_percent` 配置控制；
-  split 在 adapter 深度过滤后、资产复制前确定，并逐条写入 provenance；
-- `../datasets` 只读，所有采用的图像、mask 和必要来源元数据实际复制到新的输出根；
-- 禁止 symlink、hardlink、机器绑定绝对路径和源目录运行时依赖；
-- 输出目标已存在时失败，通过 staging、完整验证和原子发布避免半成品；
-- 图像应用方向校正并保持几何关系；目标分辨率、编码和缩放策略可配置且必须记录；
-- mask 使用无损离散编码和 nearest 几何变换；bbox 同时保留源坐标约定、变换参数和
-  规范坐标，非法或零面积结果带 reason code 跳过；
-- 稳定 ID、内容摘要和 parent 身份支持确定性去重，但不得丢失来源追踪；
-- canonical record 保存任务语义，Qwen messages 由独立 exporter 生成，改变模型模板
-  不要求重建 canonical assets。
-
-结构化文件按职责分工，而不绑定具体文件名或目录：
-
-- YAML：人工维护、严格解析、可版本化的构建与导出配置；
-- JSONL：canonical records、跳过记录和逐条 provenance；
-- JSON：schema、manifest、统计、hash 和验证摘要。
-
-canonical schema 至少表达稳定记录身份、source/parent、逻辑角色、任务类型、媒体与
-target、训练响应与参考响应、确定性事实、标注来源、审核状态、变换和质量标记。v3
-另外显式保存：
-
-- `supervision_kind`：
-  `long_description / short_qa / numeric_qa / region_description /
-  spatial_description / structured_report`；
-- `input_layout`：
-  `single_image / bbox_region / boxed_image / pre_post / mask_grounded`；
-- `output_modality=text`。
-
-模型专用字段不得污染 canonical 真值。MMRS caption 的全部 reference 保存在一个
-canonical record 中；训练 Dataset 按 `seed + epoch + record_id` 轮换单条响应，
-validation 返回全部 reference，不按参考数复制 parent。
-
-### 8.5 构建、使用与源数据安全
-
-最小流程为：
+### 6.1 总体流程
 
 ```text
-只读审计 → 锁定配置与 schema → 构建并复制资产 → 深度验证
-→ 模型专用导出与 DataLoader smoke → 原子发布
+GT mask / OOF predicted mask
+        ↓
+Evidence Renderer
+        ↓
+Programmatic Facts
+        ↓
+教师 VLM 生成候选观察
+        ↓
+规则检查
+        ↓
+第二次独立验证
+        ↓
+过滤为 Silver
+        ↓
+专家抽查或审核
+        ↓
+Gold / Case Knowledge / Optional Training
 ```
 
-adapter 必须记录每个 source 的采用、跳过和重复计数；缺失资产、路径逃逸、非法文本、
-mask/bbox 不对齐和 schema 错误都以稳定 reason code 报告，不能静默忽略。训练 sampler
-先按 task family 平衡，再在 task 内平衡 parent；source/task 权重由 Phase 3 训练配置
-显式记录。同一 parent 的参考或任务视图不能支配单个 epoch；实际权重、顺序和 RNG
-必须可记录和恢复，Benchmark 本身仍保存全部有效记录。
+### 6.2 样本选择策略
 
-正式 `description_multitask.v1` Qwen export 必须显式列出非空 task family，并使用
-任务专用 renderer：caption/QA 使用单图，bbox region 使用全图 overlay、crop 和规范
-坐标，spatial relation 保留红蓝框及对象角色，pre/post 明确灾前灾后顺序。exporter
-遇到 pixel-mask 输出、缺失 bbox context 或不能表达的 layout 必须失败。所有任务可以
-共享 autoregressive text loss，但训练不能按原始记录数平铺，验证也不能用一个混合
-loss 代表全部能力；caption/report、QA/scene、count、relation 和 region caption
-分别使用匹配的描述、准确率、数值误差、关系和区域文本指标。
+不需要对所有分割样本调用外部 API。
 
-外部预适配读取 `external_train` 训练，并只用 `external_val` 监控 loss、选择该阶段
-超参数和检查过拟合。进入完整 OA 路径后，Phase 3 再在 `oa_val` 上运行 prompt-only
-baseline；只有 zero-shot gate 未通过时，才继续用 `oa_train` 和配置化的外部 replay
-适配滑坡任务。prompt、checkpoint 和正式推理配置只能在 `oa_val` 锁定，`oa_test`
-只运行一次；`external_val` 不能替代这两个人工审核 OA split。所有训练和评价通过
-统一 Dataset API 读取逻辑角色，不直接绑定物理路径。
+按以下维度分层抽样：
 
-构建器不得删除源数据，只能在全量 deep validator 成功后生成待人工复核的删除 allowlist。
-候选类别限于未引用或损坏资产、字节相同副本、已被解压内容覆盖的重复归档、缺少必要
-资产的任务元数据和系统临时文件。任何具体路径、大小和整个源根目录的回收都必须现场
-重审，并由用户单独明确授权。
+- source；
+- 模态组合；
+- optical channel signature；
+- 环境类型；
+- foreground ratio；
+- component count；
+- mask shape；
+- optical quality；
+- auxiliary valid coverage；
+- positive / no-target；
+- 正例 / 困难负样本；
+- 不同数据源和区域。
 
-### 8.6 Phase 2 验收
+建议先构建数百条 pilot，再扩展到数千条 Silver，而不是一开始生成全量长报告。
 
-- 三个 source adapter 可重复扫描，并给出全部采用、跳过、重复和 reason-code 统计；
-- RSGPT 未引用图像、MMRS 重复/缺失资产任务和 DisasterM3 光学任务过滤均被正确识别；
-- canonical schema、稳定 ID、parent 聚合、资产变换和 Qwen 导出可重复；
-- 图像、mask 和 bbox 的规范化结果与记录的变换一致；
-- `external_train`/`external_val` 的 parent 与规范图像内容不跨角色，
-  且它们与 `oa_gold`、`oa_auto`、`oa_silver` 和 OA split 不发生角色污染；
-- 358 条人工真值的身份、选择规则、审核状态和上游 Benchmark 绑定可审计；
-- 全量 Benchmark 不依赖 symlink、hardlink、绝对源路径或外部源目录；
-- 隐藏三个外部源目录后，deep validator 和 DataLoader smoke 仍通过；
-- 输出根拒绝覆盖，失败构建不发布半成品；
-- 删除 allowlist 只在全量深度验证后生成且不自动执行；
-- 全量自包含物化和上述验收全部完成后，Phase 2 才可标记完成。
+### 6.3 外部 API 生成要求
 
-## 9. Phase 3：Mask-Grounded VLM Description
+如使用外部 API：
 
-### 9.1 任务定义
+1. 只发送项目允许外发的图像和字段；
+2. 每个请求保存模型名称、版本、prompt hash、输入 asset hash 和时间；
+3. 强制结构化输出；
+4. temperature 保持低值；
+5. 同一样本至少生成两个独立候选；
+6. API 输出不能直接成为 test 真值；
+7. 输出缓存，失败可恢复；
+8. 禁止上传 val/test 或保密数据；
+9. 不能把 API 的专业推断直接当作事实；
+10. API 仅生成候选文本，不修改 mask。
+
+如不使用外部 API，可使用本地 Qwen3-VL 或其他强 VLM 完成同样流程。
+
+### 6.4 自动规则过滤
+
+Silver 至少通过以下规则：
+
+- 所有几何和数值字段与程序事实一致；
+- 缺失模态不得出现对应证据；
+- 低覆盖模态不能输出强支持；
+- 单时相不得出现发生时间；
+- 没有单位不得出现定量速度；
+- no-target 不得生成滑坡区域描述；
+- 被禁止的 claim 不得出现；
+- 输出必须区分视觉观察与专业解释；
+- 同一样本两次生成的核心字段必须一致；
+- mask swap 后描述应发生合理变化；
+- modality removal 后相关字段必须删除；
+- wrong-region 样本不得被强制解释为滑坡；
+- 近重复文本需要去重。
+
+### 6.5 专家审核方式
+
+专家不需要为每个样本撰写长报告。
+
+建议审核结构化字段：
+
+- target status；
+- optical evidence；
+- terrain evidence；
+- deformation evidence；
+- SAR evidence；
+- confounders；
+- evidence sufficiency；
+- forbidden claims；
+- short summary。
+
+专家审核成本优先投向：
+
+- OA-GroundedEval；
+- 困难负样本；
+- 不同环境类型；
+- 多源证据冲突；
+- API 低一致性样本。
+
+---
+
+## 7. OA-AuxSeg 模型设计与 Adapter 优化
+
+### 7.1 总体结构
+
+```text
+Optical Input
+    ↓
+Optical Main Encoder
+    ↓
+Multi-scale Optical Features
+                  ↑
+Auxiliary Inputs
+    ↓
+Modality-specific Input Adapters
+    ↓
+Shared / Partially Shared Auxiliary Encoder
+    ↓
+Quality Selection
+    ↓
+CMNeXt-style Residual Injection
+    ↓
+Segmentation Decoder
+    ↓
+Mask / Regions / No-target
+```
+
+### 7.2 光学 Adapter
+
+保留当前“共享 RGB stem + extra-band residual”的设计思想：
+
+- 所有光学签名共享官方 RGB 主分支；
+- 非 RGB 波段通过签名专属浅层 residual 进入；
+- residual 零初始化；
+- 不改变纯 RGB 官方 stem 的初始输出；
+- 不把 source ID 作为模型输入；
+- 只使用通道名和真实数据统计确定归一化。
+
+优化建议：
+
+1. 先冻结官方 RGB stem，完成稳定训练后再逐步解冻；
+2. 对额外波段设置独立学习率；
+3. 使用 channel-valid mask；
+4. 不为每个光学通道签名复制完整 backbone；
+5. 对 3/4/12 通道分别报告消融。
+
+### 7.3 辅助模态 Adapter
+
+每种辅助模态建立轻量 input adapter：
+
+- DEM；
+- slope；
+- InSAR；
+- SAR；
+- 未来真实存在的其他辅助模态。
+
+Adapter 只负责：
+
+- 通道映射；
+- 基础归一化；
+- valid mask；
+- 物理值范围稳定；
+- 映射到统一特征维度。
+
+不负责：
+
+- 专业解释；
+- 可靠性重复判断；
+- 报告生成。
+
+### 7.4 质量选择优化
+
+质量选择只出现一次。
+
+输入可包括：
+
+- feature statistics；
+- valid coverage；
+- optical overlap；
+- resize ratio；
+- 可用的质量字段；
+- sensor/product card。
+
+加入 null auxiliary，使模型可拒绝无效辅助信息。
+
+禁止：
+
+- 在 decoder 再增加第二套 reliability；
+- 把 quality weight 写入最终地学证据；
+- 通过 source ID 学习数据集偏差。
+
+### 7.5 注入优化
+
+CMNeXt 式注入保持：
+
+- 光学作为主分支；
+- 辅助模态在中高层提供增量；
+- 残差注入；
+- 近零初始化；
+- optical-only 硬旁路；
+- 模态顺序不变性；
+- 注入可关闭。
+
+首版避免同时维护多种复杂注入结构。
+
+### 7.6 Region Features
+
+当前 region feature 可作为：
+
+- 区域描述的诊断输入；
+- 案例检索 baseline；
+- 可选 region selector；
+- error analysis。
+
+但分割特征未必天然适合相似案例检索。
+
+建议后续增加一个独立、轻量的 retrieval projection：
+
+```text
+frozen region feature
+→ small projection head
+→ retrieval embedding
+```
+
+projection 只在案例相关性数据上训练，不反向改变分割模型。
+
+---
+
+## 8. VLM 与 Adapter 设计
+
+### 8.1 基础模型
+
+继续采用 Qwen3-VL-2B 作为主模型，视觉 encoder 和 merger 默认冻结。
+
+### 8.2 RS-General Adapter
+
+训练数据：
+
+- RS-GeneralDesc Benchmark。
+
+目标能力：
+
+- 通用遥感图像描述；
+- 场景理解；
+- 地物识别；
+- 数量和空间关系；
+- 遥感问答；
+- 报告表达风格。
+
+沿用当前 LoRA 设计：
+
+- attention `q/k/v/o_proj`；
+- 小参数量；
+- 视觉塔冻结；
+- 单卡训练。
+
+### 8.3 Landslide-Evidence Adapter
+
+默认不训练。
+
+仅在以下 gate 失败时启用：
+
+- 模型忽略 mask；
+- 经常描述 mask 外内容；
+- no-target 处理失败；
+- modality removal 后仍输出对应结论；
+- 结构化证据字段不稳定；
+- RAG 后仍无法控制不支持结论。
+
+推荐实现方式：
+
+1. 以 RS-General Adapter 权重为初始化；
+2. 单独保存为 Landslide-Evidence Adapter；
+3. 使用 Landslide Evidence Corpus 中的 Gold、Auto 和高质量 Silver；
+4. 加入一定比例 RS-General replay；
+5. 使用更低学习率；
+6. 设置通用遥感 retention gate；
+7. 不与 OA-AuxSeg 联合训练。
+
+推理时：
+
+- 通用遥感任务使用 RS-General Adapter；
+- 滑坡 mask-grounded 任务使用 Landslide-Evidence Adapter；
+- 两者分别保存和评价，不强求运行时叠加。
+
+### 8.4 两遍式 VLM 推理
+
+#### Pass 1：Visual Observation
 
 输入：
 
-```text
-global mask 或明确指定的 candidate-region mask
-+ multimodal evidence
-+ user question
-```
+- 全图；
+- mask overlay；
+- region crop；
+- 可用辅助模态视图；
+- 程序事实；
+- 用户问题。
+
+输出只包括：
+
+- 可见区域特征；
+- 多模态空间一致性；
+- 证据缺失；
+- 不作专业结论。
+
+#### Pass 2：Knowledge-Grounded Interpretation
+
+输入：
+
+- Pass 1 视觉观察；
+- Programmatic Facts；
+- retrieved evidence cards；
+- 用户问题；
+- 禁止结论。
 
 输出：
 
-```text
-structured region facts
-natural-language description
-question answer
-```
+- 支持证据；
+- 反对证据；
+- 混淆对象；
+- 证据充分性；
+- 建议补充数据；
+- 最终摘要；
+- 引用来源。
 
-Phase 3 不训练独立 Region Grounding Adapter。进入 Evidence Builder 的目标 mask 必须是 global mask、已有 candidate-region mask 或空 mask，不新增像素级 decoder。
+---
 
-### 9.2 区域选择
+## 9. Mask-Grounded Evidence Builder
 
-首版支持：
+### 9.1 视觉证据
 
-- 使用 global mask；
-- 逐一处理全部 candidate regions；
-- 按 `region_id` 指定；
-- 按 bbox 或点击坐标匹配已有候选；
-- 按面积排序选择；
-- 按九宫格位置规则选择；
-- 将候选编号绘制在 overlay 上，由 Qwen3-VL 返回 `region_id`。
+生成：
 
-所有选择方式最终只能返回已有候选 mask 或空 mask。区域选择错误单独记录，但不作为主论文的指代分割任务，也不阻塞 Description。
+- optical full image；
+- mask overlay；
+- region crop；
+- optional mask-only view；
+- DEM/slope view；
+- InSAR view；
+- SAR view；
+- 其他 aligned auxiliary views。
 
-### 9.3 Mask-Grounded Evidence Builder
+### 9.2 确定性事实
 
-目标 mask 转换为 VLM 输入证据，包括：
-
-- 光学全图；
-- 光学 mask overlay；
-- 保留上下文的光学 region crop；
-- 可对齐辅助模态的全图和区域图；
-- 确定性几何事实；
-- 模态可用性；
-- valid coverage；
-- 单位和 sign convention；
-- 禁止推断列表。
-
-以下字段由程序确定性计算，VLM 不得改写：
+程序计算：
 
 - bbox；
 - centroid；
 - area；
 - area ratio；
 - image location；
+- component count；
 - elongation；
 - compactness；
 - fragmentation；
-- active modality list。
+- optical valid coverage；
+- auxiliary coverage；
+- modality availability；
+- units；
+- sign convention。
 
-空 mask 和 no-target 必须作为显式状态进入 Evidence Builder，不得伪造区域 crop 或几何事实。
+### 9.3 辅助模态事实
 
-### 9.4 VLM 输入方式
+#### DEM / slope
 
-第一版使用 Qwen3-VL 原生多图输入：
+- 高程均值、范围和分位数；
+- 平均坡度；
+- 高坡度比例；
+- mask 内外差异；
+- 有效覆盖率。
 
-```text
-full optical
-+ mask overlay
-+ region crop
-+ optional auxiliary views
-+ deterministic facts
-+ user question
-+ optional retrieved evidence cards
-```
+#### InSAR
 
-GAR 式 RoI feature replay 只作为后续增强。只有原生多图不能稳定关注目标区域或局部细节时，才实现标准 RoIAlign 的轻量 region replay，不复制整个 GAR 工程。其目的仅是同时保持全局上下文与区域细节。
+- 产品类型；
+- 单位；
+- LOS sign convention；
+- mask 内均值、中位数和分位数；
+- mask 内外差异；
+- 有效覆盖；
+- 可用质量信息；
+- 是否存在连续异常的程序指标。
 
-### 9.5 描述任务与证据边界
+#### SAR
 
-首版支持：
+在数据已定标时：
 
-- 描述 global mask 或单个 candidate region；
-- 说明区域位置、大小和形态；
-- 描述光学可见扰动；
-- 说明地形、SAR 或 InSAR 是否提供支持；
-- 列出可能混淆对象；
-- 判断证据是否充分；
-- 回答与目标区域有关的有限问题。
+- 后向散射统计；
+- mask 内外差异；
+- 纹理统计；
+- 有效覆盖。
 
-严格约束：
+未定标时只提供归一化视觉观察，不输出严格物理结论。
 
-- 缺失模态对应字段输出 `unavailable`；
-- 覆盖不足时输出 `insufficient evidence`；
-- 无单位或 sign convention 时禁止定量物理结论；
-- 单时相数据禁止推断发生时间；
-- 无现场资料时禁止输出确定风险等级；
-- quality weight 和 attention 不作为专业证据；
-- deterministic facts 不得由 VLM 重算或改写。
+### 9.4 证据边界
 
-### 9.6 训练顺序
+Evidence Builder 必须输出：
 
-- D0：冻结 Qwen3-VL，通过统一 Dataset API 读取 `oa_val`，运行 prompt-only
-  zero-shot baseline；
-- D1：只有 zero-shot gate 未通过时，读取 `external_train` 训练同一个
-  Description LoRA，并只在 `external_val` 上选择该阶段 checkpoint 与超参数，
-  完成通用光学遥感理解预适配；
-- D2：继续同一个 LoRA，读取 `oa_train` 和配置化的 `external_train` replay，
-  进行 mask-grounded 目标适配；
-- D3：在 val 上锁定 prompt、checkpoint 和推理配置后，分别运行 GT-mask、
-  fixed predicted-mask 和 end-to-end predicted-mask 评价，test 只运行一次。
+- available claims；
+- forbidden claims；
+- missing evidence；
+- required verification。
 
-若 D0 已满足当前研究门槛，则不实施 D1/D2，直接采用 zero-shot Description Module。
-Description LoRA 不与 OA-AuxSeg 联合训练，也不反向修改分割输出。训练和评价只读取
-第 8 节构建的自包含 Benchmark，不在运行时回读 RSGPT、MMRS-1M 或 DisasterM3
-源目录。
+---
 
-### 9.7 评价与对照
+## 10. RAG 知识库构建
 
-指标：
+### 10.1 RAG 的定位
 
-- structured field accuracy；
-- target-status accuracy；
-- modality attribution accuracy；
-- unsupported claim rate；
-- evidence sufficiency accuracy；
-- expert factuality；
-- mask-region consistency；
-- no-target response correctness。
+RAG 负责：
 
-反事实与鲁棒性检查：
+- 动态提供滑坡专业知识；
+- 解释不同环境下的判别差异；
+- 提供传感器和产品使用限制；
+- 检索相似正案例；
+- 检索困难负样本；
+- 生成可追溯引用。
 
-- mask swap；
-- wrong-region mask；
-- empty mask；
-- modality removal；
-- cross-parent region swap。
+RAG 不负责：
 
-核心输入对照：
+- 生成 mask；
+- 修改分割输出；
+- 覆盖程序事实；
+- 根据通用知识强制确认候选区域为滑坡。
 
-- full image only；
-- crop only；
-- full + overlay + crop；
-- multimodal evidence；
-- optional RoI replay；
-- GT mask；
-- fixed predicted mask；
-- end-to-end predicted mask。
+### 10.2 知识库分层
 
-GT-mask、fixed predicted-mask 和 end-to-end predicted-mask 必须分开报告，避免把分割误差混入 Description 能力结论。
+#### 层一：专业规则库
 
-### 9.8 Phase 3 验收
+来源：
 
-- 能描述 global mask 和单个 candidate region；
-- mask 改变后描述相应改变；
-- 移除某模态后不再生成该模态支持结论；
-- deterministic facts 不被 VLM 改写；
-- 空 mask 和 no-target 得到正确响应；
-- GT-mask 与 predicted-mask 结果分开报告；
-- `external_train` 不进入验证，`external_val` 只用于外部预适配监控且不被当作
-  OA 正式验证或测试真值；
-- `oa_gold`、`oa_auto` 和 `oa_silver` 的来源及使用范围可审计；
-- Description 训练和评价可在隐藏三个外部源目录后运行；
-- Qwen3-VL 训练不是分割模型前置条件；
-- 不依赖指代分割数据；
-- 不依赖独立 Grounding Adapter。
+- 地质灾害规范；
+- 滑坡遥感解译教材；
+- InSAR、SAR、DEM 技术资料；
+- 学术论文；
+- 调查报告；
+- 传感器产品说明。
 
-## 10. Phase 4：RAG
+每个知识单元需要记录：
 
-### 10.1 任务定义
-
-输入：
-
-```text
-Mask-Grounded Evidence + user question + retrieved knowledge
-```
-
-输出：
-
-```text
-knowledge-grounded description and answer with sources
-```
-
-RAG 不参与像素分割，不控制 OA-AuxSeg decoder，也不负责生成或选择 mask。
-
-### 10.2 知识类型
-
-知识库至少区分：
-
-1. 专业文本知识；
-2. 专家审核滑坡案例；
-3. 困难负样本和混淆案例；
-4. SAR、InSAR、DEM 等模态解释规则。
-
-### 10.3 检索设计边界
-
-不使用 OpenCLIP，不照搬统一图文向量空间。建议采用分索引检索：
-
-- 专业文本使用适合中英文技术文档的文本 embedding，并结合关键词检索；
-- 光学案例使用自监督视觉特征或 OA-AuxSeg 光学区域特征；
-- SAR、InSAR、DEM 案例使用 OA-AuxSeg 对应辅助 encoder 的同模态区域特征；
-- 各路检索结果在后期进行排序融合。
-
-具体 embedding 模型在 Phase 4 开始时根据资源、语言和检索实验单独评估，不在当前阶段写死。
-
-### 10.4 RAG 输入接口
-
-Phase 3 的 prompt builder 预留 `retrieved evidence cards`。每条证据至少包含：
-
-- knowledge ID；
-- 内容；
-- 来源；
+- 适用环境；
 - 适用模态；
-- 支持的 claim；
-- 禁止的 claim；
-- 相关性分数。
+- 可观察证据；
+- 使用前提；
+- 支持结论；
+- 禁止结论；
+- 混淆因素；
+- 来源和页码。
 
-检索证据只能补充或解释当前 mask-grounded evidence，不能覆盖确定性几何事实和模态可用性。
+#### 层二：滑坡正案例库
 
-### 10.5 训练与评价
+保存 train split 中专家确认的 mask-description 案例。
 
-RAG 首先采用无需训练的检索增强生成；只有检索排序明显不足时才考虑轻量 reranker。
+#### 层三：困难负样本库
 
-核心对照：
+包括：
 
-1. no RAG；
-2. text-only RAG；
-3. text + optical case retrieval；
-4. text + multimodal case retrieval；
-5. full retrieval + evidence constraints。
+- 采石场；
+- 道路切坡；
+- 裸岩坡；
+- 河滩；
+- 冲沟；
+- 施工扰动；
+- 云影、山影；
+- SAR 叠掩、阴影和 speckle；
+- InSAR 低相干、大气和解缠异常。
 
-指标：
+#### 层四：传感器解释库
+
+专门组织：
+
+- InSAR LOS 限制；
+- 升降轨差异；
+- 相干性和低相干；
+- DEM 与坡度；
+- SAR 几何畸变；
+- 分辨率和尺度影响；
+- 数值单位和符号约定。
+
+### 10.3 文本检索
+
+可继续使用：
+
+- SQLite FTS5；
+- BGE-M3；
+- Qdrant Embedded；
+- RRF；
+- BGE reranker；
+- authority boost。
+
+检索查询来自：
+
+```text
+用户问题
++ candidate status
++ Programmatic Facts
++ Pass 1 visual observations
++ environment metadata
++ available modalities
++ required claim types
+```
+
+### 10.4 图像和案例检索
+
+不使用 OpenCLIP 统一图文空间。
+
+建议采用分模态索引：
+
+- 光学区域：OA-AuxSeg optical feature 或 DINOv3；
+- DEM/slope：terrain encoder feature；
+- InSAR：InSAR auxiliary encoder feature；
+- SAR：SAR auxiliary encoder feature。
+
+各模态只在同模态索引内检索，后期融合。
+
+### 10.5 案例筛选
+
+只使用 train split。
+
+必须排除：
+
+- val/test parent；
+- 同事件样本；
+- 同 source group 泄漏；
+- exact duplicate；
+- perceptual near duplicate；
+- 无专家确认 mask；
+- 缺少关键元数据的案例。
+
+### 10.6 Evidence Cards
+
+RAG 返回结构化证据，不直接生成最终回答。
+
+每条 Evidence Card 至少包含：
+
+- knowledge/case ID；
+- content；
+- source；
+- page/section；
+- modality；
+- environment；
+- applicable conditions；
+- supported claims；
+- forbidden claims；
+- confounders；
+- retrieval score；
+- authority class。
+
+### 10.7 检索融合
+
+建议顺序：
+
+```text
+metadata filter
+→ text lexical retrieval
+→ text dense retrieval
+→ same-modality case retrieval
+→ reciprocal rank fusion
+→ reranking
+→ source and evidence-type diversity
+→ final evidence cards
+```
+
+---
+
+## 11. 统一多任务接口
+
+参考 M3D 的“统一交互、专业模块执行”思想，支持以下任务。
+
+### 11.1 Segmentation
+
+```text
+识别并分割图中的疑似滑坡。
+```
+
+输出：mask、candidate regions、no-target、confidence。
+
+### 11.2 Scene Description
+
+```text
+描述当前遥感场景。
+```
+
+使用 RS-General Adapter，不调用分割。
+
+### 11.3 Mask Description
+
+```text
+描述候选区域 2。
+```
+
+调用 OA-AuxSeg 输出和 Evidence Builder。
+
+### 11.4 Candidate Evaluation
+
+```text
+该候选区域是否具有滑坡遥感特征？
+```
+
+输出：支持、反对、混淆对象、证据充分性。
+
+### 11.5 Multimodal Evidence QA
+
+```text
+InSAR 和 DEM 是否支持该候选区域？
+```
+
+使用程序事实、视觉观察和 RAG。
+
+### 11.6 Report Generation
+
+生成结构化区域报告，但明确：
+
+- 候选区域不是确认结论；
+- 不能替代现场调查；
+- 不给出正式风险等级。
+
+### 11.7 Knowledge QA
+
+纯文本问题直接调用 RAG，不必运行 OA-AuxSeg。
+
+---
+
+## 12. 训练与实施阶段
+
+### Stage 0：冻结现有资产
+
+- 核对当前 phase2/phase3/phase4 状态；
+- 不重写已通过的核心接口；
+- 更新 README、AGENTS 和本方案；
+- 把旧方案移入 archive 或删除活动引用。
+
+### Stage 1：OA-AuxSeg 正式验收
+
+- 完成 optical-only；
+- 完成 proposed；
+- 完成不同模态组合；
+- 完成 no-target；
+- 完成 full 训练和评价；
+- 导出固定预测 mask。
+
+### Stage 2：RS-GeneralDesc Benchmark 验收
+
+- external-only Benchmark 成为正式阶段；
+- 删除 `oa_component_disabled` 作为 external Benchmark blocker；
+- 完成数据过滤、防泄漏和 deep validation；
+- 明确 external_val 只用于训练监控。
+
+### Stage 3：RS-General Adapter
+
+- 运行 prompt-only baseline；
+- 完成 RS-General LoRA；
+- 在固定通用遥感验证集上选择 checkpoint；
+- 评价通用遥感能力。
+
+### Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval
+
+- 程序生成 Auto facts；
+- 分层选择 API/本地教师样本；
+- 生成 Silver；
+- 完成规则过滤；
+- 完成人工 Gold；
+- 冻结正式 val/test。
+
+### Stage 5：Mask-Grounded Baseline
+
+依次比较：
+
+1. base Qwen3-VL；
+2. RS-General Adapter；
+3. full image；
+4. crop；
+5. overlay + crop；
+6. multimodal evidence；
+7. GT mask；
+8. fixed predicted mask；
+9. wrong mask。
+
+### Stage 6：文本 RAG
+
+- 将 RAG_tmp 改为 Evidence Provider；
+- 构建规则知识；
+- 接入 EvidenceBuilder 查询；
+- 完成 no RAG vs text RAG。
+
+### Stage 7：案例 RAG
+
+- 构建正案例；
+- 构建困难负样本；
+- 建立分模态索引；
+- 完成 text-only、case-only 和 hybrid 对照。
+
+### Stage 8：可选 Landslide-Evidence Adapter
+
+只有 Gate 失败时执行。
+
+训练：
+
+- Gold；
+- Auto；
+- 过滤 Silver；
+- external replay；
+- retention gate。
+
+### Stage 9：统一推理与报告
+
+- Task Controller；
+- 两遍式生成；
+- 引用；
+- failure artifact；
+- end-to-end demo；
+- 完整评价。
+
+---
+
+## 13. 决策 Gate
+
+### Gate A：OA-AuxSeg 是否可靠
+
+要求：
+
+- 分割性能达到设定门槛；
+- no-target FPR 可接受；
+- auxiliary 模态不会系统性降低性能；
+- checkpoint 可严格恢复。
+
+### Gate B：通用遥感微调是否有效
+
+比较：
+
+- Base Qwen3-VL；
+- RS-General Adapter。
+
+必须确认通用遥感能力真实提升。
+
+### Gate C：模型是否真正关注 mask
+
+比较：
+
+- full image；
+- crop；
+- overlay + crop；
+- mask swap；
+- wrong-region；
+- empty mask。
+
+若失败，先优化 Evidence Representation，而不是直接加入 RAG。
+
+### Gate D：RAG 是否提供真实增益
+
+比较：
+
+- no RAG；
+- text RAG；
+- case RAG；
+- hybrid RAG。
+
+必须降低 unsupported claim，并提高专家事实性和引用准确率。
+
+### Gate E：是否需要 Landslide-Evidence Adapter
+
+只有以下情况之一持续存在才训练：
+
+- mask 对应不足；
+- 证据字段格式不稳定；
+- no-target 错误；
+- modality removal 不敏感；
+- RAG 无法控制幻觉。
+
+### Gate F：专业适配是否损伤通用遥感能力
+
+比较 RS-General Adapter 与 Landslide-Evidence Adapter 在固定通用遥感验证集上的性能。
+
+---
+
+## 14. 评价体系
+
+### 14.1 分割评价
+
+- IoU；
+- Dice；
+- Precision；
+- Recall；
+- F1；
+- positive-only Dice；
+- no-target FPR；
+- 模态组合；
+- 低质量模态；
+- 显存和速度。
+
+### 14.2 区域理解评价
+
+- target-status accuracy；
+- mask-region consistency；
+- structured field accuracy；
+- modality attribution；
+- evidence sufficiency；
+- confounder recognition；
+- unsupported claim rate；
+- expert factuality；
+- no-target correctness。
+
+### 14.3 RAG 评价
 
 - Recall@K；
-- nDCG 或 MRR；
-- evidence citation precision；
+- MRR；
+- nDCG；
+- citation precision；
 - expert relevance；
-- unsupported claim rate；
+- source diversity；
+- confounder retrieval；
 - irrelevant knowledge robustness；
-- confounder retrieval accuracy。
+- modality match accuracy。
 
-### 10.6 Phase 4 验收
+### 14.4 端到端评价
 
-- 知识库可构建、保存和重载；
-- 检索结果可重复；
-- 不同模态只进入正确的案例索引；
-- 回答返回知识来源；
-- 无关知识不明显改变正确结论；
-- 检索证据不覆盖确定性输入事实；
-- RAG 失败不影响分割和 Description 的独立运行。
-
-## 11. 可选扩展：轻量区域指令选择
-
-该扩展不是主线阶段，不是论文必需实验，也不是 Description 或 RAG 的验收条件。仅在以下条件同时具备时考虑：
-
-- 单图多滑坡且用户必须通过自然语言选择；
-- 确定性 ID、坐标、规则和 Qwen 编号 overlay 仍不能满足需求；
-- 已有足够且经过审核的文本—区域配对数据。
-
-可选结构：
+分开报告：
 
 ```text
-candidate region features + text embedding
-→ lightweight scorer
-→ selected region / no-target
+GT mask + no RAG
+GT mask + RAG
+fixed predicted mask + no RAG
+fixed predicted mask + RAG
+end-to-end mask + RAG
+wrong mask + RAG
 ```
 
-实现时必须：
+---
 
-- 冻结 OA-AuxSeg；
-- 只使用已有候选区域；
-- 不新增或重训像素 decoder；
-- 不改变默认分割 forward、loss 和 checkpoint；
-- 不升级为大规模指代分割模型；
-- 不与 Description 或 RAG 联合反向传播；
-- 不阻塞四阶段主线。
+## 15. 关键消融
 
-若无需自然语言区域选择，region features 继续只作为可选只读接口，不为该扩展预先构建正式 cache。
+### 分割
 
-## 12. Codex 实施顺序
+- optical-only；
+- direct concat；
+- mean fusion；
+- CMNeXt injection；
+- quality selection；
+- modality dropout。
 
-Codex 按以下依赖顺序实施：
+### VLM
 
-1. 清理旧活动实现；
-2. 审计真实 HDF5；
-3. 构建固定 patch Benchmark；
-4. 实现 optical-only baseline；
-5. 实现辅助 adapters 和共享 encoder；
-6. 实现 CMNeXt 式注入；
-7. 实现简化 MAGIC quality selection；
-8. 冻结并验收 OA-AuxSeg，导出 mask、regions 和 no-target；
-9. 只读审计 RSGPT、MMRS-1M 和 DisasterM3 的采用记录与源资产；
-10. 实现三个 source adapter、canonical asset writer 和 Description schema；
-11. 构建并深度验证自包含 OA-LandslideDesc Benchmark；
-12. 冻结 external/OA 记录角色，完成 358 条 `oa_gold` 人工审核；
-13. 实现 global、ID、坐标、规则和编号 overlay 等区域选择；
-14. 实现 Mask-Grounded Evidence Builder；
-15. 运行 Qwen3-VL zero-shot Description 和 gate；
-16. 只有 gate 未通过时，按 external→OA 顺序训练一个 Description LoRA；
-17. 在 val 锁定方案后运行一次正式 OA test；
-18. 在分割和描述稳定后实现 RAG；
-19. 仅在主线完成且确有必要时实现轻量区域指令选择。
+- Base；
+- RS-General Adapter；
+- optional Landslide-Evidence Adapter；
+- full image；
+- crop；
+- overlay；
+- overlay + crop；
+- multimodal evidence。
 
-每阶段内部连续执行，不因普通子步骤完成而暂停。
+### RAG
 
-训练边界如下：
+- no RAG；
+- text-only；
+- positive cases；
+- hard-negative cases；
+- text + cases；
+- 无 metadata filter；
+- environment-conditioned filter；
+- sensor-conditioned filter。
 
-| 阶段 | 训练对象 | 冻结对象 | 主要监督 |
-|---|---|---|---|
-| OA-0 | 光学分割模型 | 无 | optical + mask |
-| OA-1 | 辅助 adapter、辅助 encoder、注入模块 | 可保留光学预训练权重 | multimodal image + mask |
-| OA-2 | quality selector | 已稳定分割主干可部分冻结 | mask + modality dropout |
-| LDB-0 | 不训练 | OA-AuxSeg、Qwen3-VL | external/OA 规范化与人工真值 |
-| D-0 | 不训练 | OA-AuxSeg、Qwen3-VL | OA val prompt-only |
-| D-1 | 可选 Description LoRA Stage A | OA-AuxSeg | external_train |
-| D-2 | 同一个 Description LoRA Stage B | OA-AuxSeg | OA gold/auto/silver + external replay |
-| R-0 | 不训练或仅训练 reranker | 分割与描述模型 | retrieval relevance |
+### 反事实
 
-不得将以上阶段合并为联合训练。
+- mask swap；
+- region swap；
+- empty mask；
+- modality removal；
+- wrong sign/unit；
+- irrelevant knowledge injection；
+- conflicting knowledge；
+- wrong predicted mask。
 
-## 13. 进度与停止规则
+---
 
-只使用根目录 `REBUILD_PROGRESS.md`，保持简洁并记录：
+## 16. RAG 防止合理化错误分割
 
-- 当前阶段；
-- 当前实现目标；
-- 已完成内容；
-- 主要新增、修改和删除文件；
-- 已运行测试及结果；
-- 当前阻塞；
-- 下一条命令。
+最终提示和任务定义不得写：
 
-普通子步骤不生成独立 handoff、ADR、许可证或重复审计文档。
+```text
+这是一个滑坡，请解释其特征。
+```
 
-Codex 每次开始工作时读取：
+应写为：
+
+```text
+该区域由滑坡分割模型标记为候选区域。请根据当前视觉证据、
+程序事实和检索知识，评估其是否具备滑坡遥感特征，并列出
+支持证据、反对证据、可能混淆对象和证据限制。
+```
+
+RAG Query Builder 必须同时检索：
+
+- 滑坡支持知识；
+- 相似正案例；
+- 困难负样本；
+- 证据限制；
+- 传感器误差来源。
+
+---
+
+## 17. Codex 实施规则
+
+Codex 每次读取：
 
 1. 本文档；
 2. `REBUILD_PROGRESS.md`；
-3. 根目录 `README.md`；
-4. 根目录 `AGENTS.md`。
+3. 根 README；
+4. 根 AGENTS。
 
-Codex 仅在以下情况停止：
+进展记录只使用 `REBUILD_PROGRESS.md`，记录：
 
-- HDF5 字段或通道含义无法确定；
-- optical、mask 或 auxiliary 无法配对；
-- 模态空间关系无法确认；
-- 外部 Description 记录与图像、mask 或 bbox 无法配对；
-- 358 条 `oa_gold` 需要人工或地学审核但审核尚未完成；
-- 需要覆盖原始数据或正式产物；
-- 需要实际删除 `../datasets` 中的源资产；
-- 需要人工标注或地学判断；
+- 当前 Stage；
+- 当前目标；
+- 已完成项；
+- 主要文件；
+- 测试；
+- 阻塞；
+- 下一条命令。
+
+不生成大量：
+
+- handoff；
+- ADR；
+- license gate；
+- 冗余审计报告。
+
+Codex 不因普通子任务结束而暂停。仅在以下情况停止：
+
+- 数据字段或模态含义不明确；
+- 需要人工 Gold 审核；
+- 需要调用外部付费 API 且未授权；
+- 需要覆盖原始数据或 accepted artifacts；
 - 需要正式长训练；
-- 测试失败且无法从实际错误定位。
+- 需要地学专家判断；
+- 测试失败且无法从真实错误定位。
 
-正式训练节点必须给出：
+---
 
-- 执行目录；
-- 环境激活方式；
-- 完整命令；
-- 输入 Benchmark；
-- patch size；
-- checkpoint；
-- 输出目录；
-- 预期报告；
-- 验收标准；
-- 需要用户返回的日志。
+## 18. 最终完成定义
 
-## 14. 最终完成定义
+主线完成必须满足：
 
-主线完成必须同时满足：
+1. OA-AuxSeg 完成正式训练和评价；
+2. RS-GeneralDesc Benchmark 完成 external-only 验收；
+3. RS-General Adapter 完成训练并通过通用遥感 gate；
+4. Landslide Evidence Corpus 完成 Auto、Silver 和必要 Gold；
+5. OA-GroundedEval 完成人工审核并封存 test；
+6. Evidence Builder 能构建光学、辅助模态、程序事实和证据约束；
+7. Qwen3-VL 能完成 mask-grounded 视觉观察；
+8. RAG 能返回文本规则、正案例和困难负样本；
+9. RAG 返回结构化 Evidence Cards 和引用；
+10. 最终 VLM 输出支持、反对、混淆对象和限制；
+11. wrong-mask + RAG 不会被稳定合理化为滑坡；
+12. GT、fixed predicted 和 end-to-end 分层评价；
+13. 可选 Landslide-Evidence Adapter 只在 Gate 失败时实施；
+14. 通用遥感能力 retention 得到验证；
+15. 统一 Task Controller 能编排分割、描述、证据问答和报告；
+16. RAG 失败不影响分割模型独立运行；
+17. README 只保留当前有效命令；
+18. `REBUILD_PROGRESS.md` 反映真实科学完成状态，而不是仅反映代码存在。
 
-1. 旧活动代码已从当前主线清理；
-2. 已审计真实 HDF5 数据结构；
-3. Benchmark 可通过参数统一不同原始 patch 到固定尺寸；
-4. 多个数据源可混合组成训练 batch；
-5. OA-AuxSeg 可在 optical-only 和任意辅助模态子集下运行；
-6. OA-AuxSeg 输出 global mask、candidate regions 和 no-target，并可选只读导出 region features；
-7. RSGPT、MMRS-1M 和 DisasterM3 的有效记录已按 parent 防泄漏划分并复制为
-   `external_train`/`external_val`；
-8. OA-LandslideDesc Benchmark 使用配置记录的规范图像、mask、bbox 和 canonical
-   record 合同，manifest 可解析其实际物理布局；
-9. Benchmark 脱离三个外部源目录后仍可完成深度验证和 DataLoader smoke；
-10. `external_train`、`external_val`、`oa_gold`、`oa_auto` 和 `oa_silver`
-    的角色不可混淆；
-11. 358 条人工真值继承 OA 固定 split，OA val/test 是唯一正式 Description 评价集；
-12. 区域可通过 global、all regions、ID、坐标、规则或 Qwen 编号 overlay 明确指定；
-13. Evidence Builder 可根据 global mask、candidate-region mask 或空 mask 构建多模态证据；
-14. Qwen3-VL 可基于 mask 和证据生成结构化描述与问答；
-15. GT-mask、fixed predicted-mask 和 end-to-end predicted-mask 可分别评价；
-16. 模态缺失或证据不足时不生成对应专业结论；
-17. RAG 可独立启用和关闭，且回答返回知识来源；
-18. 主线不依赖独立 Region Grounding Adapter；
-19. 可选轻量区域指令选择不阻塞主线；
-20. 正式长训练由人工执行，Codex 提供完整命令；
-21. README 只保留 OA-GroundRAG 当前有效命令；
-22. `REBUILD_PROGRESS.md` 记录四阶段主线及各 Phase 的真实完成状态。
+---
+
+## 19. 最终研究叙事
+
+本研究不是一个把多个模型简单拼接的系统，也不是一个依赖大规模滑坡文本微调的领域大模型。
+
+核心思想是：
+
+```text
+OA-AuxSeg 负责可靠空间感知；
+程序负责确定性几何和物理统计；
+通用遥感 VLM 负责视觉观察和语言交互；
+RAG 负责环境、传感器和滑坡专业知识；
+最终 VLM 负责生成受证据约束的报告。
+```
+
+最终论文应证明：
+
+1. 多源辅助模态如何改善或稳定滑坡分割；
+2. mask-grounded evidence 如何让 VLM 聚焦正确区域；
+3. 通用遥感微调能否保留广泛地物理解；
+4. RAG 是否能在不进行大规模滑坡领域微调的情况下提升专业事实性；
+5. 专业案例和困难负样本是否比纯规范文本更有效；
+6. 系统是否能够识别证据不足，而不是为任意分割结果生成合理化解释。

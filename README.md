@@ -1,34 +1,33 @@
-# OA-AuxSeg + VLM
+# OA-GroundRAG
 
-本项目研究光学锚定、任意辅助模态增强的滑坡分割，以及基于分割区域证据的视觉语言理解。
+本项目研究光学锚定、任意辅助模态增强的滑坡分割，以及基于候选区域证据的遥感视觉
+观察、专业知识检索和证据受限生成。当前唯一算法依据是
+[`docs/OA-GroundRAG_算法构建方案.md`](docs/OA-GroundRAG_算法构建方案.md)，活动状态只在
+[`REBUILD_PROGRESS.md`](REBUILD_PROGRESS.md) 维护。
 
-当前已初步完成 OA-AuxSeg v6 的五源动态 registry、训练、评价、checkpoint
-和推理闭环。Phase 2 的 External OA-LandslideDesc Benchmark 已由负责人完成全量
-自包含构建与 deep validation；本仓库在 2026-07-30 只轻量核对其发布身份，没有
-重新扫描或验证全量数据。该 Benchmark 不含 OA mask-grounded 数据，
-`formal_acceptance_eligible=false`、blocker 为 `oa_component_disabled`。
+2026-07-31 已完成新路线 Stage 0 的权威迁移与资产冻结。仓库不推倒重来，也不重命名
+既有 `phase2/phase3/phase4` 路径；它们在新路线中分别继续承载 OA-AuxSeg、
+RS-GeneralDesc Benchmark 和 Mask-Grounded VLM 基础。
 
-在负责人明确授权下，算法 Phase 3 的唯一仓库实现位于 `phase4`：严格合同、区域选择、
-证据构建、Qwen3-VL processor/model、prompt-only/LoRA、训练与恢复、推理、分任务评价、
-合成端到端测试和 External Benchmark 真实有界 processor smoke 已闭环。OA 人工真值、
-OA mask-grounded 训练与正式评价仍未实施。旧十阶段方案把相关 VLM 工作列为阶段 8/9；
-该编号矛盾保留，本仓库不修改权威方案来消除它。独立 Region Grounding 不再作为主线。
-`oa_auxseg_hdf5_v1/small` 的 500 条五源合同仍是历史回归目标，但当前现场目录缺失；
-负责人构建的五源 full 仍包含 53,645 条样本。主模型直接消费同一 batch 中
-3/4/12 通道光学、无辅助样本，以及 DEM、slope、encoded InSAR 的任意实际稀疏子集。
-OA-AuxSeg v6 明确拒绝 10 通道光学和 SAR；Benchmark builder 仍保留其通用源适配能力，
-两者不能混为一谈。辅助路径使用与 ConvNeXt-Small 对齐的全深度 MSPA，
-在 stride 4/8/16/32 执行空间模态选择、全宽 FRM/FFM 和逐阶段双流传播；
-`optical_only` 仅是消融。v6 不兼容旧训练或配置，不提供转换包装；既有产物保持只读。
-正式 full 训练配置使用 ConvNeXt-Small、物理 batch 16、100 个等价 epoch，
-关闭 activation checkpointing。本轮进程检查未发现其他构建或训练任务；没有启动、
-停止或恢复 OA-AuxSeg 长训练，也不读取其未验收 checkpoint。Phase4 仅运行了明确
-有界的真实 Qwen LoRA worker-2 2-step gate，未启动 1000-step 长训练。
+- **Stage 1 / OA-AuxSeg：** 五源 full Benchmark 有 53,645 条样本。batch-16 正式训练
+  日志停在 step `213200/229757`，存在 `checkpoint_best.pt` 和
+  `checkpoint_last.pt`，但没有最终 `training_report.json`，因此 Gate A 未完成。
+- **Stage 2 / RS-GeneralDesc：** 已发布 External Benchmark 有 274,693 records、
+  104,954 parents，saved deep validation 为 0 error / 0 warning。其 v3 manifest
+  仍保存旧组合范围的 `formal_acceptance_eligible=false` 和
+  `oa_component_disabled`；现有资产保持只读，后续只迁移作用域验收语义。
+- **Stage 3 / RS-General Adapter：** worker-2 真实 LoRA 训练已经完成 1000 optimizer
+  steps、16,000 samples，best checkpoint 为 step 1000。该结果目前只是候选 Adapter，
+  `formal_acceptance=false`；Gate B 必须另做 Base 与 Adapter 的固定生成评价。
+- **Stage 4–5 / 专业证据与区域理解：** 现有 `phase4` 合同、RegionSelector、
+  EvidenceBuilder、Qwen、checkpoint、推理和反事实评价继续复用；OA-GroundedEval、
+  两遍式生成和扩展证据合同尚未实施。
+- **Stage 6–9 / RAG 与集成：** `yukun80/RAG_tmp` commit
+  `4241140a8005bb79b8d8ebce982c645b096b7aca` 仅作外部工程原型。它不复制进仓库、
+  不作为运行时依赖，也不在 Gate C 前接入。
 
-OA-AuxSeg 算法设计见 [`OA-GroundRAG_算法构建方案.md`](docs/OA-GroundRAG_算法构建方案.md)，
-系统设计见
-[`光学锚定任意辅助模态滑坡分割与VLM区域理解_算法构建方案.md`](docs/光学锚定任意辅助模态滑坡分割与VLM区域理解_算法构建方案.md)，
-活动进度见 [`REBUILD_PROGRESS.md`](REBUILD_PROGRESS.md)。
+当前没有可见训练进程。本次 Stage 0 没有读取或修改 Benchmark、checkpoint、训练输出、
+模型权重或 `docs/RAG_knowledge/`，也没有启动 GPU、正式评价、下载、commit 或 push。
 
 ## 环境
 
@@ -46,7 +45,7 @@ torchvision 0.23.0+cu128 和 tqdm 4.67.1。
 合同测试、官方 3 通道 stem 等价和官方权重严格加载已在 CPU 完成；真实训练配置使用
 单卡 bf16。
 
-## Phase 1：OA-AuxSeg
+## OA-AuxSeg（仓库 phase2；新路线 Stage 1）
 
 为保持已验收配置、checkpoint 和命令兼容，现有工程路径继续使用
 `oa_groundrag/phase2/`、`scripts/phase2_oa_auxseg/` 等历史实现名；这些名称不表示
@@ -252,9 +251,9 @@ python scripts/phase2_oa_auxseg/run_oa_auxseg.py infer \
 和 `manifest.json`。NPZ 保存全局 probability/mask、区域 masks/features、全局模态
 权重和四尺度 float32 空间权重图；JSONL 只保存空间图对应的 NPZ key。
 
-## Phase 2：OA-LandslideDesc Benchmark
+## RS-GeneralDesc Benchmark（仓库 phase3；新路线 Stage 2）
 
-由于仓库既有 `phase1`、`phase2` 路径已占用，Phase 2 的唯一实现位于：
+为保持既有合同、配置和产物身份，RS-GeneralDesc 的实现继续位于历史 `phase3` 路径：
 
 ```text
 oa_groundrag/phase3/             # canonical、adapter、builder、validator、Dataset、exporter
@@ -268,11 +267,12 @@ tests/phase3_landslidedesc/      # 单元与合成端到端测试
 `export_qwen`。canonical schema 为 `oa_landslidedesc.canonical.v3`；
 manifest 是物理布局唯一入口。Qwen messages 独立导出，不进入 canonical 真值。
 
-`OA-LandslideDesc` 是完整 Phase 2 规划名称：`OA` 表示未来接入 OA-AuxSeg 的
-mask-grounded 数据，`LandslideDesc` 表示下游滑坡区域描述。当前
-`external_full.yaml` 只构建三库通用视觉理解组件；它设置 `oa.enabled=false`，
-不读取 OA Benchmark，也不要求 358 条人工审核。只有完整 OA 组件才需要人工
-`oa_gold`，二者不能混用同一条构建命令。
+`OA-LandslideDesc` 只保留为 v3 schema、配置和路径中的历史名称，不再表示当前
+Benchmark 必须混合 OA mask-grounded 数据。当前 `external_full.yaml` 构建的三库通用
+视觉理解组件就是 RS-GeneralDesc 数据产品；它设置 `oa.enabled=false`，不读取 OA
+Benchmark，也不要求旧规划中的 358 条 `oa_gold`。现有 builder/validator 仍保留旧
+`oa_component_disabled` blocker，Stage 2 将迁移这项作用域语义，但不得改写已发布
+v3 资产。
 
 三库统一保存“视觉证据 → 文本输出”，但保留独立任务语义：
 
@@ -310,7 +310,7 @@ validation 中记录的 identity，不重新统计这些全量数字：
   train 261,646 / val 13,047 records。源 `train/eval/benchmark` 只保存在
   provenance；该重划分不能复现 RSGPT RSIEval 或 DisasterM3 Bench 官方结果。
 
-Phase 2 历史有界真实 smoke 位于临时根
+历史有界真实 smoke 位于临时根
 `/tmp/oa_landslidedesc_external_multitask_smoke_verified_v3`，只作为本轮可重复证据：
 RSGPT/MMRS-1M/DisasterM3 分别为 `17/6/12` 条，共 35 records、32 parents、
 34 个唯一内容资产、8,944,309 bytes。7 个 text task family 全部覆盖，deep
@@ -347,11 +347,12 @@ SHA-256 一致。manifest 明确记录 `formal_acceptance_eligible=false`，bloc
 
 `build` 和 `export` 的目标根必须预先不存在。已发布的
 `oa_landslidedesc_external_v1` 不得作为新 build 目标，也不得覆盖。它不检查 OA gold；
-未来包含 OA 的正式 Benchmark 仍必须通过 OA 人工真值与科学语义 gate。本轮没有执行
-全量读取、payload 重算、full deep validation、人工审核、Silver/teacher、正式训练、
-GPU forward 或正式 test。
+该资产的旧 `formal_acceptance_eligible=false` 只描述原 OA 混合范围，不等于
+RS-GeneralDesc 数据构建失败；Stage 2 需通过 build/payload identity 关联新的作用域
+验收结果。本次没有执行全量读取、payload 重算、full deep validation、人工审核、
+Silver/teacher、正式训练、GPU forward 或正式 test。
 
-## 算法 Phase 3 / 仓库 phase4：Mask-Grounded VLM Description
+## Mask-Grounded VLM（仓库 phase4；新路线 Stage 3–9 复用）
 
 唯一实现树为：
 
@@ -377,7 +378,7 @@ Transformers quickstart 和 `evaluation/RealWorldQA/{README.md,run_realworldqa.p
 
 ```text
 External canonical record
-→ Phase 2 公共 task-aware renderer
+→ RS-GeneralDesc 公共 task-aware renderer
 → Qwen processor/collator
 → generic loss/inference
 → per-task metrics
@@ -400,7 +401,8 @@ overlay、15% context crop，并程序计算半开 bbox、centroid、area/ratio�
 fragment、4 邻域 perimeter、compactness 和 elongation。no-target 不生成 bbox、
 overlay、crop 或形态事实。辅助证据必须声明配准、coverage、unit 和 sign convention；
 不足或未知会生成限制 reason code。attention、quality weight 和 region feature 只记
-provenance，不作为地学证据；RAG 输入必须为空。
+provenance，不作为地学证据。当前 v1 Evidence 合同仍要求 RAG 输入为空；该约束用于
+保持 Stage 5 无 RAG 基线，只有 Gate C 通过后才在 Stage 6 扩展。
 
 版本化合同为：
 
@@ -419,24 +421,21 @@ mask 必须使用不同运行根和报告。
 
 模型路径配置化为本地 `models_zoo/Qwen3-VL-2B-Instruct`，强制
 `local_files_only=true`、bf16、SDPA。冻结 prompt-only baseline 的训练参数为 0；
-唯一适配主线为 LLM attention `q/k/v/o_proj` LoRA，`r=8`、`alpha=16`、
-dropout `0.05`，视觉 encoder 与 merger 永久冻结。锁定模型为 2,127,532,032
-parameters，LoRA 为 3,211,264 parameters（约 0.151%）；正式训练使用 physical
-batch 4、gradient accumulation 4、effective batch 16 和 gradient checkpointing，
-面向单张约 24 GB GPU。当前正式训练输入使用 `ordered_thread_prefetch.v1`：四个独立
-Qwen processor CPU worker、每 worker 预取两个物理 batch，最多缓存八个物理 batch，
-并对 CPU tensor 使用 pinned memory；batch 仍严格按 sampler 提交顺序消费。此前
-Batch-4/worker-2 配置的 2-step LoRA gate 已在 RTX 4090 D 上完成：step 2 loss=`3.245583`、
-CUDA peak=`8.803 GiB`、无 OOM/NaN/Inf；step 2 精确耗时 `1.599s`，其中输入等待
-`0.00024s`（`0.015%`）。checkpoint 已严格重载。worker-4 配置按负责人要求未运行
-单元、Qwen 或性能 gate，不能据此宣称吞吐继续提升；1000-step 长训练尚未启动。
+现有候选 RS-General Adapter 使用 LLM attention `q/k/v/o_proj` LoRA，`r=8`、
+`alpha=16`、dropout `0.05`，视觉 encoder 与 merger 冻结。锁定模型为
+2,127,532,032 parameters，LoRA 为 3,211,264 parameters（约 0.151%）。该候选的
+worker-2 训练已在 RTX 4090 D 上完成 1000 optimizer steps、16,000 samples，
+CUDA peak=`10.188 GiB`，best checkpoint 为 step 1000；报告状态为 `completed`，
+但 `formal_acceptance=false`。
 
-External 1000-step 训练采用有界 `external_val` teacher-forced loss：每 100 个
+该 1000-step 训练采用有界 `external_val` teacher-forced loss：每 100 个
 optimizer step 验证一次，从 `external_val` 确定性选取至多 128 个不同 parent，
 覆盖 3 个 source 和 7 个 task family，使用与训练一致的 assistant-only label
 masking。主选择指标为七类任务 macro-average loss，并列时依次选择 overall loss
 更低、step 更早的 checkpoint。验证运行于 `eval()`/`inference_mode()`，结束后恢复
 训练状态且不改变 sampler、RNG 或多参考轮换；训练期间不生成文本、不运行 OA 验证。
+step 1000 的 macro task loss 为 `0.872939`、overall loss 为 `1.019919`。这些损失只用于
+训练期选择，不能代替 Stage 3 的 Base-vs-Adapter 固定生成 Gate B。
 
 训练根内固定写入 `train_log.jsonl`、`sample_trace.jsonl`、
 `validation_selection.json`、`validation_results.jsonl`、
@@ -476,41 +475,20 @@ tokens；copied asset bytes 为 0。其 `/tmp` 过程产物已按负责人要求
 loss→optimizer→checkpoint→resume→inference→evaluation；该 smoke 只证明通用
 遥感描述入口连通。
 
-已通过的真实 2-step 并行输入 gate 位于
-`outputs/phase4_mask_grounded_description/external_lora_qwen3vl_2b_workers2_gate_20260730_190209`。
-该结果只属于 worker-2。旧同步输入的 step-100 和 worker-2 checkpoint 均已只读保留，
-但配置语义和 training layout 与 worker-4 不兼容，不得用于新配置 resume。正式训练应
-创建新的输出根，先停在 step 1 留下恢复点，再从同一轨迹继续到 step 1000：
+已完成的候选 Adapter 根为：
 
-```bash
-cd /home/yukun80/codes/paper7_VLM
-RUN_ROOT="outputs/phase4_mask_grounded_description/external_lora_qwen3vl_2b_workers4_$(date +%Y%m%d_%H%M%S)"
-
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONUNBUFFERED=1 \
-TOKENIZERS_PARALLELISM=false \
-CUDA_VISIBLE_DEVICES=0 \
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
-  scripts/phase4_mask_grounded_description/run_mask_grounded_description.py train \
-  --config configs/phase4_mask_grounded_description/external_lora_qwen3vl_2b.yaml \
-  --output-root "$RUN_ROOT" \
-  --stop-after-steps 1
-
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONUNBUFFERED=1 \
-TOKENIZERS_PARALLELISM=false \
-CUDA_VISIBLE_DEVICES=0 \
-/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
-  scripts/phase4_mask_grounded_description/run_mask_grounded_description.py train \
-  --config configs/phase4_mask_grounded_description/external_lora_qwen3vl_2b.yaml \
-  --output-root "$RUN_ROOT" \
-  --resume-checkpoint "$RUN_ROOT/checkpoints/step-00000001"
+```text
+outputs/phase4_mask_grounded_description/
+└── external_lora_qwen3vl_2b_workers2_20260730_192651/
+    ├── checkpoints/step-00001000/
+    ├── best_checkpoint.json
+    └── training_report.json
 ```
 
-该命令最多使用 16,000 个训练样本，不代表完整 epoch；它只训练和选择 External
-通用遥感理解 LoRA，不能替代 OA mask-grounded 验证或算法 Phase 3 正式验收。
+该输出与旧 gate、同步 step-100 和当前 YAML 均按各自身份只读保留。Stage 0 不恢复、
+改写或重复训练它；除非 Gate B 证据明确要求，否则不再启动同目标 LoRA 长训练。
 
-## 阶段 1B 程序
+## 历史 Benchmark 构建程序（仓库 phase1）
 
 ```text
 scripts/phase1_benchmark_build/
@@ -859,24 +837,18 @@ v6 尚未运行真实 small batch=8 六 variant GPU smoke，也不把旧 Benchma
 
 ## 当前边界
 
-- 五源 full 已由负责人构建；本次只读核对 manifest，没有重建或覆盖；
-- OA-AuxSeg 多模态模型、Trainer、Evaluator、checkpoint 和推理已实现；
-- 指定 ConvNeXt-Small 权重已就位并严格加载；旧 Benchmark 上的只读 v4 300-step 产物记录
-  EMA 下降 53.25%、val Dice 0.4299、IoU 0.2738、峰值 3.81 GiB、重载差异 0；
-  v4 1000-step overfit 的 loss 下降 79.36%、train Dice 0.9029，52 个空样本中
-  仍有 1 个误报，因此没有通过容量阈值；
-- 当前 OA-AuxSeg registry 只接受 `dem / insar_velocity / slope`，当前输出为 `[B,4]`
-  权重与 268 维区域特征；10 通道和 SAR 明确拒绝；
-- tqdm 已存在于当前环境，本次未下载数据、模型或依赖；
-- 未 commit、未 push；
-- 本轮没有发现可见构建/训练任务；未读取或修改任何训练产物，旧 batch-8 配置仍不能
-  跨 batch 恢复；
-- 当前无已验收 Small checkpoint 或正式 inference export，不能把 Full 训练中的
-  未验收中间状态作为下游区域证据；
-- External OA-LandslideDesc 已发布；给定的 2026-07-30 全量构建/deep validation
-  快照不是本轮重新验证结果。本轮只完成 identity 轻量核验和严格有界读取；
-- 算法 Phase 3 的 phase4 框架、合成测试和 External Benchmark 真实有界数据 smoke
-  已完成；OA mask-grounded 训练、正式评价和 Phase 3 正式验收未完成；
-- OA component 仍被禁用，358 条 OA approved gold、OA val、封存 oa_test 和正式
-  mask-grounded gate 均未满足；独立 Region Grounding Adapter 不实施，RAG 不参与
-  本阶段监督或事实生成。
+- Stage 0 已完成；下一科学状态是 `Stage 1 OA-AuxSeg formal acceptance pending`。
+- 五源 full Benchmark、RS-GeneralDesc v3、现有 checkpoint、输出、模型权重和
+  `docs/RAG_knowledge/` 均保持只读，未重建或覆盖。
+- OA-AuxSeg 模型、Trainer、Evaluator、checkpoint 和推理已实现，但 full 正式训练停在
+  step `213200/229757` 且没有最终报告；Gate A 未通过。
+- 当前 OA-AuxSeg registry 只接受 `dem / insar_velocity / slope`；10 通道光学和 SAR
+  明确拒绝。encoded InSAR 无可靠物理单位时不得输出定量物理结论。
+- RS-GeneralDesc External 数据已经 deep-validated；Stage 2 只迁移作用域验收合同，
+  不改写其 v3 manifest 或 payload。
+- 1000-step External LoRA 是候选 RS-General Adapter；teacher-forced validation loss
+  不等于 Gate B，默认不重复训练。
+- OA-GroundedEval、Landslide Evidence Corpus、正式 mask-grounded 评价、RAG 和统一
+  推理仍未实施。
+- Gate C 通过前不接入 RAG；`RAG_tmp` 不作为当前算法组件或运行时依赖。
+- 本次未运行 GPU、训练、正式评价、全量扫描或下载，也未 commit、push。
