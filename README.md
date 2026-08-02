@@ -26,8 +26,10 @@ Gate A 延后不等于通过，也不阻止独立的 Stage 3 准备。
   的迁移结论，但旧实现未对所有前代 ledger entry 做严格逐文件验证，不能把它扩大为
   可追溯的逐项证明；当前没有证据表明 native payload 已损坏。
 - **Stage 3 / RS-General Adapter：** 身份迁移前的候选 LoRA/checkpoint/training evidence
-  已删除，不能用于 native v1 Gate B。下一步先按新 Benchmark 身份重新训练 Adapter，
-  再冻结 Base-vs-Adapter 固定生成集合和判据。
+  已删除，不能用于 native v1 Gate B。首次 native v1 `batch=4/accumulation=4` 运行因
+  24 GB 目标显存边界停止；step 100 checkpoint 与 step 180 日志只作为未完成轨迹保留，
+  不得用于新布局恢复。活动配置已切换为 `batch=1/accumulation=16`，从新输出目录重新
+  训练，再冻结 Base-vs-Adapter 固定生成集合和判据。
 - **Stage 4–5 / 专业证据与区域理解：** 现有 `phase4` 合同、RegionSelector、
   EvidenceBuilder、Qwen、checkpoint、推理和反事实评价继续复用；OA-GroundedEval、
   两遍式生成和扩展证据合同尚未实施。
@@ -465,7 +467,9 @@ Stage 3 的 Base 配置为
 `local_files_only=true`、bf16、SDPA。冻结 prompt-only baseline 的训练参数为 0；
 计划的 RS-General Adapter 使用 LLM attention `q/k/v/o_proj` LoRA，`r=8`、
 `alpha=16`、dropout `0.05`，视觉 encoder 与 merger 冻结。锁定模型为
-2,127,532,032 parameters，LoRA 为 3,211,264 parameters（约 0.151%）。重新训练仍采用
+2,127,532,032 parameters，LoRA 为 3,211,264 parameters（约 0.151%）。24 GB 活动布局
+使用 physical batch 1、gradient accumulation 16，保持 effective batch 16；原
+physical batch 4、accumulation 4 的未完成运行与新布局 checkpoint 严格不兼容。重新训练仍采用
 有界 `external_val` teacher-forced loss：每 100 个
 optimizer step 验证一次，从 `external_val` 确定性选取至多 128 个不同 parent，
 覆盖 3 个 source 和 7 个 task family，使用与训练一致的 assistant-only label
@@ -485,7 +489,7 @@ TTY 使用进度条，非 TTY 每 10 step 打印 loss/EMA/LR/梯度范数、吞�
 之间，checkpoint 之后的日志/trace 会先保存到 `resume_recoveries/`，再原子回滚活动
 artifact 到显式 checkpoint；不会静默丢弃，也不会把未保存权重的 step 当成已完成。
 `sample_trace.jsonl` 使用 `rs_vlm.sample_trace.v1`，逐样本记录
-`micro_step` 和 `batch_slot=0..3`。checkpoint、run manifest 和 training report
+`micro_step` 和 `batch_slot=0`。checkpoint、run manifest 和 training report
 显式锁定 physical batch、accumulation、effective batch、输入 pipeline、worker、
 prefetch、pin-memory 与 trace schema；缺少任一字段的 checkpoint 严格拒绝。
 

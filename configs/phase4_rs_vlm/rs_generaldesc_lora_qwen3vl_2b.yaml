@@ -1,10 +1,10 @@
 schema_version: rs_vlm.config.v2
 run:
-  name: rs_vlm_lora_qwen3vl_2b_bs4
+  name: rs_vlm_lora_qwen3vl_2b_b1a16
   seed: 20260730
   mode: external_generic
   mask_mode: external_generic
-  output_root: ../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_bs4
+  output_root: ../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16
   resume_checkpoint: null
 data:
   benchmark_root: /home/yukun80/codes/benchmark/rs_generaldesc_v1
@@ -51,8 +51,8 @@ adaptation:
   freeze_vision: true
   freeze_merger: true
 training:
-  batch_size: 4
-  gradient_accumulation_steps: 4
+  batch_size: 1
+  gradient_accumulation_steps: 16
   gradient_checkpointing: true
   optimizer: adamw
   learning_rate: 0.0002

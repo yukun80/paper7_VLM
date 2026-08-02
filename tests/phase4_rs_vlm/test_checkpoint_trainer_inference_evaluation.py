@@ -433,11 +433,19 @@ class TrainerCheckpointTests(unittest.TestCase):
         )
         self.assertEqual(
             [row["batch_slot"] for row in trace[:16]],
-            [0, 1, 2, 3] * 4,
+            list(range(resumed_config.training.batch_size))
+            * resumed_config.training.gradient_accumulation_steps,
         )
         self.assertEqual(
             [row["micro_step"] for row in trace[:16]],
-            [1] * 4 + [2] * 4 + [3] * 4 + [4] * 4,
+            [
+                micro_step
+                for micro_step in range(
+                    1,
+                    resumed_config.training.gradient_accumulation_steps + 1,
+                )
+                for _ in range(resumed_config.training.batch_size)
+            ],
         )
         report = read_json(
             resumed_config.run.output_root / "training_report.json"
@@ -458,7 +466,13 @@ class TrainerCheckpointTests(unittest.TestCase):
             self.config,
             run=replace(
                 self.config.run,
+                name="fixture-batch4",
                 output_root=self.base / "batch4",
+            ),
+            training=replace(
+                self.config.training,
+                batch_size=4,
+                gradient_accumulation_steps=4,
             ),
         )
         batch1_config = replace(
@@ -467,11 +481,6 @@ class TrainerCheckpointTests(unittest.TestCase):
                 self.config.run,
                 name="fixture-batch1",
                 output_root=self.base / "batch1",
-            ),
-            training=replace(
-                self.config.training,
-                batch_size=1,
-                gradient_accumulation_steps=16,
             ),
         )
         torch.manual_seed(29)

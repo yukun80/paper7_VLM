@@ -1125,6 +1125,8 @@ Gate B 通过。
 ### Stage 3：RS-General Adapter
 
 - 保留 prompt-only Base 配置，在 native identity 上重新训练 RS-General LoRA；
+- 24 GB 活动训练布局使用 physical batch 1、gradient accumulation 16，保持
+  effective batch 16；旧 batch 4 未完成 checkpoint 不得跨布局恢复；
 - 重训后单独冻结不泄漏训练监控 parents 的 Base-vs-Adapter 固定生成集合；
 - 运行 Gate B 并评价通用遥感能力；
 - Gate B 完成前，checkpoint 或 teacher-forced validation loss 不构成 accepted Adapter。

@@ -146,7 +146,11 @@ native payload 损坏；本次修复后的未来 repackage 才强制完整 ledge
 身份迁移前的 phase4 Adapter/checkpoint/training evidence 已永久删除，不保留备份、链接
 或 alias。Stage 3 必须在 native v1 Benchmark identity 上重新训练；teacher-forced
 validation loss 只能选择训练期 checkpoint，不能证明 Base-vs-Adapter 生成能力提升。
-重训完成并冻结 Gate B 之前不存在 accepted Adapter。
+首次 native v1 `batch=4/accumulation=4` 运行在 24 GB 目标显存边界下停止：最后可恢复
+checkpoint 为 step 100，日志尾部为 step 180。该未完成输出保持只读，不得跨训练布局
+恢复。活动配置改为 physical batch 1、gradient accumulation 16、effective batch 16，
+并使用全新 `rs_vlm_lora_qwen3vl_2b_b1a16` 输出身份。重训完成并冻结 Gate B 之前不存在
+accepted Adapter。
 
 ### Mask-Grounded VLM 基础
 
@@ -218,7 +222,8 @@ Stage 1 剩余科学任务不是恢复训练。进入首次正式 test 前，必
 Stage 2 已完成 RS-GeneralDesc Benchmark native v1 验收。其接受结论只覆盖通用遥感
 图像语言训练与监控，不覆盖 OA-Grounded 数据，也不评价 Adapter。Stage 3 先在 native
 identity 上重新训练 RS-General Adapter，再单独冻结 Base-vs-Adapter 判据和固定生成
-集合；本次未创建 Gate B 集合、未运行生成或正式评价。
+集合。当前 24 GB 活动布局为 `batch=1/accumulation=16`，不能从既有 bs4 step 100
+checkpoint 恢复；本次未创建 Gate B 集合、未运行生成或正式评价。
 
 ## 后续冻结顺序
 

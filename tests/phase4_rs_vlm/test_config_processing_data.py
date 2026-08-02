@@ -240,9 +240,9 @@ class ConfigAndPreflightTests(unittest.TestCase):
             ("q_proj", "k_proj", "v_proj", "o_proj"),
         )
         external = configs["rs_generaldesc_lora_qwen3vl_2b.yaml"]
-        self.assertEqual(external.run.name, "rs_vlm_lora_qwen3vl_2b_bs4")
-        self.assertEqual(external.training.batch_size, 4)
-        self.assertEqual(external.training.gradient_accumulation_steps, 4)
+        self.assertEqual(external.run.name, "rs_vlm_lora_qwen3vl_2b_b1a16")
+        self.assertEqual(external.training.batch_size, 1)
+        self.assertEqual(external.training.gradient_accumulation_steps, 16)
         self.assertEqual(
             external.training.batch_size
             * external.training.gradient_accumulation_steps,
@@ -550,7 +550,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
                 "829b5548dfe7b83b002f71241029a5bb73d14c64dd018c6452ef2ebe07415fa3"
             ),
             "rs_generaldesc_lora_qwen3vl_2b.yaml": (
-                "48bf9949f4f15eeab51149868a1a373c95444003ad286d04ada0ec1e072c1d72"
+                "a4b30e9a4f654cd85ee3d9e19fe49b1b4b1e53c88e7b2c38aeffffc9834fdd85"
             ),
             "rs_generaldesc_prompt_only_qwen3vl_2b.yaml": (
                 "37c772d70b2fed6bb349d0404cbe5d8931e52a18c64253948eb6f8f62a992a7e"
