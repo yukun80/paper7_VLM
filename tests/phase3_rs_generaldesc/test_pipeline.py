@@ -22,13 +22,14 @@ from oa_groundrag.phase3.common import read_json, read_jsonl
 from oa_groundrag.phase3.config import load_build_config, load_export_config
 from oa_groundrag.phase3.dataset import (
     CanonicalRecordLocation,
-    OALandslideDescDataset,
+    RSGeneralDescDataset,
     ParentBalancedSampler,
     collate_canonical_samples,
 )
 from oa_groundrag.phase3.contracts import validate_canonical_record
 from oa_groundrag.phase3.errors import (
     BuildError,
+    ConfigError,
     ExportError,
     ReasonCode,
     SchemaError,
@@ -72,9 +73,13 @@ class PipelineTests(unittest.TestCase):
         self.assertGreater(len(provenance), 0)
         self.assertFalse(manifest["formal_acceptance_eligible"])
         self.assertIn("bounded_smoke_profile", manifest["formal_acceptance_blockers"])
+        self.assertEqual(
+            manifest["benchmark_scope"],
+            "rs_generaldesc_external_train_val",
+        )
 
     def test_canonical_nested_unknown_and_identity_tamper_are_rejected(self) -> None:
-        dataset = OALandslideDescDataset(self.benchmark, load_assets=False)
+        dataset = RSGeneralDescDataset(self.benchmark, load_assets=False)
         nested_unknown = copy.deepcopy(dataset.records[0])
         nested_unknown["media"][0]["unknown"] = True
         with self.assertRaises(SchemaError) as caught:
@@ -100,7 +105,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, ReasonCode.SCHEMA_MISMATCH)
 
     def test_canonical_dataset_sampler_and_qwen_are_decoupled(self) -> None:
-        dataset = OALandslideDescDataset(self.benchmark)
+        dataset = RSGeneralDescDataset(self.benchmark)
         self.assertGreater(len(dataset), 0)
         first = dataset[0]
         self.assertNotIn("messages", first["record"])
@@ -139,10 +144,23 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("messages", rows[0])
         self.assertNotIn("messages", dataset.records[0])
 
+    def test_dataset_rejects_non_native_roles_tasks_and_sources(self) -> None:
+        for kwargs in (
+            {"roles": ["unsupported_role"]},
+            {"task_families": ["unsupported_task"]},
+            {"sources": ["unsupported_source"]},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises(SchemaError):
+                RSGeneralDescDataset(
+                    self.benchmark,
+                    load_assets=False,
+                    **kwargs,
+                )
+
     def test_bounded_locations_and_public_renderer_preserve_contract(self) -> None:
         manifest = read_json(self.benchmark / "manifest.json")
         first_shard = manifest["layout"]["record_shards"][0]["path"]
-        bounded = OALandslideDescDataset.from_locations(
+        bounded = RSGeneralDescDataset.from_locations(
             self.benchmark,
             (
                 CanonicalRecordLocation(first_shard, 0),
@@ -151,7 +169,7 @@ class PipelineTests(unittest.TestCase):
             load_assets=False,
             seed=19,
         )
-        full = OALandslideDescDataset(
+        full = RSGeneralDescDataset(
             self.benchmark,
             load_assets=False,
             seed=19,
@@ -184,14 +202,14 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(public, repeated)
         self.assertEqual(public_assets, repeated_assets)
         with self.assertRaises(SchemaError):
-            OALandslideDescDataset.from_locations(
+            RSGeneralDescDataset.from_locations(
                 self.benchmark,
                 (CanonicalRecordLocation("records/not-in-manifest.jsonl", 0),),
                 load_assets=False,
             )
 
     def test_multireference_epoch_rotation_and_validation_contract(self) -> None:
-        dataset = OALandslideDescDataset(
+        dataset = RSGeneralDescDataset(
             self.benchmark,
             load_assets=False,
             seed=31,
@@ -232,7 +250,7 @@ class PipelineTests(unittest.TestCase):
         )
 
     def test_task_first_then_parent_balanced_sampler(self) -> None:
-        dataset = OALandslideDescDataset(
+        dataset = RSGeneralDescDataset(
             self.benchmark,
             roles=["external_train"],
             load_assets=False,
@@ -287,9 +305,8 @@ class PipelineTests(unittest.TestCase):
             "bbox_region",
             "boxed_image",
             "pre_post",
-            "mask_grounded",
         }
-        direct_dataset = OALandslideDescDataset(
+        direct_dataset = RSGeneralDescDataset(
             self.benchmark,
             load_assets=False,
         )
@@ -342,15 +359,6 @@ class PipelineTests(unittest.TestCase):
             [item.get("asset_role") for item in pre_post if item["type"] == "image"],
             ["pre_image", "post_image"],
         )
-        mask_items = by_layout["mask_grounded"]["messages"][0]["content"]
-        self.assertIn(
-            "mask",
-            {
-                item.get("asset_role")
-                for item in mask_items
-                if item["type"] == "image"
-            },
-        )
         manifest = read_json(target / "manifest.json")
         direct_derived_count = sum(
             1 for path in direct_stage.rglob("*.png")
@@ -360,7 +368,7 @@ class PipelineTests(unittest.TestCase):
             2,
         )
 
-        dataset = OALandslideDescDataset(self.benchmark, load_assets=False)
+        dataset = RSGeneralDescDataset(self.benchmark, load_assets=False)
         record = copy.deepcopy(dataset.records[0])
         record["output_modality"] = "pixel_mask"
         with self.assertRaises(ExportError):
@@ -389,7 +397,7 @@ class PipelineTests(unittest.TestCase):
             )
 
     def test_source_hidden_load_uses_only_benchmark_root(self) -> None:
-        dataset = OALandslideDescDataset(self.benchmark, load_assets=True)
+        dataset = RSGeneralDescDataset(self.benchmark, load_assets=True)
         for index in range(len(dataset)):
             dataset[index]
         report = validate_benchmark(self.benchmark, deep=True)
@@ -398,22 +406,11 @@ class PipelineTests(unittest.TestCase):
         for root in self.roots.values():
             self.assertNotIn(str(root), manifest_text)
 
-    def test_output_exists_and_full_without_gold_are_rejected(self) -> None:
+    def test_output_exists_is_rejected(self) -> None:
         with self.assertRaises(BuildError) as caught:
             build_benchmark(self.config)
         self.assertEqual(caught.exception.code, ReasonCode.OUTPUT_EXISTS)
-        full_path = write_build_config(
-            self.base / "full.yaml",
-            self.roots,
-            self.base / "full-output",
-            profile="full",
-            max_assets=None,
-        )
-        with self.assertRaises(BuildError) as caught:
-            build_benchmark(load_build_config(full_path))
-        self.assertEqual(caught.exception.code, ReasonCode.OA_REVIEW_INCOMPLETE)
-
-    def test_external_full_disables_oa_and_exports_train_val_separately(
+    def test_external_full_exports_train_val_separately(
         self,
     ) -> None:
         target = self.base / "external-full"
@@ -424,22 +421,27 @@ class PipelineTests(unittest.TestCase):
                 target,
                 profile="full",
                 max_assets=None,
-                oa_enabled=False,
             )
         )
         build_benchmark(config)
         report = validate_benchmark(target, deep=True)
         self.assertEqual(report["errors"], [])
         manifest = read_json(target / "manifest.json")
-        self.assertEqual(manifest["benchmark_scope"], "external_train_val")
+        self.assertEqual(
+            manifest["benchmark_scope"],
+            "rs_generaldesc_external_train_val",
+        )
         self.assertTrue(manifest["scope_validation_complete"])
-        self.assertFalse(manifest["formal_acceptance_eligible"])
+        self.assertTrue(manifest["formal_acceptance_eligible"])
         self.assertEqual(
             manifest["formal_acceptance_blockers"],
-            ["oa_component_disabled"],
+            [],
         )
-        dataset = OALandslideDescDataset(target, load_assets=False)
-        self.assertNotIn("oa", {row["source"] for row in dataset.records})
+        dataset = RSGeneralDescDataset(target, load_assets=False)
+        self.assertEqual(
+            {row["source"] for row in dataset.records},
+            {"rsgpt", "mmrs1m", "disasterm3"},
+        )
         self.assertEqual(
             {row["logical_role"] for row in dataset.records},
             {"external_train", "external_val"},
@@ -537,7 +539,7 @@ class PipelineTests(unittest.TestCase):
         hardlink = asset_path.with_name(f"hardlink-{asset_path.name}")
         hardlink.hardlink_to(asset_path)
         report = validate_benchmark(linked, deep=False)
-        self.assertTrue(any("hardlink" in error for error in report["errors"]))
+        self.assertTrue(any("单链接" in error for error in report["errors"]))
 
     def test_deterministic_rebuild_and_worker_independent_records(self) -> None:
         target_a = self.base / "det-a"
@@ -578,7 +580,6 @@ class PipelineTests(unittest.TestCase):
                 self.base / "seed-7.yaml",
                 self.roots,
                 self.base / "unused-seed-output",
-                oa_enabled=False,
                 seed=7,
             )
         )
@@ -593,7 +594,6 @@ class PipelineTests(unittest.TestCase):
                     self.base / f"seed-{seed}.yaml",
                     self.roots,
                     self.base / "unused-seed-output",
-                    oa_enabled=False,
                     seed=seed,
                 )
             )
@@ -618,7 +618,6 @@ class PipelineTests(unittest.TestCase):
                 self.base / "duplicate-build.yaml",
                 roots,
                 target,
-                oa_enabled=False,
             )
         )
         build_benchmark(config)
@@ -632,7 +631,7 @@ class PipelineTests(unittest.TestCase):
             ],
             1,
         )
-        dataset = OALandslideDescDataset(target, load_assets=False)
+        dataset = RSGeneralDescDataset(target, load_assets=False)
         image_roles: dict[str, set[str]] = {}
         image_parents: dict[str, set[str]] = {}
         for record in dataset.records:
@@ -655,19 +654,18 @@ class PipelineTests(unittest.TestCase):
             all(len(image_roles[digest]) == 1 for digest in duplicate_hashes)
         )
 
-    def test_qwen_test_seal(self) -> None:
-        config = load_export_config(
-            write_export_config(
-                self.base / "sealed.yaml",
-                self.benchmark,
-                self.base / "sealed-export",
-                purpose="training",
-                roles=["oa_test"],
+    def test_qwen_scope_rejects_unknown_and_role_mixing(self) -> None:
+        with self.assertRaises(ConfigError) as caught:
+            load_export_config(
+                write_export_config(
+                    self.base / "sealed.yaml",
+                    self.benchmark,
+                    self.base / "sealed-export",
+                    purpose="training",
+                    roles=["unsupported_role"],
+                )
             )
-        )
-        with self.assertRaises(ExportError) as caught:
-            export_qwen(config)
-        self.assertEqual(caught.exception.code, ReasonCode.OA_ROLE_CONTAMINATION)
+        self.assertEqual(caught.exception.code, ReasonCode.INVALID_ENUM)
 
         external_val = load_export_config(
             write_export_config(
@@ -681,14 +679,13 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(ExportError):
             export_qwen(external_val)
 
-        mixed_validation = load_export_config(
-            write_export_config(
-                self.base / "mixed-validation.yaml",
-                self.benchmark,
-                self.base / "mixed-validation",
-                purpose="validation",
-                roles=["external_val", "oa_val"],
+        with self.assertRaises(ConfigError):
+            load_export_config(
+                write_export_config(
+                    self.base / "mixed-validation.yaml",
+                    self.benchmark,
+                    self.base / "mixed-validation",
+                    purpose="validation",
+                    roles=["external_val", "unsupported_role"],
+                )
             )
-        )
-        with self.assertRaises(ExportError):
-            export_qwen(mixed_validation)

@@ -1,7 +1,7 @@
-schema_version: oa_landslidedesc.build_config.v3
+schema_version: rs_generaldesc.build_config.v1
 profile: full
 seed: 20260727
-output_root: ../../../benchmark/oa_landslidedesc_external_v1
+output_root: ../../../benchmark/rs_generaldesc_v1
 sources:
   rsgpt:
     enabled: true
@@ -12,13 +12,6 @@ sources:
   disasterm3:
     enabled: true
     root: ../../../datasets/describe_datasets/DisasterM3
-oa:
-  enabled: false
-  benchmark_root: null
-  selection_root: null
-  gold_annotations: null
-  silver_annotations: null
-  expected_gold_count: 0
 external_split:
   version: external_parent_split.v1
   validation_percent: 5
@@ -36,8 +29,6 @@ asset_policy:
   image_quality: 95
   jpeg_subsampling: 0
   target_size: null
-  mask_format: png
-  oa_preview_clip: [-3.0, 3.0]
 sharding:
   records_per_shard: 1000
 workers: 4

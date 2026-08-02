@@ -20,17 +20,23 @@ from .common import (
     read_json,
     read_jsonl,
     read_jsonl_indices,
+    sha256_file,
     stable_hash,
 )
 from .contracts import (
+    BENCHMARK_SCOPE,
     CANONICAL_SCHEMA_VERSION,
     MANIFEST_VERSION,
     AnnotationLayer,
     LogicalRole,
+    RS_GENERALDESC_ROLES,
+    RS_GENERALDESC_SOURCES,
+    RS_GENERALDESC_TASK_FAMILIES,
     TaskFamily,
     validate_canonical_record,
 )
 from .errors import ReasonCode, SchemaError
+from .hash_ledger import HashLedgerVerifier
 
 
 @dataclass(frozen=True)
@@ -56,8 +62,8 @@ class CanonicalRecordLocation:
             )
 
 
-class OALandslideDescDataset(Dataset[dict[str, Any]]):
-    """只依赖构建产物；不接受也不保存任何 source-root 配置。"""
+class RSGeneralDescDataset(Dataset[dict[str, Any]]):
+    """读取原生 v1 RS-GeneralDesc train/val records。"""
 
     def __init__(
         self,
@@ -66,11 +72,12 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         roles: Sequence[str] | None = None,
         sources: Sequence[str] | None = None,
         task_families: Sequence[str] | None = None,
-        annotation_layers: Sequence[str] | None = None,
         load_assets: bool = True,
         seed: int = 0,
         epoch: int = 0,
         record_locations: Sequence[CanonicalRecordLocation] | None = None,
+        expected_manifest_sha256: str | None = None,
+        verifier: HashLedgerVerifier | None = None,
     ) -> None:
         input_root = Path(root).absolute()
         linked_root = first_symlink_component(input_root)
@@ -95,15 +102,25 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
                 ReasonCode.OUTPUT_LINK,
                 "Benchmark manifest 必须是普通单链接文件",
             )
+        if (
+            expected_manifest_sha256 is not None
+            and sha256_file(manifest_path) != expected_manifest_sha256
+        ):
+            raise SchemaError(
+                ReasonCode.HASH_MISMATCH,
+                "Benchmark manifest SHA-256 与运行配置不一致",
+                details={"path": "manifest.json"},
+            )
         self.manifest = read_json(manifest_path)
         if (
             self.manifest.get("schema_version") != MANIFEST_VERSION
             or self.manifest.get("canonical_schema_version")
             != CANONICAL_SCHEMA_VERSION
+            or self.manifest.get("benchmark_scope") != BENCHMARK_SCOPE
         ):
             raise SchemaError(
                 ReasonCode.SCHEMA_MISMATCH,
-                "Benchmark manifest/canonical schema version 不受支持",
+                "仅支持原生 rs_generaldesc v1 Benchmark",
             )
         layout = self.manifest.get("layout")
         if not isinstance(layout, dict) or not isinstance(
@@ -113,6 +130,40 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
                 ReasonCode.SCHEMA_MISMATCH,
                 "manifest 缺少 record_shards layout",
             )
+        hashes_relative = layout.get("hashes")
+        payload_sha256 = self.manifest.get("payload_root_sha256")
+        hash_manifest_sha256 = self.manifest.get("hash_manifest_sha256")
+        if not all(
+            isinstance(value, str)
+            for value in (
+                hashes_relative,
+                payload_sha256,
+                hash_manifest_sha256,
+            )
+        ):
+            raise SchemaError(
+                ReasonCode.SCHEMA_MISMATCH,
+                "manifest 缺少 hash ledger identity",
+            )
+        if verifier is None:
+            verifier = HashLedgerVerifier(
+                self.root,
+                ledger_path=hashes_relative,
+                expected_ledger_sha256=hash_manifest_sha256,
+                expected_root_sha256=payload_sha256,
+            )
+        elif (
+            verifier.root.resolve() != self.root.resolve()
+            or verifier.ledger_relative != hashes_relative
+            or verifier.ledger_sha256 != hash_manifest_sha256
+            or verifier.root_sha256 != payload_sha256
+        ):
+            raise SchemaError(
+                ReasonCode.HASH_MISMATCH,
+                "共享 hash ledger verifier 与 manifest identity 不一致",
+                details={"path": str(hashes_relative)},
+            )
+        self.verifier = verifier
         shard_contracts: dict[str, tuple[Path, int]] = {}
         for shard in layout["record_shards"]:
             if not isinstance(shard, dict) or not isinstance(shard.get("path"), str):
@@ -140,6 +191,7 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
                 location="manifest.record_shards.path",
             )
             relative = str(shard["path"])
+            self.verifier.entry(relative)
             if relative in shard_contracts:
                 raise SchemaError(
                     ReasonCode.SCHEMA_MISMATCH,
@@ -151,6 +203,7 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         ] = []
         if record_locations is None:
             for relative, (shard_path, record_count) in shard_contracts.items():
+                self.verifier.verify_file(relative)
                 shard_rows = read_jsonl(shard_path)
                 if record_count != len(shard_rows):
                     raise SchemaError(
@@ -195,6 +248,7 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
             selected: dict[CanonicalRecordLocation, dict[str, Any]] = {}
             for relative, indices in grouped.items():
                 shard_path = shard_contracts[relative][0]
+                self.verifier.verify_file(relative)
                 for index, row in read_jsonl_indices(
                     shard_path,
                     indices,
@@ -207,26 +261,60 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
             ]
         for _, row in located_rows:
             validate_canonical_record(row)
+            if (
+                LogicalRole(row["logical_role"]) not in RS_GENERALDESC_ROLES
+                or TaskFamily(row["task_family"])
+                not in RS_GENERALDESC_TASK_FAMILIES
+                or row["annotation"]["layer"]
+                != AnnotationLayer.EXTERNAL_SOURCE.value
+            ):
+                raise SchemaError(
+                    ReasonCode.ROLE_CONTAMINATION,
+                    "RS-GeneralDesc Dataset 只消费原生 train/val 合同",
+                )
+            for media in row["media"]:
+                self.verifier.assert_declared_identity(
+                    str(media["path"]),
+                    size_bytes=media["size_bytes"],
+                    sha256=media["sha256"],
+                )
         role_set = set(roles or ())
         source_set = set(sources or ())
         task_set = set(task_families or ())
-        layer_set = set(annotation_layers or ())
         if role_set:
             for value in role_set:
-                LogicalRole(value)
+                try:
+                    valid = LogicalRole(value) in RS_GENERALDESC_ROLES
+                except ValueError:
+                    valid = False
+                if not valid:
+                    raise SchemaError(
+                        ReasonCode.ROLE_CONTAMINATION,
+                        f"RS-GeneralDesc Dataset 不接受 role={value}",
+                    )
         if task_set:
             for value in task_set:
-                TaskFamily(value)
-        if layer_set:
-            for value in layer_set:
-                AnnotationLayer(value)
+                try:
+                    valid = TaskFamily(value) in RS_GENERALDESC_TASK_FAMILIES
+                except ValueError:
+                    valid = False
+                if not valid:
+                    raise SchemaError(
+                        ReasonCode.ROLE_CONTAMINATION,
+                        f"RS-GeneralDesc Dataset 不接受 task={value}",
+                    )
+        unknown_sources = source_set - RS_GENERALDESC_SOURCES
+        if unknown_sources:
+            raise SchemaError(
+                ReasonCode.ROLE_CONTAMINATION,
+                f"RS-GeneralDesc Dataset 不接受 source={sorted(unknown_sources)}",
+            )
         selected_rows = [
             (location, row)
             for location, row in located_rows
             if (not role_set or row["logical_role"] in role_set)
             and (not source_set or row["source"] in source_set)
             and (not task_set or row["task_family"] in task_set)
-            and (not layer_set or row["annotation"]["layer"] in layer_set)
         ]
         self.record_locations = tuple(location for location, _ in selected_rows)
         self.records = [row for _, row in selected_rows]
@@ -245,7 +333,7 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         root: Path | str,
         locations: Sequence[CanonicalRecordLocation],
         **kwargs: Any,
-    ) -> "OALandslideDescDataset":
+    ) -> "RSGeneralDescDataset":
         """由 manifest 内已知位置构造严格有界 Dataset。"""
 
         if "record_locations" in kwargs:
@@ -292,12 +380,9 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         self.epoch = epoch
 
     def training_response(self, record: Mapping[str, Any]) -> str | None:
-        """按 seed/epoch 稳定选择 train reference；val/test 返回 null。"""
+        """按 seed/epoch 稳定选择 train reference；val 返回 null。"""
 
-        if record["logical_role"] not in {
-            LogicalRole.EXTERNAL_TRAIN.value,
-            LogicalRole.OA_TRAIN.value,
-        }:
+        if record["logical_role"] != LogicalRole.EXTERNAL_TRAIN.value:
             return None
         values = record["training_responses"]
         if not isinstance(values, list) or not values:
@@ -317,33 +402,24 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
         return str(values[rank % len(values)])
 
     def _resolve_asset(self, media: Mapping[str, Any]) -> Path:
-        return self.resolve_contract_path(
-            str(media["path"]),
-            location=f"asset[{media.get('asset_id', 'unknown')}].path",
+        relative = str(media["path"])
+        self.verifier.assert_declared_identity(
+            relative,
+            size_bytes=media.get("size_bytes"),
+            sha256=media.get("sha256"),
         )
+        return self.verifier.verify_file(relative)
+
+    def resolve_verified_asset_path(self, relative: str) -> Path:
+        """在返回运行时路径前验证其实际 bytes。"""
+
+        return self.verifier.verify_file(relative)
 
     def load_image(self, media: Mapping[str, Any]) -> torch.Tensor:
         path = self._resolve_asset(media)
         with Image.open(path) as image:
             array = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
         return torch.from_numpy(array).permute(2, 0, 1).contiguous()
-
-    def load_mask(self, media: Mapping[str, Any]) -> torch.Tensor:
-        path = self._resolve_asset(media)
-        with Image.open(path) as image:
-            array = (np.asarray(image.convert("L"), dtype=np.uint8) > 0).astype(
-                np.uint8
-            )
-        return torch.from_numpy(array.copy())[None, ...]
-
-    def load_array(self, media: Mapping[str, Any]) -> dict[str, torch.Tensor]:
-        path = self._resolve_asset(media)
-        arrays: dict[str, torch.Tensor] = {}
-        with np.load(path, allow_pickle=False) as archive:
-            for name in sorted(archive.files):
-                value = np.asarray(archive[name]).copy()
-                arrays[name] = torch.from_numpy(value)
-        return arrays
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = self.records[index]
@@ -365,25 +441,17 @@ class OALandslideDescDataset(Dataset[dict[str, Any]]):
             ),
         }
         if not self.load_assets:
-            item.update({"images": {}, "masks": {}, "arrays": {}})
+            item["images"] = {}
             return item
         images: dict[str, torch.Tensor] = {}
-        masks: dict[str, torch.Tensor] = {}
-        arrays: dict[str, dict[str, torch.Tensor]] = {}
         for media in record["media"]:
-            media_type = media["media_type"]
-            if media_type == "image":
-                images[str(media["role"])] = self.load_image(media)
-            elif media_type == "mask":
-                masks[str(media["role"])] = self.load_mask(media)
-            elif media_type == "array":
-                arrays[str(media["role"])] = self.load_array(media)
-            else:
+            if media["media_type"] != "image":
                 raise SchemaError(
                     ReasonCode.INVALID_ENUM,
-                    f"未知 media_type：{media_type}",
+                    f"未知 media_type：{media['media_type']}",
                 )
-        item.update({"images": images, "masks": masks, "arrays": arrays})
+            images[str(media["role"])] = self.load_image(media)
+        item["images"] = images
         return item
 
 
@@ -403,8 +471,6 @@ def collate_canonical_samples(samples: Sequence[dict[str, Any]]) -> dict[str, An
             sample["reference_responses"] for sample in samples
         ],
         "images": [sample["images"] for sample in samples],
-        "masks": [sample["masks"] for sample in samples],
-        "arrays": [sample["arrays"] for sample in samples],
         "bboxes": [sample["bboxes"] for sample in samples],
         "records": [sample["record"] for sample in samples],
     }
@@ -415,7 +481,7 @@ class ParentBalancedSampler(Sampler[int]):
 
     def __init__(
         self,
-        dataset: OALandslideDescDataset,
+        dataset: RSGeneralDescDataset,
         *,
         seed: int,
         num_samples: int | None = None,
@@ -475,7 +541,7 @@ class ParentBalancedSampler(Sampler[int]):
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "oa_landslidedesc.task_parent_sampler.v2",
+            "schema_version": "rs_generaldesc.task_parent_sampler.v1",
             "benchmark_payload_root_sha256": self.dataset.manifest[
                 "payload_root_sha256"
             ],

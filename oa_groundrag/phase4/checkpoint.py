@@ -25,7 +25,7 @@ from oa_groundrag.phase3.common import (
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.errors import LandslideDescError
+from oa_groundrag.phase3.errors import RSGeneralDescError
 
 from .contracts import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -134,7 +134,7 @@ def _validated_training_layout(
 def _read_checkpoint_json(path: Path) -> Any:
     try:
         return read_json(path)
-    except LandslideDescError as error:
+    except RSGeneralDescError as error:
         raise CheckpointError(
             ReasonCode.CHECKPOINT_CORRUPT,
             f"checkpoint JSON 无法严格读取：{path.name}",
@@ -379,13 +379,6 @@ class CheckpointManager:
                 f"checkpoint root 不存在或是链接：{root}",
             )
         manifest = _read_checkpoint_json(self._file(root, "manifest.json"))
-        legacy_fields = _CHECKPOINT_MANIFEST_FIELDS - {"training_layout"}
-        if isinstance(manifest, dict) and set(manifest) == legacy_fields:
-            raise CheckpointError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "checkpoint 缺少 batch/accumulation/trace v2 身份，"
-                "旧 batch-1 checkpoint 不可恢复到当前训练布局",
-            )
         if not isinstance(manifest, dict) or set(manifest) != (
             _CHECKPOINT_MANIFEST_FIELDS
         ):

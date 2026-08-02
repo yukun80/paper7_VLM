@@ -35,8 +35,6 @@ from oa_groundrag.phase4.contracts import (
 )
 from oa_groundrag.phase4.data import (
     DescriptionSample,
-    MaskGroundedDescriptionDataset,
-    MaskGroundedExample,
 )
 from oa_groundrag.phase4.evaluation import evaluate_predictions
 from oa_groundrag.phase4.evidence import EvidenceBuilder
@@ -49,6 +47,7 @@ from oa_groundrag.phase4.errors import (
     ReasonCode,
 )
 from oa_groundrag.phase4.inference import run_inference
+from oa_groundrag.phase4.messages import build_mask_grounded_messages
 from oa_groundrag.phase4.model import assistant_sample_mean_causal_loss
 from oa_groundrag.phase4.outputs import prediction_row, serialize_model_output
 from oa_groundrag.phase4.preflight import BenchmarkIdentity
@@ -69,7 +68,7 @@ from oa_groundrag.phase4.validation import (
 
 
 REPO = Path(__file__).resolve().parents[2]
-CONFIG_ROOT = REPO / "configs/phase4_mask_grounded_description"
+CONFIG_ROOT = REPO / "configs/phase4_rs_vlm"
 
 
 class TinyProcessor:
@@ -282,12 +281,14 @@ def benchmark_identity(base: Path) -> BenchmarkIdentity:
         manifest_schema="fixture.manifest",
         canonical_schema="fixture.canonical",
         build_id="fixture-build",
+        semantic_config_sha256="fixture-semantic",
         payload_sha256="fixture-payload",
-        benchmark_scope="external_train_val",
+        hash_manifest_sha256="fixture-hash-manifest",
+        benchmark_scope="rs_generaldesc_external_train_val",
         source_roots_embedded=False,
         deep_validation_saved=True,
-        formal_acceptance_eligible=False,
-        formal_acceptance_blockers=("fixture",),
+        formal_acceptance_eligible=True,
+        formal_acceptance_blockers=(),
         record_count=4,
         parent_count=4,
     )
@@ -298,7 +299,7 @@ class TrainerCheckpointTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
         base_config = load_config(
-            CONFIG_ROOT / "external_lora_qwen3vl_2b.yaml"
+            CONFIG_ROOT / "rs_generaldesc_lora_qwen3vl_2b.yaml"
         )
         self.config = replace(
             base_config,
@@ -400,7 +401,7 @@ class TrainerCheckpointTests(unittest.TestCase):
         manifest = read_json(resumed_config.run.output_root / "manifest.json")
         self.assertEqual(
             manifest["schema_version"],
-            "oa_mask_grounded_description.run_manifest.v1",
+            "rs_vlm.run_manifest.v1",
         )
         self.assertEqual(manifest["cursor"], second.cursor.to_dict())
         self.assertTrue(second.best_checkpoint.is_dir())
@@ -426,7 +427,7 @@ class TrainerCheckpointTests(unittest.TestCase):
         self.assertTrue(
             all(
                 row["schema_version"]
-                == "oa_mask_grounded_description.sample_trace.v2"
+                == "rs_vlm.sample_trace.v1"
                 for row in trace
             )
         )
@@ -504,7 +505,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 ),
                 expected_benchmark_identity=benchmark_identity(
                     self.base
-                ).to_dict(),
+                ).training_identity_dict(),
                 expected_validation_selection_identity=(
                     self.validation_selection.identity_dict()
                 ),
@@ -656,7 +657,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 expected_config_semantic_sha256="0" * 64,
                 expected_benchmark_identity=benchmark_identity(
                     self.base
-                ).to_dict(),
+                ).training_identity_dict(),
                 expected_validation_selection_identity=(
                     self.validation_selection.identity_dict()
                 ),
@@ -675,7 +676,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
                     self.base
-                ).to_dict(),
+                ).training_identity_dict(),
                 expected_validation_selection_identity={
                     "selection_sha256": "0" * 64
                 },
@@ -690,16 +691,16 @@ class TrainerCheckpointTests(unittest.TestCase):
         )
         manifest_path = result.checkpoint / "manifest.json"
         manifest = read_json(manifest_path)
-        legacy_manifest = dict(manifest)
-        del legacy_manifest["training_layout"]
-        atomic_write_json(manifest_path, legacy_manifest)
+        incomplete_manifest = dict(manifest)
+        del incomplete_manifest["training_layout"]
+        atomic_write_json(manifest_path, incomplete_manifest)
         with self.assertRaises(CheckpointError) as caught:
             manager.load(
                 result.checkpoint,
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
                     self.base
-                ).to_dict(),
+                ).training_identity_dict(),
                 expected_validation_selection_identity=(
                     self.validation_selection.identity_dict()
                 ),
@@ -710,7 +711,7 @@ class TrainerCheckpointTests(unittest.TestCase):
             )
         self.assertEqual(
             caught.exception.code,
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            ReasonCode.CHECKPOINT_CORRUPT,
         )
         atomic_write_json(manifest_path, manifest)
         manifest["unknown"] = True
@@ -721,7 +722,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
                     self.base
-                ).to_dict(),
+                ).training_identity_dict(),
                 expected_validation_selection_identity=(
                     self.validation_selection.identity_dict()
                 ),
@@ -741,7 +742,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
                     self.base
-                ).to_dict(),
+                ).training_identity_dict(),
                 expected_validation_selection_identity=(
                     self.validation_selection.identity_dict()
                 ),
@@ -760,7 +761,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
                     self.base
-                ).to_dict(),
+                ).training_identity_dict(),
                 expected_validation_selection_identity=(
                     self.validation_selection.identity_dict()
                 ),
@@ -864,7 +865,7 @@ class InferenceEvaluationTests(unittest.TestCase):
         mask[2:6, 2:6] = 1
         selected = RegionSelector().select(
             RegionInventory(
-                "oa-record",
+                "grounded-record",
                 MaskMode.GT_MASK,
                 mask,
                 (RegionCandidate("r1", mask),),
@@ -892,119 +893,52 @@ class InferenceEvaluationTests(unittest.TestCase):
             ),
             limitations=(),
         )
-        alternative = replace(
-            output,
-            description="A second valid description of the selected region.",
-            claims=(
-                Claim(
-                    "The selected region remains visible.",
-                    ("ev_mask_overlay",),
-                ),
-            ),
-        )
         target = serialize_model_output(output)
-        alternative_target = serialize_model_output(alternative)
-        dataset = MaskGroundedDescriptionDataset(
-            (
-                MaskGroundedExample(
-                    record_id="oa-record",
-                    parent_id="oa-parent",
-                    logical_role="oa_train",
-                    task_family="oa_mask_description",
-                    evidence=evidence.bundle,
-                    evidence_root=evidence.root,
-                    instruction="Describe the selected region.",
-                    assistant_target=target,
-                    reference_responses=(target, alternative_target),
-                ),
-            ),
-            seed=23,
+        messages = build_mask_grounded_messages(
+            evidence.bundle,
+            evidence_root=evidence.root,
+            instruction="Describe the selected region.",
+            assistant_target=target,
+        )
+        sample = DescriptionSample(
+            record_id="grounded-record",
+            parent_id="grounded-parent",
+            logical_role="grounded_core_fixture",
+            task_family="mask_description",
+            messages=tuple(messages),
+            reference_responses=(target,),
+            mask_mode=MaskMode.GT_MASK,
+            evidence_ids=tuple(sorted(evidence.bundle.evidence_ids)),
+            provenance={
+                "evidence_schema_version": evidence.bundle.schema_version,
+                "expected_target_status": evidence.bundle.target_status.value,
+                "known_limitations": list(evidence.bundle.limitations),
+                "selection": dict(evidence.bundle.selection),
+            },
         )
         base_config = load_config(
-            CONFIG_ROOT / "prompt_only_qwen3vl_2b.yaml"
-        )
-        lora_config = load_config(
-            CONFIG_ROOT / "external_lora_qwen3vl_2b.yaml"
+            CONFIG_ROOT / "rs_generaldesc_prompt_only_qwen3vl_2b.yaml"
         )
         config = replace(
             base_config,
-            adaptation=lora_config.adaptation,
             run=replace(
                 base_config.run,
-                output_root=self.base / "oa-train",
+                mask_mode=MaskMode.GT_MASK,
+                output_root=self.base / "grounded-core",
             ),
-            training=replace(
-                base_config.training,
-                gradient_accumulation_steps=1,
-                max_steps=1,
-                epochs=2,
-                checkpoint_interval=1,
-                validation_max_parents=7,
-            ),
-        )
-        rotated = set()
-        for epoch in range(16):
-            dataset.set_epoch(epoch)
-            rotated.add(dataset[0].messages[-1]["content"][0]["text"])
-        self.assertEqual(rotated, {target, alternative_target})
-        dataset.set_epoch(0)
-        identity = replace(
-            benchmark_identity(self.base),
-            benchmark_scope="oa_train_val",
-            formal_acceptance_blockers=(),
-            payload_sha256=dataset.manifest["payload_root_sha256"],
-            record_count=1,
-            parent_count=1,
-        )
-        validation_dataset = TinyDataset(logical_role="external_val")
-        validation_selection = select_bounded_external_validation(
-            validation_dataset,
-            benchmark_build_id=identity.build_id,
-            benchmark_payload_sha256=identity.payload_sha256,
-            seed=config.run.seed,
-            max_parents=7,
         )
         trained_model = TinyAdapter()
-        training = DescriptionTrainer(
-            config=config,
-            model=trained_model,
-            collator=DescriptionCollator(
-                TinyProcessor(),
-                training=True,
-            ),
-            validation_dataset=validation_dataset,
-            validation_collator=DescriptionCollator(
-                TinyProcessor(),
-                training=True,
-            ),
-            validation_selection=validation_selection,
-            benchmark_identity=identity,
-            processor_identity={"processor": "tiny-v1"},
-            device=torch.device("cpu"),
-            progress=TrainingProgress(
-                log_interval=1,
-                stream=io.StringIO(),
-                force_tty=False,
-            ),
-        ).fit(dataset)
-        self.assertEqual(training.cursor.global_step, 1)
-        self.assertTrue(
-            (
-                training.checkpoint
-                / "adapter/adapter_model.safetensors"
-            ).is_file()
-        )
         inference = run_inference(
             config=config,
-            samples=[dataset[0]],
+            samples=[sample],
             collator=DescriptionCollator(TinyProcessor(), training=False),
             model=trained_model,
             processor=None,
-            output_root=self.base / "oa-inference",
+            output_root=self.base / "grounded-inference",
         )
         evaluation = evaluate_predictions(
             inference / "predictions.jsonl",
-            output_root=self.base / "oa-evaluation",
+            output_root=self.base / "grounded-evaluation",
             expected_mask_mode=MaskMode.GT_MASK,
         )
         metrics = read_json(evaluation / "metrics.json")
@@ -1057,8 +991,8 @@ class InferenceEvaluationTests(unittest.TestCase):
                 prediction_row(
                     record_id=f"record-{variant}",
                     parent_id="counterfactual-parent",
-                    logical_role="oa_val",
-                    task_family="oa_mask_description",
+                    logical_role="grounded_val",
+                    task_family="mask_description",
                     mask_mode=MaskMode.GT_MASK,
                     model_output=output,
                     reference_responses=(output.description,),
@@ -1106,8 +1040,8 @@ class InferenceEvaluationTests(unittest.TestCase):
             prediction_row(
                 record_id="baseline",
                 parent_id="parent-a",
-                logical_role="oa_val",
-                task_family="oa_mask_description",
+                logical_role="grounded_val",
+                task_family="mask_description",
                 mask_mode=MaskMode.GT_MASK,
                 model_output=output,
                 reference_responses=(output.description,),
@@ -1123,8 +1057,8 @@ class InferenceEvaluationTests(unittest.TestCase):
             prediction_row(
                 record_id="swap",
                 parent_id="parent-b",
-                logical_role="oa_val",
-                task_family="oa_mask_description",
+                logical_role="grounded_val",
+                task_family="mask_description",
                 mask_mode=MaskMode.GT_MASK,
                 model_output=replace(output, description="Changed region."),
                 reference_responses=("Changed region.",),

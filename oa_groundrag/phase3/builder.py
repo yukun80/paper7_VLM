@@ -14,7 +14,6 @@ from typing import Any, Iterable, Mapping, Sequence
 from .adapters import (
     DisasterM3Adapter,
     MMRS1MAdapter,
-    OABenchmarkAdapter,
     RSGPTAdapter,
 )
 from .assets import AssetStore, normalize_bbox_target
@@ -28,13 +27,14 @@ from .common import (
 )
 from .config import BuildConfig
 from .contracts import (
+    BENCHMARK_SCOPE,
     CANONICAL_SCHEMA_VERSION,
+    HASH_SCHEMA_VERSION,
     HF_DATASETS_REFERENCE,
     MANIFEST_VERSION,
     PROVENANCE_SCHEMA_VERSION,
     STATISTICS_SCHEMA_VERSION,
     AdapterResult,
-    AnnotationLayer,
     LogicalRole,
     SkipRecord,
     SourceExample,
@@ -49,9 +49,8 @@ from .errors import AssetError, BuildError, ReasonCode
 from .splitter import assign_external_splits
 
 
-AUDIT_SCHEMA_VERSION = "oa_landslidedesc.audit.v3"
-HASH_SCHEMA_VERSION = "oa_landslidedesc.hashes.v1"
-STAGING_SENTINEL = ".oa_landslidedesc_staging"
+AUDIT_SCHEMA_VERSION = "rs_generaldesc.audit.v1"
+STAGING_SENTINEL = ".rs_generaldesc_staging"
 
 
 def _enabled_adapters(config: BuildConfig) -> list[Any]:
@@ -62,8 +61,6 @@ def _enabled_adapters(config: BuildConfig) -> list[Any]:
         adapters.append(MMRS1MAdapter(config))
     if config.sources["disasterm3"].enabled:
         adapters.append(DisasterM3Adapter(config))
-    if config.oa.enabled:
-        adapters.append(OABenchmarkAdapter(config))
     return adapters
 
 
@@ -91,30 +88,6 @@ def _preflight_paths(config: BuildConfig, *, for_build: bool) -> None:
                 f"{name}: source root 不能是 symlink",
             )
         roots.append(source.root)
-    if config.oa.enabled:
-        if (
-            config.oa.benchmark_root is None
-            or config.oa.selection_root is None
-        ):
-            raise BuildError(
-                ReasonCode.SCHEMA_MISMATCH,
-                "oa.enabled=true 但 OA root 未配置",
-            )
-        for name, root in (
-            ("oa.benchmark_root", config.oa.benchmark_root),
-            ("oa.selection_root", config.oa.selection_root),
-        ):
-            if not root.is_dir():
-                raise BuildError(
-                    ReasonCode.ASSET_MISSING,
-                    f"{name} 不存在",
-                )
-            if root.is_symlink():
-                raise BuildError(
-                    ReasonCode.SOURCE_SYMLINK,
-                    f"{name} 不能是 symlink",
-                )
-            roots.append(root)
     if any(_inside(config.output_root, root) for root in roots):
         raise BuildError(
             ReasonCode.PATH_ESCAPE,
@@ -127,24 +100,6 @@ def _preflight_paths(config: BuildConfig, *, for_build: bool) -> None:
             ReasonCode.OUTPUT_EXISTS,
             f"拒绝覆盖已有 output_root：{config.output_root}",
         )
-    if for_build and config.profile == "full" and config.oa.enabled:
-        if (
-            config.oa.gold_annotations is None
-            or not config.oa.gold_annotations.is_file()
-        ):
-            raise BuildError(
-                ReasonCode.OA_REVIEW_INCOMPLETE,
-                "full build 需要已审核的 358 条 oa_gold JSONL",
-            )
-    for name, path in (
-        ("oa.gold_annotations", config.oa.gold_annotations),
-        ("oa.silver_annotations", config.oa.silver_annotations),
-    ):
-        if path is not None and path.is_symlink():
-            raise BuildError(
-                ReasonCode.SOURCE_SYMLINK,
-                f"{name} 不能是 symlink",
-            )
 
 
 def _scan(
@@ -163,7 +118,7 @@ def _scan(
     else:
         with ThreadPoolExecutor(
             max_workers=min(config.workers, len(adapters)),
-            thread_name_prefix="oa-landslidedesc-audit",
+            thread_name_prefix="rs-generaldesc-audit",
         ) as executor:
             futures = [
                 executor.submit(
@@ -234,19 +189,7 @@ def audit_sources(config: BuildConfig, *, deep: bool = False) -> dict[str, Any]:
             ),
         },
         "formal_acceptance_eligible": False,
-        "formal_acceptance_blockers": [
-            "audit_only",
-            *(
-                [ReasonCode.OA_REVIEW_INCOMPLETE.value]
-                if config.oa.enabled
-                and (
-                    config.oa.gold_annotations is None
-                    or not config.oa.gold_annotations.is_file()
-                )
-                else []
-            ),
-            *(["oa_component_disabled"] if not config.oa.enabled else []),
-        ],
+        "formal_acceptance_blockers": ["audit_only"],
         "reference_project": dict(HF_DATASETS_REFERENCE),
     }
 
@@ -327,23 +270,6 @@ def _canonical_from_example(
     )
     media, geometries, transforms = store.materialize(example.assets)
     target = normalize_bbox_target(example.target, geometries)
-    if target.get("type") == "mask":
-        mask_role = target.get("mask_role")
-        image_role = target.get("image_role")
-        mask_media = next((row for row in media if row["role"] == mask_role), None)
-        image_media = next((row for row in media if row["role"] == image_role), None)
-        if mask_media is None or image_media is None:
-            raise AssetError(
-                ReasonCode.MASK_GEOMETRY_MISMATCH,
-                "mask target 缺少 image/mask media",
-            )
-        target = {
-            **dict(target),
-            "canonical_convention": "binary_raster_top_left",
-            "mask_asset_id": mask_media["asset_id"],
-            "image_asset_id": image_media["asset_id"],
-            "size": [mask_media["width"], mask_media["height"]],
-        }
     provenance_rows = [
         _provenance_row(example, item) for item in example.provenance
     ]
@@ -390,7 +316,6 @@ def _canonical_from_example(
         "coordinate_convention": {
             "image_origin": "top_left",
             "bbox_canonical": "xyxy_normalized",
-            "mask_layout": "height_width",
         },
         "transforms": transforms,
         "quality_flags": sorted(set(example.quality_flags)),
@@ -624,6 +549,7 @@ def _manifest(
     hashes: Mapping[str, Any],
     blockers: Sequence[str],
     deletion_allowlist_path: str | None,
+    release_equivalence_path: str | None = None,
 ) -> dict[str, Any]:
     role_shards: dict[str, list[str]] = defaultdict(list)
     record_by_shard: dict[str, list[Mapping[str, Any]]] = {}
@@ -639,11 +565,7 @@ def _manifest(
         "schema_version": MANIFEST_VERSION,
         "canonical_schema_version": CANONICAL_SCHEMA_VERSION,
         "build_profile": config.profile,
-        "benchmark_scope": (
-            "oa_landslidedesc_complete"
-            if config.oa.enabled
-            else "external_train_val"
-        ),
+        "benchmark_scope": BENCHMARK_SCOPE,
         "scope_validation_complete": "deep_validation_pending" not in blockers,
         "build_id": (
             "build_"
@@ -671,6 +593,7 @@ def _manifest(
             "build_config": "metadata/build_config.json",
             "validation": "metadata/validation.json",
             "deletion_allowlist": deletion_allowlist_path,
+            "release_equivalence": release_equivalence_path,
         },
         "counts": {
             "records": len(records),
@@ -683,7 +606,6 @@ def _manifest(
         "formal_acceptance_blockers": list(blockers),
         "source_roots_embedded": False,
         "external_test_retained": False,
-        "oa_split_repartitioned": False,
         "upstream_split_policy": (
             "provenance_only_repartitioned_parent_content_component"
         ),
@@ -693,7 +615,6 @@ def _manifest(
 
 def _ensure_parent_split_integrity(records: Sequence[Mapping[str, Any]]) -> None:
     external_roles_by_parent: dict[str, set[str]] = defaultdict(set)
-    oa_roles_by_parent: dict[str, set[str]] = defaultdict(set)
     for row in records:
         role = str(row["logical_role"])
         parent = str(row["parent_id"])
@@ -702,8 +623,11 @@ def _ensure_parent_split_integrity(records: Sequence[Mapping[str, Any]]) -> None
             LogicalRole.EXTERNAL_VAL.value,
         }:
             external_roles_by_parent[parent].add(role)
-        elif role.startswith("oa_"):
-            oa_roles_by_parent[parent].add(role)
+        else:
+            raise BuildError(
+                ReasonCode.ROLE_CONTAMINATION,
+                f"RS-GeneralDesc builder 不接受 role={role}",
+            )
     external_conflicts = {
         parent: sorted(roles)
         for parent, roles in external_roles_by_parent.items()
@@ -715,41 +639,14 @@ def _ensure_parent_split_integrity(records: Sequence[Mapping[str, Any]]) -> None
             "同一 external parent 跨 train/val",
             details={"conflict_count": len(external_conflicts)},
         )
-    conflicts = {
-        parent: sorted(roles)
-        for parent, roles in oa_roles_by_parent.items()
-        if len(
-            {
-                "train" if role == "oa_train" else role.removeprefix("oa_")
-                for role in roles
-            }
-        )
-        > 1
-    }
-    if conflicts:
-        raise BuildError(
-            ReasonCode.OA_SPLIT_LEAKAGE,
-            "同一 OA parent 跨逻辑 split",
-            details={"conflict_count": len(conflicts)},
-        )
-
-
 def _formal_blockers(
     config: BuildConfig,
-    records: Sequence[Mapping[str, Any]],
     *,
     deep_pending: bool,
 ) -> list[str]:
     blockers: list[str] = []
     if config.profile != "full":
         blockers.append("bounded_smoke_profile")
-    gold_count = sum(
-        1 for row in records if row["annotation"]["layer"] == AnnotationLayer.OA_GOLD.value
-    )
-    if config.oa.enabled and gold_count != config.oa.expected_gold_count:
-        blockers.append(ReasonCode.OA_REVIEW_INCOMPLETE.value)
-    if not config.oa.enabled:
-        blockers.append("oa_component_disabled")
     if deep_pending:
         blockers.append("deep_validation_pending")
     return blockers
@@ -793,7 +690,7 @@ def build_benchmark(config: BuildConfig) -> Path:
         raise BuildError(ReasonCode.OUTPUT_EXISTS, f"staging 已存在：{staging}")
     staging.mkdir(parents=True)
     (staging / STAGING_SENTINEL).write_text(
-        "owned-by-oa-landslidedesc-builder\n", encoding="utf-8"
+        "owned-by-rs-generaldesc-builder\n", encoding="utf-8"
     )
     try:
         results, split_summary = _scan(config, deep=True, for_build=True)
@@ -910,33 +807,6 @@ def build_benchmark(config: BuildConfig) -> Path:
             for result in sorted(results, key=lambda item: item.source)
         }
         atomic_write_json(staging / "metadata/source_audits.json", audits)
-        hashes = _write_hashes(staging)
-        blockers = _formal_blockers(config, records, deep_pending=True)
-        manifest = _manifest(
-            config=config,
-            records=records,
-            shards=shards,
-            statistics=statistics,
-            audits=audits,
-            hashes=hashes,
-            blockers=blockers,
-            deletion_allowlist_path=None,
-        )
-        manifest["hash_manifest_sha256"] = sha256_file(
-            staging / "metadata/hashes.json"
-        )
-        atomic_write_json(staging / "manifest.json", manifest)
-
-        from .validator import validate_benchmark
-
-        validation = validate_benchmark(staging, deep=True)
-        if validation["errors"]:
-            raise BuildError(
-                ReasonCode.STAGING_FAILURE,
-                "staging deep validation 失败",
-                details={"errors": validation["errors"][:20]},
-            )
-
         allowlist_path: str | None = None
         if config.profile == "full" and config.deletion_allowlist:
             allowlist_path = "metadata/deletion_allowlist.jsonl"
@@ -944,9 +814,8 @@ def build_benchmark(config: BuildConfig) -> Path:
                 staging / allowlist_path,
                 _allowlist_rows(all_skips),
             )
-            hashes = _write_hashes(staging)
-
-        blockers = _formal_blockers(config, records, deep_pending=False)
+        hashes = _write_hashes(staging)
+        blockers = _formal_blockers(config, deep_pending=False)
         manifest = _manifest(
             config=config,
             records=records,
@@ -961,6 +830,9 @@ def build_benchmark(config: BuildConfig) -> Path:
             staging / "metadata/hashes.json"
         )
         atomic_write_json(staging / "manifest.json", manifest)
+
+        from .validator import validate_benchmark
+
         validation = validate_benchmark(staging, deep=True)
         if validation["errors"]:
             raise BuildError(

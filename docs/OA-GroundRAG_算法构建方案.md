@@ -3,9 +3,10 @@
 > **路线全称：** Optical-Anchored Arbitrary-Auxiliary Segmentation and Mask-Grounded Retrieval-Augmented Understanding for Landslides
 > **中文名称：** 光学锚定任意辅助模态滑坡分割与掩膜驱动检索增强理解
 > **版本：** 2.0
-> **日期：** 2026-07-31
+> **日期：** 2026-08-01
 > **文档定位：** 本文件已替代旧版 OA-GroundRAG 方案，是后续 Codex Agent 继续开发、实验和整合的唯一算法实施依据。
 > **硬件边界：** 单张约 24 GB GPU；正式长训练由项目负责人启动，Coding Agent 只运行短测试、工程门和有界 smoke。
+> **当前状态：** Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred
 
 ---
 
@@ -156,19 +157,35 @@ RAG Query Builder
 
 ### 4.2 `oa_groundrag/phase3`
 
-旧名称 `OA-LandslideDesc Benchmark` 不再准确。
-
-应重新定位为：
+原生产品定义为：
 
 > **RS-GeneralDesc Benchmark**
 
 只负责整合通用遥感描述和问答数据，用于训练与监控 RS-General Description Adapter。
 
-默认不再要求包含 OA 真实 mask-grounded 训练记录，也不因为 `oa_component_disabled` 判定 external-only Benchmark 不完整。
+该产品不包含 OA 真实 mask-grounded 训练记录。Stage 2 原生合同为：
+
+- manifest：`rs_generaldesc.manifest.v1`；
+- canonical：`rs_generaldesc.canonical.v1`；
+- scope：`rs_generaldesc_external_train_val`；
+- full deep validation 完成后 eligible 且 blockers 为空；
+- Dataset/exporter 只接受 `external_train/external_val` 和七类 RS-GeneralDesc task；
+- builder 配置没有 mask、Gold/Silver 或混合数据字段；validator 不接受其他 schema。
+
+未来 `repackage` 路由锁定前代四项 identity，严格解析 hash ledger；record/metadata 在
+读取前核验，asset 在同一次流式复制中计算 size/SHA，manifest layout、asset inventory、
+ledger 和实际文件集合必须一致，全部 entry 验证完成后才允许写等价结论。随后按内容
+fingerprint 重建 parent/record/provenance ID 和所有派生 SHA，在 sibling staging 中执行
+full deep validation 后原子发布。历史 native 迁移报告由加固前实现生成，前代 root 已
+删除，不能由当前修复追溯性地升级为严格逐文件证明；这也不构成 native payload 损坏
+证据。额外 scope report 与旧 API/schema 兼容逻辑均不存在。
+
+native manifest 只接受 RS-GeneralDesc 通用遥感训练/监控范围，不接受 OA-Grounded
+数据，也不评价 Gate B。`external_val` 在 Stage 2 始终是训练监控用途。
 
 ### 4.3 `oa_groundrag/phase4`
 
-继续作为 **Mask-Grounded VLM Description** 实现基础。
+作为 **RS-VLM** 实现基础，并保留后续 Mask-Grounded Baseline 核心。
 
 保留：
 
@@ -221,7 +238,7 @@ RAG Query Builder
 
 ## 5. Benchmark 与数据资产重新划分
 
-新方案不再把所有数据放入一个“OA-LandslideDesc Benchmark”。应建立五类独立资产。
+新方案将数据拆成五类独立资产。
 
 ### 5.1 OA-AuxSeg Benchmark
 
@@ -258,6 +275,10 @@ RAG Query Builder
 - 滑坡区域真值；
 - 滑坡正式评价；
 - 真实 OA mask-grounded 训练。
+
+native manifest 必须同时绑定 build ID、payload SHA-256、semantic config SHA-256 和
+hash-manifest SHA-256。RS-VLM preflight 直接核验这些 identity、canonical schema、
+eligible/空 blockers 与 saved clean deep validation，不使用旁路报告。
 
 ### 5.3 Landslide Evidence Corpus
 
@@ -1042,13 +1063,27 @@ InSAR 和 DEM 是否支持该候选区域？
 - 更新 README、AGENTS 和本方案；
 - 把旧方案移入 archive 或删除活动引用。
 
-### Stage 1：OA-AuxSeg 正式验收
+阶段依赖包含两条支线：OA-AuxSeg 工程定版 → 未来 Gate A → formal fixed masks；
+RS-GeneralDesc Stage 2 → Adapter 重训 → Gate B。两条支线在 Mask-Grounded 阶段汇合。
+Gate A 延后不等于 Gate A 通过，也不阻止独立的 Stage 2/3 支线准备；依赖 formal masks
+的下游工作仍必须等待 Gate A。
+
+### Stage 1：OA-AuxSeg 工程定版（Gate A 待执行）
 
 - 冻结项目负责人确认的 proposed `checkpoint_best.pt`；
 - 完成训练报告、严格重载以及 train/val 工程评价；
 - 保留 optical-only、不同融合方式、模态组合和 no-target 的代码能力；
 - 在完整框架搭建后再执行分割消融、多随机种子和 Gate A；
 - Gate A 通过后才运行 sealed test 并导出固定预测 mask。
+
+当前 `rs_vlm.config.v2` 仅开放 `external_generic`，用于 Stage 3
+RS-General Base/Adapter。配置固定实际 manifest/validation SHA，并绑定 native
+canonical/build/payload/hash identity；preflight 按 ledger 验证被读取的 metadata 和 shard
+layout，Dataset 在消费前验证 shard/asset bytes。配置不含旁路作用域报告、旧治理字段、
+未使用的 External evidence/evaluation 段或 v1 alias。GT/fixed/end-to-end mask、
+RegionSelector、EvidenceBuilder、mask-grounded messages、反事实 evaluator 和 AuxSeg
+inference 核心继续保留；临时 Mask-Grounded Dataset 合同已撤回，Stage 4/5 冻结新数据
+schema 前没有可运行的 mask-grounded data mode。
 
 训练配置中的 `max_steps` 是计划预算上限，不是必须跑满的权重有效性或 Gate A
 判据。项目负责人可以依据训练轨迹主动停止优化，并按训练开始前已实现的 checkpoint
@@ -1064,17 +1099,35 @@ InSAR 和 DEM 是否支持该候选区域？
 
 ### Stage 2：RS-GeneralDesc Benchmark 验收
 
-- external-only Benchmark 成为正式阶段；
-- 删除 `oa_component_disabled` 作为 external Benchmark blocker；
-- 完成数据过滤、防泄漏和 deep validation；
-- 明确 external_val 只用于训练监控。
+已完成：
+
+- 确定性重发布到 `/home/yukun80/codes/benchmark/rs_generaldesc_v1`；
+- 274,693 records、104,954 parents；历史报告记录 train/val 成员和 asset 等价，但旧
+  repackage 未逐项验证前代 ledger 的全部 record/metadata，不能追溯性地称为严格证明；
+- native manifest/canonical 为 `rs_generaldesc.*.v1`，eligible 且 blockers 为空；
+- 新树单次 full deep validation 为 0 error / 0 warning；
+- build/payload/hash-manifest identity 分别为 `build_3ebc09a4daad10e121fc14c2727d9896e10371a95bbaf6b780d15aa42eaf3c03`、
+  `549281f296b357bce256e6af71cec7412fe17e36052d6a8674f4876ae2d06e0b`、
+  `55ac26d9771ce8385318fbd23a10b999afb754ac195e823be659f4e49b0a7090`；
+- phase4 三份活动配置直接绑定 native identity；
+- Stage 3 prompt-only Base 使用 `rs_generaldesc_prompt_only_qwen3vl_2b.yaml`，只完成配置与
+  preflight，尚未运行 Gate B；
+- `external_val` 只用于训练监控，Stage 3 另行冻结 Gate B 集合。
+
+Stage 2 的当前验收依据是 native manifest、固定 build/payload/hash identity、eligible、
+空 blockers 与 saved clean deep validation。没有证据表明当前 native payload 损坏；
+本次身份加固未修改或重扫真实 Benchmark。
+
+前代 Benchmark 和 Adapter outputs 已在全部验收通过后删除，不保留备份、链接、alias
+或兼容包装。该结论不等于 OA-Grounded acceptance，也不等于 RS-General Adapter
+Gate B 通过。
 
 ### Stage 3：RS-General Adapter
 
-- 运行 prompt-only baseline；
-- 完成 RS-General LoRA；
-- 在固定通用遥感验证集上选择 checkpoint；
-- 评价通用遥感能力。
+- 保留 prompt-only Base 配置，在 native identity 上重新训练 RS-General LoRA；
+- 重训后单独冻结不泄漏训练监控 parents 的 Base-vs-Adapter 固定生成集合；
+- 运行 Gate B 并评价通用遥感能力；
+- Gate B 完成前，checkpoint 或 teacher-forced validation loss 不构成 accepted Adapter。
 
 ### Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval
 
@@ -1368,7 +1421,7 @@ Codex 不因普通子任务结束而暂停。仅在以下情况停止：
 
 主线完成必须满足：
 
-1. OA-AuxSeg 完成负责人定版的训练报告、正式评价和 Gate A；跑满计划
+1. OA-AuxSeg 完成负责人定版的工程报告，并在未来完成正式评价和 Gate A；跑满计划
    `max_steps` 不是独立完成条件；
 2. RS-GeneralDesc Benchmark 完成 external-only 验收；
 3. RS-General Adapter 完成训练并通过通用遥感 gate；

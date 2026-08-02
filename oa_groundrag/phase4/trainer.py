@@ -51,12 +51,12 @@ from .validation import (
 )
 
 
-TRAIN_LOG_SCHEMA_VERSION = "oa_mask_grounded_description.train_log.v2"
+TRAIN_LOG_SCHEMA_VERSION = "rs_vlm.train_log.v1"
 BEST_CHECKPOINT_SCHEMA_VERSION = (
-    "oa_mask_grounded_description.best_checkpoint.v1"
+    "rs_vlm.best_checkpoint.v1"
 )
 TRAINING_REPORT_SCHEMA_VERSION = (
-    "oa_mask_grounded_description.training_report.v1"
+    "rs_vlm.training_report.v1"
 )
 
 
@@ -834,17 +834,13 @@ class DescriptionTrainer:
                 ReasonCode.OUTPUT_LINK,
                 f"training output_root 含链接组件：{linked}",
             )
-        expected_training_role = (
-            "external_train"
-            if config.run.mode.value == "external_generic"
-            else "oa_train"
-        )
+        expected_training_role = "external_train"
         if any(
             record.get("logical_role") != expected_training_role
             for record in dataset.records
         ):
             raise ModelError(
-                ReasonCode.OA_ROLE_FORBIDDEN,
+                ReasonCode.ROLE_FORBIDDEN,
                 f"训练 Dataset 必须严格只含 {expected_training_role}",
             )
         sampler = ParentBalancedSampler(
@@ -869,7 +865,7 @@ class DescriptionTrainer:
             warmup_ratio=config.training.warmup_ratio,
         )
         model_identity = self.model.identity.to_dict()
-        benchmark_row = self.benchmark_identity.to_dict()
+        benchmark_row = self.benchmark_identity.training_identity_dict()
         validation_identity = self.validation_selection.identity_dict()
         training_layout = training_layout_identity(config)
         worker_collators = tuple(

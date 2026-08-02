@@ -73,7 +73,6 @@ class RunSection:
     mask_mode: MaskMode
     output_root: Path
     resume_checkpoint: Path | None
-    allow_oa_test: bool
 
 
 @dataclass(frozen=True)
@@ -81,11 +80,13 @@ class DataSection:
     benchmark_root: Path
     roles: tuple[str, ...]
     task_families: tuple[str, ...]
-    oa_inference_root: Path | None
     expected_manifest_schema: str
     expected_canonical_schema: str
+    expected_manifest_sha256: str
+    expected_validation_sha256: str
     expected_build_id: str
     expected_payload_sha256: str
+    expected_hash_manifest_sha256: str
     parent_balanced: bool
     source_weights: Mapping[str, float]
     task_weights: Mapping[str, float]
@@ -107,17 +108,6 @@ class LimitsSection:
     max_probe_shards: int
     max_records_per_shard: int
     max_probe_records: int
-
-
-@dataclass(frozen=True)
-class EvidenceSection:
-    context_margin_ratio: float
-    overlay_alpha: float
-    max_auxiliary_views: int
-    min_auxiliary_coverage: float
-    fragment_connectivity: int
-    perimeter_connectivity: int
-    rag_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -172,25 +162,15 @@ class GenerationSection:
 
 
 @dataclass(frozen=True)
-class EvaluationSection:
-    require_evidence_ids: bool
-    counterfactual_checks: tuple[str, ...]
-    allow_external_as_formal_oa: bool
-    seal_oa_test: bool
-
-
-@dataclass(frozen=True)
 class Phase4Config:
     schema_version: str
     run: RunSection
     data: DataSection
     limits: LimitsSection
-    evidence: EvidenceSection
     model: ModelSection
     adaptation: AdaptationSection
     training: TrainingSection
     generation: GenerationSection
-    evaluation: EvaluationSection
     config_path: Path
     semantic_sha256: str
 
@@ -203,21 +183,22 @@ class Phase4Config:
                 "seed": self.run.seed,
                 "mode": self.run.mode.value,
                 "mask_mode": self.run.mask_mode.value,
-                "allow_oa_test": self.run.allow_oa_test,
             },
             "data": {
                 "benchmark_root": str(self.data.benchmark_root),
                 "roles": list(self.data.roles),
                 "task_families": list(self.data.task_families),
-                "oa_inference_root": (
-                    None
-                    if self.data.oa_inference_root is None
-                    else str(self.data.oa_inference_root)
-                ),
                 "expected_manifest_schema": self.data.expected_manifest_schema,
                 "expected_canonical_schema": self.data.expected_canonical_schema,
+                "expected_manifest_sha256": self.data.expected_manifest_sha256,
+                "expected_validation_sha256": (
+                    self.data.expected_validation_sha256
+                ),
                 "expected_build_id": self.data.expected_build_id,
                 "expected_payload_sha256": self.data.expected_payload_sha256,
+                "expected_hash_manifest_sha256": (
+                    self.data.expected_hash_manifest_sha256
+                ),
                 "parent_balanced": self.data.parent_balanced,
                 "source_weights": dict(sorted(self.data.source_weights.items())),
                 "task_weights": dict(sorted(self.data.task_weights.items())),
@@ -225,10 +206,6 @@ class Phase4Config:
             "limits": {
                 name: getattr(self.limits, name)
                 for name in self.limits.__dataclass_fields__
-            },
-            "evidence": {
-                name: getattr(self.evidence, name)
-                for name in self.evidence.__dataclass_fields__
             },
             "model": {
                 "path": str(self.model.path),
@@ -254,16 +231,6 @@ class Phase4Config:
             "generation": {
                 name: getattr(self.generation, name)
                 for name in self.generation.__dataclass_fields__
-            },
-            "evaluation": {
-                "require_evidence_ids": self.evaluation.require_evidence_ids,
-                "counterfactual_checks": list(
-                    self.evaluation.counterfactual_checks
-                ),
-                "allow_external_as_formal_oa": (
-                    self.evaluation.allow_external_as_formal_oa
-                ),
-                "seal_oa_test": self.evaluation.seal_oa_test,
             },
         }
 
@@ -423,6 +390,30 @@ def _string_list(
     return output
 
 
+def _nullable_sha256(value: Any, *, location: str) -> str | None:
+    if value is None:
+        return None
+    result = _string(value, location=location)
+    if len(result) != 64 or any(
+        character not in "0123456789abcdef" for character in result
+    ):
+        raise ConfigError(
+            ReasonCode.TYPE_MISMATCH,
+            f"{location}: 必须是小写 SHA-256 或 null",
+        )
+    return result
+
+
+def _sha256(value: Any, *, location: str) -> str:
+    result = _nullable_sha256(value, location=location)
+    if result is None:
+        raise ConfigError(
+            ReasonCode.TYPE_MISMATCH,
+            f"{location}: 必须是小写 SHA-256",
+        )
+    return result
+
+
 def _weights(value: Any, *, location: str) -> dict[str, float]:
     row = _mapping(value, location=location)
     output: dict[str, float] = {}
@@ -480,12 +471,10 @@ def load_config(path: Path | str) -> Phase4Config:
         "run",
         "data",
         "limits",
-        "evidence",
         "model",
         "adaptation",
         "training",
         "generation",
-        "evaluation",
     )
     _keys(row, required=section_names, location="$")
     if row["schema_version"] != CONFIG_SCHEMA_VERSION:
@@ -504,7 +493,6 @@ def load_config(path: Path | str) -> Phase4Config:
             "mask_mode",
             "output_root",
             "resume_checkpoint",
-            "allow_oa_test",
         ),
         location="$.run",
     )
@@ -532,10 +520,6 @@ def load_config(path: Path | str) -> Phase4Config:
             location="$.run.resume_checkpoint",
             nullable=True,
         ),
-        allow_oa_test=_bool(
-            run_row["allow_oa_test"],
-            location="$.run.allow_oa_test",
-        ),
     )
 
     data_row = _mapping(row["data"], location="$.data")
@@ -545,11 +529,13 @@ def load_config(path: Path | str) -> Phase4Config:
             "benchmark_root",
             "roles",
             "task_families",
-            "oa_inference_root",
             "expected_manifest_schema",
             "expected_canonical_schema",
+            "expected_manifest_sha256",
+            "expected_validation_sha256",
             "expected_build_id",
             "expected_payload_sha256",
+            "expected_hash_manifest_sha256",
             "parent_balanced",
             "source_weights",
             "task_weights",
@@ -567,12 +553,6 @@ def load_config(path: Path | str) -> Phase4Config:
             data_row["task_families"],
             location="$.data.task_families",
         ),
-        oa_inference_root=_path(
-            data_row["oa_inference_root"],
-            base=base,
-            location="$.data.oa_inference_root",
-            nullable=True,
-        ),
         expected_manifest_schema=_string(
             data_row["expected_manifest_schema"],
             location="$.data.expected_manifest_schema",
@@ -581,13 +561,25 @@ def load_config(path: Path | str) -> Phase4Config:
             data_row["expected_canonical_schema"],
             location="$.data.expected_canonical_schema",
         ),
+        expected_manifest_sha256=_sha256(
+            data_row["expected_manifest_sha256"],
+            location="$.data.expected_manifest_sha256",
+        ),
+        expected_validation_sha256=_sha256(
+            data_row["expected_validation_sha256"],
+            location="$.data.expected_validation_sha256",
+        ),
         expected_build_id=_string(
             data_row["expected_build_id"],
             location="$.data.expected_build_id",
         ),
-        expected_payload_sha256=_string(
+        expected_payload_sha256=_sha256(
             data_row["expected_payload_sha256"],
             location="$.data.expected_payload_sha256",
+        ),
+        expected_hash_manifest_sha256=_sha256(
+            data_row["expected_hash_manifest_sha256"],
+            location="$.data.expected_hash_manifest_sha256",
         ),
         parent_balanced=_bool(
             data_row["parent_balanced"],
@@ -646,68 +638,6 @@ def load_config(path: Path | str) -> Phase4Config:
             ReasonCode.TYPE_MISMATCH,
             "Qwen3-VL 主线固定 max_images=5、input_tokens=2048、"
             "pixels=28x28x[16,256]、max_new_tokens<=384",
-        )
-
-    evidence_row = _mapping(row["evidence"], location="$.evidence")
-    _keys(
-        evidence_row,
-        required=(
-            "context_margin_ratio",
-            "overlay_alpha",
-            "max_auxiliary_views",
-            "min_auxiliary_coverage",
-            "fragment_connectivity",
-            "perimeter_connectivity",
-            "rag_enabled",
-        ),
-        location="$.evidence",
-    )
-    evidence = EvidenceSection(
-        context_margin_ratio=_float(
-            evidence_row["context_margin_ratio"],
-            location="$.evidence.context_margin_ratio",
-            minimum=0.0,
-            maximum=1.0,
-        ),
-        overlay_alpha=_float(
-            evidence_row["overlay_alpha"],
-            location="$.evidence.overlay_alpha",
-            minimum=0.0,
-            maximum=1.0,
-        ),
-        max_auxiliary_views=_int(
-            evidence_row["max_auxiliary_views"],
-            location="$.evidence.max_auxiliary_views",
-        ),
-        min_auxiliary_coverage=_float(
-            evidence_row["min_auxiliary_coverage"],
-            location="$.evidence.min_auxiliary_coverage",
-            minimum=0.0,
-            maximum=1.0,
-        ),
-        fragment_connectivity=_int(
-            evidence_row["fragment_connectivity"],
-            location="$.evidence.fragment_connectivity",
-            minimum=1,
-        ),
-        perimeter_connectivity=_int(
-            evidence_row["perimeter_connectivity"],
-            location="$.evidence.perimeter_connectivity",
-            minimum=1,
-        ),
-        rag_enabled=_bool(
-            evidence_row["rag_enabled"],
-            location="$.evidence.rag_enabled",
-        ),
-    )
-    if (
-        evidence.fragment_connectivity != 8
-        or evidence.perimeter_connectivity != 4
-        or evidence.rag_enabled
-    ):
-        raise ConfigError(
-            ReasonCode.RAG_FORBIDDEN,
-            "Phase 3 固定使用 8 连通碎片、4 邻域周长且 rag_enabled=false",
         )
 
     model_row = _mapping(row["model"], location="$.model")
@@ -1028,115 +958,31 @@ def load_config(path: Path | str) -> Phase4Config:
             "主线要求确定性 do_sample=false",
         )
 
-    evaluation_row = _mapping(row["evaluation"], location="$.evaluation")
-    _keys(
-        evaluation_row,
-        required=(
-            "require_evidence_ids",
-            "counterfactual_checks",
-            "allow_external_as_formal_oa",
-            "seal_oa_test",
-        ),
-        location="$.evaluation",
-    )
-    evaluation = EvaluationSection(
-        require_evidence_ids=_bool(
-            evaluation_row["require_evidence_ids"],
-            location="$.evaluation.require_evidence_ids",
-        ),
-        counterfactual_checks=_string_list(
-            evaluation_row["counterfactual_checks"],
-            location="$.evaluation.counterfactual_checks",
-        ),
-        allow_external_as_formal_oa=_bool(
-            evaluation_row["allow_external_as_formal_oa"],
-            location="$.evaluation.allow_external_as_formal_oa",
-        ),
-        seal_oa_test=_bool(
-            evaluation_row["seal_oa_test"],
-            location="$.evaluation.seal_oa_test",
-        ),
-    )
-    if (
-        not evaluation.require_evidence_ids
-        or evaluation.allow_external_as_formal_oa
-        or not evaluation.seal_oa_test
-    ):
+    if mode is not DataMode.EXTERNAL_GENERIC:
         raise ConfigError(
-            ReasonCode.OA_ROLE_FORBIDDEN,
-            "必须引用 evidence、禁止 External 冒充 OA，且 oa_test 默认封存",
+            ReasonCode.INVALID_ENUM,
+            "config v2 只支持 external_generic",
         )
-    required_counterfactuals = {
-        "mask_swap",
-        "wrong_region",
-        "empty_mask",
-        "modality_removal",
-    }
-    if set(evaluation.counterfactual_checks) != required_counterfactuals:
+    if mask_mode is not MaskMode.EXTERNAL_GENERIC:
         raise ConfigError(
-            ReasonCode.COUNTERFACTUAL_INVALID,
-            "counterfactual_checks 必须精确覆盖 mask_swap/wrong_region/"
-            "empty_mask/modality_removal",
+            ReasonCode.EXTERNAL_MASK_FORBIDDEN,
+            "config v2 只支持 external_generic mask_mode",
         )
-
-    if mode is DataMode.EXTERNAL_GENERIC:
-        if mask_mode is not MaskMode.EXTERNAL_GENERIC:
-            raise ConfigError(
-                ReasonCode.EXTERNAL_MASK_FORBIDDEN,
-                "External mode 必须使用 external_generic mask_mode",
-            )
-        if any(not role.startswith("external_") for role in data.roles):
-            raise ConfigError(
-                ReasonCode.OA_ROLE_FORBIDDEN,
-                "External mode roles 只能是 external_*",
-            )
-        if data.oa_inference_root is not None:
-            raise ConfigError(
-                ReasonCode.EXTERNAL_MASK_FORBIDDEN,
-                "External mode 不接受 oa_inference_root",
-            )
-    else:
-        if mask_mode is MaskMode.EXTERNAL_GENERIC:
-            raise ConfigError(
-                ReasonCode.EXTERNAL_MASK_FORBIDDEN,
-                "OA mode 必须显式选择 gt/fixed/end-to-end mask mode",
-            )
-        if any(not role.startswith("oa_") for role in data.roles):
-            raise ConfigError(
-                ReasonCode.OA_ROLE_FORBIDDEN,
-                "OA mode roles 只能是 oa_*",
-            )
-        if "oa_test" in data.roles and (
-            not run.allow_oa_test or evaluation.seal_oa_test
-        ):
-            raise ConfigError(
-                ReasonCode.OA_TEST_SEALED,
-                "oa_test 仍处于封存状态",
-            )
-        if (
-            mask_mode
-            in {
-                MaskMode.FIXED_PREDICTED_MASK,
-                MaskMode.END_TO_END_PREDICTED_MASK,
-            }
-            and data.oa_inference_root is None
-        ):
-            raise ConfigError(
-                ReasonCode.ASSET_MISSING,
-                "predicted mask mode 必须配置 oa_inference_root",
-            )
+    if set(data.roles) - {"external_train", "external_val"}:
+        raise ConfigError(
+            ReasonCode.ROLE_FORBIDDEN,
+            "External mode roles 只能是 external_train/external_val",
+        )
 
     provisional = Phase4Config(
         schema_version=CONFIG_SCHEMA_VERSION,
         run=run,
         data=data,
         limits=limits,
-        evidence=evidence,
         model=model,
         adaptation=adaptation,
         training=training,
         generation=generation,
-        evaluation=evaluation,
         config_path=config_path,
         semantic_sha256="",
     )

@@ -1,12 +1,11 @@
-schema_version: oa_landslidedesc.qwen_export.v3
+schema_version: rs_generaldesc.qwen_export.v1
 profile: description_multitask.v1
-benchmark_root: /tmp/oa_landslidedesc_smoke_v3
-output_root: /tmp/oa_landslidedesc_smoke_qwen_v3
+benchmark_root: ../../../benchmark/rs_generaldesc_v1
+output_root: ../../../benchmark/rs_generaldesc_qwen_train_v1
 seed: 20260727
 purpose: training
 roles:
   - external_train
-  - oa_train
 task_families:
   - global_caption
   - visual_qa
@@ -15,6 +14,4 @@ task_families:
   - object_count
   - spatial_relation
   - visible_change_report
-  - oa_mask_facts
-  - oa_mask_description
 template_version: qwen3vl_messages.v2

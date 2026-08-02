@@ -9,11 +9,10 @@ from fixture_helpers import make_all_sources, write_build_config
 from oa_groundrag.phase3.adapters import (
     DisasterM3Adapter,
     MMRS1MAdapter,
-    OABenchmarkAdapter,
     RSGPTAdapter,
 )
-from oa_groundrag.phase3.adapters.oa import select_gold_candidates
 from oa_groundrag.phase3.config import load_build_config
+from oa_groundrag.phase3.builder import _enabled_adapters
 from oa_groundrag.phase3.contracts import TaskFamily
 from oa_groundrag.phase3.errors import ReasonCode
 
@@ -33,6 +32,12 @@ class AdapterTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_builder_enables_only_three_external_adapters(self) -> None:
+        self.assertEqual(
+            [type(adapter).__name__ for adapter in _enabled_adapters(self.config)],
+            ["RSGPTAdapter", "MMRS1MAdapter", "DisasterM3Adapter"],
+        )
 
     def test_rsgpt_valid_reject_and_duplicate(self) -> None:
         result = RSGPTAdapter(self.config).scan()
@@ -143,25 +148,3 @@ class AdapterTests(unittest.TestCase):
             if row.task_family is TaskFamily.OBJECT_COUNT
         )
         self.assertEqual([asset.role for asset in single.assets], ["image"])
-
-    def test_oa_auto_empty_positive_and_gold_identity_selection(self) -> None:
-        result = OABenchmarkAdapter(self.config).scan()
-        self.assertEqual(len(result.examples), 2)
-        statuses = {
-            row.deterministic_facts["mask_status"] for row in result.examples
-        }
-        self.assertEqual(statuses, {"empty", "positive"})
-        self.assertFalse(result.audit["gold_selection_evaluated"])
-        selection = select_gold_candidates(
-            self.roots["oa"],
-            self.roots["oa"],
-            seed=self.config.seed,
-        )
-        self.assertEqual(len(selection), 358)
-        self.assertEqual(
-            dict(Counter(row["split"] for row in selection)),
-            {"test": 100, "train": 158, "val": 100},
-        )
-        for row in result.examples:
-            self.assertEqual(row.annotation_layer.value, "oa_auto")
-            self.assertEqual(row.logical_role.value, "oa_train")

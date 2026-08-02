@@ -1,4 +1,4 @@
-"""OA evidence 消息构造；External 消息继续由 Phase 2 renderer 提供。"""
+"""Mask-grounded evidence 消息构造；External 消息由 phase3 renderer 提供。"""
 
 from __future__ import annotations
 

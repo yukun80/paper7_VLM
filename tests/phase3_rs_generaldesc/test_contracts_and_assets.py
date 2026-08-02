@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import math
 import tempfile
 import unittest
 from pathlib import Path
 
-import numpy as np
 import yaml
-from PIL import Image
 
-from fixture_helpers import build_config_dict, make_all_sources, make_image, mask_bytes
+from fixture_helpers import build_config_dict, make_all_sources, make_image
 from oa_groundrag.phase3.assets import (
     AssetStore,
     normalize_bbox_target,
@@ -35,6 +32,9 @@ from oa_groundrag.phase3.contracts import (
 )
 from oa_groundrag.phase3.errors import AssetError, ConfigError, ReasonCode, SchemaError
 from oa_groundrag.phase3.splitter import assign_external_splits
+
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 class ConfigAndIdentityTests(unittest.TestCase):
@@ -67,7 +67,7 @@ class ConfigAndIdentityTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load_build_config(self._write(value))
         value = build_config_dict(self.roots, self.base / "out")
-        value["asset_policy"]["oa_preview_clip"] = [float("nan"), 3.0]
+        value["asset_policy"]["image_quality"] = float("nan")
         self._write(value)
         with self.assertRaises(SchemaError) as caught:
             load_build_config(self.base / "config.yaml")
@@ -94,7 +94,7 @@ class ConfigAndIdentityTests(unittest.TestCase):
 
     def test_export_config_requires_typed_nonempty_roles(self) -> None:
         value = {
-            "schema_version": "oa_landslidedesc.qwen_export.v3",
+            "schema_version": "rs_generaldesc.qwen_export.v1",
             "profile": "description_multitask.v1",
             "benchmark_root": str(self.base / "benchmark"),
             "output_root": str(self.base / "export"),
@@ -115,27 +115,34 @@ class ConfigAndIdentityTests(unittest.TestCase):
             load_export_config(self._write(value))
         self.assertEqual(caught.exception.code, ReasonCode.INVALID_ENUM)
 
-    def test_external_split_and_disabled_oa_are_strict(self) -> None:
+    def test_external_split_and_native_config_are_strict(self) -> None:
         value = build_config_dict(
             self.roots,
             self.base / "external",
-            oa_enabled=False,
         )
         config = load_build_config(self._write(value))
-        self.assertFalse(config.oa.enabled)
+        self.assertNotIn("retired_component", config.sanitized())
         self.assertEqual(config.external_split.validation_percent, 5)
-        value["oa"]["benchmark_root"] = str(self.roots["oa"])
+        value["retired_component"] = {"enabled": False}
         with self.assertRaises(ConfigError):
             load_build_config(self._write(value))
 
         value = build_config_dict(
             self.roots,
             self.base / "bad-percent",
-            oa_enabled=False,
         )
         value["external_split"]["validation_percent"] = True
         with self.assertRaises(ConfigError):
             load_build_config(self._write(value))
+
+    def test_native_full_semantic_identity_is_stable(self) -> None:
+        config = load_build_config(
+            REPO / "configs/phase3_rs_generaldesc/full.yaml"
+        )
+        self.assertEqual(
+            config.semantic_hash,
+            "bb9b00ea44fb1c79e9efdfa00fbf73e8d8e9e5c416b8e9ff48d0c0b550e0d162",
+        )
 
     def test_stable_record_and_parent_ids(self) -> None:
         first = parent_id("rsgpt", "RSICap/a.png")
@@ -151,7 +158,6 @@ class ConfigAndIdentityTests(unittest.TestCase):
                 build_config_dict(
                     self.roots,
                     self.base / "split-output",
-                    oa_enabled=False,
                     validation_percent=5,
                 )
             )
@@ -212,7 +218,6 @@ class ConfigAndIdentityTests(unittest.TestCase):
                 build_config_dict(
                     self.roots,
                     self.base / "deep-filter-output",
-                    oa_enabled=False,
                 )
             )
         )
@@ -277,29 +282,14 @@ class ConfigAndIdentityTests(unittest.TestCase):
         )
         self.assertEqual(summary["content_fingerprint_error_count"], 1)
 
-    def test_oa_role_and_annotation_layer_constraints(self) -> None:
+    def test_native_role_and_annotation_contract_is_external_only(self) -> None:
         validate_role_layer(
             LogicalRole.EXTERNAL_VAL,
             AnnotationLayer.EXTERNAL_SOURCE,
             ReviewStatus.NOT_REQUIRED,
         )
-        validate_role_layer(
-            LogicalRole.OA_TRAIN,
-            AnnotationLayer.OA_AUTO,
-            ReviewStatus.NOT_REQUIRED,
-        )
-        with self.assertRaises(SchemaError):
-            validate_role_layer(
-                LogicalRole.OA_VAL,
-                AnnotationLayer.OA_AUTO,
-                ReviewStatus.NOT_REQUIRED,
-            )
-        with self.assertRaises(SchemaError):
-            validate_role_layer(
-                LogicalRole.OA_TEST,
-                AnnotationLayer.OA_GOLD,
-                ReviewStatus.UNREVIEWED,
-            )
+        with self.assertRaises(ValueError):
+            LogicalRole("unsupported_role")
 
     def test_portable_paths_reject_absolute_and_escape(self) -> None:
         self.assertEqual(
@@ -336,11 +326,9 @@ class AssetGeometryTests(unittest.TestCase):
             limits=self.config.limits,
         )
 
-    def test_exif_bbox_and_mask_transform_are_synchronized(self) -> None:
+    def test_exif_bbox_transform_and_normalized_hash_are_synchronized(self) -> None:
         image = self.base / "oriented.jpg"
         make_image(image, size=(3, 2), orientation=6)
-        mask = self.base / "mask.png"
-        mask.write_bytes(mask_bytes(size=(3, 2), positive=True))
         assets = (
             PendingAsset(
                 role="image",
@@ -349,23 +337,10 @@ class AssetGeometryTests(unittest.TestCase):
                 source_ref="fixture/image.jpg",
                 source_path=image,
             ),
-            PendingAsset(
-                role="mask",
-                media_type=MediaType.MASK,
-                extension="png",
-                source_ref="fixture/mask.png",
-                source_path=mask,
-                align_to_role="image",
-            ),
         )
         media, geometry, _ = self._store().materialize(assets)
         image_media = next(row for row in media if row["role"] == "image")
-        mask_media = next(row for row in media if row["role"] == "mask")
         self.assertEqual((image_media["width"], image_media["height"]), (2, 3))
-        self.assertEqual(
-            (mask_media["width"], mask_media["height"]),
-            (image_media["width"], image_media["height"]),
-        )
         target = normalize_bbox_target(
             {
                 "type": "bbox",
@@ -385,11 +360,9 @@ class AssetGeometryTests(unittest.TestCase):
             image_media["sha256"],
         )
 
-    def test_zero_bbox_empty_mask_and_allow_empty(self) -> None:
+    def test_zero_bbox_and_non_image_media_are_rejected(self) -> None:
         image = self.base / "image.png"
         make_image(image)
-        empty = self.base / "empty.png"
-        empty.write_bytes(mask_bytes(positive=False))
         store = self._store()
         image_asset = PendingAsset(
             role="image",
@@ -410,56 +383,8 @@ class AssetGeometryTests(unittest.TestCase):
                 geometry,
             )
         self.assertEqual(caught.exception.code, ReasonCode.BBOX_ZERO_AREA)
-        with self.assertRaises(AssetError) as caught:
-            store.materialize(
-                (
-                    image_asset,
-                    PendingAsset(
-                        role="mask",
-                        media_type=MediaType.MASK,
-                        extension="png",
-                        source_ref="fixture/empty.png",
-                        source_path=empty,
-                        align_to_role="image",
-                    ),
-                )
-            )
-        self.assertEqual(caught.exception.code, ReasonCode.MASK_EMPTY)
-        media, _, _ = store.materialize(
-            (
-                image_asset,
-                PendingAsset(
-                    role="mask",
-                    media_type=MediaType.MASK,
-                    extension="png",
-                    source_ref="fixture/empty.png",
-                    source_path=empty,
-                    align_to_role="image",
-                    allow_empty=True,
-                ),
-            )
-        )
-        self.assertEqual(len(media), 2)
-
-        invalid = self.base / "invalid.png"
-        array = np.zeros((6, 8), dtype=np.uint8)
-        array[0, 0] = 2
-        Image.fromarray(array).save(invalid)
-        with self.assertRaises(AssetError) as caught:
-            store.materialize(
-                (
-                    image_asset,
-                    PendingAsset(
-                        role="invalid_mask",
-                        media_type=MediaType.MASK,
-                        extension="png",
-                        source_ref="fixture/invalid.png",
-                        source_path=invalid,
-                        align_to_role="image",
-                    ),
-                )
-            )
-        self.assertEqual(caught.exception.code, ReasonCode.MASK_INVALID_VALUES)
+        with self.assertRaises(ValueError):
+            MediaType("unsupported_media")
 
     def test_asset_count_limit_is_enforced(self) -> None:
         limited = AssetStore(

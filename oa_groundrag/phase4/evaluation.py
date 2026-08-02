@@ -109,13 +109,13 @@ def _validate_row(
         if row["model_output"] is not None or evidence_ids:
             raise EvaluationError(
                 ReasonCode.EXTERNAL_MASK_FORBIDDEN,
-                "External prediction 不允许 OA model_output/evidence",
+                "External prediction 不允许 mask-grounded model_output/evidence",
             )
         return None
     if not isinstance(row["model_output"], dict):
         raise EvaluationError(
             ReasonCode.PREDICTION_INVALID,
-            "OA prediction 缺少 structured model_output",
+            "mask-grounded prediction 缺少 structured model_output",
         )
     output = parse_model_output(
         row["model_output"],
@@ -317,7 +317,7 @@ def evaluate_predictions(
 ) -> Path:
     if formal:
         raise EvaluationError(
-            ReasonCode.OA_TEST_SEALED,
+            ReasonCode.FORMAL_EVALUATION_FORBIDDEN,
             "phase4 本轮不执行正式评价",
         )
     prediction_path = Path(prediction_path)
@@ -351,12 +351,12 @@ def evaluate_predictions(
     evidence_violations = 0
     no_target_hallucinations = 0
     target_status_mismatches = 0
-    oa_task_metrics: dict[str, Counter[str]] = defaultdict(Counter)
+    mask_task_metrics: dict[str, Counter[str]] = defaultdict(Counter)
     for row in rows:
         output = _validate_row(row, expected_mask_mode=expected_mask_mode)
         if output is None:
             continue
-        task_metrics = oa_task_metrics[str(row["task_family"])]
+        task_metrics = mask_task_metrics[str(row["task_family"])]
         task_metrics["count"] += 1
         outputs[str(row["record_id"])] = output
         if any(not claim.evidence_ids for claim in output.claims):
@@ -379,7 +379,7 @@ def evaluate_predictions(
         per_task = _external_metrics(rows)
         counterfactual = {
             "not_applicable": True,
-            "reason": "external_generic_has_no_oa_masks",
+            "reason": "external_generic_has_no_masks",
         }
     else:
         per_task = {
@@ -395,7 +395,7 @@ def evaluate_predictions(
                     "no_target_hallucinations"
                 ],
             }
-            for task, values in sorted(oa_task_metrics.items())
+            for task, values in sorted(mask_task_metrics.items())
         }
         counterfactual = _counterfactual_metrics(rows, outputs)
     report = {

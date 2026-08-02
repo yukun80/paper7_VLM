@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Phase 2 三库描述与视觉理解多任务 Benchmark 统一入口。
+"""RS-GeneralDesc 三库描述与视觉理解多任务 Benchmark 统一入口。
 
-用途：调用库层 audit、build、validate 或 export。
+命令：python scripts/phase3_rs_generaldesc/run_rs_generaldesc.py --help
+用途：调用库层 audit、build、repackage、validate 或 export。
 输入：严格 YAML 配置，或已构建的 canonical 根。
 输出：JSON 报告、自包含 canonical Benchmark，或 task-aware Qwen messages。
-写入：audit/validate 默认只读；build/export 拒绝覆盖并经 staging 原子发布。
-所属阶段：算法 Phase 2；仓库实现路径 phase3。
+写入：audit/validate 不修改 Benchmark；报告、build、repackage 和 export 均拒绝覆盖并原子发布。
+所属阶段：新路线 Stage 2；仓库实现路径 phase3。
 """
 
 import sys

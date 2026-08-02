@@ -1,4 +1,4 @@
-"""算法 Phase 3 / 仓库 phase4：Mask-Grounded VLM Description。"""
+"""算法 Phase 3 / 仓库 phase4：RS-VLM。"""
 
 from .checkpoint import CheckpointManager, TrainingCursor
 from .contracts import (
@@ -29,10 +29,7 @@ from .config import Phase4Config, apply_runtime_overrides, load_config
 from .data import (
     DescriptionSample,
     ExternalDescriptionDataset,
-    MaskGroundedDescriptionDataset,
-    MaskGroundedExample,
     inventory_from_auxseg_inference,
-    inventory_from_canonical_oa_item,
     locate_bounded_external_records,
 )
 from .evaluation import evaluate_predictions
@@ -72,8 +69,6 @@ __all__ = [
     "FAILURE_SCHEMA_VERSION",
     "MODEL_OUTPUT_SCHEMA_VERSION",
     "MaskMode",
-    "MaskGroundedDescriptionDataset",
-    "MaskGroundedExample",
     "MAIN_REFERENCE",
     "Phase4Config",
     "PREDICTION_SCHEMA_VERSION",
@@ -99,7 +94,6 @@ __all__ = [
     "evaluate_teacher_forced_loss",
     "inspect_benchmark_identity",
     "inventory_from_auxseg_inference",
-    "inventory_from_canonical_oa_item",
     "load_config",
     "locate_bounded_external_records",
     "parse_model_output",

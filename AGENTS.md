@@ -16,7 +16,7 @@ OA-GroundRAG v2 路线继续开发。当前设计权威为：
 
 ```text
 Stage 0  冻结现有资产并切换权威路线
-Stage 1  OA-AuxSeg 正式验收
+Stage 1  OA-AuxSeg 工程定版（Gate A 待执行）
 Stage 2  RS-GeneralDesc Benchmark 验收
 Stage 3  RS-General Adapter 评价
 Stage 4  Landslide Evidence Corpus 与 OA-GroundedEval
@@ -27,16 +27,32 @@ Stage 8  可选 Landslide-Evidence Adapter
 Stage 9  统一推理与报告
 ```
 
-这些 Stage 是科学依赖顺序，不要求重命名已有 `phase2/phase3/phase4` 工程目录。
-不得跳过 Gate，不得把代码存在、checkpoint 文件存在或中途指标当作正式验收。
+这些 Stage 包含两条可独立推进的依赖支线：OA-AuxSeg 工程定版 → 未来 Gate A →
+formal fixed masks；RS-GeneralDesc Stage 2 → Adapter 重训 → Gate B。两条支线在后续
+Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不阻止独立的 Stage 2/3 支线准备；
+任何依赖 Gate 的下游产物仍不得越过对应 Gate。工程目录无需随 Stage 重命名。
 
 ## 3. 当前边界
 
-Stage 0 已完成权威迁移；当前科学状态是
-`Stage 1 OA-AuxSeg proposed final checkpoint frozen and training report completed /
-Gate A pending`。项目负责人已将 batch-16 proposed 训练主动停止，并冻结
-`checkpoint_best.pt` step 206820 为当前最终权重；不再续训。离线 train/val 工程报告
-已经完成，但 Gate A、消融、sealed test 和正式 fixed masks 尚未执行。
+当前科学状态是
+`Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
+Stage 2 以 `/home/yukun80/codes/benchmark/rs_generaldesc_v1`、
+`rs_generaldesc.manifest.v1` 和 `rs_generaldesc.canonical.v1` 原生发布
+External train/val；manifest 本身 eligible 且 blockers 为空，不再需要额外作用域报告。
+该结论不等于 OA-Grounded 数据验收或 Gate B 通过，`external_val` 仍只用于训练监控。
+Stage 1 的 batch-16
+proposed final 权重仍为 `checkpoint_best.pt` step 206820，不再续训；Gate A、消融、
+sealed test 和正式 fixed masks 继续延后。
+
+活动产品统一称为 **RS-GeneralDesc Benchmark**，训练系统统一称为 **RS-VLM**。
+phase3 只保留三类 External source、两类 role 与七类文本任务；没有 OA Gold/Silver、
+mask target、混合 builder、旧 schema validator 或兼容 alias。phase4 配置为
+`rs_vlm.config.v2`，其他产物合同仍为 `rs_vlm.*.v1`；preflight 和 Dataset 按需绑定
+native manifest、validation、build、payload、ledger、shard 与 asset identity。
+GT/fixed/end-to-end mask、RegionSelector、EvidenceBuilder、mask-grounded messages 和
+AuxSeg inference 仅作为 Stage 5 核心保留；临时 Mask-Grounded Dataset 合同未公开，
+须等新数据 schema 冻结后才能接入活动运行入口。上一轮候选 Adapter
+产物已随身份迁移删除，Stage 3 必须重新训练后再冻结 Gate B。
 
 进入后续任务前，必须重新核对 `REBUILD_PROGRESS.md` 并取得项目负责人对相应写入、
 正式评价或长训练的明确授权。未经新授权禁止：
@@ -46,7 +62,7 @@ Gate A pending`。项目负责人已将 batch-16 proposed 训练主动停止，�
 - 修改 `../datasets`、`../benchmark` 或 `../external`；
 - 修改或复制第三方参考实现；
 - 修改既有 Benchmark、checkpoint、训练输出或模型权重；
-- 提前实施 Stage 2 的合同迁移、Stage 4 的数据构建或 Stage 6/7 的 RAG；
+- 提前实施 Stage 4 的数据构建或 Stage 6/7 的 RAG；
 - 创建 legacy 目录、兼容包装、alias 或旧接口适配层。
 
 Gate A/B 的科学判据必须只基于 train/val 预注册并在首次正式 test 前冻结，不得读取

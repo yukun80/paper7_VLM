@@ -13,25 +13,22 @@ import numpy as np
 from .errors import ContractError, ReasonCode
 
 
-CONFIG_SCHEMA_VERSION = "oa_mask_grounded_description.config.v1"
-EVIDENCE_SCHEMA_VERSION = "oa_mask_grounded_description.evidence.v1"
-MODEL_OUTPUT_SCHEMA_VERSION = "oa_mask_grounded_description.model_output.v1"
-PREDICTION_SCHEMA_VERSION = "oa_mask_grounded_description.prediction.v1"
-FAILURE_SCHEMA_VERSION = "oa_mask_grounded_description.failure.v1"
-CHECKPOINT_SCHEMA_VERSION = "oa_mask_grounded_description.checkpoint.v1"
-RUN_MANIFEST_SCHEMA_VERSION = "oa_mask_grounded_description.run_manifest.v1"
-SAMPLE_TRACE_SCHEMA_VERSION = (
-    "oa_mask_grounded_description.sample_trace.v2"
-)
+CONFIG_SCHEMA_VERSION = "rs_vlm.config.v2"
+EVIDENCE_SCHEMA_VERSION = "rs_vlm.evidence.v1"
+MODEL_OUTPUT_SCHEMA_VERSION = "rs_vlm.model_output.v1"
+PREDICTION_SCHEMA_VERSION = "rs_vlm.prediction.v1"
+FAILURE_SCHEMA_VERSION = "rs_vlm.failure.v1"
+CHECKPOINT_SCHEMA_VERSION = "rs_vlm.checkpoint.v1"
+RUN_MANIFEST_SCHEMA_VERSION = "rs_vlm.run_manifest.v1"
+SAMPLE_TRACE_SCHEMA_VERSION = "rs_vlm.sample_trace.v1"
 
-SUPPORTED_MANIFEST_SCHEMA = "oa_landslidedesc.manifest.v3"
-SUPPORTED_CANONICAL_SCHEMA = "oa_landslidedesc.canonical.v3"
+SUPPORTED_MANIFEST_SCHEMA = "rs_generaldesc.manifest.v1"
+SUPPORTED_CANONICAL_SCHEMA = "rs_generaldesc.canonical.v1"
 SUPPORTED_AUXSEG_INFERENCE_SCHEMA = "oa_auxseg_inference_v6"
 
 
 class DataMode(StrEnum):
     EXTERNAL_GENERIC = "external_generic"
-    OA_MASK_GROUNDED = "oa_mask_grounded"
 
 
 class MaskMode(StrEnum):
@@ -166,7 +163,6 @@ class RegionCandidate:
         if self.provenance not in {
             "candidate_region",
             "oa_auxseg_inference_v6",
-            "canonical_oa_mask",
         }:
             raise ContractError(
                 ReasonCode.INVALID_ENUM,

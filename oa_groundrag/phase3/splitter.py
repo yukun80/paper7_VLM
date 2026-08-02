@@ -92,8 +92,6 @@ def assign_external_splits(
     if check_content:
         unique_image_assets: dict[tuple[str, ...], PendingAsset] = {}
         for result in results:
-            if result.source == "oa":
-                continue
             for example in result.examples:
                 for asset in example.assets:
                     if asset.media_type is MediaType.IMAGE:
@@ -124,7 +122,7 @@ def assign_external_splits(
         else:
             with ThreadPoolExecutor(
                 max_workers=min(config.workers, len(ordered_assets)),
-                thread_name_prefix="oa-landslidedesc-fingerprint",
+                thread_name_prefix="rs-generaldesc-fingerprint",
             ) as executor:
                 fingerprint_rows = list(executor.map(fingerprint, ordered_assets))
         for cache_key, digest, error in fingerprint_rows:
@@ -135,8 +133,6 @@ def assign_external_splits(
                 fingerprint_cache[cache_key] = digest
 
         for result in results:
-            if result.source == "oa":
-                continue
             valid_examples: list[SourceExample] = []
             deep_rejected_examples = 0
             for example in result.examples:
@@ -196,7 +192,6 @@ def assign_external_splits(
     external_examples = [
         example
         for result in results
-        if result.source != "oa"
         for example in result.examples
     ]
     nodes = sorted({(row.source, row.parent_key) for row in external_examples})
@@ -363,8 +358,6 @@ def assign_external_splits(
     assignment_sha256 = sha256_text(canonical_json(assignment_rows))
 
     for result in results:
-        if result.source == "oa":
-            continue
         updated: list[SourceExample] = []
         for example in result.examples:
             node = (example.source, example.parent_key)
@@ -423,7 +416,6 @@ def assign_external_splits(
     all_updated = [
         example
         for result in results
-        if result.source != "oa"
         for example in result.examples
     ]
     return {

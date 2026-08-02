@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from oa_groundrag.phase3.dataset import (
-    OALandslideDescDataset,
+    RSGeneralDescDataset,
     ParentBalancedSampler,
 )
 
@@ -25,7 +25,7 @@ from .data import (
     locate_bounded_external_records,
 )
 from .errors import PreflightError, ReasonCode
-from .preflight import inspect_benchmark_identity
+from .preflight import open_benchmark_access
 from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
 from .reference import MAIN_REFERENCE
 
@@ -46,17 +46,20 @@ def run_bounded_external_smoke(
             ReasonCode.OUTPUT_EXISTS,
             f"smoke output_root 已存在：{target}",
         )
-    identity = inspect_benchmark_identity(config)
-    selection = locate_bounded_external_records(config)
+    access = open_benchmark_access(config)
+    identity = access.identity
+    selection = locate_bounded_external_records(config, access=access)
     with AtomicArtifactDirectory(target) as writer:
         assert writer.staging is not None
-        canonical = OALandslideDescDataset.from_locations(
+        canonical = RSGeneralDescDataset.from_locations(
             config.data.benchmark_root,
             selection.locations,
             roles=config.data.roles,
             task_families=config.data.task_families,
             load_assets=False,
             seed=config.run.seed,
+            expected_manifest_sha256=config.data.expected_manifest_sha256,
+            verifier=access.verifier,
         )
         expected_ids = [str(row["record_id"]) for row in selection.records]
         actual_ids = [str(row["record_id"]) for row in canonical.records]
@@ -192,7 +195,7 @@ def run_bounded_external_smoke(
                 ),
             },
             "formal_acceptance": False,
-            "oa_mask_grounded_data_used": False,
+            "mask_grounded_data_used": False,
         }
         writer.write_json("report.json", report)
         writer.write_json(

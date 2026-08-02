@@ -1,4 +1,4 @@
-"""自包含资产规范化、内容寻址与 bbox/mask 同步几何变换。"""
+"""自包含图像规范化、内容寻址与 bbox 同步几何变换。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .common import portable_relative_path, sha256_bytes, sha256_file
@@ -110,9 +109,7 @@ def _source_bytes(asset: PendingAsset) -> tuple[bytes, str]:
             payload = archive.read(info)
     except KeyError as error:
         raise AssetError(
-            ReasonCode.MASK_MISSING
-            if asset.media_type is MediaType.MASK
-            else ReasonCode.ASSET_MISSING,
+            ReasonCode.ASSET_MISSING,
             f"{asset.role}: archive member 缺失",
             details={"source_ref": asset.source_ref},
         ) from error
@@ -156,19 +153,6 @@ def _orientation_transform(
     if orientation == 8:
         return y, width - x
     return x, y
-
-
-def _transpose_by_orientation(image: Image.Image, orientation: int) -> Image.Image:
-    operation = {
-        2: Image.Transpose.FLIP_LEFT_RIGHT,
-        3: Image.Transpose.ROTATE_180,
-        4: Image.Transpose.FLIP_TOP_BOTTOM,
-        5: Image.Transpose.TRANSPOSE,
-        6: Image.Transpose.ROTATE_270,
-        7: Image.Transpose.TRANSVERSE,
-        8: Image.Transpose.ROTATE_90,
-    }.get(orientation)
-    return image.transpose(operation) if operation is not None else image.copy()
 
 
 def _normalize_image(
@@ -397,119 +381,6 @@ class AssetStore:
         )
         return MaterializedAsset(media=media, geometry=normalized.geometry)
 
-    def add_mask(
-        self,
-        asset: PendingAsset,
-        *,
-        image_geometry: ImageGeometry,
-    ) -> MaterializedAsset:
-        raw, source_digest = _source_bytes(asset)
-        try:
-            with Image.open(io.BytesIO(raw)) as opened:
-                opened.load()
-                if opened.size != image_geometry.source_size:
-                    raise AssetError(
-                        ReasonCode.MASK_GEOMETRY_MISMATCH,
-                        f"{asset.role}: mask/source image 尺寸不一致",
-                        details={
-                            "mask_size": list(opened.size),
-                            "image_size": list(image_geometry.source_size),
-                        },
-                    )
-                array = np.asarray(opened)
-        except AssetError:
-            raise
-        except (UnidentifiedImageError, OSError, ValueError) as error:
-            raise AssetError(
-                ReasonCode.ASSET_CORRUPT,
-                f"{asset.role}: mask 无法解码",
-                details={"source_ref": asset.source_ref, "error": str(error)},
-            ) from error
-        if array.ndim == 3:
-            if array.shape[2] == 1:
-                array = array[:, :, 0]
-            elif np.all(array == array[:, :, :1]):
-                array = array[:, :, 0]
-            else:
-                raise AssetError(
-                    ReasonCode.MASK_INVALID_VALUES,
-                    f"{asset.role}: mask 必须是单通道离散图",
-                )
-        values = set(np.unique(array).tolist())
-        if not values.issubset({0, 1, 255}):
-            raise AssetError(
-                ReasonCode.MASK_INVALID_VALUES,
-                f"{asset.role}: mask 非法值 {sorted(values)[:20]}",
-            )
-        binary = (array > 0).astype(np.uint8) * 255
-        if not asset.allow_empty and not np.any(binary):
-            raise AssetError(
-                ReasonCode.MASK_EMPTY,
-                f"{asset.role}: mask 为空",
-                details={"source_ref": asset.source_ref},
-            )
-        image = Image.fromarray(binary)
-        oriented = _transpose_by_orientation(
-            image, image_geometry.exif_orientation
-        )
-        if oriented.size != image_geometry.oriented_size:
-            raise AssetError(
-                ReasonCode.MASK_GEOMETRY_MISMATCH,
-                f"{asset.role}: 方向变换后尺寸不一致",
-            )
-        if oriented.size != image_geometry.output_size:
-            output = oriented.resize(
-                image_geometry.output_size,
-                resample=Image.Resampling.NEAREST,
-            )
-        else:
-            output = oriented
-        encoded = io.BytesIO()
-        output.save(encoded, format="PNG", optimize=False, compress_level=9)
-        payload = encoded.getvalue()
-        media = self._store(
-            payload=payload,
-            kind=MediaType.MASK.value,
-            extension="png",
-            source_sha256=source_digest,
-            role=asset.role,
-            width=output.width,
-            height=output.height,
-            mode="L",
-        )
-        transforms = [
-            {
-                "type": "mask_exif_orientation",
-                "orientation": image_geometry.exif_orientation,
-                "interpolation": "nearest",
-            },
-            {
-                "type": "mask_resize",
-                "input_size": list(image_geometry.oriented_size),
-                "output_size": list(image_geometry.output_size),
-                "interpolation": "nearest",
-            },
-        ]
-        geometry = ImageGeometry(
-            source_size=image_geometry.source_size,
-            oriented_size=image_geometry.oriented_size,
-            output_size=image_geometry.output_size,
-            exif_orientation=image_geometry.exif_orientation,
-            transforms=tuple(transforms),
-        )
-        return MaterializedAsset(media=media, geometry=geometry)
-
-    def add_array(self, asset: PendingAsset) -> MaterializedAsset:
-        raw, source_digest = _source_bytes(asset)
-        media = self._store(
-            payload=raw,
-            kind=MediaType.ARRAY.value,
-            extension=asset.extension.lower(),
-            source_sha256=source_digest,
-            role=asset.role,
-        )
-        return MaterializedAsset(media=media, geometry=None)
-
     def materialize(
         self,
         assets: tuple[PendingAsset, ...],
@@ -527,7 +398,10 @@ class AssetStore:
         transforms: list[dict[str, Any]] = []
         for asset in assets:
             if asset.media_type is not MediaType.IMAGE:
-                continue
+                raise AssetError(
+                    ReasonCode.INVALID_ENUM,
+                    f"{asset.role}: RS-GeneralDesc 只接受 image media",
+                )
             item = self.add_image(asset)
             output.append(dict(item.media))
             assert item.geometry is not None
@@ -536,25 +410,6 @@ class AssetStore:
                 {"asset_role": asset.role, **dict(row)}
                 for row in item.geometry.transforms
             )
-        for asset in assets:
-            if asset.media_type is MediaType.MASK:
-                if asset.align_to_role is None or asset.align_to_role not in geometry:
-                    raise AssetError(
-                        ReasonCode.MASK_GEOMETRY_MISMATCH,
-                        f"{asset.role}: 缺少 align_to_role 图像几何",
-                    )
-                item = self.add_mask(
-                    asset, image_geometry=geometry[asset.align_to_role]
-                )
-                output.append(dict(item.media))
-                assert item.geometry is not None
-                geometry[asset.role] = item.geometry
-                transforms.extend(
-                    {"asset_role": asset.role, **dict(row)}
-                    for row in item.geometry.transforms
-                )
-            elif asset.media_type is MediaType.ARRAY:
-                output.append(dict(self.add_array(asset).media))
         output.sort(key=lambda row: (str(row["role"]), str(row["asset_id"])))
         return output, geometry, transforms
 

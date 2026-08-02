@@ -1,4 +1,4 @@
-"""统一 Dataset 接入、bounded locator 与未来 OA mask adapter。"""
+"""统一 Dataset 接入、bounded locator 与 mask-grounded 核心。"""
 
 from __future__ import annotations
 
@@ -11,24 +11,21 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
-from torch import Tensor
 from torch.utils.data import Dataset
 
 from oa_groundrag.phase3.common import (
-    canonical_json,
     first_symlink_component,
     portable_relative_path,
     read_json,
     read_jsonl_indices,
     reject_nonfinite,
     sha256_file,
-    sha256_text,
     stable_hash,
 )
 from oa_groundrag.phase3.contracts import validate_canonical_record
 from oa_groundrag.phase3.dataset import (
     CanonicalRecordLocation,
-    OALandslideDescDataset,
+    RSGeneralDescDataset,
 )
 from oa_groundrag.phase3.exporter import render_canonical_messages
 
@@ -39,11 +36,9 @@ from .contracts import (
     MaskMode,
     RegionCandidate,
     RegionInventory,
-    EvidenceBundle,
 )
 from .errors import ContractError, PreflightError, ReasonCode
-from .preflight import inspect_benchmark_identity
-from .messages import build_mask_grounded_messages
+from .preflight import BenchmarkAccess, open_benchmark_access
 
 
 REQUIRED_EXTERNAL_ROLES = frozenset({"external_train", "external_val"})
@@ -142,35 +137,6 @@ class BoundedCanonicalSelection:
         }
 
 
-def _regular_manifest_path(
-    root: Path,
-    relative: str,
-    *,
-    location: str,
-) -> Path:
-    pure = portable_relative_path(relative, location=location)
-    path = root.joinpath(*pure.parts)
-    linked = first_symlink_component(path)
-    if linked is not None:
-        raise PreflightError(
-            ReasonCode.OUTPUT_LINK,
-            f"{location}: 路径含链接组件 {linked}",
-        )
-    try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError as error:
-        raise PreflightError(
-            ReasonCode.PATH_ESCAPE,
-            f"{location}: 路径逃逸",
-        ) from error
-    if not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
-        raise PreflightError(
-            ReasonCode.OUTPUT_LINK,
-            f"{location}: 必须是普通单链接文件",
-        )
-    return path
-
-
 def _evenly_spaced(first: int, last: int, count: int) -> tuple[int, ...]:
     if last < first or count <= 0:
         return ()
@@ -265,6 +231,8 @@ def _asset_increment(
 
 def locate_bounded_external_records(
     config: Phase4Config,
+    *,
+    access: BenchmarkAccess | None = None,
 ) -> BoundedCanonicalSelection:
     """在固定探测上限内覆盖 2 roles、3 sources、7 tasks。"""
 
@@ -273,7 +241,12 @@ def locate_bounded_external_records(
             ReasonCode.EXTERNAL_MASK_FORBIDDEN,
             "bounded External locator 只接受 external_generic",
         )
-    inspect_benchmark_identity(config)
+    opened = access or open_benchmark_access(config)
+    if opened.root != config.data.benchmark_root.resolve():
+        raise PreflightError(
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            "BenchmarkAccess root 与 locator 配置不一致",
+        )
     limits = config.limits
     if (
         limits.max_probe_shards > 19
@@ -290,15 +263,7 @@ def locate_bounded_external_records(
             ReasonCode.ASSET_LIMIT_EXCEEDED,
             "bounded smoke 配置超过允许的探测/资产/token 上限",
         )
-    root = config.data.benchmark_root
-    manifest = read_json(root / "manifest.json")
-    layout = manifest["layout"]
-    shards = layout.get("record_shards")
-    if not isinstance(shards, list) or not shards:
-        raise PreflightError(
-            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
-            "manifest record_shards 非法",
-        )
+    shards = opened.record_shards
     counts: list[int] = []
     for index, shard in enumerate(shards):
         if (
@@ -320,15 +285,8 @@ def locate_bounded_external_records(
             ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
             "仅支持除尾分片外等长 canonical shards",
         )
-    statistics = read_json(
-        _regular_manifest_path(
-            root,
-            layout["statistics"],
-            location="layout.statistics",
-        )
-    )
     shard_indices = _probe_shard_indices(
-        statistics,
+        opened.statistics,
         records_per_shard=records_per_shard,
     )
     if len(shard_indices) > limits.max_probe_shards:
@@ -356,14 +314,16 @@ def locate_bounded_external_records(
                 ReasonCode.ASSET_LIMIT_EXCEEDED,
                 "probe records 将超过配置上限，拒绝扩大窗口",
             )
-        path = _regular_manifest_path(
-            root,
-            shard["path"],
-            location=f"record_shards[{shard_index}]",
-        )
+        path = opened.verify_file(str(shard["path"]))
         rows = read_jsonl_indices(path, tuple(range(count)))
         for line_index, row in rows.items():
             validate_canonical_record(row)
+            for media in row["media"]:
+                opened.assert_declared_identity(
+                    str(media["path"]),
+                    size_bytes=media["size_bytes"],
+                    sha256=media["sha256"],
+                )
             candidates.append(
                 (
                     CanonicalRecordLocation(shard["path"], line_index),
@@ -503,7 +463,7 @@ class ExternalDescriptionDataset(Dataset[DescriptionSample]):
 
     def __init__(
         self,
-        canonical: OALandslideDescDataset,
+        canonical: RSGeneralDescDataset,
         *,
         derived_root: Path,
         seed: int,
@@ -513,7 +473,7 @@ class ExternalDescriptionDataset(Dataset[DescriptionSample]):
         role_set = set(roles or REQUIRED_EXTERNAL_ROLES)
         if not role_set or role_set - REQUIRED_EXTERNAL_ROLES:
             raise ContractError(
-                ReasonCode.OA_ROLE_FORBIDDEN,
+                ReasonCode.ROLE_FORBIDDEN,
                 "ExternalDescriptionDataset roles 只能是非空 "
                 "external_train/external_val 子集",
             )
@@ -639,9 +599,8 @@ class ExternalDescriptionDataset(Dataset[DescriptionSample]):
                     resolved.append(dict(item))
                     continue
                 if "benchmark_asset" in item:
-                    path = self.canonical.resolve_contract_path(
+                    path = self.canonical.resolve_verified_asset_path(
                         str(item["benchmark_asset"]),
-                        location="renderer.benchmark_asset",
                     )
                 elif "export_asset" in item:
                     pure = portable_relative_path(
@@ -704,256 +663,6 @@ def collate_description_samples(
         "provenance": [sample.provenance for sample in samples],
         "counterfactual": [sample.counterfactual for sample in samples],
     }
-
-
-@dataclass(frozen=True)
-class MaskGroundedExample:
-    record_id: str
-    parent_id: str
-    logical_role: str
-    task_family: str
-    evidence: EvidenceBundle
-    evidence_root: Path
-    instruction: str
-    assistant_target: str | None
-    reference_responses: tuple[str, ...]
-    counterfactual: Mapping[str, Any] | None = None
-
-
-class MaskGroundedDescriptionDataset(Dataset[DescriptionSample]):
-    """EvidenceBundle 到唯一 OA messages 的轻量 Dataset。"""
-
-    def __init__(
-        self,
-        examples: Sequence[MaskGroundedExample],
-        *,
-        seed: int = 0,
-    ) -> None:
-        if not examples:
-            raise ContractError(
-                ReasonCode.TYPE_MISMATCH,
-                "MaskGroundedDescriptionDataset 不接受空 examples",
-            )
-        if isinstance(seed, bool) or not isinstance(seed, int):
-            raise ContractError(
-                ReasonCode.TYPE_MISMATCH,
-                "MaskGroundedDescriptionDataset.seed 必须是整数",
-            )
-        self.seed = seed
-        self.epoch = 0
-        samples: list[DescriptionSample] = []
-        records: list[dict[str, Any]] = []
-        parents_by_role: dict[str, set[str]] = {}
-        for example in examples:
-            if not example.logical_role.startswith("oa_"):
-                raise ContractError(
-                    ReasonCode.OA_ROLE_FORBIDDEN,
-                    "mask-grounded Dataset 只接受 oa_* role",
-                )
-            if example.evidence.mask_mode is MaskMode.EXTERNAL_GENERIC:
-                raise ContractError(
-                    ReasonCode.EXTERNAL_MASK_FORBIDDEN,
-                    "OA example 不允许 external_generic mask_mode",
-                )
-            if example.evidence.sample_id != example.record_id:
-                raise ContractError(
-                    ReasonCode.TYPE_MISMATCH,
-                    "evidence.sample_id 必须等于 record_id",
-                )
-            references = tuple(example.reference_responses)
-            if (
-                any(
-                    not isinstance(value, str) or not value.strip()
-                    for value in references
-                )
-                or len(references) != len(set(references))
-            ):
-                raise ContractError(
-                    ReasonCode.TYPE_MISMATCH,
-                    "OA reference_responses 必须是无重复非空字符串",
-                )
-            if example.logical_role == "oa_train" and (
-                not references
-                or example.assistant_target not in references
-            ):
-                raise ContractError(
-                    ReasonCode.TYPE_MISMATCH,
-                    "oa_train 要求 assistant_target 属于 reference_responses",
-                )
-            for role, parents in parents_by_role.items():
-                if (
-                    role != example.logical_role
-                    and example.parent_id in parents
-                ):
-                    raise ContractError(
-                        ReasonCode.OA_ROLE_FORBIDDEN,
-                        f"parent 跨 role 泄漏：{example.parent_id}",
-                    )
-            parents_by_role.setdefault(example.logical_role, set()).add(
-                example.parent_id
-            )
-            messages = build_mask_grounded_messages(
-                example.evidence,
-                evidence_root=example.evidence_root,
-                    instruction=example.instruction,
-                    assistant_target=example.assistant_target,
-                )
-            samples.append(
-                DescriptionSample(
-                    record_id=example.record_id,
-                    parent_id=example.parent_id,
-                    logical_role=example.logical_role,
-                    task_family=example.task_family,
-                    messages=tuple(messages),
-                    reference_responses=example.reference_responses,
-                    mask_mode=example.evidence.mask_mode,
-                    evidence_ids=tuple(sorted(example.evidence.evidence_ids)),
-                    provenance={
-                        "evidence_schema_version": example.evidence.schema_version,
-                        "expected_target_status": (
-                            example.evidence.target_status.value
-                        ),
-                        "known_limitations": list(
-                            example.evidence.limitations
-                        ),
-                        "selection": dict(example.evidence.selection),
-                    },
-                    counterfactual=example.counterfactual,
-                )
-            )
-            records.append(
-                {
-                    "record_id": example.record_id,
-                    "parent_id": example.parent_id,
-                    "logical_role": example.logical_role,
-                    "source": "oa",
-                    "task_family": example.task_family,
-                }
-            )
-        self._samples = tuple(samples)
-        self.records = tuple(records)
-        self.manifest = {
-            "payload_root_sha256": sha256_text(
-                canonical_json(
-                    [
-                        {
-                            "record_id": sample.record_id,
-                            "parent_id": sample.parent_id,
-                            "logical_role": sample.logical_role,
-                            "task_family": sample.task_family,
-                            "mask_mode": sample.mask_mode.value,
-                            "evidence_ids": list(sample.evidence_ids),
-                            "reference_responses": list(
-                                sample.reference_responses
-                            ),
-                        }
-                        for sample in self._samples
-                    ]
-                )
-            )
-        }
-
-    def __len__(self) -> int:
-        return len(self._samples)
-
-    def set_epoch(self, epoch: int) -> None:
-        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
-            raise ContractError(
-                ReasonCode.TYPE_MISMATCH,
-                "MaskGroundedDescriptionDataset.epoch 必须是 >= 0 的整数",
-            )
-        self.epoch = epoch
-
-    def __getitem__(self, index: int) -> DescriptionSample:
-        sample = self._samples[index]
-        if sample.logical_role != "oa_train":
-            return sample
-        rank = int(
-            stable_hash(
-                self.seed,
-                self.epoch,
-                sample.record_id,
-                "training_reference",
-            ),
-            16,
-        )
-        response = sample.reference_responses[
-            rank % len(sample.reference_responses)
-        ]
-        messages = copy.deepcopy(list(sample.messages))
-        if (
-            len(messages) != 2
-            or messages[-1].get("role") != "assistant"
-        ):
-            raise ContractError(
-                ReasonCode.TYPE_MISMATCH,
-                "oa_train messages 必须是单轮 user/assistant",
-            )
-        messages[-1] = {
-            "role": "assistant",
-            "content": [{"type": "text", "text": response}],
-        }
-        return replace(sample, messages=tuple(messages))
-
-
-def inventory_from_canonical_oa_item(
-    item: Mapping[str, Any],
-    *,
-    mask_mode: MaskMode = MaskMode.GT_MASK,
-) -> RegionInventory:
-    record = item.get("record")
-    if mask_mode is not MaskMode.GT_MASK:
-        raise ContractError(
-            ReasonCode.INVALID_ENUM,
-            "canonical OA mask 只能标记为 gt_mask",
-        )
-    target = record.get("target") if isinstance(record, dict) else None
-    if (
-        not isinstance(record, dict)
-        or not str(record.get("logical_role", "")).startswith("oa_")
-        or record.get("input_layout") != "mask_grounded"
-        or not isinstance(target, dict)
-        or target.get("type") != "mask"
-    ):
-        raise ContractError(
-            ReasonCode.OA_ROLE_FORBIDDEN,
-            "canonical OA item 必须是 oa_* mask_grounded record",
-        )
-    mask_role_value = target.get("mask_role")
-    if not isinstance(mask_role_value, str) or not mask_role_value:
-        raise ContractError(
-            ReasonCode.TYPE_MISMATCH,
-            "canonical OA target.mask_role 必须是非空字符串",
-        )
-    mask_role = mask_role_value
-    masks = item.get("masks")
-    if not isinstance(masks, dict) or mask_role not in masks:
-        raise ContractError(
-            ReasonCode.ASSET_MISSING,
-            f"canonical OA item 缺少 mask_role={mask_role}",
-        )
-    tensor = masks[mask_role]
-    if not isinstance(tensor, Tensor):
-        raise ContractError(
-            ReasonCode.TYPE_MISMATCH,
-            "canonical OA mask asset 必须是 torch.Tensor",
-        )
-    source_identity = record.get("record_sha256")
-    if not isinstance(source_identity, str) or len(source_identity) != 64:
-        raise ContractError(
-            ReasonCode.TYPE_MISMATCH,
-            "canonical OA record_sha256 非法",
-        )
-    array = np.asarray(tensor.detach().cpu().numpy())
-    if array.ndim == 3 and array.shape[0] == 1:
-        array = array[0]
-    return RegionInventory(
-        sample_id=str(record["record_id"]),
-        mask_mode=mask_mode,
-        global_mask=array,
-        candidates=(),
-        source_identity=source_identity,
-    )
 
 
 def _unique_json(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

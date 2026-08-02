@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import zipfile
 from pathlib import Path
 from typing import Any
 
-import h5py
 import numpy as np
 import yaml
 from PIL import Image, ImageDraw
 
-from oa_groundrag.phase3.common import atomic_write_json, atomic_write_jsonl, sha256_file
+from oa_groundrag.phase3.common import atomic_write_json
 
 
 def make_image(
@@ -340,99 +337,15 @@ def make_disaster(root: Path) -> None:
         archive.writestr("masks/flooding/empty.png", mask_bytes(positive=False))
 
 
-def _hex(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
-def make_oa_benchmark(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    split_counts = (("train", 158), ("val", 100), ("test", 100))
-    rows: list[dict[str, Any]] = []
-    total = sum(count for _, count in split_counts)
-    optical = np.zeros((total, 3, 4, 4), dtype=np.float32)
-    optical_valid = np.ones((total, 3, 4, 4), dtype=np.uint8)
-    channel_valid = np.ones((total, 3), dtype=np.uint8)
-    masks = np.zeros((total, 1, 4, 4), dtype=np.uint8)
-    position = 0
-    for split, count in split_counts:
-        for local_index in range(count):
-            sample_id = f"fixture::{split}-{local_index:03d}"
-            positive = local_index % 2 == 1
-            optical[position, 0] = local_index
-            optical[position, 1] = local_index + 1
-            optical[position, 2] = local_index + 2
-            if positive:
-                masks[position, 0, 1:3, 1:3] = 1
-            row = {
-                "schema_version": "oa_auxseg_hdf5_v1",
-                "sample_id": sample_id,
-                "source": "fixture",
-                "source_group_id": f"fixture-group-{split}-{local_index:03d}",
-                "group_status": "known",
-                "source_record_sha256": _hex(f"source:{sample_id}"),
-                "record_sha256": _hex(f"record:{sample_id}"),
-                "split": split,
-                "foreground_ratio": 0.25 if positive else 0.0,
-                "optical": {
-                    "channel_names": ["Red", "Green", "Blue"],
-                    "shape": [3, 4, 4],
-                    "pixel_validity": True,
-                    "channel_validity": True,
-                },
-                "auxiliaries": {},
-                "mask": {"shape": [1, 4, 4], "values": [0, 1]},
-                "resize": {
-                    "original_size": [4, 4],
-                    "target_size": [4, 4],
-                },
-                "storage": {"shard": "data/shard.h5", "row": position},
-            }
-            rows.append(row)
-            position += 1
-    shard = root / "data/shard.h5"
-    shard.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(shard, "w") as handle:
-        handle.create_dataset("optical", data=optical)
-        handle.create_dataset("optical_pixel_valid", data=optical_valid)
-        handle.create_dataset("optical_channel_valid", data=channel_valid)
-        handle.create_dataset("mask", data=masks)
-    atomic_write_jsonl(root / "index.jsonl", rows)
-    atomic_write_json(
-        root / "source_statistics.json",
-        {
-            "schema_version": "oa_auxseg_hdf5_v1",
-            "sources": {
-                "fixture": {
-                    "optical": [
-                        {"index": 0, "name": "Red", "mean": 40.0, "std": 20.0},
-                        {"index": 1, "name": "Green", "mean": 41.0, "std": 20.0},
-                        {"index": 2, "name": "Blue", "mean": 42.0, "std": 20.0},
-                    ]
-                }
-            },
-        },
-    )
-    atomic_write_json(
-        root / "manifest.json",
-        {
-            "schema_version": "oa_auxseg_hdf5_v1",
-            "sample_count": len(rows),
-            "index_sha256": sha256_file(root / "index.jsonl"),
-        },
-    )
-
-
 def make_all_sources(base: Path) -> dict[str, Path]:
     roots = {
         "rsgpt": base / "rsgpt",
         "mmrs1m": base / "mmrs",
         "disasterm3": base / "disaster",
-        "oa": base / "oa",
     }
     make_rsgpt(roots["rsgpt"])
     make_mmrs(roots["mmrs1m"])
     make_disaster(roots["disasterm3"])
-    make_oa_benchmark(roots["oa"])
     return roots
 
 
@@ -445,29 +358,9 @@ def build_config_dict(
     max_assets: int | None = 64,
     seed: int = 7,
     validation_percent: int = 5,
-    oa_enabled: bool = True,
 ) -> dict[str, Any]:
-    oa = (
-        {
-            "enabled": True,
-            "benchmark_root": str(roots["oa"]),
-            "selection_root": str(roots["oa"]),
-            "gold_annotations": None,
-            "silver_annotations": None,
-            "expected_gold_count": 358,
-        }
-        if oa_enabled
-        else {
-            "enabled": False,
-            "benchmark_root": None,
-            "selection_root": None,
-            "gold_annotations": None,
-            "silver_annotations": None,
-            "expected_gold_count": 0,
-        }
-    )
     return {
-        "schema_version": "oa_landslidedesc.build_config.v3",
+        "schema_version": "rs_generaldesc.build_config.v1",
         "profile": profile,
         "seed": seed,
         "output_root": str(output_root),
@@ -479,7 +372,6 @@ def build_config_dict(
                 "root": str(roots["disasterm3"]),
             },
         },
-        "oa": oa,
         "external_split": {
             "version": "external_parent_split.v1",
             "validation_percent": validation_percent,
@@ -498,8 +390,6 @@ def build_config_dict(
             "image_quality": 95,
             "jpeg_subsampling": 0,
             "target_size": None,
-            "mask_format": "png",
-            "oa_preview_clip": [-3.0, 3.0],
         },
         "sharding": {"records_per_shard": 8},
         "workers": workers,
@@ -509,10 +399,7 @@ def build_config_dict(
             "max_assets": max_assets,
             "max_copied_bytes": 50_000_000,
             "max_validation_candidates_per_task": 10,
-            "per_task": {
-                "oa:oa_mask_facts:empty": 1,
-                "oa:oa_mask_facts:positive": 1,
-            },
+            "per_task": {},
         },
         "deletion_allowlist": False,
     }
@@ -553,17 +440,15 @@ def write_export_config(
         "object_count",
         "spatial_relation",
         "visible_change_report",
-        "oa_mask_facts",
-        "oa_mask_description",
     ]
     value = {
-        "schema_version": "oa_landslidedesc.qwen_export.v3",
+        "schema_version": "rs_generaldesc.qwen_export.v1",
         "profile": "description_multitask.v1",
         "benchmark_root": str(benchmark_root),
         "output_root": str(output_root),
         "seed": 7,
         "purpose": purpose,
-        "roles": roles or ["external_train", "oa_train"],
+        "roles": roles if roles is not None else ["external_train"],
         "task_families": task_families or default_tasks,
         "template_version": "qwen3vl_messages.v2",
     }

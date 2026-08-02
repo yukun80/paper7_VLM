@@ -4,28 +4,36 @@
 
 - program: `OA_GROUNDRAG_V2`
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
-- stage: `1`
-- stage_name: `OA_AUXSEG_FORMAL_ACCEPTANCE`
-- stage_status: `in_progress`
-- current_task: `OA_AUXSEG_MANUAL_FINALIZATION`
+- stage: `3`
+- stage_name: `RS_GENERAL_ADAPTER_RETRAINING`
+- stage_status: `pending`
+- current_task: `RS_GENERALDESC_IDENTITY_BINDING_HARDENING`
 - current_task_status: `complete`
-- next_gate: `A`
-- scientific_status: `Stage 1 OA-AuxSeg proposed final checkpoint frozen and training report completed / Gate A, ablations, sealed test and formal fixed masks pending`
-- execution_date: `2026-07-31`
+- next_gate: `B`
+- scientific_status: `Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`
+- execution_date: `2026-08-01`
 - branch: `main`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
+- stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
 - active_training_process_found: `false`
 - gpu_inference_only_run_performed: `true`
+- stage2_gpu_run_performed: `false`
+- stage2_native_full_deep_validation_performed: `true`
+- identity_hardening_repackage_performed: `false`
+- identity_hardening_deep_validation_performed: `false`
+- identity_hardening_gpu_run_performed: `false`
 - training_or_optimizer_step_performed: `false`
 - formal_evaluation_performed: `false`
 - test_split_evaluated: `false`
 - commit_performed: `false`
 - push_performed: `false`
 
-Stage 0 权威迁移已经完成。当前状态表示项目负责人已定版 OA-AuxSeg proposed 主模型并
-完成 train/val 工程报告，不表示 Gate A 已执行或通过。代码存在、checkpoint 定版和
-工程指标都不能单独替代科学验收。
+Stage 0 权威迁移、Stage 1 工程定版和 Stage 2 RS-GeneralDesc Benchmark native v1
+重发布与验收已经完成。依赖分为 OA-AuxSeg 工程定版 → 未来 Gate A → formal fixed
+masks，以及 RS-GeneralDesc Stage 2 → Adapter 重训 → Gate B；两者在 Mask-Grounded
+阶段汇合。Gate A 延后不等于通过，也不阻止独立的 Stage 3 准备。Stage 2 不表示
+OA-Grounded 数据验收或 Gate B 通过。
 
 ## Stage 0 已完成
 
@@ -96,56 +104,49 @@ hash 或数据源扫描。
 该 `checkpoint_best.pt` 是项目负责人定版的当前最终权重，但不是 Gate-A-accepted
 checkpoint。Gate A、消融、sealed test 和正式 fixed predicted masks 仍未执行。
 
-### RS-GeneralDesc External Benchmark
+### RS-GeneralDesc Benchmark native v1
 
 - root:
-  `/home/yukun80/codes/benchmark/oa_landslidedesc_external_v1`
-- manifest schema: `oa_landslidedesc.manifest.v3`
-- canonical schema: `oa_landslidedesc.canonical.v3`
-- benchmark scope: `external_train_val`
+  `/home/yukun80/codes/benchmark/rs_generaldesc_v1`
+- manifest schema: `rs_generaldesc.manifest.v1`
+- canonical schema: `rs_generaldesc.canonical.v1`
+- benchmark scope: `rs_generaldesc_external_train_val`
 - build_id:
-  `build_8adb325c14ed7a8419b7d0e95ab2871ee277c3eac7d0409b3dbf64a9f831f96e`
+  `build_3ebc09a4daad10e121fc14c2727d9896e10371a95bbaf6b780d15aa42eaf3c03`
 - payload SHA-256:
-  `f43ab63d2bb452e72648b108c43072d60b682ce936c3fbc196cde3c04fa623ec`
+  `549281f296b357bce256e6af71cec7412fe17e36052d6a8674f4876ae2d06e0b`
+- semantic config SHA-256:
+  `bb9b00ea44fb1c79e9efdfa00fbf73e8d8e9e5c416b8e9ff48d0c0b550e0d162`
+- hash manifest SHA-256:
+  `55ac26d9771ce8385318fbd23a10b999afb754ac195e823be659f4e49b0a7090`
 - records / parents: `274693 / 104954`
 - external_train / external_val: `261646 / 13047`
 - saved deep validation: `errors=0 / warnings=0`
 - source roots embedded: `false`
-- historical manifest formal flag: `false`
-- historical blocker: `oa_component_disabled`
+- formal acceptance eligible: `true`
+- formal acceptance blockers: `[]`
+- release equivalence schema: `rs_generaldesc.release_equivalence.v1`
+- OA-Grounded acceptance: `false`
+- Gate B evaluated: `false`
+- external_val usage: `training_monitoring_only`
 
-该资产已完成数据构建和 deep validation。旧 formal flag 描述的是“必须同时包含 OA
-组件”的 v1 范围，不再作为 RS-GeneralDesc 数据产品失败的结论。Stage 2 将迁移
-作用域验收合同，但必须保持上述 v3 manifest、build ID、payload 和资产字节只读；
-不为改名重建约 40 GB 数据。
+该资产由冻结 payload 确定性重发布；canonical/provenance/ID/SHA/build identity 全部按
+native v1 重算，且新树自身具备固定 manifest/hash identity、eligible/空 blockers 和
+saved clean deep validation。历史 `release_equivalence.json` 记录了当时的 record、parent、
+role 和 asset 等价结论，但旧 repackage 未逐项核验前代 ledger 的全部 record/metadata，
+前代 root 又已删除，因此不能追溯性地把该报告升级为严格逐文件证明。目前没有证据表明
+native payload 损坏；本次修复后的未来 repackage 才强制完整 ledger 验证。
 
-### 候选 RS-General Adapter
+活动 phase3 builder 只装载 RSGPT、MMRS-1M、DisasterM3，只生成
+`rs_generaldesc_external_train_val`；Dataset/exporter 仅接受两类 role 和七类任务。
+额外作用域报告、混合分支、旧 validator 与兼容 API 已删除。
 
-- output root:
-  `outputs/phase4_mask_grounded_description/external_lora_qwen3vl_2b_workers2_20260730_192651`
-- training report schema:
-  `oa_mask_grounded_description.training_report.v1`
-- report status: `completed`
-- formal_acceptance: `false`
-- config semantic SHA-256:
-  `830ed95a289be7804dd51838583a3a78b4d69e524cbd76cdaafe4b846169fda9`
-- benchmark build/payload: 与上方 RS-GeneralDesc v3 身份一致
-- validation selection: `128 records / 128 parents`
-- selection SHA-256:
-  `aa5fdcaf8706d1ed7185b0ecab8018f62dedb2eb1f12ddf01c15b297a5382b43`
-- training layout:
-  `physical_batch=4 / accumulation=4 / effective_batch=16 / workers=2`
-- completed:
-  `1000 optimizer steps / 16000 samples / 4905307 input tokens / 538824 supervised tokens / 20571 images`
-- peak CUDA: `10.187897205352783 GiB`
-- elapsed: `3182.6901238840073 s`
-- best checkpoint: `checkpoints/step-00001000`
-- best macro task loss: `0.8729393698334892`
-- best overall loss: `1.019919321325915`
+### RS-General Adapter
 
-该输出冻结为候选 RS-General Adapter。teacher-forced validation loss 只能选择训练期
-checkpoint，不能证明 Base-vs-Adapter 生成能力提升。Stage 3 Gate B 完成前不得称为
-accepted Adapter，也不默认重复训练。
+身份迁移前的 phase4 Adapter/checkpoint/training evidence 已永久删除，不保留备份、链接
+或 alias。Stage 3 必须在 native v1 Benchmark identity 上重新训练；teacher-forced
+validation loss 只能选择训练期 checkpoint，不能证明 Base-vs-Adapter 生成能力提升。
+重训完成并冻结 Gate B 之前不存在 accepted Adapter。
 
 ### Mask-Grounded VLM 基础
 
@@ -153,13 +154,16 @@ accepted Adapter，也不默认重复训练。
 - 已有能力:
   `RegionSelector / EvidenceBuilder / Qwen processor-model / prompt-only / LoRA / checkpoint-resume / inference / evaluation / counterfactual`
 - 当前 evidence schema:
-  `oa_mask_grounded_description.evidence.v1`
+  `rs_vlm.evidence.v1`
 - 当前合同仍要求 `rag_context=[]`
 - 当前 evaluator 仍拒绝 formal evaluation
 - 当前消息为单遍 user 生成合同
 
 这些是 Stage 5 的可复用无 RAG 基线，不是 OA-GroundedEval、两遍式生成或完整
-RAG 系统。Stage 0 不改写这些接口。
+RAG 系统。当前 `rs_vlm.config.v2` 只运行 RS-GeneralDesc External；GT/fixed/end-to-end
+mask、RegionSelector、EvidenceBuilder、mask-grounded messages、AuxSeg inference 和
+反事实评价核心继续保留。临时 Mask-Grounded Dataset 合同已撤回，等待 Stage 4/5 冻结
+新数据 schema 后再接入。
 
 ### RAG_tmp 与知识文档
 
@@ -175,7 +179,7 @@ PDF 实体，因此 Stage 0 不重新下载或做逐文件 hash 对照。后续�
 知识单元、FTS5、dense retrieval、RRF、reranker、authority boost、引用和拒答范式。
 不得直接复制代码、导入包、复用其中的 Ollama 最终生成器或把它设为运行时依赖。
 
-## 当前科学任务：Stage 1 / Gate A
+## Stage 1 工程定版边界
 
 Stage 1 的 proposed 主模型训练已经由负责人定版完成，不再续训。本轮新增的
 `finalize` 入口不创建 optimizer、不执行 backward 或 scheduler step，只核对
@@ -209,22 +213,26 @@ Stage 1 剩余科学任务不是恢复训练。进入首次正式 test 前，必
 负责人指令延后到完整框架搭建后；只有未来 Gate A 通过，才运行一次 sealed test 并
 导出供 Stage 5 使用的正式 fixed predicted masks。
 
+## 当前科学任务：Stage 3 / Gate B
+
+Stage 2 已完成 RS-GeneralDesc Benchmark native v1 验收。其接受结论只覆盖通用遥感
+图像语言训练与监控，不覆盖 OA-Grounded 数据，也不评价 Adapter。Stage 3 先在 native
+identity 上重新训练 RS-General Adapter，再单独冻结 Base-vs-Adapter 判据和固定生成
+集合；本次未创建 Gate B 集合、未运行生成或正式评价。
+
 ## 后续冻结顺序
 
-1. **Stage 2：RS-GeneralDesc Benchmark 验收。** 移除
-   `oa_component_disabled` 对 RS-GeneralDesc scope 的阻塞；现有 v3 资产保持只读，
-   `external_val` 只用于训练监控。
-2. **Stage 3：RS-General Adapter。** 使用当前 step-1000 candidate，对 Base Qwen3-VL
-   与 Adapter 做固定生成 Gate B；gate 集排除训练报告使用的 128 个 parent。
-3. **Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval。** 分开构建 Auto、
+1. **Stage 3：RS-General Adapter。** 先按 native v1 identity 重训，再对 Base Qwen3-VL
+   与 Adapter 做固定生成 Gate B；gate 集必须与训练监控 parent 隔离。
+2. **Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval。** 分开构建 Auto、
    过滤 Silver 和必要 Gold，冻结正式 val/test；付费 API 和 Gold 需要单独授权。
-4. **Stage 5：Mask-Grounded Baseline。** 比较 full/crop/overlay/multimodal 与
+3. **Stage 5：Mask-Grounded Baseline。** 比较 full/crop/overlay/multimodal 与
    GT/fixed/wrong/empty mask；Gate C 失败时先修 Evidence Representation。
-5. **Stage 6–7：文本与案例 RAG。** 重新实现 Evidence Retrieval Provider，先文本，
+4. **Stage 6–7：文本与案例 RAG。** 重新实现 Evidence Retrieval Provider，先文本，
    再正案例/困难负样本/分模态索引；RAG_tmp 不直接集成。
-6. **Stage 8：可选 Landslide-Evidence Adapter。** 仅 Gate E 失败时训练，并执行
+5. **Stage 8：可选 Landslide-Evidence Adapter。** 仅 Gate E 失败时训练，并执行
    RS-General retention Gate F。
-7. **Stage 9：统一推理与报告。** 最后实现 Task Controller、两遍式生成、Evidence
+6. **Stage 9：统一推理与报告。** 最后实现 Task Controller、两遍式生成、Evidence
    Cards、引用、failure artifact 和端到端评价。
 
 ## 已知科学与数据边界
@@ -259,7 +267,7 @@ Stage 1 剩余科学任务不是恢复训练。进入首次正式 test 前，必
 
 以上是 Stage 0 当时的验收记录；此后 Stage 1 已新增代码、测试和人工定版报告。
 
-## Stage 1 人工定版验收
+## Stage 1 工程定版记录（Gate A 未执行）
 
 | 检查 | Exit | 结果 |
 | --- | ---: | --- |
@@ -276,20 +284,52 @@ Stage 1 剩余科学任务不是恢复训练。进入首次正式 test 前，必
 缺失的 historical small 资产不是本次改动造成，也不为通过测试而重建、复制或修改
 Benchmark。当前 full Benchmark 和真实 final checkpoint 已完成本任务所需验证。
 
+## Stage 2 native v1 重发布与验收
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| Phase 3 全量单元测试 | 0 | 当时 39/39；含 native builder/Dataset/exporter/repackage/validator |
+| Phase 4 全量单元测试 | 0 | 当时 48/48；mask/evidence/region/AuxSeg 核心保留 |
+| 真实 `repackage` | 0 | 历史报告记录 split/group/content/asset 等价；旧实现未逐项验证全部前代 ledger |
+| 新树 full deep validation | 0 | 单次运行；0 error / 0 warning |
+| CPU RS-VLM preflight | 0 | schema/build/payload/hash identity 匹配；未创建 output root |
+| phase4 活动配置 preflight | 0 | 3/3 直接绑定 native identity |
+| 前代 Benchmark 与 Adapter outputs | 已删除 | 验收完成后永久删除；无备份、链接或 alias |
+| 源数据读取 / 图像重编码 | 未运行 | 只复制已发布图像字节并重写文本元数据 |
+| GPU / training / test / Gate A / Gate B | 未运行 | native 身份迁移不扩张为科学评价 |
+
+## 本次身份绑定加固
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| Phase 3 全量单元测试 | 0 | 45/45；新增 ledger、record/metadata/asset 漂移与等价写入时序保护 |
+| Phase 4 全量单元测试 | 0 | 53/53；新增 manifest/validation/metadata/shard/asset 运行时绑定保护 |
+| 三份真实配置 preflight | 0 | 3/3 metadata-only；manifest/validation/build/payload/ledger identity 匹配 |
+| 真实 Benchmark repackage/deep validation | 未运行 | 只使用 `/tmp` 小 fixture，不扫描 40 GB payload |
+| Benchmark/checkpoint/outputs 写入 | 未运行 | size/mtime/SHA 与目录清单前后复核 |
+
 ## Stage 0 当时未运行
 
 - GPU、训练、正式评价或长时间任务
 - OA-AuxSeg 恢复、test 或 predicted-mask 导出
 - External LoRA 重训或 Base-vs-Adapter Gate B
-- Benchmark build、full deep validation、payload 重算或源数据扫描
+- 源数据扫描、图像重编码或第二次 full deep validation
 - OA-GroundedEval、Silver/Gold、RAG 或端到端集成
 - 数据、模型、依赖或 PDF 下载
 - commit 或 push
 
-## 本次人工定版未运行
+## Stage 1 人工定版当时未运行
 
 - resume、optimizer step、backward、scheduler step 或任何训练
 - checkpoint 保存、复制、重命名或 train log 裁剪
 - test、Gate A、分割消融、多随机种子或正式 predicted-mask 导出
 - Benchmark build、deep validation、payload 重算或源数据扫描
-- Stage 2–9 算法开发、外部下载、commit 或 push
+- 当时的 Stage 2–9 算法开发、外部下载、commit 或 push
+
+## 本次身份绑定加固未运行
+
+- 真实 Benchmark build、repackage、export、复制、records/assets 遍历或 payload validator
+- GPU、训练、inference、生成评价、test、Gate A 或 Gate B
+- OA-GroundedEval、Evidence Corpus、Silver/Gold、RAG 或 Stage 3–9 实施
+- 既有 LoRA、checkpoint、training report、validation selection 或模型权重写入
+- 数据、模型、依赖下载、commit 或 push

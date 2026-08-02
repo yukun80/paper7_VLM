@@ -20,10 +20,10 @@ from .processing import DescriptionCollator
 
 
 VALIDATION_SELECTION_SCHEMA_VERSION = (
-    "oa_mask_grounded_description.validation_selection.v1"
+    "rs_vlm.validation_selection.v1"
 )
 VALIDATION_RESULT_SCHEMA_VERSION = (
-    "oa_mask_grounded_description.validation_result.v1"
+    "rs_vlm.validation_result.v1"
 )
 
 

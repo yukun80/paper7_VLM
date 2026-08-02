@@ -37,7 +37,7 @@ where = ["."]
 include = [
     "oa_groundrag*",
     "scripts.phase1_benchmark_build*",
-    "scripts.phase3_landslidedesc*",
-    "scripts.phase4_mask_grounded_description*",
+    "scripts.phase3_rs_generaldesc*",
+    "scripts.phase4_rs_vlm*",
 ]
 namespaces = true

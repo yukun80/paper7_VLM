@@ -28,11 +28,11 @@ from .contracts import (
     InputLayout,
     OutputModality,
 )
-from .dataset import OALandslideDescDataset
+from .dataset import RSGeneralDescDataset
 from .errors import ExportError, ReasonCode
 
 
-EXPORT_STAGING_SENTINEL = ".oa_landslidedesc_export_staging"
+EXPORT_STAGING_SENTINEL = ".rs_generaldesc_export_staging"
 
 
 def _response(
@@ -64,10 +64,10 @@ def _response(
 
 
 def _benchmark_image(media: Mapping[str, Any]) -> dict[str, Any]:
-    if media.get("media_type") not in {"image", "mask"}:
+    if media.get("media_type") != "image":
         raise ExportError(
             ReasonCode.SCHEMA_MISMATCH,
-            f"{media.get('asset_id')}: Qwen image item 只能引用 image/mask",
+            f"{media.get('asset_id')}: RS-GeneralDesc 只能引用 image",
         )
     return {
         "type": "image",
@@ -144,7 +144,7 @@ def _bbox_pixels(
 def _render_bbox_region(
     record: Mapping[str, Any],
     *,
-    dataset: OALandslideDescDataset,
+    dataset: RSGeneralDescDataset,
     staging: Path,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     boxes = _normalized_boxes(record)
@@ -278,45 +278,17 @@ def _render_pre_post(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _render_mask_grounded(record: Mapping[str, Any]) -> list[dict[str, Any]]:
-    target = record["target"]
-    by_role = _media_by_role(record)
-    image = by_role.get(str(target.get("image_role")))
-    mask = by_role.get(str(target.get("mask_role")))
-    if (
-        target.get("type") != "mask"
-        or image is None
-        or image.get("media_type") != "image"
-        or mask is None
-        or mask.get("media_type") != "mask"
-    ):
-        raise ExportError(
-            ReasonCode.MASK_GEOMETRY_MISMATCH,
-            f"{record['record_id']}: mask-grounded text context 缺失",
-        )
-    return [
-        {"type": "text", "text": "Image 1 is the optical image."},
-        _benchmark_image(image),
-        {
-            "type": "text",
-            "text": "Image 2 is the binary target mask used as input context.",
-        },
-        _benchmark_image(mask),
-        {"type": "text", "text": str(record["instruction"])},
-    ]
-
-
 def render_canonical_messages(
     record: Mapping[str, Any],
     *,
     purpose: str,
     seed: int,
-    dataset: OALandslideDescDataset,
+    dataset: RSGeneralDescDataset,
     derived_root: Path,
 ) -> tuple[dict[str, Any], list[str]]:
-    """使用唯一的 Phase 2 task-aware 模板渲染一条 canonical record。"""
+    """使用唯一的 RS-GeneralDesc task-aware 模板渲染一条 canonical record。"""
 
-    if purpose not in {"training", "validation", "formal_test"}:
+    if purpose not in {"training", "validation"}:
         raise ExportError(
             ReasonCode.INVALID_ENUM,
             f"不支持 renderer purpose={purpose!r}",
@@ -351,8 +323,6 @@ def render_canonical_messages(
         user_content = _render_boxed_image(record)
     elif layout is InputLayout.PRE_POST:
         user_content = _render_pre_post(record)
-    elif layout is InputLayout.MASK_GROUNDED:
-        user_content = _render_mask_grounded(record)
     else:
         raise ExportError(
             ReasonCode.UNSUPPORTED_TASK,
@@ -399,33 +369,15 @@ def _validate_export_scope(config: ExportConfig) -> None:
             "task_families 必须显式列出，禁止空列表隐式导出全部",
         )
     roles = set(config.roles)
-    if "oa_test" in roles and config.purpose != "formal_test":
+    if config.purpose == "training" and roles != {"external_train"}:
         raise ExportError(
-            ReasonCode.OA_ROLE_CONTAMINATION,
-            "oa_test 仅允许 purpose=formal_test",
+            ReasonCode.ROLE_CONTAMINATION,
+            "training export 的 roles 必须且只能是 external_train",
         )
-    if config.purpose == "formal_test" and roles != {"oa_test"}:
+    if config.purpose == "validation" and roles != {"external_val"}:
         raise ExportError(
-            ReasonCode.OA_ROLE_CONTAMINATION,
-            "formal_test export 的 roles 必须且只能是 oa_test",
-        )
-    if config.purpose == "training" and roles & {
-        "external_val",
-        "oa_val",
-        "oa_test",
-    }:
-        raise ExportError(
-            ReasonCode.OA_ROLE_CONTAMINATION,
-            "training export 不允许 external_val/oa_val/oa_test",
-        )
-    if config.purpose == "validation" and roles not in (
-        {"external_val"},
-        {"oa_val"},
-    ):
-        raise ExportError(
-            ReasonCode.OA_ROLE_CONTAMINATION,
-            "validation export 的 roles 必须且只能是 external_val 或 oa_val，"
-            "且两者不能混合",
+            ReasonCode.ROLE_CONTAMINATION,
+            "validation export 的 roles 必须且只能是 external_val",
         )
 
 
@@ -460,7 +412,7 @@ def export_qwen(config: ExportConfig) -> Path:
             "export output_root 不能位于 canonical benchmark 内",
         )
     manifest = read_json(config.benchmark_root / "manifest.json")
-    dataset = OALandslideDescDataset(
+    dataset = RSGeneralDescDataset(
         config.benchmark_root,
         roles=config.roles,
         task_families=config.task_families,
@@ -473,7 +425,7 @@ def export_qwen(config: ExportConfig) -> Path:
     staging = target.parent / f".{target.name}.staging-{uuid.uuid4().hex}"
     staging.mkdir(parents=True)
     (staging / EXPORT_STAGING_SENTINEL).write_text(
-        "owned-by-oa-landslidedesc-exporter\n", encoding="utf-8"
+        "owned-by-rs-generaldesc-exporter\n", encoding="utf-8"
     )
     try:
         rows: list[dict[str, Any]] = []

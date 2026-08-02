@@ -1,11 +1,11 @@
-schema_version: oa_landslidedesc.qwen_export.v3
+schema_version: rs_generaldesc.qwen_export.v1
 profile: description_multitask.v1
-benchmark_root: ../../../benchmark/oa_landslidedesc_external_v1
-output_root: ../../../benchmark/oa_landslidedesc_external_qwen_train_v1
+benchmark_root: ../../../benchmark/rs_generaldesc_v1
+output_root: ../../../benchmark/rs_generaldesc_qwen_val_v1
 seed: 20260727
-purpose: training
+purpose: validation
 roles:
-  - external_train
+  - external_val
 task_families:
   - global_caption
   - visual_qa

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -14,7 +15,30 @@ import torch
 import yaml
 from PIL import Image
 
+import oa_groundrag.phase4 as phase4_public
 from oa_groundrag.phase4.cli import entrypoint
+from oa_groundrag.phase3.builder import build_benchmark
+from oa_groundrag.phase3.common import (
+    atomic_write_json,
+    atomic_write_jsonl,
+    canonical_json,
+    read_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.phase3.contracts import (
+    BENCHMARK_SCOPE,
+    BUILD_CONFIG_VERSION,
+    CANONICAL_SCHEMA_VERSION,
+    HASH_SCHEMA_VERSION,
+    MANIFEST_VERSION,
+    STATISTICS_SCHEMA_VERSION,
+    VALIDATION_VERSION,
+)
+from oa_groundrag.phase3.config import load_build_config
+from oa_groundrag.phase3.dataset import RSGeneralDescDataset
+from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.phase3.hash_ledger import HashLedgerVerifier
 from oa_groundrag.phase4.config import (
     CONFIG_SCHEMA_VERSION,
     apply_runtime_overrides,
@@ -25,7 +49,6 @@ from oa_groundrag.phase4.data import (
     DescriptionSample,
     ExternalDescriptionDataset,
     inventory_from_auxseg_inference,
-    inventory_from_canonical_oa_item,
 )
 from oa_groundrag.phase4.errors import (
     ConfigError,
@@ -52,13 +75,141 @@ from oa_groundrag.phase4.model import (
     local_model_identity,
 )
 from oa_groundrag.phase4.reference import MAIN_REFERENCE
+from tests.phase3_rs_generaldesc.fixture_helpers import (
+    make_all_sources,
+    write_build_config,
+)
 
 
 REPO = Path(__file__).resolve().parents[2]
-CONFIG_ROOT = REPO / "configs/phase4_mask_grounded_description"
+CONFIG_ROOT = REPO / "configs/phase4_rs_vlm"
+
+
+def native_preflight_fixture(root: Path) -> dict[str, str]:
+    build_config = {"schema_version": BUILD_CONFIG_VERSION}
+    atomic_write_json(root / "metadata/build_config.json", build_config)
+    semantic_sha = sha256_text(canonical_json(build_config))
+    atomic_write_json(
+        root / "schemas/canonical.schema.json",
+        {
+            "$id": CANONICAL_SCHEMA_VERSION,
+            "properties": {
+                "schema_version": {"const": CANONICAL_SCHEMA_VERSION}
+            },
+        },
+    )
+    atomic_write_json(
+        root / "metadata/statistics.json",
+        {
+            "schema_version": STATISTICS_SCHEMA_VERSION,
+            "record_count": 10,
+            "parent_count": 4,
+            "role_counts": {"external_train": 8, "external_val": 2},
+            "parent_role_counts": {"external_train": 3, "external_val": 1},
+        },
+    )
+    atomic_write_jsonl(
+        root / "records/part-00000.jsonl",
+        ({"fixture": index} for index in range(10)),
+    )
+    ledger_paths = (
+        "metadata/build_config.json",
+        "metadata/statistics.json",
+        "records/part-00000.jsonl",
+        "schemas/canonical.schema.json",
+    )
+    files = [
+        {
+            "path": relative,
+            "size_bytes": (root / relative).stat().st_size,
+            "sha256": sha256_file(root / relative),
+        }
+        for relative in ledger_paths
+    ]
+    payload_sha = sha256_text(canonical_json(files))
+    hashes = {
+        "schema_version": HASH_SCHEMA_VERSION,
+        "files": files,
+        "root_sha256": payload_sha,
+    }
+    atomic_write_json(root / "metadata/hashes.json", hashes)
+    hash_manifest_sha = sha256_file(root / "metadata/hashes.json")
+    build_id = "build_" + sha256_text(
+        canonical_json([semantic_sha, payload_sha])
+    )
+    atomic_write_json(
+        root / "metadata/validation.json",
+        {
+            "schema_version": VALIDATION_VERSION,
+            "deep": True,
+            "errors": [],
+            "warnings": [],
+            "payload_root_sha256": payload_sha,
+            "hash_manifest_sha256": hash_manifest_sha,
+            "record_count": 10,
+            "parent_count": 4,
+            "checked_records": 10,
+        },
+    )
+    atomic_write_json(
+        root / "manifest.json",
+        {
+            "schema_version": MANIFEST_VERSION,
+            "canonical_schema_version": CANONICAL_SCHEMA_VERSION,
+            "build_profile": "full",
+            "benchmark_scope": BENCHMARK_SCOPE,
+            "scope_validation_complete": True,
+            "build_id": build_id,
+            "semantic_config_sha256": semantic_sha,
+            "payload_root_sha256": payload_sha,
+            "hash_manifest_sha256": hash_manifest_sha,
+            "layout": {
+                "canonical_schema": "schemas/canonical.schema.json",
+                "record_shards": [
+                    {
+                        "path": "records/part-00000.jsonl",
+                        "record_count": 10,
+                    }
+                ],
+                "role_to_record_shards": {
+                    "external_train": ["records/part-00000.jsonl"],
+                    "external_val": ["records/part-00000.jsonl"],
+                },
+                "validation": "metadata/validation.json",
+                "statistics": "metadata/statistics.json",
+                "hashes": "metadata/hashes.json",
+                "build_config": "metadata/build_config.json",
+            },
+            "counts": {"records": 10, "parents": 4},
+            "formal_acceptance_eligible": True,
+            "formal_acceptance_blockers": [],
+            "source_roots_embedded": False,
+            "external_test_retained": False,
+            "official_upstream_evaluation_reproducible": False,
+        },
+    )
+    manifest_sha = sha256_file(root / "manifest.json")
+    validation_sha = sha256_file(root / "metadata/validation.json")
+    return {
+        "build_id": build_id,
+        "payload_sha256": payload_sha,
+        "hash_manifest_sha256": hash_manifest_sha,
+        "manifest_sha256": manifest_sha,
+        "validation_sha256": validation_sha,
+    }
 
 
 class ConfigAndPreflightTests(unittest.TestCase):
+    def test_inactive_mask_grounded_dataset_contract_is_not_public(self) -> None:
+        self.assertFalse(hasattr(phase4_public, "MaskGroundedExample"))
+        self.assertFalse(
+            hasattr(phase4_public, "MaskGroundedDescriptionDataset")
+        )
+        from oa_groundrag.phase4 import data
+
+        self.assertFalse(hasattr(data, "MaskGroundedExample"))
+        self.assertFalse(hasattr(data, "MaskGroundedDescriptionDataset"))
+
     def test_three_configs_strictly_parse(self) -> None:
         configs = {
             path.name: load_config(path)
@@ -68,24 +219,28 @@ class ConfigAndPreflightTests(unittest.TestCase):
             set(configs),
             {
                 "bounded_smoke.yaml",
-                "external_lora_qwen3vl_2b.yaml",
-                "prompt_only_qwen3vl_2b.yaml",
+                "rs_generaldesc_lora_qwen3vl_2b.yaml",
+                "rs_generaldesc_prompt_only_qwen3vl_2b.yaml",
             },
         )
         for config in configs.values():
             self.assertEqual(config.schema_version, CONFIG_SCHEMA_VERSION)
             self.assertEqual(len(config.semantic_sha256), 64)
+            self.assertFalse(hasattr(config, "evidence"))
+            self.assertFalse(hasattr(config, "evaluation"))
+            self.assertNotIn("evidence", config.semantic_dict())
+            self.assertNotIn("evaluation", config.semantic_dict())
             self.assertTrue(config.model.local_files_only)
             self.assertTrue(config.adaptation.freeze_vision)
             self.assertTrue(config.adaptation.freeze_merger)
         self.assertEqual(
             configs[
-                "external_lora_qwen3vl_2b.yaml"
+                "rs_generaldesc_lora_qwen3vl_2b.yaml"
             ].adaptation.target_modules,
             ("q_proj", "k_proj", "v_proj", "o_proj"),
         )
-        external = configs["external_lora_qwen3vl_2b.yaml"]
-        self.assertEqual(external.run.name, "external_lora_qwen3vl_2b_bs4")
+        external = configs["rs_generaldesc_lora_qwen3vl_2b.yaml"]
+        self.assertEqual(external.run.name, "rs_vlm_lora_qwen3vl_2b_bs4")
         self.assertEqual(external.training.batch_size, 4)
         self.assertEqual(external.training.gradient_accumulation_steps, 4)
         self.assertEqual(
@@ -102,11 +257,14 @@ class ConfigAndPreflightTests(unittest.TestCase):
         self.assertTrue(
             str(external.run.output_root).startswith(str(REPO / "outputs"))
         )
+        base = configs["rs_generaldesc_prompt_only_qwen3vl_2b.yaml"]
+        self.assertEqual(base.adaptation.strategy, "prompt_only")
+        self.assertEqual(base.data.roles, ("external_val",))
 
     def test_training_layout_accepts_only_b1a16_or_b4a4(self) -> None:
         source = yaml.safe_load(
             (
-                CONFIG_ROOT / "external_lora_qwen3vl_2b.yaml"
+                CONFIG_ROOT / "rs_generaldesc_lora_qwen3vl_2b.yaml"
             ).read_text(encoding="utf-8")
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -150,7 +308,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
     def test_input_pipeline_layout_is_strict(self) -> None:
         source = yaml.safe_load(
             (
-                CONFIG_ROOT / "external_lora_qwen3vl_2b.yaml"
+                CONFIG_ROOT / "rs_generaldesc_lora_qwen3vl_2b.yaml"
             ).read_text(encoding="utf-8")
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -196,6 +354,28 @@ class ConfigAndPreflightTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
+            version_one = yaml.safe_load(yaml.safe_dump(source))
+            version_one["schema_version"] = "rs_vlm.config.v1"
+            version_one_path = base / "v1.yaml"
+            version_one_path.write_text(
+                yaml.safe_dump(version_one, sort_keys=False),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ConfigError) as caught:
+                load_config(version_one_path)
+            self.assertEqual(caught.exception.code, ReasonCode.INVALID_ENUM)
+
+            legacy_section = yaml.safe_load(yaml.safe_dump(source))
+            legacy_section["evidence"] = {"rag_enabled": False}
+            legacy_path = base / "legacy-section.yaml"
+            legacy_path.write_text(
+                yaml.safe_dump(legacy_section, sort_keys=False),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ConfigError) as caught:
+                load_config(legacy_path)
+            self.assertEqual(caught.exception.code, ReasonCode.UNKNOWN_FIELD)
+
             unknown = dict(source)
             unknown["unknown"] = True
             unknown_path = base / "unknown.yaml"
@@ -250,21 +430,236 @@ class ConfigAndPreflightTests(unittest.TestCase):
                 load_config(linked_path)
             self.assertEqual(caught.exception.code, ReasonCode.OUTPUT_LINK)
 
-    def test_light_external_identity_and_oa_component_gate(self) -> None:
+    def test_all_active_configs_pass_native_preflight(self) -> None:
         external = load_config(CONFIG_ROOT / "bounded_smoke.yaml")
         identity = inspect_benchmark_identity(external)
+        self.assertEqual(identity.build_id, external.data.expected_build_id)
         self.assertEqual(
-            identity.build_id,
-            "build_8adb325c14ed7a8419b7d0e95ab2871ee277c3eac7d0409b3dbf64a9f831f96e",
+            identity.hash_manifest_sha256,
+            external.data.expected_hash_manifest_sha256,
         )
         self.assertFalse(identity.source_roots_embedded)
-        oa = load_config(CONFIG_ROOT / "prompt_only_qwen3vl_2b.yaml")
-        with self.assertRaises(PreflightError) as caught:
-            run_preflight(oa, require_new_output=False)
-        self.assertEqual(
-            caught.exception.code,
-            ReasonCode.OA_COMPONENT_DISABLED,
+        self.assertTrue(identity.formal_acceptance_eligible)
+        self.assertEqual(identity.formal_acceptance_blockers, ())
+        for path in sorted(CONFIG_ROOT.glob("*.yaml")):
+            with self.subTest(config=path.name):
+                preflight = run_preflight(
+                    load_config(path),
+                    require_new_output=False,
+                )
+                self.assertEqual(preflight["status"], "ok")
+                self.assertTrue(
+                    preflight["benchmark"]["formal_acceptance_eligible"]
+                )
+
+    def test_native_preflight_rejects_missing_tamper_and_identity(self) -> None:
+        external = load_config(CONFIG_ROOT / "bounded_smoke.yaml")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata_root = root / "native"
+            native_identity = native_preflight_fixture(metadata_root)
+            local = replace(
+                external,
+                data=replace(
+                    external.data,
+                    benchmark_root=metadata_root,
+                    expected_manifest_sha256=native_identity[
+                        "manifest_sha256"
+                    ],
+                    expected_validation_sha256=native_identity[
+                        "validation_sha256"
+                    ],
+                    expected_build_id=native_identity["build_id"],
+                    expected_payload_sha256=native_identity["payload_sha256"],
+                    expected_hash_manifest_sha256=(
+                        native_identity["hash_manifest_sha256"]
+                    ),
+                ),
+            )
+            missing = replace(
+                local,
+                data=replace(
+                    local.data,
+                    benchmark_root=root / "missing",
+                ),
+            )
+            with self.assertRaises(PreflightError) as caught:
+                inspect_benchmark_identity(missing)
+            self.assertEqual(
+                caught.exception.code,
+                ReasonCode.ASSET_MISSING,
+            )
+
+            bad_hash_identity = replace(
+                local,
+                data=replace(
+                    local.data,
+                    expected_hash_manifest_sha256="0" * 64,
+                ),
+            )
+            with self.assertRaises(PreflightError) as caught:
+                inspect_benchmark_identity(bad_hash_identity)
+            self.assertEqual(
+                caught.exception.code,
+                ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            )
+
+            mutations = {
+                "not-eligible": (
+                    "manifest.json",
+                    lambda value: value.update(
+                        {
+                            "formal_acceptance_eligible": False,
+                            "formal_acceptance_blockers": ["fixture_blocker"],
+                        }
+                    ),
+                ),
+                "validation-error": (
+                    "metadata/validation.json",
+                    lambda value: value.update({"errors": ["fixture"]}),
+                ),
+                "hash-file": (
+                    "metadata/hashes.json",
+                    lambda value: value.update({"files": [{"tampered": True}]}),
+                ),
+                "statistics-count": (
+                    "metadata/statistics.json",
+                    lambda value: value.update(
+                        {"record_count": value["record_count"] + 1}
+                    ),
+                ),
+            }
+            for name, (relative, mutation) in mutations.items():
+                with self.subTest(name=name):
+                    path = metadata_root / relative
+                    original = path.read_bytes()
+                    candidate = read_json(path)
+                    mutation(candidate)
+                    atomic_write_json(path, candidate)
+                    with self.assertRaises(PreflightError) as caught:
+                        inspect_benchmark_identity(local)
+                    self.assertEqual(
+                        caught.exception.code,
+                        ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+                    )
+                    path.write_bytes(original)
+
+    def test_native_identity_is_semantic_and_training_identity_is_native(self) -> None:
+        expected_semantic_hashes = {
+            "bounded_smoke.yaml": (
+                "829b5548dfe7b83b002f71241029a5bb73d14c64dd018c6452ef2ebe07415fa3"
+            ),
+            "rs_generaldesc_lora_qwen3vl_2b.yaml": (
+                "48bf9949f4f15eeab51149868a1a373c95444003ad286d04ada0ec1e072c1d72"
+            ),
+            "rs_generaldesc_prompt_only_qwen3vl_2b.yaml": (
+                "37c772d70b2fed6bb349d0404cbe5d8931e52a18c64253948eb6f8f62a992a7e"
+            ),
+        }
+        for name, expected in expected_semantic_hashes.items():
+            with self.subTest(config=name):
+                self.assertEqual(
+                    load_config(CONFIG_ROOT / name).semantic_sha256,
+                    expected,
+                )
+        base = load_config(
+            CONFIG_ROOT / "rs_generaldesc_prompt_only_qwen3vl_2b.yaml"
         )
+        self.assertEqual(len(base.semantic_sha256), 64)
+        config = load_config(CONFIG_ROOT / "bounded_smoke.yaml")
+        changed = replace(
+            config,
+            data=replace(
+                config.data,
+                expected_hash_manifest_sha256="f" * 64,
+            ),
+        )
+        self.assertNotEqual(config.semantic_dict(), changed.semantic_dict())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "native"
+            native_identity = native_preflight_fixture(root)
+            native_config = replace(
+                config,
+                data=replace(
+                    config.data,
+                    benchmark_root=root,
+                    expected_manifest_sha256=native_identity[
+                        "manifest_sha256"
+                    ],
+                    expected_validation_sha256=native_identity[
+                        "validation_sha256"
+                    ],
+                    expected_build_id=native_identity["build_id"],
+                    expected_payload_sha256=native_identity["payload_sha256"],
+                    expected_hash_manifest_sha256=(
+                        native_identity["hash_manifest_sha256"]
+                    ),
+                ),
+            )
+            identity = inspect_benchmark_identity(native_config)
+        training_identity = identity.training_identity_dict()
+        self.assertEqual(
+            set(training_identity),
+            {
+                "root",
+                "manifest_schema",
+                "canonical_schema",
+                "build_id",
+                "semantic_config_sha256",
+                "payload_sha256",
+                "hash_manifest_sha256",
+                "benchmark_scope",
+                "source_roots_embedded",
+                "deep_validation_saved",
+                "formal_acceptance_eligible",
+                "formal_acceptance_blockers",
+                "record_count",
+                "parent_count",
+            },
+        )
+        self.assertEqual(
+            training_identity["hash_manifest_sha256"],
+            native_config.data.expected_hash_manifest_sha256,
+        )
+
+    def test_native_identity_and_mode_are_strict(self) -> None:
+        external_source = yaml.safe_load(
+            (CONFIG_ROOT / "bounded_smoke.yaml").read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cases = []
+            missing_manifest = json.loads(json.dumps(external_source))
+            del missing_manifest["data"]["expected_manifest_sha256"]
+            cases.append(("missing-manifest", missing_manifest))
+            invalid_validation = json.loads(json.dumps(external_source))
+            invalid_validation["data"]["expected_validation_sha256"] = "bad"
+            cases.append(("invalid-validation", invalid_validation))
+            missing_hash = json.loads(json.dumps(external_source))
+            del missing_hash["data"]["expected_hash_manifest_sha256"]
+            cases.append(("missing-hash", missing_hash))
+            invalid_hash = json.loads(json.dumps(external_source))
+            invalid_hash["data"]["expected_hash_manifest_sha256"] = "bad"
+            cases.append(("invalid-hash", invalid_hash))
+            retired_mode = json.loads(json.dumps(external_source))
+            retired_mode["run"]["mode"] = "unsupported_mode"
+            retired_mode["run"]["mask_mode"] = "gt_mask"
+            cases.append(("retired-mode", retired_mode))
+            inert_path = json.loads(json.dumps(external_source))
+            inert_path["data"]["retired_inference_root"] = "/tmp/retired"
+            cases.append(("retired-path", inert_path))
+            retired_flag = json.loads(json.dumps(external_source))
+            retired_flag["run"]["retired_test_flag"] = True
+            cases.append(("retired-test-flag", retired_flag))
+            for name, value in cases:
+                with self.subTest(name=name):
+                    path = root / f"{name}.yaml"
+                    path.write_text(
+                        yaml.safe_dump(value, sort_keys=False),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ConfigError):
+                        load_config(path)
 
     def test_resume_semantic_hash_excludes_output_pointer_only(self) -> None:
         config = load_config(CONFIG_ROOT / "bounded_smoke.yaml")
@@ -306,7 +701,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
                         "--config",
                         str(
                             CONFIG_ROOT
-                            / "external_lora_qwen3vl_2b.yaml"
+                            / "rs_generaldesc_lora_qwen3vl_2b.yaml"
                         ),
                         "--output-root",
                         str(output),
@@ -338,6 +733,178 @@ class ConfigAndPreflightTests(unittest.TestCase):
         self.assertEqual(len(identity.config_sha256), 64)
         self.assertEqual(len(identity.weights_metadata_sha256), 64)
         self.assertEqual(len(identity.processor_config_sha256), 64)
+
+
+class RuntimeIdentityBindingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.base = Path(cls.temporary.name)
+        roots = make_all_sources(cls.base / "sources")
+        cls.template = build_benchmark(
+            load_build_config(
+                write_build_config(
+                    cls.base / "build.yaml",
+                    roots,
+                    cls.base / "template",
+                    profile="full",
+                    max_assets=None,
+                )
+            )
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.temporary.cleanup()
+
+    def setUp(self) -> None:
+        self.root = self.base / self._testMethodName
+        shutil.copytree(self.template, self.root)
+        base_config = load_config(CONFIG_ROOT / "bounded_smoke.yaml")
+        manifest = read_json(self.root / "manifest.json")
+        self.config = replace(
+            base_config,
+            data=replace(
+                base_config.data,
+                benchmark_root=self.root,
+                expected_manifest_sha256=sha256_file(
+                    self.root / "manifest.json"
+                ),
+                expected_validation_sha256=sha256_file(
+                    self.root / "metadata/validation.json"
+                ),
+                expected_build_id=manifest["build_id"],
+                expected_payload_sha256=manifest["payload_root_sha256"],
+                expected_hash_manifest_sha256=manifest[
+                    "hash_manifest_sha256"
+                ],
+            ),
+            run=replace(
+                base_config.run,
+                output_root=self.base / f"output-{self._testMethodName}",
+            ),
+        )
+
+    def test_preflight_binds_metadata_manifest_validation_and_layout(self) -> None:
+        inspect_benchmark_identity(self.config)
+        statistics_path = self.root / "metadata/statistics.json"
+        statistics = read_json(statistics_path)
+        statistics["record_count"] += 1
+        atomic_write_json(statistics_path, statistics)
+        with self.assertRaises(PreflightError) as caught:
+            inspect_benchmark_identity(self.config)
+        self.assertEqual(
+            caught.exception.code,
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+        )
+        self.assertEqual(
+            caught.exception.details["path"],
+            "metadata/statistics.json",
+        )
+
+        shutil.rmtree(self.root)
+        shutil.copytree(self.template, self.root)
+        manifest_path = self.root / "manifest.json"
+        manifest = read_json(manifest_path)
+        manifest["layout"]["record_shards"][0]["path"] = (
+            "records/not-in-ledger.jsonl"
+        )
+        atomic_write_json(manifest_path, manifest)
+        layout_config = replace(
+            self.config,
+            data=replace(
+                self.config.data,
+                expected_manifest_sha256=sha256_file(manifest_path),
+            ),
+        )
+        with self.assertRaises(PreflightError) as caught:
+            inspect_benchmark_identity(layout_config)
+        self.assertEqual(
+            caught.exception.code,
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+        )
+        self.assertEqual(
+            caught.exception.details["path"],
+            "records/not-in-ledger.jsonl",
+        )
+
+        shutil.rmtree(self.root)
+        shutil.copytree(self.template, self.root)
+        validation_path = self.root / "metadata/validation.json"
+        validation = read_json(validation_path)
+        validation["warnings"] = ["drift"]
+        atomic_write_json(validation_path, validation)
+        with self.assertRaises(PreflightError) as caught:
+            inspect_benchmark_identity(self.config)
+        self.assertEqual(
+            caught.exception.details["path"],
+            "metadata/validation.json",
+        )
+
+    def test_preflight_does_not_hash_record_or_asset_content(self) -> None:
+        verified: list[str] = []
+        original = HashLedgerVerifier.verify_file
+
+        def capture(verifier, relative):
+            verified.append(relative)
+            return original(verifier, relative)
+
+        with mock.patch.object(HashLedgerVerifier, "verify_file", new=capture):
+            inspect_benchmark_identity(self.config)
+        self.assertTrue(
+            {
+                "schemas/canonical.schema.json",
+                "metadata/build_config.json",
+                "metadata/statistics.json",
+            }
+            <= set(verified)
+        )
+        self.assertFalse(
+            any(
+                relative.startswith("records/")
+                or relative.startswith("assets/")
+                for relative in verified
+            )
+        )
+
+    def test_dataset_rejects_shard_drift_before_jsonl_consumption(self) -> None:
+        manifest = read_json(self.root / "manifest.json")
+        relative = manifest["layout"]["record_shards"][0]["path"]
+        path = self.root / relative
+        text = path.read_text(encoding="utf-8")
+        path.write_text(text.replace("\n", " \n", 1), encoding="utf-8")
+        with mock.patch(
+            "oa_groundrag.phase3.dataset.read_jsonl",
+            side_effect=AssertionError("drifted JSONL must not be parsed"),
+        ) as parser:
+            with self.assertRaises(RSGeneralDescError) as caught:
+                RSGeneralDescDataset(
+                    self.root,
+                    load_assets=False,
+                    expected_manifest_sha256=self.config.data.expected_manifest_sha256,
+                )
+        self.assertEqual(caught.exception.code.value, "HASH_MISMATCH")
+        self.assertEqual(caught.exception.details["path"], relative)
+        parser.assert_not_called()
+
+    def test_dataset_rejects_asset_drift_before_decode(self) -> None:
+        dataset = RSGeneralDescDataset(
+            self.root,
+            load_assets=False,
+            expected_manifest_sha256=self.config.data.expected_manifest_sha256,
+        )
+        media = dataset.records[0]["media"][0]
+        asset_path = self.root / media["path"]
+        Image.new("RGB", (8, 6), (1, 2, 3)).save(asset_path)
+        with mock.patch(
+            "oa_groundrag.phase3.dataset.Image.open",
+            side_effect=AssertionError("drifted asset must not be decoded"),
+        ) as decoder:
+            with self.assertRaises(RSGeneralDescError) as caught:
+                dataset.load_image(media)
+        self.assertEqual(caught.exception.code.value, "HASH_MISMATCH")
+        self.assertEqual(caught.exception.details["path"], media["path"])
+        decoder.assert_not_called()
 
 
 class FakeProcessor:
@@ -519,7 +1086,7 @@ class ProcessingTests(unittest.TestCase):
                 )()
 
         config = load_config(
-            CONFIG_ROOT / "external_lora_qwen3vl_2b.yaml"
+            CONFIG_ROOT / "rs_generaldesc_lora_qwen3vl_2b.yaml"
         )
         core = CaptureModel()
         adapter = Qwen3VLModelAdapter(
@@ -628,31 +1195,7 @@ class ProcessingTests(unittest.TestCase):
         renderer.assert_called_once()
 
 
-class OAInputAdapterTests(unittest.TestCase):
-    def test_canonical_oa_mask_is_gt_only_and_tensor_backed(self) -> None:
-        mask = torch.zeros((1, 6, 7), dtype=torch.uint8)
-        mask[:, 1:4, 2:6] = 1
-        item = {
-            "record": {
-                "record_id": "oa-record",
-                "record_sha256": "a" * 64,
-                "logical_role": "oa_train",
-                "input_layout": "mask_grounded",
-                "target": {"type": "mask", "mask_role": "landslide"},
-            },
-            "masks": {"landslide": mask},
-        }
-        value = inventory_from_canonical_oa_item(item)
-        self.assertEqual(value.mask_mode, MaskMode.GT_MASK)
-        self.assertEqual(value.global_mask.shape, (6, 7))
-        self.assertEqual(int(value.global_mask.sum()), 12)
-        with self.assertRaises(ContractError) as caught:
-            inventory_from_canonical_oa_item(
-                item,
-                mask_mode=MaskMode.FIXED_PREDICTED_MASK,
-            )
-        self.assertEqual(caught.exception.code, ReasonCode.INVALID_ENUM)
-
+class MaskInputAdapterTests(unittest.TestCase):
     def _write_auxseg_fixture(
         self,
         root: Path,

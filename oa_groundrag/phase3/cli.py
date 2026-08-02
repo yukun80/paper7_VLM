@@ -1,4 +1,4 @@
-"""OA-LandslideDesc audit/build/validate/export 薄 CLI。"""
+"""RS-GeneralDesc audit/build/repackage/validate/export 薄 CLI。"""
 
 from __future__ import annotations
 
@@ -11,15 +11,16 @@ from typing import Sequence
 from .builder import audit_sources, build_benchmark
 from .common import atomic_write_json
 from .config import load_build_config, load_export_config
-from .errors import LandslideDescError, ReasonCode
+from .errors import RSGeneralDescError, ReasonCode
 from .exporter import export_qwen
+from .repackage import repackage_benchmark
 from .validator import validate_benchmark
 
 
 def _report(value: dict[str, object], path: Path | None) -> None:
     if path is not None:
-        if path.exists():
-            raise LandslideDescError(
+        if path.exists() or path.is_symlink():
+            raise RSGeneralDescError(
                 ReasonCode.OUTPUT_EXISTS,
                 f"拒绝覆盖已有 report：{path}",
             )
@@ -27,6 +28,7 @@ def _report(value: dict[str, object], path: Path | None) -> None:
         summary = {
             "report": str(path),
             "schema_version": value.get("schema_version"),
+            "status": value.get("status"),
             "errors": len(value.get("errors", []))
             if isinstance(value.get("errors"), list)
             else None,
@@ -39,7 +41,7 @@ def _report(value: dict[str, object], path: Path | None) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Phase 2 三库视觉证据→文本多任务 Benchmark："
+            "Stage 2 RS-GeneralDesc 三库视觉证据→文本多任务 Benchmark："
             "审计、构建、验证和 task-aware Qwen 导出。"
         )
     )
@@ -51,7 +53,7 @@ def _parser() -> argparse.ArgumentParser:
 
     build = subparsers.add_parser(
         "build",
-        help="按配置构建 external train/val；仅 oa.enabled=true 时读取 OA",
+        help="按配置构建 RS-GeneralDesc external train/val",
     )
     build.add_argument("--config", type=Path, required=True)
 
@@ -59,6 +61,17 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--root", type=Path, required=True)
     validate.add_argument("--deep", action="store_true")
     validate.add_argument("--report", type=Path)
+
+    repackage = subparsers.add_parser(
+        "repackage",
+        help="将锁定身份的冻结 External payload 重发布为 native v1",
+    )
+    repackage.add_argument("--source-root", type=Path, required=True)
+    repackage.add_argument("--target-root", type=Path, required=True)
+    repackage.add_argument("--expected-manifest-sha256", required=True)
+    repackage.add_argument("--expected-build-id", required=True)
+    repackage.add_argument("--expected-payload-sha256", required=True)
+    repackage.add_argument("--expected-hash-manifest-sha256", required=True)
 
     export = subparsers.add_parser(
         "export",
@@ -83,6 +96,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = validate_benchmark(args.root, deep=args.deep)
         _report(report, args.report)
         return 1 if report["errors"] else 0
+    if args.command == "repackage":
+        target = repackage_benchmark(
+            args.source_root,
+            args.target_root,
+            expected_manifest_sha256=args.expected_manifest_sha256,
+            expected_build_id=args.expected_build_id,
+            expected_payload_sha256=args.expected_payload_sha256,
+            expected_hash_manifest_sha256=(
+                args.expected_hash_manifest_sha256
+            ),
+        )
+        print(f"原生重发布完成：{target}")
+        return 0
     if args.command == "export":
         config = load_export_config(args.config)
         target = export_qwen(config)
@@ -94,7 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def entrypoint() -> None:
     try:
         raise SystemExit(main())
-    except LandslideDescError as error:
+    except RSGeneralDescError as error:
         print(str(error), file=sys.stderr)
         raise SystemExit(1)
     except Exception as error:

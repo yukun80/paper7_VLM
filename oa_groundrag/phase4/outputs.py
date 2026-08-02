@@ -215,7 +215,7 @@ def prediction_row(
     if mask_mode is MaskMode.EXTERNAL_GENERIC:
         raise PredictionError(
             ReasonCode.EXTERNAL_MASK_FORBIDDEN,
-            "OA prediction_row 不接受 external_generic",
+            "mask-grounded prediction_row 不接受 external_generic",
         )
     reference_values = ensure_unique_strings(
         list(reference_responses),

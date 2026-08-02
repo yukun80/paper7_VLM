@@ -1,4 +1,4 @@
-"""OA-LandslideDesc Phase 2 的公共异常与稳定错误码。"""
+"""RS-GeneralDesc Stage 2 的公共异常与稳定错误码。"""
 
 from __future__ import annotations
 
@@ -20,10 +20,6 @@ class ReasonCode(StrEnum):
     ASSET_CORRUPT = "ASSET_CORRUPT"
     ASSET_ZERO_BYTES = "ASSET_ZERO_BYTES"
     ASSET_LIMIT_EXCEEDED = "ASSET_LIMIT_EXCEEDED"
-    MASK_MISSING = "MASK_MISSING"
-    MASK_EMPTY = "MASK_EMPTY"
-    MASK_INVALID_VALUES = "MASK_INVALID_VALUES"
-    MASK_GEOMETRY_MISMATCH = "MASK_GEOMETRY_MISMATCH"
     BBOX_INVALID = "BBOX_INVALID"
     BBOX_ZERO_AREA = "BBOX_ZERO_AREA"
     DUPLICATE_RECORD = "DUPLICATE_RECORD"
@@ -35,9 +31,7 @@ class ReasonCode(StrEnum):
     REVERSE_GROUNDING_DIRECTION = "REVERSE_GROUNDING_DIRECTION"
     INVALID_CONVERSATION = "INVALID_CONVERSATION"
     EXTERNAL_SPLIT_LEAKAGE = "EXTERNAL_SPLIT_LEAKAGE"
-    OA_SPLIT_LEAKAGE = "OA_SPLIT_LEAKAGE"
-    OA_REVIEW_INCOMPLETE = "OA_REVIEW_INCOMPLETE"
-    OA_ROLE_CONTAMINATION = "OA_ROLE_CONTAMINATION"
+    ROLE_CONTAMINATION = "ROLE_CONTAMINATION"
     OUTPUT_EXISTS = "OUTPUT_EXISTS"
     STAGING_FAILURE = "STAGING_FAILURE"
     HASH_MISMATCH = "HASH_MISMATCH"
@@ -51,8 +45,8 @@ class ErrorContext:
     details: Mapping[str, Any]
 
 
-class LandslideDescError(RuntimeError):
-    """带稳定 reason code 的 Phase 2 基类异常。"""
+class RSGeneralDescError(RuntimeError):
+    """带稳定 reason code 的 Stage 2 基类异常。"""
 
     def __init__(
         self,
@@ -73,29 +67,29 @@ class LandslideDescError(RuntimeError):
         return self.context.details
 
 
-class ConfigError(LandslideDescError):
+class ConfigError(RSGeneralDescError):
     pass
 
 
-class SchemaError(LandslideDescError):
+class SchemaError(RSGeneralDescError):
     pass
 
 
-class SourceAuditError(LandslideDescError):
+class SourceAuditError(RSGeneralDescError):
     pass
 
 
-class AssetError(LandslideDescError):
+class AssetError(RSGeneralDescError):
     pass
 
 
-class BuildError(LandslideDescError):
+class BuildError(RSGeneralDescError):
     pass
 
 
-class ValidationError(LandslideDescError):
+class ValidationError(RSGeneralDescError):
     pass
 
 
-class ExportError(LandslideDescError):
+class ExportError(RSGeneralDescError):
     pass

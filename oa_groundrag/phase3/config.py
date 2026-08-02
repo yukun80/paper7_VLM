@@ -30,6 +30,8 @@ from .contracts import (
     EXPORT_CONFIG_VERSION,
     LogicalRole,
     QWEN_TEMPLATE_VERSION,
+    RS_GENERALDESC_ROLES,
+    RS_GENERALDESC_TASK_FAMILIES,
     TaskFamily,
 )
 from .errors import ConfigError, ReasonCode
@@ -81,16 +83,6 @@ class SourceConfig:
 
 
 @dataclass(frozen=True)
-class OAConfig:
-    enabled: bool
-    benchmark_root: Path | None
-    selection_root: Path | None
-    gold_annotations: Path | None
-    silver_annotations: Path | None
-    expected_gold_count: int
-
-
-@dataclass(frozen=True)
 class ExternalSplitConfig:
     version: str
     validation_percent: int
@@ -109,8 +101,6 @@ class AssetPolicyConfig:
     image_quality: int
     jpeg_subsampling: int
     target_size: tuple[int, int] | None
-    mask_format: str
-    oa_preview_clip: tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -135,7 +125,6 @@ class BuildConfig:
     seed: int
     output_root: Path
     sources: Mapping[str, SourceConfig]
-    oa: OAConfig
     external_split: ExternalSplitConfig
     text_policy: TextPolicyConfig
     asset_policy: AssetPolicyConfig
@@ -154,12 +143,6 @@ class BuildConfig:
             "sources": {
                 name: {"enabled": value.enabled}
                 for name, value in sorted(self.sources.items())
-            },
-            "oa": {
-                "enabled": self.oa.enabled,
-                "expected_gold_count": self.oa.expected_gold_count,
-                "gold_annotations_configured": self.oa.gold_annotations is not None,
-                "silver_annotations_configured": self.oa.silver_annotations is not None,
             },
             "external_split": {
                 "version": self.external_split.version,
@@ -181,8 +164,6 @@ class BuildConfig:
                     if self.asset_policy.target_size is not None
                     else None
                 ),
-                "mask_format": self.asset_policy.mask_format,
-                "oa_preview_clip": list(self.asset_policy.oa_preview_clip),
             },
             "sharding": {
                 "records_per_shard": self.sharding.records_per_shard,
@@ -262,7 +243,6 @@ def load_build_config(path: Path | str) -> BuildConfig:
         "seed",
         "output_root",
         "sources",
-        "oa",
         "external_split",
         "text_policy",
         "asset_policy",
@@ -325,87 +305,10 @@ def load_build_config(path: Path | str) -> BuildConfig:
         validation_percent=validation_percent,
     )
 
-    oa_row = require_mapping(row["oa"], location="$.oa")
-    require_exact_keys(
-        oa_row,
-        required=(
-            "enabled",
-            "benchmark_root",
-            "selection_root",
-            "gold_annotations",
-            "silver_annotations",
-            "expected_gold_count",
-        ),
-        location="$.oa",
-    )
-    oa_enabled = require_bool(oa_row["enabled"], location="$.oa.enabled")
-    benchmark_root = (
-        None
-        if oa_row["benchmark_root"] is None
-        else resolve_config_path(
-            base, oa_row["benchmark_root"], location="$.oa.benchmark_root"
-        )
-    )
-    selection_root = (
-        None
-        if oa_row["selection_root"] is None
-        else resolve_config_path(
-            base, oa_row["selection_root"], location="$.oa.selection_root"
-        )
-    )
-    gold = (
-        None
-        if oa_row["gold_annotations"] is None
-        else resolve_config_path(
-            base, oa_row["gold_annotations"], location="$.oa.gold_annotations"
-        )
-    )
-    silver = (
-        None
-        if oa_row["silver_annotations"] is None
-        else resolve_config_path(
-            base, oa_row["silver_annotations"], location="$.oa.silver_annotations"
-        )
-    )
-    expected_gold_count = require_int(
-        oa_row["expected_gold_count"],
-        location="$.oa.expected_gold_count",
-        minimum=0,
-    )
-    if oa_enabled:
-        if benchmark_root is None or selection_root is None:
-            raise ConfigError(
-                ReasonCode.TYPE_MISMATCH,
-                "oa.enabled=true 时 benchmark_root/selection_root 必须配置",
-            )
-        if expected_gold_count < 1:
-            raise ConfigError(
-                ReasonCode.TYPE_MISMATCH,
-                "oa.enabled=true 时 expected_gold_count 必须为正整数",
-            )
-    elif (
-        benchmark_root is not None
-        or selection_root is not None
-        or gold is not None
-        or silver is not None
-        or expected_gold_count != 0
-    ):
-        raise ConfigError(
-            ReasonCode.TYPE_MISMATCH,
-            "oa.enabled=false 时 OA 路径必须为 null 且 expected_gold_count=0",
-        )
-    oa = OAConfig(
-        enabled=oa_enabled,
-        benchmark_root=benchmark_root,
-        selection_root=selection_root,
-        gold_annotations=gold,
-        silver_annotations=silver,
-        expected_gold_count=expected_gold_count,
-    )
-    if not oa.enabled and not any(source.enabled for source in sources.values()):
+    if not any(source.enabled for source in sources.values()):
         raise ConfigError(
             ReasonCode.SCHEMA_MISMATCH,
-            "至少启用一个 external source 或 OA source",
+            "至少启用一个 external source",
         )
 
     text_row = require_mapping(row["text_policy"], location="$.text_policy")
@@ -455,8 +358,6 @@ def load_build_config(path: Path | str) -> BuildConfig:
             "image_quality",
             "jpeg_subsampling",
             "target_size",
-            "mask_format",
-            "oa_preview_clip",
         ),
         location="$.asset_policy",
     )
@@ -464,11 +365,6 @@ def load_build_config(path: Path | str) -> BuildConfig:
         asset_row["image_format"],
         choices=("jpeg", "png"),
         location="$.asset_policy.image_format",
-    )
-    mask_format = require_enum(
-        asset_row["mask_format"],
-        choices=("png",),
-        location="$.asset_policy.mask_format",
     )
     target_raw = asset_row["target_size"]
     if target_raw is None:
@@ -487,17 +383,6 @@ def load_build_config(path: Path | str) -> BuildConfig:
             ReasonCode.TYPE_MISMATCH,
             "$.asset_policy.target_size 必须为 null 或 [width,height]",
         )
-    clip = asset_row["oa_preview_clip"]
-    if (
-        not isinstance(clip, list)
-        or len(clip) != 2
-        or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in clip)
-        or float(clip[0]) >= float(clip[1])
-    ):
-        raise ConfigError(
-            ReasonCode.TYPE_MISMATCH,
-            "$.asset_policy.oa_preview_clip 必须为递增有限二元数值列表",
-        )
     asset_policy = AssetPolicyConfig(
         image_format=image_format,
         image_quality=require_int(
@@ -511,8 +396,6 @@ def load_build_config(path: Path | str) -> BuildConfig:
             minimum=0,
         ),
         target_size=target_size,
-        mask_format=mask_format,
-        oa_preview_clip=(float(clip[0]), float(clip[1])),
     )
     if asset_policy.image_quality > 100 or asset_policy.jpeg_subsampling > 2:
         raise ConfigError(
@@ -578,7 +461,6 @@ def load_build_config(path: Path | str) -> BuildConfig:
         seed=require_int(row["seed"], location="$.seed", minimum=0),
         output_root=output_root,
         sources=sources,
-        oa=oa,
         external_split=external_split,
         text_policy=text_policy,
         asset_policy=asset_policy,
@@ -639,15 +521,23 @@ def load_export_config(path: Path | str) -> ExportConfig:
             "$.task_families 必须显式列出至少一个且不允许重复",
         )
     try:
-        for role in roles:
-            LogicalRole(role)
-        for task in tasks:
-            TaskFamily(task)
+        parsed_roles = {LogicalRole(role) for role in roles}
+        parsed_tasks = {TaskFamily(task) for task in tasks}
     except ValueError as error:
         raise ConfigError(
             ReasonCode.INVALID_ENUM,
             "export roles/task_families 含非法枚举",
         ) from error
+    if not parsed_roles <= RS_GENERALDESC_ROLES:
+        raise ConfigError(
+            ReasonCode.INVALID_ENUM,
+            "RS-GeneralDesc export 只接受 external_train/external_val",
+        )
+    if not parsed_tasks <= RS_GENERALDESC_TASK_FAMILIES:
+        raise ConfigError(
+            ReasonCode.INVALID_ENUM,
+            "RS-GeneralDesc export 只接受七类 External 任务",
+        )
     template = require_string(row["template_version"], location="$.template_version")
     if template != QWEN_TEMPLATE_VERSION:
         raise ConfigError(
@@ -672,7 +562,7 @@ def load_export_config(path: Path | str) -> ExportConfig:
         seed=require_int(row["seed"], location="$.seed", minimum=0),
         purpose=require_enum(
             row["purpose"],
-            choices=("training", "validation", "formal_test"),
+            choices=("training", "validation"),
             location="$.purpose",
         ),
         roles=tuple(roles),

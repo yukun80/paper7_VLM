@@ -12,8 +12,8 @@ from typing import Sequence
 
 import torch
 
-from oa_groundrag.phase3.dataset import OALandslideDescDataset
-from oa_groundrag.phase3.errors import LandslideDescError
+from oa_groundrag.phase3.dataset import RSGeneralDescDataset
+from oa_groundrag.phase3.errors import RSGeneralDescError
 
 from .checkpoint import CheckpointManager
 from .config import apply_runtime_overrides, load_config
@@ -24,12 +24,11 @@ from .errors import (
     ModelError,
     Phase4Error,
     PredictionError,
-    PreflightError,
     ReasonCode,
 )
 from .inference import run_inference
 from .model import Qwen3VLModelAdapter
-from .preflight import inspect_benchmark_identity, run_preflight
+from .preflight import BenchmarkAccess, open_benchmark_access, run_preflight
 from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
 from .progress import compact_training_result
 from .smoke import run_bounded_external_smoke
@@ -39,9 +38,9 @@ from .validation import select_bounded_external_validation
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="phase4-mask-grounded-description",
+        prog="rs-vlm",
         description=(
-            "算法 Phase 3 / 仓库 phase4：Mask-Grounded VLM Description"
+            "算法 Phase 3 / 仓库 phase4：RS-VLM train/infer/evaluate"
         ),
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -80,13 +79,19 @@ def _processor(config):
     )
 
 
-def _external_dataset(config, derived_root: Path):
-    canonical = OALandslideDescDataset(
+def _external_dataset(
+    config,
+    derived_root: Path,
+    access: BenchmarkAccess,
+):
+    canonical = RSGeneralDescDataset(
         config.data.benchmark_root,
         roles=config.data.roles,
         task_families=config.data.task_families,
         load_assets=False,
         seed=config.run.seed,
+        expected_manifest_sha256=config.data.expected_manifest_sha256,
+        verifier=access.verifier,
     )
     return ExternalDescriptionDataset(
         canonical,
@@ -139,16 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(target)
         return 0
-    if config.run.mode.value != "external_generic":
-        run_preflight(
-            config,
-            require_new_output=arguments.command == "train",
-        )
-        raise PreflightError(
-            ReasonCode.ASSET_MISSING,
-            "OA train/infer 需要经审核的 canonical OA Dataset 构造合同；"
-            "CLI 不从未确认数据语义推断样本",
-        )
+    access = open_benchmark_access(config)
     if arguments.command == "train":
         if config.adaptation.strategy == "prompt_only":
             raise ModelError(
@@ -158,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_preflight(
             config,
             require_new_output=config.run.resume_checkpoint is None,
+            access=access,
         )
         if not torch.cuda.is_available():
             raise ModelError(
@@ -178,8 +175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ReasonCode.CHECKPOINT_INCOMPATIBLE,
                 "LoRA infer 必须显式给 --checkpoint",
             )
-        run_preflight(config, require_new_output=False)
-    identity = inspect_benchmark_identity(config)
+        run_preflight(config, require_new_output=False, access=access)
+    identity = access.identity
     device = torch.device(
         "cuda"
         if arguments.command == "train"
@@ -211,14 +208,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if arguments.command == "train":
         with tempfile.TemporaryDirectory(
-            prefix="oa_phase4_external_derived_"
+            prefix="rs_generaldesc_external_derived_"
         ) as temporary:
-            canonical = OALandslideDescDataset(
+            canonical = RSGeneralDescDataset(
                 config.data.benchmark_root,
                 roles=("external_train", "external_val"),
                 task_families=config.data.task_families,
                 load_assets=False,
                 seed=config.run.seed,
+                expected_manifest_sha256=config.data.expected_manifest_sha256,
+                verifier=access.verifier,
             )
             dataset = ExternalDescriptionDataset(
                 canonical,
@@ -263,15 +262,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "infer":
         with tempfile.TemporaryDirectory(
-            prefix="oa_phase4_external_infer_derived_"
+            prefix="rs_generaldesc_external_infer_derived_"
         ) as temporary:
-            dataset = _external_dataset(config, Path(temporary) / "derived")
+            dataset = _external_dataset(
+                config,
+                Path(temporary) / "derived",
+                access,
+            )
             if config.adaptation.strategy == "lora":
                 assert arguments.checkpoint is not None
                 payload = CheckpointManager().load(
                     arguments.checkpoint,
                     expected_config_semantic_sha256=config.semantic_sha256,
-                    expected_benchmark_identity=identity.to_dict(),
+                    expected_benchmark_identity=(
+                        identity.training_identity_dict()
+                    ),
                     expected_validation_selection_identity=None,
                     expected_model_identity=model.identity.to_dict(),
                     expected_processor_identity=processor.identity(),
@@ -299,7 +304,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def entrypoint(argv: Sequence[str] | None = None) -> int:
     try:
         return main(argv)
-    except (Phase4Error, LandslideDescError) as error:
+    except (Phase4Error, RSGeneralDescError) as error:
         print(
             json.dumps(
                 {
