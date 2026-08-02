@@ -6,6 +6,10 @@ from .contracts import (
     CONFIG_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
     FAILURE_SCHEMA_VERSION,
+    GATE_B_GENERATION_SCHEMA_VERSION,
+    GATE_B_PROTOCOL_SCHEMA_VERSION,
+    GATE_B_REPORT_SCHEMA_VERSION,
+    GATE_B_SELECTION_SCHEMA_VERSION,
     MODEL_OUTPUT_SCHEMA_VERSION,
     PREDICTION_SCHEMA_VERSION,
     RUN_MANIFEST_SCHEMA_VERSION,
@@ -33,6 +37,13 @@ from .data import (
     locate_bounded_external_records,
 )
 from .evaluation import evaluate_predictions
+from .gate_b_acceptance import (
+    GateBAcceptanceVerification,
+    verify_gate_b_acceptance,
+)
+from .gate_b_evaluation import evaluate_gate_b
+from .gate_b_generation import generate_gate_b
+from .gate_b_selection import prepare_gate_b
 from .inference import run_inference
 from .messages import build_mask_grounded_messages
 from .model import Qwen3VLModelAdapter
@@ -67,6 +78,11 @@ __all__ = [
     "EvidenceSufficiency",
     "ExternalDescriptionDataset",
     "FAILURE_SCHEMA_VERSION",
+    "GATE_B_GENERATION_SCHEMA_VERSION",
+    "GATE_B_PROTOCOL_SCHEMA_VERSION",
+    "GATE_B_REPORT_SCHEMA_VERSION",
+    "GATE_B_SELECTION_SCHEMA_VERSION",
+    "GateBAcceptanceVerification",
     "MODEL_OUTPUT_SCHEMA_VERSION",
     "MaskMode",
     "MAIN_REFERENCE",
@@ -91,15 +107,19 @@ __all__ = [
     "build_mask_grounded_messages",
     "deterministic_mask_facts",
     "evaluate_predictions",
+    "evaluate_gate_b",
     "evaluate_teacher_forced_loss",
     "inspect_benchmark_identity",
     "inventory_from_auxseg_inference",
+    "generate_gate_b",
     "load_config",
     "locate_bounded_external_records",
     "parse_model_output",
+    "prepare_gate_b",
     "run_bounded_external_smoke",
     "run_inference",
     "run_preflight",
     "select_bounded_external_validation",
     "serialize_model_output",
+    "verify_gate_b_acceptance",
 ]

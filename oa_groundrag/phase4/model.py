@@ -399,13 +399,16 @@ class Qwen3VLModelAdapter:
         self.eval()
         tensors = model_tensor_batch(batch)
         tensors.pop("labels", None)
-        generated = self.model.generate(
-            **tensors,
-            max_new_tokens=max_new_tokens,
-            do_sample=do_sample,
-            temperature=temperature if do_sample else None,
-            top_p=top_p if do_sample else None,
-        )
+        generation_arguments: dict[str, Any] = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+        }
+        if do_sample:
+            generation_arguments.update(
+                temperature=temperature,
+                top_p=top_p,
+            )
+        generated = self.model.generate(**tensors, **generation_arguments)
         input_length = tensors["input_ids"].shape[1]
         continuation = generated[:, input_length:]
         values = processor.batch_decode(

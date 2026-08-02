@@ -5,16 +5,17 @@
 [`docs/OA-GroundRAG_算法构建方案.md`](docs/OA-GroundRAG_算法构建方案.md)，活动状态只在
 [`REBUILD_PROGRESS.md`](REBUILD_PROGRESS.md) 维护。
 
-2026-08-01 已完成新路线 Stage 0 的权威迁移、Stage 1 工程定版和 Stage 2
-RS-GeneralDesc Benchmark native v1 验收。仓库中的 `phase2/phase3/phase4` Python 包
+2026-08-02 已完成新路线 Stage 0 的权威迁移、Stage 1 工程定版、Stage 2
+RS-GeneralDesc Benchmark native v1 验收，以及 Stage 3 Adapter 重训和 Gate B。
+仓库中的 `phase2/phase3/phase4` Python 包
 分别承载 OA-AuxSeg、RS-GeneralDesc Benchmark 和 RS-VLM；活动配置、脚本与测试目录
 已经使用各自的原生产品名。
 
-当前统一状态：`Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
+当前统一状态：`Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
 
 当前依赖分两条支线：OA-AuxSeg 工程定版 → 未来 Gate A → formal fixed masks；
 RS-GeneralDesc Stage 2 → Adapter 重训 → Gate B。两条支线在 Mask-Grounded 阶段汇合；
-Gate A 延后不等于通过，也不阻止独立的 Stage 3 准备。
+Gate A 延后不等于通过，也不推翻已独立完成的 Stage 3 Gate B。
 
 - **Stage 1 / OA-AuxSeg：** 五源 full Benchmark 有 53,645 条样本。batch-16 proposed
   训练由项目负责人在日志 step `213200` 主动停止，不再续训；step `206820` 的
@@ -25,11 +26,12 @@ Gate A 延后不等于通过，也不阻止独立的 Stage 3 准备。
   0 error / 0 warning，不使用额外验收报告。历史 `release_equivalence.json` 记录了当时
   的迁移结论，但旧实现未对所有前代 ledger entry 做严格逐文件验证，不能把它扩大为
   可追溯的逐项证明；当前没有证据表明 native payload 已损坏。
-- **Stage 3 / RS-General Adapter：** 身份迁移前的候选 LoRA/checkpoint/training evidence
-  已删除，不能用于 native v1 Gate B。首次 native v1 `batch=4/accumulation=4` 运行因
-  24 GB 目标显存边界停止；step 100 checkpoint 与 step 180 日志只作为未完成轨迹保留，
-  不得用于新布局恢复。活动配置已切换为 `batch=1/accumulation=16`，从新输出目录重新
-  训练，再冻结 Base-vs-Adapter 固定生成集合和判据。
+- **Stage 3 / RS-General Adapter：** native v1 `batch=1/accumulation=16` 重训已完成到
+  step 1000；best pointer 指向 step 1000，`macro_task_loss=0.8427927826882716`。
+  训练报告中的 `formal_acceptance=false` 是 Gate B 执行前的预期状态；独立 Gate B
+  随后以 Base/Adapter 各 256 predictions、0 failures 完成，primary task-macro delta
+  为 `0.2362535013`，10,000 次 paired bootstrap 95% CI 为
+  `[0.2061703267, 0.2670255801]`，六项预注册判据全部 PASS，Adapter 已接受。
 - **Stage 4–5 / 专业证据与区域理解：** 现有 `phase4` 合同、RegionSelector、
   EvidenceBuilder、Qwen、checkpoint、推理和反事实评价继续复用；OA-GroundedEval、
   两遍式生成和扩展证据合同尚未实施。
@@ -38,9 +40,9 @@ Gate A 延后不等于通过，也不阻止独立的 Stage 3 准备。
   不作为运行时依赖，也不在 Gate C 前接入。
 
 早先的 native 身份迁移曾对既有发布 payload 做一次字节复制与 metadata/ID 重写，并对
-新树执行一次 full deep validation；没有重新读取三套源数据或重新编码图像。本次身份
-绑定加固只修改代码、配置、测试和文档，没有重跑 repackage/deep validation，也未运行
-optimizer/backward、GPU、test、Gate A 或 Gate B，未修改 OA-AuxSeg 权重或
+新树执行一次 full deep validation；没有重新读取三套源数据或重新编码图像。随后完成的
+身份绑定加固只修改代码、配置、测试和文档，没有重跑 repackage/deep validation；
+Stage 3 的训练和 Gate B 是其后的独立正式运行。本次证据闭环没有修改 OA-AuxSeg 权重或
 `docs/RAG_knowledge/`。
 
 ## 环境
@@ -441,6 +443,10 @@ provenance，不作为地学证据。当前 v1 Evidence 合同仍要求 RAG 输�
 - `rs_vlm.failure.v1`
 - `rs_vlm.checkpoint.v1`
 - `rs_vlm.run_manifest.v1`
+- `rs_vlm.gate_b_protocol.v1`
+- `rs_vlm.gate_b_selection.v1`
+- `rs_vlm.gate_b_generation.v1`
+- `rs_vlm.gate_b_report.v1`
 
 YAML 只保存人工配置；JSON 保存 manifest/config snapshot/metrics/hash；JSONL 保存逐条
 prediction/failure/provenance；mask、图像和 tensor 使用独立二进制资产。所有输出根
@@ -461,7 +467,8 @@ mask-grounded messages、EvidenceBuilder、RegionSelector、AuxSeg inference 和
 Stage 3 的 Base 配置为
 `configs/phase4_rs_vlm/rs_generaldesc_prompt_only_qwen3vl_2b.yaml`，只选择
 `external_val` 且 `prompt_only` 训练参数为 0。LoRA 配置为
-`rs_generaldesc_lora_qwen3vl_2b.yaml`；native v1 身份下尚未训练 Adapter，也未运行 Gate B。
+`rs_generaldesc_lora_qwen3vl_2b.yaml`；native v1 Adapter 已完成 step-1000 重训，正式
+Gate B 使用独立 `rs_generaldesc_gate_b_qwen3vl_2b.yaml`，不会扩张训练配置语义。
 
 模型路径配置化为本地 `models_zoo/Qwen3-VL-2B-Instruct`，强制
 `local_files_only=true`、bf16、SDPA。冻结 prompt-only baseline 的训练参数为 0；
@@ -469,7 +476,7 @@ Stage 3 的 Base 配置为
 `alpha=16`、dropout `0.05`，视觉 encoder 与 merger 冻结。锁定模型为
 2,127,532,032 parameters，LoRA 为 3,211,264 parameters（约 0.151%）。24 GB 活动布局
 使用 physical batch 1、gradient accumulation 16，保持 effective batch 16；原
-physical batch 4、accumulation 4 的未完成运行与新布局 checkpoint 严格不兼容。重新训练仍采用
+physical batch 4、accumulation 4 的未完成运行与新布局 checkpoint 严格不兼容。本次重训采用
 有界 `external_val` teacher-forced loss：每 100 个
 optimizer step 验证一次，从 `external_val` 确定性选取至多 128 个不同 parent，
 覆盖 3 个 source 和 7 个 task family，使用与训练一致的 assistant-only label
@@ -506,10 +513,71 @@ python scripts/phase4_rs_vlm/run_rs_vlm.py \
 python scripts/phase4_rs_vlm/run_rs_vlm.py \
   preflight \
   --config configs/phase4_rs_vlm/rs_generaldesc_prompt_only_qwen3vl_2b.yaml
+```
+
+以下四条 Gate B 命令是 2026-08-02 正式执行记录。对应输出根已经存在且实现拒绝覆盖，
+因此不能原样重跑；任何未来重跑必须升级协议并使用全新输出根。
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_rs_vlm/run_rs_vlm.py gate-b-prepare \
+  --protocol configs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b.yaml \
+  --training-root outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16 \
+  --output-root outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/selection
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_rs_vlm/run_rs_vlm.py gate-b-generate \
+  --protocol configs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b.yaml \
+  --selection outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/selection/gate_b_selection.json \
+  --model-role base \
+  --output-root outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/base
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_rs_vlm/run_rs_vlm.py gate-b-generate \
+  --protocol configs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b.yaml \
+  --selection outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/selection/gate_b_selection.json \
+  --model-role adapter \
+  --training-root outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16 \
+  --output-root outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/adapter
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_rs_vlm/run_rs_vlm.py gate-b-evaluate \
+  --protocol configs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b.yaml \
+  --selection outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/selection/gate_b_selection.json \
+  --base-run outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/base \
+  --adapter-run outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/adapter \
+  --output-root outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/evaluation
+```
+
+已发布证据可重复执行只读复核；该命令不加载图像资产或模型，也不写正式产物：
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_rs_vlm/run_rs_vlm.py gate-b-verify \
+  --protocol configs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b.yaml \
+  --selection outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/selection/gate_b_selection.json \
+  --training-root outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16 \
+  --base-run outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/base \
+  --adapter-run outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/adapter \
+  --evaluation-root outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/evaluation \
+  --expected-protocol-file-sha256 8378f6f107849439be3b402b0014df4007b10589e93602c1afb99173c2fb2c54 \
+  --expected-report-sha256 b150de8eeed07c5cb3e9c808e7cec5c32f29c23fca9dd82bf7842786d89eb165
 
 python -m unittest discover \
   -s tests/phase4_rs_vlm -p 'test_*.py' -v
 ```
+
+Gate B v1 的 frozen selection 已与预注册算法重算结果逐项一致，且与训练 monitoring 的
+128 个 parent 交集为 0。该 gate 只证明 RS-GeneralDesc native v1 固定 lexical protocol
+下的相对提升；不表示 Gate A、OA-Grounded、mask-grounded、sealed test 或最终系统验收。
+当前 v1 仍存在已记录的形式与方法学限制：selection loader 本身不重推唯一算法输出，
+模型/tokenizer/运行环境身份不是完整传递闭包；monitoring 与 Gate 共享一个 asset SHA，
+涉及两条 Gate spatial records。删除这两条的非门控事后敏感性分析仍满足六项判据，
+CI 下界为 `0.2038789283`。未来重跑应升级到 v2 后再预注册完整身份、asset-component
+selection、task-aware 指标、grouped bootstrap 和真实 finish reason。
+CLI 的 exit 1 只有在 `gate-b-evaluate` 已写出 `status=completed` 报告后才表示科学未通过；
+缺少 completed report 的原生 Python exit 1 不能冒充科学结论。明确 CUDA 基础设施错误
+在 generation 边界输出 structured invalid / exit 2，普通 RuntimeError 保持可见。
 
 身份迁移前完成的历史真实有界 smoke 最多探测 19 个确定性分片、每片前 256 条，共 4,864
 records；最终选取 7 records/7 parents、8 unique assets、2,430,960 asset bytes，
@@ -520,8 +588,11 @@ tokens；copied asset bytes 为 0。其 `/tmp` 过程产物已按负责人要求
 loss→optimizer→checkpoint→resume→inference→evaluation；该 smoke 只证明当时的通用
 遥感描述入口连通，不是当前 native v1 Adapter checkpoint 或 Gate B 证据。
 
-身份迁移前的 phase4 Adapter 输出已经删除且不保留 alias 或备份。下一步必须先在
-native v1 Benchmark 身份上重新训练，再冻结 Gate B；不得从已删除产物推断结论。
+身份迁移前的 phase4 Adapter 输出已经删除且不保留 alias 或备份；当前 Gate B 只绑定
+native v1 新训练根的 completed report 和 `best_checkpoint.json`，不会读取旧轨迹或任意
+中间 checkpoint。Gate selection 固定为 256 个不同 parent，排除训练 monitoring 的
+128 个 parents；Base/Adapter 必须各生成 256 条且 failure 为 0，才进入 10,000 次配对
+bootstrap 和六项预注册判据。
 
 ## 历史 Benchmark 构建程序（仓库 phase1）
 
@@ -880,7 +951,7 @@ MSPA block 及四层 FRM/FFM 的辅助梯度、checkpoint v6 严格重载、旧 
 
 ## 当前边界
 
-- 当前统一状态是 `Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
+- 当前统一状态是 `Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
 - 五源 OA-AuxSeg Benchmark、final checkpoint、训练日志、模型权重和
   `docs/RAG_knowledge/` 均未重建或覆盖；RS-GeneralDesc 已原生重发布到 native v1。
 - OA-AuxSeg proposed 主模型已由项目负责人定版：final 权重为
@@ -894,10 +965,10 @@ MSPA block 及四层 FRM/FFM 的辅助梯度、checkpoint v6 严格重载、旧 
   本次修复追溯性地升级为严格前代逐文件证明，但目前没有 native payload 损坏证据。
 - phase3 活动 builder/Dataset/exporter 严格 native External-only；RS-VLM config v2 只允许
   External，并直接绑定 manifest/validation/build/payload/ledger 与运行时消费文件。
-- 前代 Adapter 产物已删除；Stage 3 必须重新训练，teacher-forced validation loss
-  仍不等于 Gate B。
+- 前代 Adapter 产物已删除；native v1 Adapter 已重新训练并通过独立 Gate B。
+  teacher-forced validation loss 本身仍不等于 Gate B，正式接受只由固定生成报告表达。
 - OA-GroundedEval、Landslide Evidence Corpus、正式 mask-grounded 评价、RAG 和统一
   推理仍未实施。
 - Gate C 通过前不接入 RAG；`RAG_tmp` 不作为当前算法组件或运行时依赖。
-- 本次身份加固未运行 GPU、训练、test、Gate A/B、repackage 或 deep validation，也未
-  下载、commit 或 push；早先 native 迁移执行过一次复制和全量 deep validation。
+- 本次 Gate B 证据闭环只运行 CPU 只读 verifier；没有重新生成，也未运行 GPU、训练、
+  test、Gate A、repackage 或 deep validation，未下载、commit 或 push。

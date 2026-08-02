@@ -27,6 +27,10 @@ from .errors import (
     ReasonCode,
 )
 from .inference import run_inference
+from .gate_b_acceptance import verify_gate_b_acceptance
+from .gate_b_evaluation import evaluate_gate_b
+from .gate_b_generation import generate_gate_b
+from .gate_b_selection import prepare_gate_b
 from .model import Qwen3VLModelAdapter
 from .preflight import BenchmarkAccess, open_benchmark_access, run_preflight
 from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
@@ -64,6 +68,38 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--config", type=Path, required=True)
     evaluate.add_argument("--predictions", type=Path, required=True)
     evaluate.add_argument("--output-root", type=Path, required=True)
+    gate_prepare = subcommands.add_parser("gate-b-prepare")
+    gate_prepare.add_argument("--protocol", type=Path, required=True)
+    gate_prepare.add_argument("--training-root", type=Path, required=True)
+    gate_prepare.add_argument("--output-root", type=Path, required=True)
+    gate_generate = subcommands.add_parser("gate-b-generate")
+    gate_generate.add_argument("--protocol", type=Path, required=True)
+    gate_generate.add_argument("--selection", type=Path, required=True)
+    gate_generate.add_argument(
+        "--model-role",
+        choices=("base", "adapter"),
+        required=True,
+    )
+    gate_generate.add_argument("--training-root", type=Path)
+    gate_generate.add_argument("--output-root", type=Path, required=True)
+    gate_evaluate = subcommands.add_parser("gate-b-evaluate")
+    gate_evaluate.add_argument("--protocol", type=Path, required=True)
+    gate_evaluate.add_argument("--selection", type=Path, required=True)
+    gate_evaluate.add_argument("--base-run", type=Path, required=True)
+    gate_evaluate.add_argument("--adapter-run", type=Path, required=True)
+    gate_evaluate.add_argument("--output-root", type=Path, required=True)
+    gate_verify = subcommands.add_parser("gate-b-verify")
+    gate_verify.add_argument("--protocol", type=Path, required=True)
+    gate_verify.add_argument("--selection", type=Path, required=True)
+    gate_verify.add_argument("--training-root", type=Path, required=True)
+    gate_verify.add_argument("--base-run", type=Path, required=True)
+    gate_verify.add_argument("--adapter-run", type=Path, required=True)
+    gate_verify.add_argument("--evaluation-root", type=Path, required=True)
+    gate_verify.add_argument(
+        "--expected-protocol-file-sha256",
+        required=True,
+    )
+    gate_verify.add_argument("--expected-report-sha256", required=True)
     return parser
 
 
@@ -108,6 +144,57 @@ def _absolute_cli_path(path: Path | None) -> Path | None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    if arguments.command == "gate-b-prepare":
+        target = prepare_gate_b(
+            arguments.protocol,
+            training_root=arguments.training_root,
+            output_root=arguments.output_root,
+        )
+        print(target)
+        return 0
+    if arguments.command == "gate-b-generate":
+        outcome = generate_gate_b(
+            arguments.protocol,
+            arguments.selection,
+            model_role=arguments.model_role,
+            training_root=arguments.training_root,
+            output_root=arguments.output_root,
+        )
+        print(outcome.root)
+        return 0 if outcome.valid_for_evaluation else 2
+    if arguments.command == "gate-b-evaluate":
+        outcome = evaluate_gate_b(
+            arguments.protocol,
+            arguments.selection,
+            base_run=arguments.base_run,
+            adapter_run=arguments.adapter_run,
+            output_root=arguments.output_root,
+        )
+        print(outcome.root)
+        if outcome.status == "invalid":
+            return 2
+        return 0 if outcome.gate_b_passed else 1
+    if arguments.command == "gate-b-verify":
+        verification = verify_gate_b_acceptance(
+            arguments.protocol,
+            arguments.selection,
+            training_root=arguments.training_root,
+            base_run=arguments.base_run,
+            adapter_run=arguments.adapter_run,
+            evaluation_root=arguments.evaluation_root,
+            expected_protocol_file_sha256=(
+                arguments.expected_protocol_file_sha256
+            ),
+            expected_report_sha256=arguments.expected_report_sha256,
+        )
+        print(
+            json.dumps(
+                verification.to_dict(),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
     config = load_config(arguments.config)
     if arguments.command in {"preflight", "train"}:
         config = apply_runtime_overrides(
@@ -301,6 +388,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     raise AssertionError("unreachable")
 
 
+_GATE_B_INFRASTRUCTURE_MARKERS = (
+    "cuda out of memory",
+    "cuda error",
+    "cuda driver",
+    "cublas",
+    "cudnn",
+    "nccl",
+    "no kernel image is available",
+)
+
+
+def _gate_b_infrastructure_runtime_error(
+    argv: Sequence[str] | None,
+    error: RuntimeError,
+) -> bool:
+    values = list(sys.argv[1:] if argv is None else argv)
+    if not values or values[0] != "gate-b-generate":
+        return False
+    if isinstance(error, torch.cuda.OutOfMemoryError):
+        return True
+    message = str(error).lower()
+    return any(marker in message for marker in _GATE_B_INFRASTRUCTURE_MARKERS)
+
+
 def entrypoint(argv: Sequence[str] | None = None) -> int:
     try:
         return main(argv)
@@ -312,6 +423,22 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
                     "reason_code": error.code.value,
                     "message": str(error),
                     "details": dict(error.details),
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    except RuntimeError as error:
+        if not _gate_b_infrastructure_runtime_error(argv, error):
+            raise
+        print(
+            json.dumps(
+                {
+                    "status": "invalid",
+                    "reason_code": ReasonCode.GATE_B_RUN_INVALID.value,
+                    "message": str(error),
+                    "details": {"exception_type": type(error).__name__},
                 },
                 ensure_ascii=False,
             ),

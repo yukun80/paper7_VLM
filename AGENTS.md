@@ -35,11 +35,13 @@ Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不阻止独立�
 ## 3. 当前边界
 
 当前科学状态是
-`Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
+`Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
 Stage 2 以 `/home/yukun80/codes/benchmark/rs_generaldesc_v1`、
 `rs_generaldesc.manifest.v1` 和 `rs_generaldesc.canonical.v1` 原生发布
 External train/val；manifest 本身 eligible 且 blockers 为空，不再需要额外作用域报告。
-该结论不等于 OA-Grounded 数据验收或 Gate B 通过，`external_val` 仍只用于训练监控。
+Stage 2 结论本身不等于 OA-Grounded 数据验收或 Gate B 通过；随后独立执行的 Stage 3
+Gate B 已在固定 `external_val` 子集上接受 RS-General Adapter，不扩张为 OA-Grounded、
+mask-grounded、Gate A 或 sealed-test 结论。
 Stage 1 的 batch-16
 proposed final 权重仍为 `checkpoint_best.pt` step 206820，不再续训；Gate A、消融、
 sealed test 和正式 fixed masks 继续延后。
@@ -51,8 +53,9 @@ mask target、混合 builder、旧 schema validator 或兼容 alias。phase4 配
 native manifest、validation、build、payload、ledger、shard 与 asset identity。
 GT/fixed/end-to-end mask、RegionSelector、EvidenceBuilder、mask-grounded messages 和
 AuxSeg inference 仅作为 Stage 5 核心保留；临时 Mask-Grounded Dataset 合同未公开，
-须等新数据 schema 冻结后才能接入活动运行入口。上一轮候选 Adapter
-产物已随身份迁移删除，Stage 3 必须重新训练后再冻结 Gate B。
+须等新数据 schema 冻结后才能接入活动运行入口。native v1 Adapter 已完成 step-1000
+重训；Base/Adapter 各 256 条、0 failure 的预注册 Gate B 已通过，正式接受证据和 SHA
+锚点见 `REBUILD_PROGRESS.md`。Gate B v1 只证明固定 lexical protocol 下的相对提升。
 
 进入后续任务前，必须重新核对 `REBUILD_PROGRESS.md` 并取得项目负责人对相应写入、
 正式评价或长训练的明确授权。未经新授权禁止：

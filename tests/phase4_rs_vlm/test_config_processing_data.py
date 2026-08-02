@@ -45,6 +45,10 @@ from oa_groundrag.phase4.config import (
     load_config,
 )
 from oa_groundrag.phase4.contracts import MaskMode
+from oa_groundrag.phase4.gate_b_contracts import (
+    GATE_B_PROTOCOL_SCHEMA_VERSION,
+    load_gate_b_protocol,
+)
 from oa_groundrag.phase4.data import (
     DescriptionSample,
     ExternalDescriptionDataset,
@@ -83,6 +87,29 @@ from tests.phase3_rs_generaldesc.fixture_helpers import (
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIG_ROOT = REPO / "configs/phase4_rs_vlm"
+EXPECTED_TRAINING_CONFIG_NAMES = (
+    "bounded_smoke.yaml",
+    "rs_generaldesc_lora_qwen3vl_2b.yaml",
+    "rs_generaldesc_prompt_only_qwen3vl_2b.yaml",
+)
+
+
+def phase4_yaml_contracts() -> dict[str, tuple[Path, ...]]:
+    """按顶层 schema 发现所有活动 YAML，未知合同立即失败。"""
+
+    grouped: dict[str, list[Path]] = {
+        CONFIG_SCHEMA_VERSION: [],
+        GATE_B_PROTOCOL_SCHEMA_VERSION: [],
+    }
+    for path in sorted(CONFIG_ROOT.glob("*.yaml")):
+        row = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(row, dict):
+            raise AssertionError(f"{path}: 顶层必须是对象")
+        schema = row.get("schema_version")
+        if schema not in grouped:
+            raise AssertionError(f"{path}: 未知顶层 schema {schema!r}")
+        grouped[schema].append(path)
+    return {schema: tuple(paths) for schema, paths in grouped.items()}
 
 
 def native_preflight_fixture(root: Path) -> dict[str, str]:
@@ -210,19 +237,27 @@ class ConfigAndPreflightTests(unittest.TestCase):
         self.assertFalse(hasattr(data, "MaskGroundedExample"))
         self.assertFalse(hasattr(data, "MaskGroundedDescriptionDataset"))
 
-    def test_three_configs_strictly_parse(self) -> None:
+    def test_all_phase4_yaml_contracts_are_discovered_and_strictly_parse(self) -> None:
+        contracts = phase4_yaml_contracts()
+        config_paths = contracts[CONFIG_SCHEMA_VERSION]
+        protocol_paths = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION]
         configs = {
             path.name: load_config(path)
-            for path in CONFIG_ROOT.glob("*.yaml")
+            for path in config_paths
         }
         self.assertEqual(
             set(configs),
-            {
-                "bounded_smoke.yaml",
-                "rs_generaldesc_lora_qwen3vl_2b.yaml",
-                "rs_generaldesc_prompt_only_qwen3vl_2b.yaml",
-            },
+            set(EXPECTED_TRAINING_CONFIG_NAMES),
         )
+        self.assertEqual(
+            tuple(path.name for path in protocol_paths),
+            ("rs_generaldesc_gate_b_qwen3vl_2b.yaml",),
+        )
+        for path in protocol_paths:
+            self.assertEqual(
+                load_gate_b_protocol(path).raw["schema_version"],
+                GATE_B_PROTOCOL_SCHEMA_VERSION,
+            )
         for config in configs.values():
             self.assertEqual(config.schema_version, CONFIG_SCHEMA_VERSION)
             self.assertEqual(len(config.semantic_sha256), 64)
@@ -441,7 +476,8 @@ class ConfigAndPreflightTests(unittest.TestCase):
         self.assertFalse(identity.source_roots_embedded)
         self.assertTrue(identity.formal_acceptance_eligible)
         self.assertEqual(identity.formal_acceptance_blockers, ())
-        for path in sorted(CONFIG_ROOT.glob("*.yaml")):
+        config_paths = phase4_yaml_contracts()[CONFIG_SCHEMA_VERSION]
+        for path in config_paths:
             with self.subTest(config=path.name):
                 preflight = run_preflight(
                     load_config(path),

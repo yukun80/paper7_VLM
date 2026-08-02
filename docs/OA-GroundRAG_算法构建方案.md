@@ -6,7 +6,7 @@
 > **日期：** 2026-08-01
 > **文档定位：** 本文件已替代旧版 OA-GroundRAG 方案，是后续 Codex Agent 继续开发、实验和整合的唯一算法实施依据。
 > **硬件边界：** 单张约 24 GB GPU；正式长训练由项目负责人启动，Coding Agent 只运行短测试、工程门和有界 smoke。
-> **当前状态：** Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred
+> **当前状态：** Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred
 
 ---
 
@@ -199,9 +199,13 @@ native manifest 只接受 RS-GeneralDesc 通用遥感训练/监控范围，不�
 - GT、fixed predicted 和 end-to-end mask 隔离；
 - mask swap、modality removal 等反事实接口。
 
-需要新增：
+已完成：
 
-- RS-General Adapter 与可选 Landslide-Evidence Adapter 的路由；
+- RS-General Adapter 训练、best checkpoint 闭环和独立 Gate B；
+
+后续需要新增：
+
+- 可选 Landslide-Evidence Adapter 的路由；
 - 两遍式 VLM 推理；
 - RAG Evidence Provider；
 - retrieved evidence cards；
@@ -1110,26 +1114,35 @@ schema 前没有可运行的 mask-grounded data mode。
   `549281f296b357bce256e6af71cec7412fe17e36052d6a8674f4876ae2d06e0b`、
   `55ac26d9771ce8385318fbd23a10b999afb754ac195e823be659f4e49b0a7090`；
 - phase4 三份活动配置直接绑定 native identity；
-- Stage 3 prompt-only Base 使用 `rs_generaldesc_prompt_only_qwen3vl_2b.yaml`，只完成配置与
-  preflight，尚未运行 Gate B；
-- `external_val` 只用于训练监控，Stage 3 另行冻结 Gate B 集合。
+- Stage 3 prompt-only Base 使用 `rs_generaldesc_prompt_only_qwen3vl_2b.yaml`；Stage 2
+  没有预先指定 Gate 集，Stage 3 从 `external_val` 另行冻结与训练期 monitoring parents
+  零交集的 Gate B 集合。
 
 Stage 2 的当前验收依据是 native manifest、固定 build/payload/hash identity、eligible、
 空 blockers 与 saved clean deep validation。没有证据表明当前 native payload 损坏；
 本次身份加固未修改或重扫真实 Benchmark。
 
 前代 Benchmark 和 Adapter outputs 已在全部验收通过后删除，不保留备份、链接、alias
-或兼容包装。该结论不等于 OA-Grounded acceptance，也不等于 RS-General Adapter
-Gate B 通过。
+或兼容包装。Stage 2 结论本身不等于 OA-Grounded acceptance，也不等于 RS-General
+Adapter Gate B 通过；后者已由随后独立执行的 Stage 3 protocol 给出接受结论。
 
 ### Stage 3：RS-General Adapter
 
-- 保留 prompt-only Base 配置，在 native identity 上重新训练 RS-General LoRA；
-- 24 GB 活动训练布局使用 physical batch 1、gradient accumulation 16，保持
-  effective batch 16；旧 batch 4 未完成 checkpoint 不得跨布局恢复；
-- 重训后单独冻结不泄漏训练监控 parents 的 Base-vs-Adapter 固定生成集合；
-- 运行 Gate B 并评价通用遥感能力；
-- Gate B 完成前，checkpoint 或 teacher-forced validation loss 不构成 accepted Adapter。
+已完成：
+
+- prompt-only Base 与 native identity 上的 RS-General LoRA 配置均已固定；
+- 24 GB 训练布局使用 physical batch 1、gradient accumulation 16，保持 effective
+  batch 16；native 训练完成到 step 1000，`best_checkpoint.json` 按预注册的
+  `macro_task_loss` 选择 step 1000，值为 `0.8427927826882716`；
+- training report 保留 `formal_acceptance=false`，因为它只表达训练闭环；
+- 独立 `rs_vlm.gate_b_protocol.v1` 冻结了与训练 monitoring parents 零交集的 256-parent
+  Base-vs-Adapter 固定生成集合；
+- Base/Adapter 各完成 256 predictions、0 failures，10,000 次 paired bootstrap 与六项
+  判据全部通过；Gate B report 以 `formal_acceptance=true` 接受 Adapter。
+
+checkpoint 存在或 teacher-forced validation loss 更低仍不能单独构成 acceptance；
+Stage 3 结论只来自固定 Gate B report，且不扩张到 OA-Grounded、mask-grounded、Gate A
+或 sealed test。
 
 ### Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval
 
@@ -1208,12 +1221,82 @@ Gate B 通过。
 
 ### Gate B：通用遥感微调是否有效
 
-比较：
+Gate B 使用独立协议
+`configs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b.yaml`，不是
+`rs_vlm.config.v2` 训练配置。协议在首次正式生成前预注册，并绑定 Benchmark 的
+manifest/validation/build/payload/hash-ledger、Base/Adapter 配置文件与 semantic SHA、
+completed training report、training monitoring selection、validation results、最终
+best pointer、step-1000 checkpoint manifest、Adapter 权重、模型/processor 和实现文件
+SHA。冻结产物使用：
 
-- Base Qwen3-VL；
-- RS-General Adapter。
+- `rs_vlm.gate_b_protocol.v1`；
+- `rs_vlm.gate_b_selection.v1`；
+- `rs_vlm.gate_b_generation.v1`；
+- `rs_vlm.gate_b_report.v1`。
 
-必须确认通用遥感能力真实提升。
+固定 Gate B selection 只扫描 manifest 指定的 `external_val` record metadata，不读取
+图像，不使用 reference、loss 或模型输出排序。seed 为 `20260802`，排除训练期 128 个
+monitoring parents，选择 256 个不同 parent、每个 parent 一条 record。七类任务固定顺序
+为 `bbox_region_caption / global_caption / object_count / scene_understanding /
+spatial_relation / visible_change_report / visual_qa`。先覆盖全部非空 source-task cell，
+再将任务配额尽量均分；稀缺任务不足时按固定任务顺序循环回填，每个 task 内对 source
+做确定性 water-fill。每一步通过二分匹配保证剩余 cell 覆盖、task quota 与 parent 唯一性
+仍可完成。无法精确得到 256 条、三源七任务、全部可用 cell 或 monitoring 零交集时拒绝
+发布。
+
+Base 与 Adapter 分两个进程顺序加载同一个 Qwen3-VL-2B；Adapter 只能从 training root 的
+`best_checkpoint.json` 解析最终 step-1000 LoRA。两侧使用相同 processor、
+`qwen3vl_messages.v2` renderer、图像/token 限制和 frozen selection 顺序。生成固定为
+greedy decoding：`do_sample=false`、`max_new_tokens=384`、temperature `0`、top-p `1`；
+实际 Transformers 调用不传无效 sampling kwargs。shard 在解析前、asset 在渲染/解码前
+通过共享 hash ledger 核验。任一侧不是恰好 256 predictions、出现 failure、身份或文件
+SHA 不匹配，运行均为 `invalid`，不算 Adapter 科学失败。
+
+评价先对每条 Base/Adapter prediction 严格配对。开放生成任务
+`bbox_region_caption / global_caption / visible_change_report` 的 primary 为最佳 reference
+token-F1 与最佳 reference ROUGE-L-F1 的均值；短答案任务
+`visual_qa / object_count / scene_understanding / spatial_relation` 的 primary 为
+normalized exact match 与最佳 reference token-F1 的均值。Unicode lowercase `\w+`
+分词，token-F1 使用多重集交集，ROUGE-L-F1 使用 token LCS。先在 task 内求均值，再对
+七类 task 等权；source macro 先算实际存在的 source-task cell，再在 source 内等权。
+
+置信区间使用 parent-level、task-stratified paired bootstrap：每个 task 内有放回抽样，
+七类 task 等权，NumPy `PCG64(20260802)`，10,000 次，线性 2.5%/97.5% percentile。
+只有以下六项同时满足才接受 Adapter：
+
+1. Adapter−Base primary task-macro 的 95% CI 下界严格大于 0；
+2. 至少四类 task 的 primary delta 严格大于 0；
+3. 任一 task primary delta 不低于 `-0.02`；
+4. 任一 source macro delta 不低于 `-0.02`；
+5. 三类开放任务 macro ROUGE-L delta 不低于 0；
+6. 四类短答案 macro normalized exact-match delta 不低于 0。
+
+科学通过、科学未通过和基础设施/合同无效分别使用退出码 `0/1/2`。冻结后不得根据生成
+结果修改 selection、指标或门槛；若实现错误，保留原运行并标为 invalid，升级协议版本
+且使用全新输出根。只有 `gate-b-evaluate` 已原子写出 `status=completed` 报告后的 exit 1
+才表示科学未通过；未捕获的程序错误即使由 Python 返回 1，也不得在缺少 completed report
+时解释为科学结论。明确匹配的 CUDA 基础设施 RuntimeError 在生成 CLI 边界归类为
+structured invalid / exit 2，普通 RuntimeError 继续抛出。
+
+2026-08-02 正式 v1 运行已经完成并接受 Adapter：Base/Adapter 均为 256 predictions、
+0 failures，输入顺序、69,798 tokens 和 338 images 一致；primary task-macro 从
+`0.2197314184` 提升到 `0.4559849197`，delta 为 `0.2362535013`，10,000 次 bootstrap
+95% CI 为 `[0.2061703267, 0.2670255801]`，七类 task delta 均为正，六项判据全部
+PASS。正式 report SHA-256 为
+`b150de8eeed07c5cb3e9c808e7cec5c32f29c23fca9dd82bf7842786d89eb165`；完整 artifact
+SHA 锚点见 `REBUILD_PROGRESS.md`。只读 verifier 已重新推导 selection、paired scores、
+metrics、bootstrap 和 report，确认发布 selection 与预注册算法逐项一致、monitoring
+parent 交集为 0。
+
+该结果只证明 RS-GeneralDesc native v1 固定 lexical protocol 下的 Base-vs-Adapter
+相对提升。v1 selection loader 本身不重新推导算法唯一输出，模型完整权重、tokenizer、
+generation config、传递实现依赖和运行环境也未形成完整 ledger；当前没有实际漂移证据。
+monitoring/Gate 共享一个 asset SHA，涉及两条 Gate spatial records；删除这两条的非门控
+事后敏感性仍六项 PASS，CI 下界为 `0.2038789283`。Gate 内 spatial records 存在重复
+asset，task/source 配额是 capacity-constrained，lexical metric 同时测量内容、答案风格
+与词面重合，v1 也未保存真实 finish reason。这些限制不事后改变 v1 判据或 PASS；未来
+重跑须升级 v2，预注册完整 model/tokenizer/runtime ledger、asset-component selection、
+task-aware metric、grouped bootstrap 和 finish reason，并使用全新输出根。
 
 ### Gate C：模型是否真正关注 mask
 

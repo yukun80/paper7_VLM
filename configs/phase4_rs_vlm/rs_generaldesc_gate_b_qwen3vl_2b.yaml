@@ -1,0 +1,95 @@
+schema_version: rs_vlm.gate_b_protocol.v1
+protocol_id: rs_generaldesc_gate_b_qwen3vl_2b_v1
+benchmark:
+  root: /home/yukun80/codes/benchmark/rs_generaldesc_v1
+  manifest_schema: rs_generaldesc.manifest.v1
+  canonical_schema: rs_generaldesc.canonical.v1
+  manifest_sha256: 36875efb59619cf10fa614ce5995afb88f7d7888624267f7ed216f29ae385832
+  validation_sha256: bbc9e75afcdd23d3bd5ec83d724bdd5a1ae4e4507b1a2743a8350631e1fc0e9b
+  build_id: build_3ebc09a4daad10e121fc14c2727d9896e10371a95bbaf6b780d15aa42eaf3c03
+  payload_sha256: 549281f296b357bce256e6af71cec7412fe17e36052d6a8674f4876ae2d06e0b
+  hash_manifest_sha256: 55ac26d9771ce8385318fbd23a10b999afb754ac195e823be659f4e49b0a7090
+base:
+  config: rs_generaldesc_prompt_only_qwen3vl_2b.yaml
+  config_file_sha256: f57aef671bb9a5c60fbfe9ce4fbcdde53d2804476aa4300318c36e17e510e635
+  config_semantic_sha256: 37c772d70b2fed6bb349d0404cbe5d8931e52a18c64253948eb6f8f62a992a7e
+adapter:
+  config: rs_generaldesc_lora_qwen3vl_2b.yaml
+  config_file_sha256: aeebbbb7d1d7a4024c1024975fefb86e1e04ce9a972a420b843b399ad0d74873
+  config_semantic_sha256: a4b30e9a4f654cd85ee3d9e19fe49b1b4b1e53c88e7b2c38aeffffc9834fdd85
+training:
+  training_report_sha256: a4f42e777eaab6e444f04d63b89f482ee31a077bf13006d587863bfa4fb1eb1e
+  training_manifest_sha256: f4da0b051fc83b84935522e93dc358189a0bc426896b3a88f6b601e62cb91ea3
+  config_snapshot_sha256: 8a5cabaf594cefae628b0b4277eac672c1468883a39593bcfa21a79d4fccee5e
+  best_checkpoint_sha256: 4d93e2c6c34fe01a10db373c00946166238b8d132bb32b9863b52e305b6f4db6
+  monitoring_selection_file_sha256: fe21878b9e894fa687f86f05619132f1ee0f3e014f27f54883e536697ea1e9a2
+  monitoring_selection_sha256: ffe1ba8ff7c2ea001887f984f47b091fbaab30898e7f41cb328055bb1e229514
+  validation_results_sha256: 699ddf1788843476bfd2f1e3b7a61be9a94163de71a3140da1ada16e19afc1fc
+  checkpoint_step: 1000
+  checkpoint_manifest_sha256: aa279659a4c563536f1d7554ed9e51643398365ce11539eb9865f77c1d3a621f
+  adapter_size_bytes: 12879760
+  adapter_sha256: a367e39c626338a151dad33e6f7a7f9cc9887206dbcd261d147837e6408becc1
+model_identity:
+  model_path: /home/yukun80/codes/paper7_VLM/models_zoo/Qwen3-VL-2B-Instruct
+  model_type: qwen3_vl
+  config_sha256: bec4b3d446efa05807365c9e1cec03ac590836879d02f3a6da879971154bdd3b
+  weights_metadata_sha256: e14461feeccfecc62c623512173cc34d2c9f11d8aaf5489692d19e65f2c9c4fc
+  processor_config_sha256: 27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516
+  base_parameter_count: 2127532032
+processor_identity:
+  processor_path: /home/yukun80/codes/paper7_VLM/models_zoo/Qwen3-VL-2B-Instruct
+  files:
+    preprocessor_config.json: 27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516
+    tokenizer_config.json: c2da771801886ad9ae98181793ffd3dfb7f1af30f6f7c6a4e15d7dbba52e2399
+    chat_template.json: 6f8a6a55027e3da5160105556cda5dd69f6423f1c32645f6730d32de7773d0c4
+  processor_class: Qwen3VLProcessor
+  tokenizer_class: Qwen2Tokenizer
+  pad_token_id: 151643
+selection:
+  algorithm: external_val_parent_source_task_waterfill.v1
+  role: external_val
+  sample_count: 256
+  seed: 20260802
+  task_order:
+    - bbox_region_caption
+    - global_caption
+    - object_count
+    - scene_understanding
+    - spatial_relation
+    - visible_change_report
+    - visual_qa
+generation:
+  seed: 20260802
+  max_new_tokens: 384
+  do_sample: false
+  temperature: 0.0
+  top_p: 1.0
+  template_version: qwen3vl_messages.v2
+evaluation:
+  open_tasks:
+    - bbox_region_caption
+    - global_caption
+    - visible_change_report
+  short_tasks:
+    - visual_qa
+    - object_count
+    - scene_understanding
+    - spatial_relation
+  text_normalization: unicode_word_lower.v1
+  token_f1: multiset_token_f1.v1
+  rouge_l: token_lcs_f1.v1
+  task_macro_weighting: equal_task.v1
+  source_macro_weighting: equal_present_source_task_cell.v1
+  bootstrap:
+    iterations: 10000
+    seed: 20260802
+    confidence_level: 0.95
+    rng: numpy.PCG64
+    quantile_method: linear
+  criteria:
+    primary_ci_lower_strictly_greater_than: 0.0
+    minimum_improved_tasks: 4
+    task_delta_floor: -0.02
+    source_delta_floor: -0.02
+    open_rouge_l_delta_floor: 0.0
+    short_exact_match_delta_floor: 0.0

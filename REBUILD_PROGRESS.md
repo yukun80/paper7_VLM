@@ -4,36 +4,42 @@
 
 - program: `OA_GROUNDRAG_V2`
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
-- stage: `3`
-- stage_name: `RS_GENERAL_ADAPTER_RETRAINING`
+- stage: `4`
+- stage_name: `LANDSLIDE_EVIDENCE_CORPUS_AND_OA_GROUNDED_EVAL`
 - stage_status: `pending`
-- current_task: `RS_GENERALDESC_IDENTITY_BINDING_HARDENING`
+- current_task: `STAGE3_GATE_B_EVIDENCE_CLOSURE`
 - current_task_status: `complete`
-- next_gate: `B`
-- scientific_status: `Stage 2 RS-GeneralDesc Benchmark native v1 acceptance completed / Stage 3 RS-General Adapter retraining and Base-vs-Adapter Gate B pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`
-- execution_date: `2026-08-01`
+- next_gate: `A (OA-AuxSeg branch) / C (after Stage 4–5)`
+- scientific_status: `Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`
+- execution_date: `2026-08-02`
 - branch: `main`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
+- stage3_gate_b_evidence_baseline_head: `2ad01f0723eaf698c0cbaff9bb3e993122bd87e0`
 - active_training_process_found: `false`
 - gpu_inference_only_run_performed: `true`
+- stage3_training_performed: `true`
+- stage3_gate_b_generation_performed: `true`
+- stage3_gate_b_evaluated: `true`
+- stage3_gate_b_passed: `true`
+- stage3_adapter_formal_acceptance: `true`
 - stage2_gpu_run_performed: `false`
 - stage2_native_full_deep_validation_performed: `true`
 - identity_hardening_repackage_performed: `false`
 - identity_hardening_deep_validation_performed: `false`
 - identity_hardening_gpu_run_performed: `false`
-- training_or_optimizer_step_performed: `false`
-- formal_evaluation_performed: `false`
+- current_task_training_or_optimizer_step_performed: `false`
+- formal_evaluation_performed: `true`
 - test_split_evaluated: `false`
 - commit_performed: `false`
 - push_performed: `false`
 
-Stage 0 权威迁移、Stage 1 工程定版和 Stage 2 RS-GeneralDesc Benchmark native v1
-重发布与验收已经完成。依赖分为 OA-AuxSeg 工程定版 → 未来 Gate A → formal fixed
-masks，以及 RS-GeneralDesc Stage 2 → Adapter 重训 → Gate B；两者在 Mask-Grounded
-阶段汇合。Gate A 延后不等于通过，也不阻止独立的 Stage 3 准备。Stage 2 不表示
-OA-Grounded 数据验收或 Gate B 通过。
+Stage 0 权威迁移、Stage 1 工程定版、Stage 2 RS-GeneralDesc Benchmark native v1
+重发布与验收，以及 Stage 3 Adapter 重训和 Gate B 均已完成。依赖分为 OA-AuxSeg
+工程定版 → 未来 Gate A → formal fixed masks，以及 RS-GeneralDesc Stage 2 → Adapter
+重训 → Gate B；两者在 Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不推翻
+独立完成的 Stage 3 Gate B。Gate B 不表示 OA-Grounded、mask-grounded 或系统验收。
 
 ## Stage 0 已完成
 
@@ -127,8 +133,8 @@ checkpoint。Gate A、消融、sealed test 和正式 fixed predicted masks 仍�
 - formal acceptance blockers: `[]`
 - release equivalence schema: `rs_generaldesc.release_equivalence.v1`
 - OA-Grounded acceptance: `false`
-- Gate B evaluated: `false`
-- external_val usage: `training_monitoring_only`
+- Gate B evaluated: `true`（由独立 Stage 3 protocol 完成）
+- external_val usage: `Stage 2 training monitoring; Stage 3 independent frozen Gate B selection`
 
 该资产由冻结 payload 确定性重发布；canonical/provenance/ID/SHA/build identity 全部按
 native v1 重算，且新树自身具备固定 manifest/hash identity、eligible/空 blockers 和
@@ -144,13 +150,19 @@ native payload 损坏；本次修复后的未来 repackage 才强制完整 ledge
 ### RS-General Adapter
 
 身份迁移前的 phase4 Adapter/checkpoint/training evidence 已永久删除，不保留备份、链接
-或 alias。Stage 3 必须在 native v1 Benchmark identity 上重新训练；teacher-forced
-validation loss 只能选择训练期 checkpoint，不能证明 Base-vs-Adapter 生成能力提升。
-首次 native v1 `batch=4/accumulation=4` 运行在 24 GB 目标显存边界下停止：最后可恢复
-checkpoint 为 step 100，日志尾部为 step 180。该未完成输出保持只读，不得跨训练布局
-恢复。活动配置改为 physical batch 1、gradient accumulation 16、effective batch 16，
-并使用全新 `rs_vlm_lora_qwen3vl_2b_b1a16` 输出身份。重训完成并冻结 Gate B 之前不存在
-accepted Adapter。
+或 alias。首次 native v1 `batch=4/accumulation=4` 运行在 24 GB 目标显存边界下停止，
+不得跨布局恢复；随后使用 physical batch 1、gradient accumulation 16、effective
+batch 16 在全新 `rs_vlm_lora_qwen3vl_2b_b1a16` 根完成到 step 1000。best pointer 按
+`macro_task_loss` 指向 step 1000（`0.8427927826882716`）。training report 保留
+`formal_acceptance=false`，因为它只证明训练闭环；独立 Gate B report 随后以
+`formal_acceptance=true` 接受该 Adapter。
+
+最终 Adapter 身份：training report SHA-256
+`a4f42e777eaab6e444f04d63b89f482ee31a077bf13006d587863bfa4fb1eb1e`，best pointer
+`4d93e2c6c34fe01a10db373c00946166238b8d132bb32b9863b52e305b6f4db6`，step-1000
+checkpoint manifest
+`aa279659a4c563536f1d7554ed9e51643398365ce11539eb9865f77c1d3a621f`，Adapter 权重
+`a367e39c626338a151dad33e6f7a7f9cc9887206dbcd261d147837e6408becc1`。
 
 ### Mask-Grounded VLM 基础
 
@@ -217,27 +229,25 @@ Stage 1 剩余科学任务不是恢复训练。进入首次正式 test 前，必
 负责人指令延后到完整框架搭建后；只有未来 Gate A 通过，才运行一次 sealed test 并
 导出供 Stage 5 使用的正式 fixed predicted masks。
 
-## 当前科学任务：Stage 3 / Gate B
+## 当前科学任务：Stage 4 / Landslide Evidence Corpus 与 OA-GroundedEval
 
-Stage 2 已完成 RS-GeneralDesc Benchmark native v1 验收。其接受结论只覆盖通用遥感
-图像语言训练与监控，不覆盖 OA-Grounded 数据，也不评价 Adapter。Stage 3 先在 native
-identity 上重新训练 RS-General Adapter，再单独冻结 Base-vs-Adapter 判据和固定生成
-集合。当前 24 GB 活动布局为 `batch=1/accumulation=16`，不能从既有 bs4 step 100
-checkpoint 恢复；本次未创建 Gate B 集合、未运行生成或正式评价。
+Stage 3 已在 native identity 上完成 RS-General Adapter 重训和独立 Base-vs-Adapter
+Gate B；固定 selection 与训练 monitoring parents 零交集，Base/Adapter 均为 256 条、
+0 failure，六项预注册判据全部通过。当前不需要恢复训练或重复 Gate B。下一阶段须另行
+获得写入授权后构建 Landslide Evidence Corpus、审核必要 Gold，并冻结
+OA-GroundedEval；Gate B 结果不能解锁 Gate A、formal fixed masks 或 sealed test。
 
 ## 后续冻结顺序
 
-1. **Stage 3：RS-General Adapter。** 先按 native v1 identity 重训，再对 Base Qwen3-VL
-   与 Adapter 做固定生成 Gate B；gate 集必须与训练监控 parent 隔离。
-2. **Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval。** 分开构建 Auto、
+1. **Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval。** 分开构建 Auto、
    过滤 Silver 和必要 Gold，冻结正式 val/test；付费 API 和 Gold 需要单独授权。
-3. **Stage 5：Mask-Grounded Baseline。** 比较 full/crop/overlay/multimodal 与
+2. **Stage 5：Mask-Grounded Baseline。** 比较 full/crop/overlay/multimodal 与
    GT/fixed/wrong/empty mask；Gate C 失败时先修 Evidence Representation。
-4. **Stage 6–7：文本与案例 RAG。** 重新实现 Evidence Retrieval Provider，先文本，
+3. **Stage 6–7：文本与案例 RAG。** 重新实现 Evidence Retrieval Provider，先文本，
    再正案例/困难负样本/分模态索引；RAG_tmp 不直接集成。
-5. **Stage 8：可选 Landslide-Evidence Adapter。** 仅 Gate E 失败时训练，并执行
+4. **Stage 8：可选 Landslide-Evidence Adapter。** 仅 Gate E 失败时训练，并执行
    RS-General retention Gate F。
-6. **Stage 9：统一推理与报告。** 最后实现 Task Controller、两遍式生成、Evidence
+5. **Stage 9：统一推理与报告。** 最后实现 Task Controller、两遍式生成、Evidence
    Cards、引用、failure artifact 和端到端评价。
 
 ## 已知科学与数据边界
@@ -313,6 +323,69 @@ Benchmark。当前 full Benchmark 和真实 final checkpoint 已完成本任务�
 | 真实 Benchmark repackage/deep validation | 未运行 | 只使用 `/tmp` 小 fixture，不扫描 40 GB payload |
 | Benchmark/checkpoint/outputs 写入 | 未运行 | size/mtime/SHA 与目录清单前后复核 |
 
+## Stage 3 Gate B 正式验收记录
+
+正式输出根为
+`outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1`。只读证据复核重新验证了
+training root、确定性 selection、Base/Adapter manifests 与 predictions、canonical
+records、paired scores、全部指标、10,000 次 bootstrap 和六项判据；未读取图像资产。
+
+| 正式 artifact | SHA-256 |
+| --- | --- |
+| frozen protocol file | `8378f6f107849439be3b402b0014df4007b10589e93602c1afb99173c2fb2c54` |
+| selection file | `98290aaa585b798dcc5a30b9a4d47083e778aa4d48980e24bbce647705b915bd` |
+| Base generation manifest | `bad680291426f65fd51dfaa35eca649968e478af963d3c5009cdbce733a699fb` |
+| Base predictions | `862759c44400552f40f5211a38ceafd8d1f4712c7d6f870e3a2f0676d8ce8bd6` |
+| Adapter generation manifest | `c69314727ba71ef712fd7bbde1990ebd610e6759714641103916adf901787168` |
+| Adapter predictions | `a7c791fcfe8f3b94f6b188780bc0aed46dbf2fcf92f1bcca3b6617ca1c4bd98a` |
+| paired scores | `64d6802e2b2438305fa7ba560bc4d90ebb4537d1048dc281333c707fb4d3975f` |
+| Gate B report | `b150de8eeed07c5cb3e9c808e7cec5c32f29c23fca9dd82bf7842786d89eb165` |
+
+protocol canonical SHA 为
+`05ffb5ddf1940fb2474f13daf9ad7beec844f20d3da70a13c6c1c9f20a6eef0d`，selection
+canonical SHA 为
+`75285af6d8cee21c84760edcc2f20d71beb283bca8d340d6d3243e22c8537119`。selection
+重算与发布 items 逐项一致，256 个 parent 与 training monitoring 的 128 个 parent
+交集为 0。Base/Adapter 均为 256 predictions、0 failures，输入顺序、69,798 tokens
+和 338 images 一致，paired count 为 256。
+
+- primary task-macro：Base `0.2197314184`，Adapter `0.4559849197`，delta
+  `0.2362535013`；95% paired-bootstrap CI 为
+  `[0.2061703267, 0.2670255801]`；
+- task 数量依次为 `42/41/41/41/11/40/40`；primary delta 依次为
+  `0.4429630184 / 0.1316141258 / 0.2377844412 / 0.2792818227 /
+  0.0753093476 / 0.2834546518 / 0.2033671016`，七类均为正；
+- source 数量为 `disasterm3=128 / mmrs1m=101 / rsgpt=27`；source macro delta
+  分别为 `0.2266998826 / 0.2959882661 / 0.0341324147`；
+- 六项判据 observed 值分别为 `0.2061703267 / 7 / 0.0753093476 /
+  0.0341324147 / 0.2743480215 / 0.0804878049`，全部 PASS；
+- report 为 `status=completed`、`gate_b_evaluated=true`、`gate_b_passed=true`、
+  `formal_acceptance=true`、`adapter_status=accepted`。
+
+当前 PASS 只证明 RS-GeneralDesc native v1 固定 lexical protocol 下的相对提升，不表示
+Gate A、OA-Grounded、mask-grounded、sealed test 或最终系统验收。v1 的 selection loader
+本身不重推确定性唯一输出，模型完整权重、tokenizer/generation config、传递实现依赖和
+运行环境也未形成完整 ledger；当前复核未发现实际 selection、输入或产物漂移。training
+monitoring 与 Gate 共享一个 asset SHA，涉及两条 Gate `spatial_relation` records；删除
+它们的非门控事后敏感性分析仍满足六项判据，delta 为 `0.2340555947`，CI 下界为
+`0.2038789283`。Gate 内 11 条 spatial records 对应 4 个重复 asset 组；task/source
+配额是 capacity-constrained，lexical metric 同时反映答案风格和词面重合，现有产物也
+没有真实 finish reason。这些限制不事后改写 v1 判据；未来重跑须升级 v2，预注册完整
+模型/tokenizer/runtime ledger、asset-component selection、task-aware metric、grouped
+bootstrap 和 finish reason。
+
+### 本次证据闭环验证
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| 只读 `gate-b-verify` | 0 | selection、training、256 配对、指标、bootstrap、六判据和 8 个 artifact SHA 全部一致 |
+| Phase 3 全量单元测试 | 0 | 45/45 |
+| Phase 4 全量单元测试 | 0 | 72/72；含 verifier、public completed pass/fail、真实 exclusion、临时 training tamper 和 CUDA 错误窄分类 |
+| 三份 `rs_vlm.config.v2` preflight | 0 | 3/3 metadata-only；临时 output roots 均未创建 |
+| Python compile | 0 | `oa_groundrag/phase4/*.py`、phase4 CLI 和测试全部通过 |
+| `git diff --check` | 0 | 无 whitespace 错误 |
+| 正式 Gate B/训练产物不变 | 0 | 12 个文件的 size、mtime、SHA-256 前后完全一致 |
+
 ## Stage 0 当时未运行
 
 - GPU、训练、正式评价或长时间任务
@@ -337,4 +410,13 @@ Benchmark。当前 full Benchmark 和真实 final checkpoint 已完成本任务�
 - GPU、训练、inference、生成评价、test、Gate A 或 Gate B
 - OA-GroundedEval、Evidence Corpus、Silver/Gold、RAG 或 Stage 3–9 实施
 - 既有 LoRA、checkpoint、training report、validation selection 或模型权重写入
+- 数据、模型、依赖下载、commit 或 push
+
+## 本次 Gate B 证据闭环未运行
+
+- Base/Adapter 重新生成、GPU、训练、optimizer/backward 或 checkpoint 写入
+- test、Gate A、deep validation、Benchmark payload/asset 重扫或 repackage
+- Stage 4 Evidence Corpus/OA-GroundedEval 构建、Mask-Grounded 实验或 RAG
+- 正式 Gate B artifact、training report、best pointer、checkpoint、Adapter 权重或
+  Benchmark 修改
 - 数据、模型、依赖下载、commit 或 push

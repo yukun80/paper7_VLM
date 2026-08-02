@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""用途：运行算法 Phase 3（仓库 phase4）的 preflight/train/infer/evaluate/smoke。
+"""用途：运行算法 Phase 3（仓库 phase4）的训练工具与独立 Gate B。
 
 命令：python
   scripts/phase4_rs_vlm/run_rs_vlm.py --help
-输入：严格 phase4 YAML、已发布 canonical Benchmark、可选显式 checkpoint/predictions。
-输出：仅写命令指定的新输出根；preflight 只打印 JSON，不写数据。
+输入：严格 RS-VLM 配置或 Gate B 协议、canonical Benchmark、冻结 selection。
+输出：仅写命令指定的新输出根；preflight 只打印 JSON，Gate B 拒绝覆盖。
 写入：拒绝链接、路径逃逸和覆盖已有输出；不修改 Benchmark/source/model。
 阶段：算法 Phase 3 / 仓库 phase4，RS-VLM；mask 核心仅供后续阶段接入。
 """
