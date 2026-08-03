@@ -30,6 +30,10 @@ from .inference import run_inference
 from .gate_b_acceptance import verify_gate_b_acceptance
 from .gate_b_evaluation import evaluate_gate_b
 from .gate_b_generation import generate_gate_b
+from .gate_b_media import (
+    DEFAULT_GATE_B_BENCHMARK_ROOT,
+    locate_gate_b_media,
+)
 from .gate_b_selection import prepare_gate_b
 from .model import Qwen3VLModelAdapter
 from .preflight import BenchmarkAccess, open_benchmark_access, run_preflight
@@ -100,6 +104,14 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     gate_verify.add_argument("--expected-report-sha256", required=True)
+    gate_locate = subcommands.add_parser("gate-b-locate-media")
+    gate_locate.add_argument("--predictions", type=Path, required=True)
+    gate_locate.add_argument("--line-number", type=int, required=True)
+    gate_locate.add_argument(
+        "--benchmark-root",
+        type=Path,
+        default=DEFAULT_GATE_B_BENCHMARK_ROOT,
+    )
     return parser
 
 
@@ -144,6 +156,15 @@ def _absolute_cli_path(path: Path | None) -> Path | None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    if arguments.command == "gate-b-locate-media":
+        media_paths = locate_gate_b_media(
+            arguments.predictions,
+            line_number=arguments.line_number,
+            benchmark_root=arguments.benchmark_root,
+        )
+        for media in media_paths:
+            print(f"{media.role}\t{media.path}")
+        return 0
     if arguments.command == "gate-b-prepare":
         target = prepare_gate_b(
             arguments.protocol,

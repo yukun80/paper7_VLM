@@ -78,6 +78,24 @@ def _rgb_image(value: Any, *, location: str) -> Image.Image:
     return Image.fromarray(array, mode=mode).convert("RGB")
 
 
+def render_evidence_image(
+    value: Any, *, validity: np.ndarray | None = None, location: str = "evidence_image"
+) -> Image.Image:
+    """确定性渲染二维数值或 RGB 图；无效像素保持黑色。"""
+
+    if validity is None:
+        return _rgb_image(value, location=location)
+    array = np.asarray(value)
+    valid = np.asarray(validity)
+    if array.ndim != 2 or valid.shape != array.shape:
+        raise EvidenceError(ReasonCode.TYPE_MISMATCH, f"{location}: validity 必须与二维数值数组同 shape")
+    if not np.issubdtype(array.dtype, np.number):
+        raise EvidenceError(ReasonCode.TYPE_MISMATCH, f"{location}: 必须是数值数组")
+    cleaned = array.astype(np.float64, copy=True)
+    cleaned[~valid.astype(bool)] = np.nan
+    return _rgb_image(cleaned, location=location)
+
+
 def _component_count(mask: np.ndarray) -> int:
     """8 连通组件数，避免把视觉模型特征误当几何事实。"""
 
@@ -171,6 +189,124 @@ def deterministic_mask_facts(mask: np.ndarray) -> dict[str, Any]:
         "perimeter_pixels": perimeter,
         "compactness_4pi_area_over_perimeter2": compactness,
         "covariance_elongation": elongation,
+    }
+
+
+def context_crop_window(
+    mask: np.ndarray, *, image_size: tuple[int, int], margin_ratio: float = 0.15
+) -> tuple[int, int, int, int]:
+    """返回 target mask 的确定性半开 context crop 窗口。"""
+
+    if not 0 <= float(margin_ratio) <= 1:
+        raise EvidenceError(ReasonCode.TYPE_MISMATCH, "margin_ratio 必须位于 [0,1]")
+    image_width, image_height = image_size
+    if mask.shape != (image_height, image_width):
+        raise EvidenceError(ReasonCode.MASK_SHAPE_MISMATCH, "mask 与 image_size 不一致")
+    left, top, right, bottom = mask_bbox(mask)
+    margin_x = math.ceil((right - left) * float(margin_ratio))
+    margin_y = math.ceil((bottom - top) * float(margin_ratio))
+    return (max(0, left - margin_x), max(0, top - margin_y),
+            min(image_width, right + margin_x), min(image_height, bottom + margin_y))
+
+
+def render_mask_overlay(optical: Image.Image, mask: np.ndarray, *, alpha: float = 0.45) -> Image.Image:
+    """在已渲染 optical 上叠加红色 target mask。"""
+
+    if not 0 <= float(alpha) <= 1:
+        raise EvidenceError(ReasonCode.TYPE_MISMATCH, "alpha 必须位于 [0,1]")
+    optical = optical.convert("RGB")
+    if mask.shape != (optical.height, optical.width):
+        raise EvidenceError(ReasonCode.MASK_SHAPE_MISMATCH, "mask 与 optical image 尺寸不一致")
+    base = np.asarray(optical, dtype=np.float32).copy()
+    red = np.zeros_like(base)
+    red[..., 0] = 255
+    selected = np.asarray(mask, dtype=bool)
+    base[selected] = (1.0 - float(alpha)) * base[selected] + float(alpha) * red[selected]
+    return Image.fromarray(np.clip(base, 0, 255).astype(np.uint8))
+
+
+def render_context_crop(
+    optical: Image.Image, mask: np.ndarray, *, margin_ratio: float = 0.15
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    """返回 context crop 及其在 full optical 上的半开窗口。"""
+
+    optical = optical.convert("RGB")
+    window = context_crop_window(mask, image_size=optical.size, margin_ratio=margin_ratio)
+    return optical.crop(window), window
+
+
+def deterministic_auxiliary_facts(
+    values: np.ndarray,
+    pixel_valid: np.ndarray,
+    channel_valid: np.ndarray,
+    *,
+    channel_names: Sequence[str],
+    mask: np.ndarray | None,
+    min_coverage: float = 0.8,
+) -> dict[str, Any]:
+    """按 OA validity 计算 full/mask/outside 编码值统计。"""
+
+    array = np.asarray(values)
+    validity = np.asarray(pixel_valid)
+    channels = np.asarray(channel_valid)
+    names = tuple(str(name) for name in channel_names)
+    if (array.ndim != 3 or validity.shape != array.shape
+            or channels.shape != (array.shape[0],) or len(names) != array.shape[0]):
+        raise EvidenceError(ReasonCode.TYPE_MISMATCH,
+                            "auxiliary values/pixel_valid/channel_valid/channel_names 合同不一致")
+    if not 0 <= float(min_coverage) <= 1:
+        raise EvidenceError(ReasonCode.TYPE_MISMATCH, "min_coverage 必须位于 [0,1]")
+    height, width = array.shape[-2:]
+    if mask is not None and np.asarray(mask).shape != (height, width):
+        raise EvidenceError(ReasonCode.MASK_SHAPE_MISMATCH, "auxiliary 与 mask shape 不一致")
+    effective = validity.astype(bool) & channels.astype(bool)[:, None, None] & np.isfinite(array)
+
+    def summarize(scope: np.ndarray) -> dict[str, Any]:
+        scope = np.asarray(scope, dtype=bool)
+        denominator = int(scope.sum())
+        aggregate = effective.any(axis=0) & scope
+        coverage = 0.0 if denominator == 0 else float(aggregate.sum() / denominator)
+        status = ("not_applicable" if denominator == 0 else "unavailable"
+                  if not bool(aggregate.any()) else "insufficient_coverage"
+                  if coverage < float(min_coverage) else "available")
+        rows: list[dict[str, Any]] = []
+        for index, name in enumerate(names):
+            selected = effective[index] & scope
+            count = int(selected.sum())
+            channel_coverage = 0.0 if denominator == 0 else float(count / denominator)
+            statistics: dict[str, Any] | None = None
+            if count > 0 and channel_coverage >= float(min_coverage):
+                data = array[index][selected].astype(np.float64)
+                statistics = {"count": count, "mean": float(data.mean()),
+                              "median": float(np.median(data)),
+                              "p25": float(np.percentile(data, 25, method="linear")),
+                              "p75": float(np.percentile(data, 75, method="linear")),
+                              "min": float(data.min()), "max": float(data.max())}
+            rows.append({"name": name, "valid_count": count, "coverage": channel_coverage,
+                         "statistics": statistics})
+        return {
+            "status": status, "scope_pixel_count": denominator,
+            "valid_pixel_count": int(aggregate.sum()), "coverage": coverage, "channels": rows,
+        }
+
+    full = summarize(np.ones((height, width), dtype=bool))
+    if mask is None:
+        inside = outside = None
+    else:
+        binary = np.asarray(mask, dtype=bool)
+        inside = summarize(binary)
+        outside = summarize(~binary)
+    differences: dict[str, float | None] | None = None
+    if inside is not None and outside is not None:
+        differences = {}
+        for name, inner, outer in zip(names, inside["channels"], outside["channels"], strict=True):
+            inner_stats = inner["statistics"]
+            outer_stats = outer["statistics"]
+            differences[name] = (None if inner_stats is None or outer_stats is None
+                                 else float(inner_stats["mean"] - outer_stats["mean"]))
+    return {
+        "status": full["status"], "full": full, "mask": inside, "outside": outside,
+        "inside_minus_outside_mean": differences,
     }
 
 
@@ -284,9 +420,17 @@ class EvidenceBuilder:
                 facts = deterministic_mask_facts(selected.mask)
                 if facts["covariance_elongation"] is None:
                     limitations.append("DEGENERATE_COVARIANCE_ELONGATION")
-                overlay = self._overlay(optical, selected.mask)
+                overlay = render_mask_overlay(
+                    optical,
+                    selected.mask,
+                    alpha=self.overlay_alpha,
+                )
                 overlay.save(staging / "mask_overlay.png", format="PNG")
-                crop = self._context_crop(optical, selected.mask)
+                crop, _ = render_context_crop(
+                    optical,
+                    selected.mask,
+                    margin_ratio=self.context_margin_ratio,
+                )
                 crop.save(staging / "context_crop.png", format="PNG")
                 assets.extend(
                     (
@@ -366,32 +510,23 @@ class EvidenceBuilder:
             raise
 
     def _overlay(self, optical: Image.Image, mask: np.ndarray) -> Image.Image:
-        base = np.asarray(optical, dtype=np.float32).copy()
-        red = np.zeros_like(base)
-        red[..., 0] = 255
-        base[mask] = (
-            (1.0 - self.overlay_alpha) * base[mask]
-            + self.overlay_alpha * red[mask]
+        return render_mask_overlay(
+            optical,
+            mask,
+            alpha=self.overlay_alpha,
         )
-        return Image.fromarray(np.clip(base, 0, 255).astype(np.uint8))
 
     def _context_crop(
         self,
         optical: Image.Image,
         mask: np.ndarray,
     ) -> Image.Image:
-        left, top, right, bottom = mask_bbox(mask)
-        width = right - left
-        height = bottom - top
-        margin_x = math.ceil(width * self.context_margin_ratio)
-        margin_y = math.ceil(height * self.context_margin_ratio)
-        crop = (
-            max(0, left - margin_x),
-            max(0, top - margin_y),
-            min(optical.width, right + margin_x),
-            min(optical.height, bottom + margin_y),
+        crop, _ = render_context_crop(
+            optical,
+            mask,
+            margin_ratio=self.context_margin_ratio,
         )
-        return optical.crop(crop)
+        return crop
 
     def _auxiliary_contract(
         self,

@@ -6,17 +6,18 @@
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
 - stage: `4`
 - stage_name: `LANDSLIDE_EVIDENCE_CORPUS_AND_OA_GROUNDED_EVAL`
-- stage_status: `pending`
-- current_task: `STAGE3_GATE_B_EVIDENCE_CLOSURE`
+- stage_status: `in_progress`
+- current_task: `STAGE4B_LOCAL_SILVER_PROVIDER_HARDENING`
 - current_task_status: `complete`
 - next_gate: `A (OA-AuxSeg branch) / C (after Stage 4–5)`
-- scientific_status: `Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`
-- execution_date: `2026-08-02`
+- scientific_status: `Stage 4B local Silver provider hardened / clean-HEAD preflight, GPU smoke, formal generation, automatic filtering, expert review and OA-GroundedEval pending`
+- execution_date: `2026-08-03`
 - branch: `main`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
 - stage3_gate_b_evidence_baseline_head: `2ad01f0723eaf698c0cbaff9bb3e993122bd87e0`
+- stage4a_auto_pilot_baseline_head: `ee71e02127476da8e75b6bc9f2ce007fc38f77e5`
 - active_training_process_found: `false`
 - gpu_inference_only_run_performed: `true`
 - stage3_training_performed: `true`
@@ -24,6 +25,16 @@
 - stage3_gate_b_evaluated: `true`
 - stage3_gate_b_passed: `true`
 - stage3_adapter_formal_acceptance: `true`
+- stage4a_auto_pilot_built: `true`
+- stage4a_auto_pilot_validated: `true`
+- stage4b_local_provider_implemented: `true`
+- stage4b_formal_generation_performed: `false`
+- stage4b_automatic_filter_performed: `false`
+- stage4b_review_queue_prepared: `false`
+- stage4b_gpu_run_performed: `false`
+- stage4_silver_generated: `false`
+- stage4_expert_review_completed: `false`
+- oa_grounded_eval_completed: `false`
 - stage2_gpu_run_performed: `false`
 - stage2_native_full_deep_validation_performed: `true`
 - identity_hardening_repackage_performed: `false`
@@ -36,7 +47,10 @@
 - push_performed: `false`
 
 Stage 0 权威迁移、Stage 1 工程定版、Stage 2 RS-GeneralDesc Benchmark native v1
-重发布与验收，以及 Stage 3 Adapter 重训和 Gate B 均已完成。依赖分为 OA-AuxSeg
+重发布与验收、Stage 3 Adapter 重训和 Gate B、Stage 4A deterministic Auto Pilot，
+以及 Stage 4B 本地 Silver provider 正式运行前加固均已完成。Stage 4B clean-HEAD
+preflight、GPU smoke、正式 generation、自动过滤、专家审核和 OA-GroundedEval 尚未完成。
+依赖分为 OA-AuxSeg
 工程定版 → 未来 Gate A → formal fixed masks，以及 RS-GeneralDesc Stage 2 → Adapter
 重训 → Gate B；两者在 Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不推翻
 独立完成的 Stage 3 Gate B。Gate B 不表示 OA-Grounded、mask-grounded 或系统验收。
@@ -229,25 +243,139 @@ Stage 1 剩余科学任务不是恢复训练。进入首次正式 test 前，必
 负责人指令延后到完整框架搭建后；只有未来 Gate A 通过，才运行一次 sealed test 并
 导出供 Stage 5 使用的正式 fixed predicted masks。
 
-## 当前科学任务：Stage 4 / Landslide Evidence Corpus 与 OA-GroundedEval
+## 当前科学任务：Stage 4A deterministic Auto Pilot 已完成
 
-Stage 3 已在 native identity 上完成 RS-General Adapter 重训和独立 Base-vs-Adapter
-Gate B；固定 selection 与训练 monitoring parents 零交集，Base/Adapter 均为 256 条、
-0 failure，六项预注册判据全部通过。当前不需要恢复训练或重复 Gate B。下一阶段须另行
-获得写入授权后构建 Landslide Evidence Corpus、审核必要 Gold，并冻结
-OA-GroundedEval；Gate B 结果不能解锁 Gate A、formal fixed masks 或 sealed test。
+Stage 4A 已从冻结 OA-AuxSeg train split 构建并正式验证 500 条 Landslide Evidence
+Corpus Auto records。五源各 100 条，总计 400 target / 100 no-target；没有打开 val/test
+HDF5 内容，没有使用 predicted mask。发布根为
+`outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500`。
+
+| 身份或规模 | 冻结值 |
+| --- | --- |
+| manifest SHA-256 | `37aebb9c5f8ceb720e0a1a3c8621212d44562fa6b6786d145c31e11ffa94f9bb` |
+| corpus ID | `f4dd4c4e124e112154145a207d67f209ba9a3a1e7cfe56c35ab2f732624951d0` |
+| ordered sample IDs SHA-256 | `84e1801fe9ec37284d7bf02b663153d057145726fc78c6d54e87ded11e185936` |
+| records | `500`；`records.jsonl` SHA-256 `36f5dcbf8fe6008be09ccb291eb64a8a72398f01337ebb84ce13063d3a870c5d` |
+| assets | `2200`；`115528315` bytes；500 optical / 500 mask / 400 overlay / 400 crop / 400 auxiliary |
+| ledger | `2201` entries；file SHA-256 `0b0f7a1488e2069ce5d5ed03365d756905f81e742f12d2848dfb9b81de3ef430`；root `bf1f0446e17e6e94ea04859e4e6311226a5684690f44b6426ac64759e32b64c1` |
+
+五种实际 modality signature 各覆盖 100 条。source/target/foreground-ratio quota 全部
+达到；唯一组件覆盖不足为 `landslide4sense × large`，18 条均为多连通、单连通为 0，
+manifest 记录 `both_covered=false`，未补造样本。所有 `silver_generated`、
+`expert_review_completed`、`oa_grounded_eval`、`adapter_training_eligible` 和
+`case_kb_eligible` 均为 false。
+
+该 Corpus 是结构化 Auto evidence，不是分割 Benchmark、完整 RAG 知识库或人工测试集。
+Silver 仍是假标签，正式生成和专家审核均未执行；OA-GroundedEval 继续作为独立的设计、
+人工标注和冻结任务。Landslide-Evidence Adapter 只在后续 Gate E 失败时考虑。
+Stage 4A v1 的辅助模态合同只包含 `dem / slope / insar_velocity`；当前 Corpus 不含 SAR，
+SAR 是未来显式扩展，不能从现有通道或文件名推断补造。
+
+### Stage 4A 验证记录
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| `/tmp/oa_groundrag_stage4_tests` synthetic unittest | 0 | 11/11；覆盖 train-only/leakage、500 确定性去重、target/no-target、资产路径、科学 claims、manifest/record/ledger 篡改、原子发布、fake provider、禁止结论、review queue、mask-insensitive、symlink/path escape |
+| Phase 3 单元测试 | 0 | 45/45 |
+| 当时的 Phase 4 单元测试 | 0 | 72/72；Stage 4A 发布时的历史回归，当前套件规模见 Stage 4B 加固记录 |
+| 三份活动 RS-VLM preflight | 0 | 3/3 metadata-only；临时 output roots 未创建 |
+| 只读 Gate B verifier | 0 | accepted；report SHA-256 仍为 `b150de8eeed07c5cb3e9c808e7cec5c32f29c23fca9dd82bf7842786d89eb165` |
+| 真实 `build-auto` | 0 | staging 内重算通过后原子发布 500 records / 2200 assets |
+| 真实 CLI `validate` | 0 | `valid=true`、`source_verified=true`、400/100、五源各 100 |
+| Python compile / `git diff --check` | 0 | Stage 4A、phase4、CLI 与临时测试 compile 通过；无 whitespace 错误 |
+| 新增核心 Python 规模 | 0 | 指定五模块加薄 CLI 1516 physical / 1352 nonblank 行；既有 `phase4/evidence.py` 通用扩展净增 135 physical / 118 nonblank 行；合计净增 nonblank 1470 行 |
+| 临时测试清理 | 0 | 已精确删除 `/tmp/oa_groundrag_stage4_tests`；未创建 `tests/stage4_landslide_evidence` |
+
+临时测试命令为：
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python -m unittest discover \
+  -s /tmp/oa_groundrag_stage4_tests -p 'test_stage4_landslide_evidence.py' -v
+```
+
+真实构建和验证命令为：
+
+```bash
+python scripts/stage4_landslide_evidence/run_landslide_evidence.py build-auto \
+  --config configs/stage4_landslide_evidence/pilot_500.yaml
+python scripts/stage4_landslide_evidence/run_landslide_evidence.py validate \
+  --root outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500
+```
+
+本任务未运行 GPU、外部 API、正式 Silver、专家审核、OA-GroundedEval、训练、test、
+Gate A/C/D/E、predicted mask、RAG、下载、commit 或 push；未修改 Benchmark、checkpoint、
+Gate B 正式产物和既有训练 outputs。
+
+## 当前科学任务：Stage 4B local Silver provider 已加固
+
+新增配置 `configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml`，显式冻结
+Stage 4A manifest/Corpus/records/ledger、Gate B frozen protocol/report、training report、
+best pointer、checkpoint manifest、Adapter bytes、本地模型/processor identity、prompt
+template SHA、生成参数、seed 和关键 Python/package 版本。Stage 4B 独立冻结
+`max_input_tokens=4096`、最多 5 张图和 `max_new_tokens=256`，不修改 Gate B 的 2,048-token
+配置或产物。Provider 复用现有
+`Qwen3VLProcessorAdapter`、`Qwen3VLModelAdapter` 和 `CheckpointManager`；没有修改冻结的
+Gate B 实现或正式产物。
+
+正式计划固定为 500 records、1,000 regular candidates、25 wrong-mask 和 25
+modality-removal attempts。每个 attempt 原子保存 raw output、严格七字段解析、request/
+asset/prompt identity、seed 和模型身份；partial run 恢复时重新验证已有 attempt 与 raw、
+request、资产和候选的绑定。生成、filter 和 review 分别发布到新 sibling root 下的独立
+目录，均拒绝覆盖。自动过滤固定 `silver_accepted=false`，150 条 review queue 固定为
+`prepared_not_reviewed`；该流程不表示 Gate C 或 OA-GroundedEval。
+
+preflight 和 generate 都必须先用真实本地 processor 在 CPU 上编码全部唯一请求；相同输入
+的双候选按 request SHA 去重，但预算报告仍须覆盖全部 1,050 attempts。超过 4,096 tokens
+或 5 张图时，在正式 output root 创建和 GPU 模型加载前失败。25 条 wrong-mask 只从
+`gdcld / landslidebench_agent / lmhld` 的纯光学 target-present 样本中确定性平衡选择，
+原样本与 donor 都必须无辅助资产且 DEM/slope/InSAR 全部 unavailable；25 条
+modality-removal 从 `landslide4sense / multimodal_landslide` 平衡选择。该 50 条只是 Silver
+provider 反事实审计，不是 Gate C。
+
+科学规则将滑坡表述解析为确定、谨慎和否定语境：target-present 允许“疑似/可能/候选/
+尚不能确认”，拒绝确定性确认；no-target 拒绝确定和谨慎的存在声明，允许明确否定或证据
+不足。任何失败继续保留 raw output 和明确 reason code，不静默改写。
+
+### Stage 4B 实现验证记录
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| 初始 `/tmp/oa_groundrag_stage4b_tests` temporary unittest | 0 | 14/14；初始 provider/恢复/filter/review/CLI 合同通过，路径已清理 |
+| `/tmp/oa_groundrag_stage4b_repair_tests` temporary unittest | 0 | 8/8；覆盖 4,096-token 语义合同、三态滑坡表述、纯光学 wrong-mask/donor、五源 1,050-attempt 计划、预算去重/汇总及预算失败先于输出和模型加载 |
+| 20-record 真实 processor CPU 预算 | 0 | 50 attempts 全覆盖、30 unique requests；最大 2,116 input tokens、5 images |
+| 正式计划真实 processor CPU 预算 | 0 | 1,050 attempts 全覆盖、550 unique requests；最大 2,199 input tokens、5 images；未冻结 development protocol SHA |
+| Stage 4A 只读 validator | 0 | `valid=true`、`source_verified=true`；500 records、2,200 assets、115,528,315 bytes，manifest/ordered IDs SHA 未变 |
+| 正式 CLI preflight（当前未提交工作区） | 1 | 预期 `DIRTY_WORKTREE`；必须在提交后的 clean HEAD 重跑，不能冒充正式通过 |
+| Phase 3 / Phase 4 单元测试 | 0 | 45/45；82/82；Phase 4 含 `gate-b-locate-media` 10 项严格永久测试 |
+| 三份活动 RS-VLM preflight | 0 | 3/3；LoRA 已有正式 output，使用未创建的 `/tmp` override 完成只读检查 |
+| 只读 Gate B verifier | 0 | `accepted`；正式 report SHA-256 仍为 `b150de8eeed07c5cb3e9c808e7cec5c32f29c23fca9dd82bf7842786d89eb165` |
+| 冻结资产修复前后 SHA | 0 | Stage 4A manifest/records/ledger、Gate B report/paired scores、best pointer/training report、step-1000 manifest/Adapter 共 9 项完全不变 |
+| Python compile / `git diff --check` | 0 | Stage 4B 核心与 CLI compile 通过；无 whitespace 错误 |
+| 临时测试清理 | 0 | 已精确删除初始与 repair 两个 `/tmp` 测试路径；未向仓库新增 Stage 4B 永久测试 |
+
+本次只完成 CPU 代码、合同和只读身份检查；没有运行 GPU、模型生成、外部 API、正式
+Silver、自动过滤、专家审核、OA-GroundedEval、训练、test、Gate A/C/D/E、RAG、下载、
+commit 或 push，也没有重跑 Stage 4A `build-auto`，没有修改 Corpus、Benchmark、
+checkpoint、模型权重、训练输出或 Gate B 正式产物。
+
+`gate-b-locate-media` 继续作为人工检查 Gate B prediction 的严格只读工具，验证 manifest、
+ledger、record 与 asset identity；它不属于 Stage 4B Silver 运行时依赖，也不替代 Gate B
+verifier。其 10 项永久测试保留在 Phase 4 回归中。
 
 ## 后续冻结顺序
 
-1. **Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval。** 分开构建 Auto、
-   过滤 Silver 和必要 Gold，冻结正式 val/test；付费 API 和 Gold 需要单独授权。
-2. **Stage 5：Mask-Grounded Baseline。** 比较 full/crop/overlay/multimodal 与
+1. **Stage 4B 正式运行。** 先在提交后的 clean HEAD 执行全计划 CPU preflight，再由负责人执行
+   20-record GPU smoke；检查并冻结 prompt 后才运行 500×2 候选、50 条反事实、自动过滤
+   和 150 条待审核队列。自动过滤不等于 Silver accepted。
+2. **Stage 4 后续人工资产。** 专家审核、必要 Gold 和 OA-GroundedEval 须分别授权、
+   人工标注并冻结。
+3. **Stage 5：Mask-Grounded Baseline。** 比较 full/crop/overlay/multimodal 与
    GT/fixed/wrong/empty mask；Gate C 失败时先修 Evidence Representation。
-3. **Stage 6–7：文本与案例 RAG。** 重新实现 Evidence Retrieval Provider，先文本，
+4. **Stage 6–7：文本与案例 RAG。** 重新实现 Evidence Retrieval Provider，先文本，
    再正案例/困难负样本/分模态索引；RAG_tmp 不直接集成。
-4. **Stage 8：可选 Landslide-Evidence Adapter。** 仅 Gate E 失败时训练，并执行
+5. **Stage 8：可选 Landslide-Evidence Adapter。** 仅 Gate E 失败时训练，并执行
    RS-General retention Gate F。
-5. **Stage 9：统一推理与报告。** 最后实现 Task Controller、两遍式生成、Evidence
+6. **Stage 9：统一推理与报告。** 最后实现 Task Controller、两遍式生成、Evidence
    Cards、引用、failure artifact 和端到端评价。
 
 ## 已知科学与数据边界
@@ -259,9 +387,9 @@ OA-GroundedEval；Gate B 结果不能解锁 Gate A、formal fixed masks 或 seal
   不得生成定量位移或物理方向结论。
 - LMHLD 和 Landslide4Sense 缺少可靠地理 group；不得从文件名或 sample ID 伪造空间
   身份。
-- 当前有负责人定版的 OA-AuxSeg final checkpoint，但没有 Gate-A-accepted checkpoint、
-  fixed predicted mask、OA-GroundedEval、Landslide Evidence Corpus 或正式
-  mask-grounded test。
+- 当前有负责人定版的 OA-AuxSeg final checkpoint 和已验证的 Stage 4A Auto Corpus，
+  且 Stage 4B provider 已实现，但没有 Gate-A-accepted checkpoint、fixed predicted mask、
+  正式 Silver/Gold、OA-GroundedEval 或正式 mask-grounded test。
 - Gate C 通过前不得接入 RAG；RAG 不能为候选 mask 直接寻找支持理由，必须同时检索
   反对证据、混淆对象、困难负样本和传感器限制。
 

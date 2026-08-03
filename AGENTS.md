@@ -35,7 +35,7 @@ Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不阻止独立�
 ## 3. 当前边界
 
 当前科学状态是
-`Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
+`Stage 4B local Silver provider hardened / clean-HEAD preflight, GPU smoke, formal generation, automatic filtering, expert review and OA-GroundedEval pending`。
 Stage 2 以 `/home/yukun80/codes/benchmark/rs_generaldesc_v1`、
 `rs_generaldesc.manifest.v1` 和 `rs_generaldesc.canonical.v1` 原生发布
 External train/val；manifest 本身 eligible 且 blockers 为空，不再需要额外作用域报告。
@@ -51,9 +51,16 @@ phase3 只保留三类 External source、两类 role 与七类文本任务；没
 mask target、混合 builder、旧 schema validator 或兼容 alias。phase4 配置为
 `rs_vlm.config.v2`，其他产物合同仍为 `rs_vlm.*.v1`；preflight 和 Dataset 按需绑定
 native manifest、validation、build、payload、ledger、shard 与 asset identity。
-GT/fixed/end-to-end mask、RegionSelector、EvidenceBuilder、mask-grounded messages 和
-AuxSeg inference 仅作为 Stage 5 核心保留；临时 Mask-Grounded Dataset 合同未公开，
-须等新数据 schema 冻结后才能接入活动运行入口。native v1 Adapter 已完成 step-1000
+GT mask、RegionSelector 和 EvidenceBuilder 已由 Stage 4A train-only Auto Pilot 复用；
+fixed/end-to-end mask、mask-grounded messages 和 AuxSeg inference 继续作为 Stage 5
+核心保留。Stage 4A 已冻结 500 条、400 target/100 no-target 的确定性 Corpus，但未生成
+Silver、未完成人工审核，也不是 OA-GroundedEval、完整 RAG 案例库或分割 Benchmark；v1
+仅处理 `dem / slope / insar_velocity`，SAR 仍是未来能力。Stage 4B 已加固只面向
+Gate-B-accepted RS-General Adapter 的本地 batch-1 Silver provider：独立固定 4,096 input
+tokens、双候选生成、纯光学 wrong-mask 与辅助模态移除共 50 条反事实审计、自动过滤、
+150 条待审核队列和只读 validator。正式 clean-HEAD preflight 与 GPU 生成尚未执行，自动
+过滤通过也不等于 Silver accepted。
+native v1 Adapter 已完成 step-1000
 重训；Base/Adapter 各 256 条、0 failure 的预注册 Gate B 已通过，正式接受证据和 SHA
 锚点见 `REBUILD_PROGRESS.md`。Gate B v1 只证明固定 lexical protocol 下的相对提升。
 
@@ -65,7 +72,8 @@ AuxSeg inference 仅作为 Stage 5 核心保留；临时 Mask-Grounded Dataset �
 - 修改 `../datasets`、`../benchmark` 或 `../external`；
 - 修改或复制第三方参考实现；
 - 修改既有 Benchmark、checkpoint、训练输出或模型权重；
-- 提前实施 Stage 4 的数据构建或 Stage 6/7 的 RAG；
+- 未经授权运行 Stage 4B 正式 GPU generation、生成 Gold/OA-GroundedEval，或实施
+  Stage 6/7 RAG；
 - 创建 legacy 目录、兼容包装、alias 或旧接口适配层。
 
 Gate A/B 的科学判据必须只基于 train/val 预注册并在首次正式 test 前冻结，不得读取

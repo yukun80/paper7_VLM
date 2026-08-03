@@ -5,13 +5,15 @@
 [`docs/OA-GroundRAG_算法构建方案.md`](docs/OA-GroundRAG_算法构建方案.md)，活动状态只在
 [`REBUILD_PROGRESS.md`](REBUILD_PROGRESS.md) 维护。
 
-2026-08-02 已完成新路线 Stage 0 的权威迁移、Stage 1 工程定版、Stage 2
-RS-GeneralDesc Benchmark native v1 验收，以及 Stage 3 Adapter 重训和 Gate B。
+截至 2026-08-03 已完成新路线 Stage 0 的权威迁移、Stage 1 工程定版、Stage 2
+RS-GeneralDesc Benchmark native v1 验收、Stage 3 Adapter 重训和 Gate B，以及
+Stage 4A Landslide Evidence Corpus deterministic Auto Pilot；Stage 4B 本地 Silver
+provider 已完成正式运行前加固，clean-HEAD preflight 和正式生成尚未执行。
 仓库中的 `phase2/phase3/phase4` Python 包
 分别承载 OA-AuxSeg、RS-GeneralDesc Benchmark 和 RS-VLM；活动配置、脚本与测试目录
 已经使用各自的原生产品名。
 
-当前统一状态：`Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
+当前统一状态：`Stage 4B local Silver provider hardened / clean-HEAD preflight, GPU smoke, formal generation, automatic filtering, expert review and OA-GroundedEval pending`。
 
 当前依赖分两条支线：OA-AuxSeg 工程定版 → 未来 Gate A → formal fixed masks；
 RS-GeneralDesc Stage 2 → Adapter 重训 → Gate B。两条支线在 Mask-Grounded 阶段汇合；
@@ -33,8 +35,10 @@ Gate A 延后不等于通过，也不推翻已独立完成的 Stage 3 Gate B。
   为 `0.2362535013`，10,000 次 paired bootstrap 95% CI 为
   `[0.2061703267, 0.2670255801]`，六项预注册判据全部 PASS，Adapter 已接受。
 - **Stage 4–5 / 专业证据与区域理解：** 现有 `phase4` 合同、RegionSelector、
-  EvidenceBuilder、Qwen、checkpoint、推理和反事实评价继续复用；OA-GroundedEval、
-  两遍式生成和扩展证据合同尚未实施。
+  EvidenceBuilder、Qwen、checkpoint、推理和反事实评价继续复用；Stage 4A 已发布
+  train-only 500 条确定性 Auto Pilot。Stage 4B 已加固本地 Silver provider、双候选、
+  反事实审计、自动过滤、审核队列和 validator；clean-HEAD preflight、正式 Silver、专家审核、
+  OA-GroundedEval、两遍式生成和正式 mask-grounded 评价尚未执行。
 - **Stage 6–9 / RAG 与集成：** `yukun80/RAG_tmp` commit
   `4241140a8005bb79b8d8ebce982c645b096b7aca` 仅作外部工程原型。它不复制进仓库、
   不作为运行时依赖，也不在 Gate C 前接入。
@@ -44,6 +48,113 @@ Gate A 延后不等于通过，也不推翻已独立完成的 Stage 3 Gate B。
 身份绑定加固只修改代码、配置、测试和文档，没有重跑 repackage/deep validation；
 Stage 3 的训练和 Gate B 是其后的独立正式运行。本次证据闭环没有修改 OA-AuxSeg 权重或
 `docs/RAG_knowledge/`。
+
+## Stage 4A Landslide Evidence Corpus Auto Pilot
+
+活动产物位于
+`outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500`。它从冻结的
+OA-AuxSeg train split 确定性选取五源各 100 条，共 500 records、400 target 和
+100 no-target；导出 2,200 个 optical/GT mask/overlay/context crop/auxiliary PNG，
+总计 115,528,315 bytes。manifest SHA-256 为
+`37aebb9c5f8ceb720e0a1a3c8621212d44562fa6b6786d145c31e11ffa94f9bb`，有序 sample IDs
+SHA-256 为 `84e1801fe9ec37284d7bf02b663153d057145726fc78c6d54e87ded11e185936`。
+
+该 Stage 4A 根已经冻结，当前不要重新运行 `build-auto`。以下命令仅保留为已完成入口的
+身份记录：
+
+```bash
+python scripts/stage4_landslide_evidence/run_landslide_evidence.py build-auto \
+  --config configs/stage4_landslide_evidence/pilot_500.yaml
+
+python scripts/stage4_landslide_evidence/run_landslide_evidence.py validate \
+  --root outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500
+```
+
+构建器只打开入选项所需的 train HDF5 shard；validator 重新计算 GT mask 几何、crop、
+overlay、辅助覆盖/统计、claims，并核对 manifest、records、ledger 和所有资产身份。
+当前 `silver_observation=null`、`review_status=not_reviewed`，全部 Silver/专家审核/
+OA-GroundedEval/Adapter/案例库 eligibility 均为 false。该 Corpus 不是分割 Benchmark、
+完整 RAG 知识库或人工测试集；Silver 仍是假标签且正式生成未执行。OA-GroundedEval
+继续作为独立的人工设计、标注和冻结任务，Landslide-Evidence Adapter 仅在后续 Gate E
+失败时考虑。
+
+Stage 4A v1 只接受并记录 `dem / slope / insar_velocity` 三类辅助模态；当前 Corpus 不含
+SAR，SAR 只能作为未来显式扩展，不能由现有通道或文件名推断补造。
+
+## Stage 4B 本地 Silver Provider
+
+配置为
+`configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml`，直接绑定冻结 Auto
+Corpus、Gate-B-accepted RS-General Adapter、best checkpoint、模型/processor、prompt、
+生成参数和关键运行时版本。正式计划是 500 records × 2 regular candidates，加 25 条
+wrong-mask 和 25 条 modality-removal 审计，共 1,050 attempts。输出进入新的 sibling
+root，不修改 Stage 4A Corpus。自动过滤通过不等于 Silver accepted，review queue 也只是
+150 条 `pending` 人工任务；本阶段不是 Gate C 或 OA-GroundedEval。
+
+Silver 独立固定 `max_input_tokens=4096`、`max_new_tokens=256` 和最多 5 张图，不修改
+Gate B 的 2,048-token 配置或任何冻结产物。preflight 与 generate 都先用真实本地 processor
+在 CPU 上编码全部唯一请求；双候选按 request SHA 去重，但必须证明 1,050 attempts 全覆盖。
+预算超限在创建正式输出或加载 GPU 模型前失败。25 条 wrong-mask 只来自三个纯光学
+target-present 来源，原样本与同源同尺寸 donor 均须无辅助资产且 DEM/slope/InSAR 全部
+unavailable；另 25 条 modality-removal 来自两个有辅助模态来源。
+
+自动规则将滑坡陈述区分为确定、谨慎和否定语境。target-present 允许“疑似、可能、候选、
+尚不能确认”等谨慎表达，但拒绝确定性确认；no-target 同时拒绝确定和谨慎的存在声明，允许
+“未发现、无法确认、不能判定”等否定或证据不足表达。违规 raw output 和 reason code 必须
+保留，不作静默修补。
+
+正式协议要求 clean HEAD。先提交并推送当前实现，再运行只读 preflight：
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage4_landslide_evidence/run_landslide_evidence.py silver \
+  --action preflight \
+  --config configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml
+```
+
+preflight 通过后，由项目负责人运行 20-record GPU smoke。该 smoke 实际包含 40 个 regular
+候选和 10 个反事实 attempt：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage4_landslide_evidence/run_landslide_evidence.py silver \
+  --action generate \
+  --config configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml \
+  --limit 20 \
+  --output-root /tmp/oa_groundrag_stage4b_silver_smoke
+```
+
+检查 smoke raw outputs、failure 原因和规则结果并冻结 prompt 后，才运行正式 generation，
+随后依次过滤、准备审核队列和验证：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage4_landslide_evidence/run_landslide_evidence.py silver \
+  --action generate \
+  --config configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage4_landslide_evidence/run_landslide_evidence.py silver \
+  --action filter \
+  --config configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage4_landslide_evidence/run_landslide_evidence.py silver \
+  --action prepare-review \
+  --config configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml \
+  --review-count 150
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage4_landslide_evidence/run_landslide_evidence.py silver \
+  --action validate \
+  --config configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml
+```
+
+若 generation 中断，原命令可在同一 protocol/HEAD/模型/checkpoint/Corpus 身份下安全续跑；
+已完成的正式输出拒绝覆盖。当前工作区未提交时，preflight 返回 `DIRTY_WORKTREE` 是预期
+保护，不应通过放宽配置绕过。
 
 ## 环境
 
@@ -567,6 +678,20 @@ python -m unittest discover \
   -s tests/phase4_rs_vlm -p 'test_*.py' -v
 ```
 
+按 `predictions.jsonl` 的一基行号查询对应的持久化 canonical 图片；默认 Benchmark
+根为仓库同级的 `benchmark/rs_generaldesc_v1`，也可显式传 `--benchmark-root`。成功时
+stdout 仅输出 `媒体角色<TAB>绝对路径`；bbox 记录只返回原图，不返回生成时已清理的
+临时 overlay/crop。该严格只读工具会验证 prediction、manifest、ledger、record 和 asset
+identity，仅用于人工检查 Gate B prediction；它不是 Stage 4B Silver 算法依赖，不能替代
+Gate B verifier。
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/phase4_rs_vlm/run_rs_vlm.py gate-b-locate-media \
+  --predictions outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/adapter/predictions.jsonl \
+  --line-number 1
+```
+
 Gate B v1 的 frozen selection 已与预注册算法重算结果逐项一致，且与训练 monitoring 的
 128 个 parent 交集为 0。该 gate 只证明 RS-GeneralDesc native v1 固定 lexical protocol
 下的相对提升；不表示 Gate A、OA-Grounded、mask-grounded、sealed test 或最终系统验收。
@@ -951,7 +1076,7 @@ MSPA block 及四层 FRM/FFM 的辅助梯度、checkpoint v6 严格重载、旧 
 
 ## 当前边界
 
-- 当前统一状态是 `Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred`。
+- 当前统一状态是 `Stage 4B local Silver provider hardened / clean-HEAD preflight, GPU smoke, formal generation, automatic filtering, expert review and OA-GroundedEval pending`。
 - 五源 OA-AuxSeg Benchmark、final checkpoint、训练日志、模型权重和
   `docs/RAG_knowledge/` 均未重建或覆盖；RS-GeneralDesc 已原生重发布到 native v1。
 - OA-AuxSeg proposed 主模型已由项目负责人定版：final 权重为
@@ -967,8 +1092,10 @@ MSPA block 及四层 FRM/FFM 的辅助梯度、checkpoint v6 严格重载、旧 
   External，并直接绑定 manifest/validation/build/payload/ledger 与运行时消费文件。
 - 前代 Adapter 产物已删除；native v1 Adapter 已重新训练并通过独立 Gate B。
   teacher-forced validation loss 本身仍不等于 Gate B，正式接受只由固定生成报告表达。
-- OA-GroundedEval、Landslide Evidence Corpus、正式 mask-grounded 评价、RAG 和统一
-  推理仍未实施。
+- Stage 4A train-only deterministic Auto Pilot 已发布并验证；Stage 4B provider 已加固，
+  但 clean-HEAD preflight、GPU smoke、正式 Silver generation/filter、专家审核、
+  OA-GroundedEval、正式 mask-grounded 评价、
+  RAG 和统一推理仍未实施。
 - Gate C 通过前不接入 RAG；`RAG_tmp` 不作为当前算法组件或运行时依赖。
 - 本次 Gate B 证据闭环只运行 CPU 只读 verifier；没有重新生成，也未运行 GPU、训练、
   test、Gate A、repackage 或 deep validation，未下载、commit 或 push。

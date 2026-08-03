@@ -43,6 +43,7 @@ from .gate_b_acceptance import (
 )
 from .gate_b_evaluation import evaluate_gate_b
 from .gate_b_generation import generate_gate_b
+from .gate_b_media import GateBMediaPath, locate_gate_b_media
 from .gate_b_selection import prepare_gate_b
 from .inference import run_inference
 from .messages import build_mask_grounded_messages
@@ -83,6 +84,7 @@ __all__ = [
     "GATE_B_REPORT_SCHEMA_VERSION",
     "GATE_B_SELECTION_SCHEMA_VERSION",
     "GateBAcceptanceVerification",
+    "GateBMediaPath",
     "MODEL_OUTPUT_SCHEMA_VERSION",
     "MaskMode",
     "MAIN_REFERENCE",
@@ -113,6 +115,7 @@ __all__ = [
     "inventory_from_auxseg_inference",
     "generate_gate_b",
     "load_config",
+    "locate_gate_b_media",
     "locate_bounded_external_records",
     "parse_model_output",
     "prepare_gate_b",
