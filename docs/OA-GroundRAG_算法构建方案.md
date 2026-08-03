@@ -6,7 +6,7 @@
 > **日期：** 2026-08-01
 > **文档定位：** 本文件已替代旧版 OA-GroundRAG 方案，是后续 Codex Agent 继续开发、实验和整合的唯一算法实施依据。
 > **硬件边界：** 单张约 24 GB GPU；正式长训练由项目负责人启动，Coding Agent 只运行短测试、工程门和有界 smoke。
-> **当前状态：** Stage 4B local Silver provider hardened / clean-HEAD preflight, GPU smoke, formal generation, automatic filtering, expert review and OA-GroundedEval pending
+> **当前状态：** Stage 3 RS-General Adapter Gate B completed and accepted / Stage 4 Landslide Evidence Corpus and OA-GroundedEval pending; Gate A, ablations, sealed test and formal fixed masks remain deferred
 
 ---
 
@@ -293,11 +293,9 @@ eligible/空 blockers 与 saved clean deep validation，不使用旁路报告。
 数据来源：
 
 - OA-AuxSeg train split 中的 GT mask；
+- 必要时加入高质量 OOF predicted mask；
 - 只使用 train parent；
 - val/test parent、同事件、同区域近重复不得进入。
-
-当前 v1 Auto Pilot 只使用 GT mask，不使用 predicted/OOF/end-to-end mask。任何未来
-predicted-mask Corpus 都必须作为独立版本重新设计和冻结，不能混入当前发布。
 
 内容分三层。
 
@@ -372,79 +370,7 @@ predicted-mask Corpus 都必须作为独立版本重新设计和冻结，不能�
 - 不允许生成的结论；
 - 一段简短摘要。
 
-Expert Gold 主要用于 OA-GroundedEval；只有后续 Gate E 失败且另行授权时，才考虑将其中
-少量样本用于可选 Landslide-Evidence Adapter。
-
-#### Stage 4A 已实现的确定性 Auto Pilot
-
-2026-08-03 已在
-`outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500` 原子发布并通过
-正式 validator：五源各 100 条，共 500 records、400 target、100 no-target；资产为
-500 optical、500 GT mask、400 overlay、400 context crop 和 400 auxiliary，共
-2,200 个 PNG、115,528,315 bytes。manifest SHA-256 为
-`37aebb9c5f8ceb720e0a1a3c8621212d44562fa6b6786d145c31e11ffa94f9bb`，有序 sample ID
-SHA-256 为 `84e1801fe9ec37284d7bf02b663153d057145726fc78c6d54e87ded11e185936`。
-
-选择算法固定 seed、版本、source/target/foreground-ratio quota 和 SHA-256 排序；所有
-入选项均重新读取 train GT mask，并优先覆盖单/多连通区域。唯一组件覆盖不足为
-`landslide4sense × large`：18 条均为多连通，`single=0`，manifest 如实记录
-`both_covered=false`，未借用 val/test 或补造样本。五种实际 modality signature 各覆盖
-100 条。
-
-每条记录冻结 GT target state、mask 几何、3×3 位置、8 连通组件、crop window、
-validity-aware 辅助模态 full/mask/outside 统计和受控 allowed/forbidden/unavailable
-claims；未知单位与 InSAR sign 不作物理解释。ledger 覆盖 `records.jsonl` 和全部资产，
-validator 从 OA train 源重算选择、mask、overlay、crop、统计与 claims，并拒绝 split
-泄漏、路径逃逸、链接、身份或内容篡改。
-
-Corpus 不是分割 Benchmark、完整案例知识库或人工测试集；OA-GroundedEval 仍须独立
-设计、人工标注并冻结。
-Stage 4A v1 的辅助模态合同仅支持 `dem / slope / insar_velocity`。当前 500-record Corpus
-不含 SAR；SAR 仍是未来能力，不能从现有通道、文件名或缺失元数据中推断或补造。
-
-#### Stage 4B 已实现的本地 Silver Provider
-
-Stage 4B 使用
-`configs/stage4_landslide_evidence/silver_local_qwen3vl_2b_v1.yaml` 冻结 Stage 4A
-manifest/Corpus/records/ledger identity、Gate B accepted Adapter、best checkpoint、training
-report、Gate B report、本地 Qwen3-VL-2B/processor identity、prompt SHA、生成参数、随机种子
-和关键运行时版本。配置只允许 batch 1、每条两个独立候选、独立
-`max_input_tokens=4096`、最多 5 张图、`do_sample=true`、`temperature=0.2`、
-`top_p=0.9` 和最多 256 个新 token；每个候选使用按 sample/candidate 派生的确定性 seed。
-该输入上限只属于 Stage 4B，不修改 Gate B 的 2,048-token 配置或冻结产物；本地模型上下文
-上限 262,144，能够容纳 4,096 input + 256 output。
-
-正式计划为 500 records 的 1,000 个 regular candidates，另对 25 条执行 wrong-mask、
-25 条执行 modality-removal，共 1,050 次生成。输出保存无修补 raw text、严格七字段解析、
-输入资产 SHA、prompt/request identity、候选 seed、模型/processor/checkpoint 和运行环境。
-生成写入新的 sibling output；每个 attempt 原子保存并可续跑。续跑会重新绑定 existing
-attempt 的 raw output、request、资产、候选和协议；Corpus、代码、配置、HEAD、模型或
-checkpoint identity 改变时拒绝恢复。
-
-preflight 和 generate 在 GPU 模型加载与正式 output root 创建前，必须用真实本地 processor
-在 CPU 上编码计划内全部唯一请求。双候选相同输入按 request SHA 去重，但预算报告必须证明
-全部 1,050 attempts 均已覆盖，并记录配置上限、最大实测 tokens、最大图片数、最坏
-attempt/sample、attempt 总数和唯一请求数；预算检查所需的 wrong-mask 临时派生图只写入
-自动清理的 `/tmp`，正式生成仍按 artifact 合同保存反事实输入证据。
-任一请求超过 4,096 tokens 或 5 张图立即拒绝。
-
-25 条 wrong-mask 只从三个纯光学来源的 target-present 样本中确定性平衡选择；原样本和
-donor 必须同源、同尺寸、sample 不同、mask SHA 不同，且两者都无辅助资产并将
-DEM/slope/InSAR 声明为 unavailable。另 25 条 modality-removal 从两个有辅助模态来源平衡
-选择，使 50 条审计覆盖五源。该审计只检查 Silver provider，不是 Gate C。
-
-自动过滤要求两候选均可解析且通过科学规则、四个核心枚举一致，并检查缺失模态、禁止
-结论、no-target 语义以及 50 条反事实的明显 mask/modality 不敏感现象。滑坡表述分为
-确定、谨慎和否定语境：target-present 允许“疑似/可能/候选/尚不能确认”等谨慎或否定
-表述，禁止确定性确认；no-target 同时禁止确定和谨慎的存在声明，允许明确否定或证据不足。
-失败项保留原始
-证据和原因，不静默修补或删除。随后按五源平衡和失败/分歧/低证据优先级确定性准备
-150 条 `pending` 专家审核队列。自动过滤结果始终写明 `silver_accepted=false`；该流程
-不是 Gate C，也不创建 OA-GroundedEval。
-
-正式生成要求已提交且 clean 的 HEAD。当前已完成 provider、合同、CLI、validator 和正式
-运行前加固；未运行 clean-HEAD preflight、GPU、外部 API 或正式生成，状态不得写成
-Silver generated/accepted。
+Expert Gold 主要用于 OA-GroundedEval，也可少量用于可选 adapter 训练。
 
 ### 5.4 Landslide Mask-Case Knowledge Base
 
@@ -1220,15 +1146,12 @@ Stage 3 结论只来自固定 Gate B report，且不扩张到 OA-Grounded、mask
 
 ### Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval
 
-- 已完成 Stage 4A：train-only 500 条确定性选择、Auto facts、派生资产、manifest/ledger、
-  运行时 validator；
-- 已加固 Stage 4B 本地 Silver provider：严格身份预检、4,096-token CPU 输入预算、500×2
-  候选、纯光学 wrong-mask 与 modality-removal 共 50 条反事实计划、可恢复原子生成、自动
-  过滤、150 条审核队列与只读 validator；
-- 待执行：clean HEAD 上的正式 preflight、20-record GPU smoke、Silver 生成和自动过滤；
-- 待完成：专家审核与必要 Gold；
-- 待独立完成：OA-GroundedEval 设计、人工标注和冻结；
-- 当前结论不得写成 Stage 4 completed、Silver accepted 或 OA-GroundedEval completed。
+- 程序生成 Auto facts；
+- 分层选择 API/本地教师样本；
+- 生成 Silver；
+- 完成规则过滤；
+- 完成人工 Gold；
+- 冻结正式 val/test。
 
 ### Stage 5：Mask-Grounded Baseline
 
