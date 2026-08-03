@@ -1144,14 +1144,355 @@ checkpoint 存在或 teacher-forced validation loss 更低仍不能单独构成 
 Stage 3 结论只来自固定 Gate B report，且不扩张到 OA-Grounded、mask-grounded、Gate A
 或 sealed test。
 
-### Stage 4：Landslide Evidence Corpus 与 OA-GroundedEval
+### Stage 4：Mask-Grounded Landslide Region Corpus 与 OA-GroundedEval
 
-- 程序生成 Auto facts；
-- 分层选择 API/本地教师样本；
-- 生成 Silver；
-- 完成规则过滤；
-- 完成人工 Gold；
-- 冻结正式 val/test。
+#### 4.1 阶段定位
+
+Stage 4 不再依赖 OA-AuxSeg 的预测结果，也不评价分割模型是否正确。该阶段统一使用已有滑坡数据中的人工标注二值 mask，将 mask 作为唯一的目标区域定位信息，研究通用遥感 VLM 是否能够：
+
+1. 准确关注 mask 所指定的滑坡区域；
+2. 描述 mask 内部可见的光学特征；
+3. 结合未被修改的原始遥感影像，描述滑坡区域周围的地形、地表覆盖和邻近地物环境；
+4. 比较 mask 区域与周围环境之间的颜色、纹理、植被和形态差异；
+5. 在证据不足时避免生成发生时间、触发原因、稳定性、风险等级等不受图像支持的专业结论。
+
+Stage 4 的核心任务由“为分割结果生成专业报告”简化为：
+
+> 给定一幅原始遥感影像和一个人工标注的滑坡 mask，生成同时覆盖目标区域内部特征、周围环境特征及区域—环境关系的 mask-grounded 遥感描述。
+
+Stage 4 只建立区域描述数据和评价协议，不调用 OA-AuxSeg，不使用 predicted mask，不生成正式 fixed predicted masks，也不访问滑坡 RAG。预测 mask、RAG 和端到端流程分别在后续 Stage 5、Stage 6 和 Stage 7 中处理。
+
+---
+
+#### 4.2 输入数据
+
+每条 Stage 4 样本至少包含：
+
+- 原始光学遥感影像；
+- 与光学影像严格同尺寸、同空间范围的二值滑坡 mask；
+- 数据源、split 和样本身份；
+- 原始数据中已经明确提供的传感器、分辨率和有效区信息；
+- 可选的人工类别或场景元数据。
+
+首版 Stage 4 以光学影像和二值 mask 为核心输入。DEM、坡度、InSAR 和 SAR 不作为 Stage 4 首版描述的必要输入，避免不同数据源的物理单位、符号、有效覆盖和配准差异增加标注与评价复杂度。
+
+后续若需要研究多源区域证据，可在保持 Stage 4 光学基线不变的前提下，建立独立的辅助模态扩展版本，不得直接修改已冻结的首版数据和评价协议。
+
+---
+
+#### 4.3 区域视觉输入构建
+
+为了避免彩色 overlay 改变光学影像的颜色、纹理和对比度，正式发送给 VLM 的区域视觉输入由以下三部分组成：
+
+##### A. Original Full Image
+
+完整、未修改的原始光学影像，用于保留：
+
+- 整体地形和场景背景；
+- 滑坡所在坡面或沟谷环境；
+- 周围植被、道路、河流、建筑和裸地分布；
+- mask 区域与整个场景之间的空间关系。
+
+##### B. Binary Mask Prompt
+
+与原始影像同尺寸的单通道二值 mask：
+
+- mask 内部像素为目标区域；
+- mask 外部像素为背景区域；
+- mask 仅提供空间关注位置；
+- mask 不修改原始 RGB 像素；
+- mask 不携带颜色、类别或置信度信息。
+
+二值 mask 应作为独立图像、独立空间提示或后续 mask pooling 的输入，不与原始光学影像进行颜色混合。
+
+##### C. Clean Context Crop
+
+根据 mask 外接矩形向外扩展固定比例，直接从原始光学影像中裁剪得到无标记的上下文图像。该图像同时保留：
+
+- mask 区域内部的局部视觉细节；
+- mask 邻近区域的地表环境；
+- 滑坡区域与周围背景之间的过渡关系。
+
+首版建议使用固定的 context margin ratio，并在数据发布前冻结。不同样本不得根据人工主观判断使用不同裁剪尺度。
+
+彩色 mask overlay 仅作为专家审核、数据检查和论文可视化资产，不作为 VLM 正式描述输入，也不参与区域颜色、纹理和植被特征评价。
+
+---
+
+#### 4.4 Mask-Grounded Region Record
+
+每个目标样本构建一条独立的 Mask-Grounded Region Record。记录内容分为确定性字段和人工描述字段。
+
+##### 4.4.1 确定性字段
+
+由程序根据二值 mask 直接计算：
+
+- target status；
+- mask bbox；
+- mask centroid；
+- mask area 和 area ratio；
+- mask 在图像中的相对位置；
+- 连通区域数量；
+- context crop window；
+- 原始影像尺寸；
+- 数据源和 split；
+- 图像、mask 和 crop 的资产身份。
+
+这些字段只用于区域定位、数据检查和评价，不由 VLM 重新计算或改写。
+
+##### 4.4.2 区域描述字段
+
+人工描述或评价字段统一组织为以下六类：
+
+1. **Target Appearance**
+   - mask 区域的主要色调；
+   - 表面纹理和粗糙程度；
+   - 植被覆盖或裸露特征；
+   - 内部均一性或异质性；
+   - 可见边界是否清晰。
+
+2. **Target Morphology**
+   - 区域整体形态；
+   - 是否呈长条状、块状、舌状或不规则形态；
+   - 是否存在多个分离部分；
+   - 区域延伸方向的定性描述。
+
+3. **Surrounding Environment**
+   - 周围主要地表覆盖类型；
+   - 周围植被、裸地、道路、河流、建筑或农田情况；
+   - 目标所在的坡面、沟谷、坡脚或其他可见地形环境；
+   - 周围是否存在明显的人类活动扰动。
+
+4. **Region–Context Contrast**
+   - mask 内外色调差异；
+   - mask 内外纹理差异；
+   - mask 内外植被覆盖差异；
+   - 目标边界与背景之间的过渡特征；
+   - 目标区域与周围地物的邻接关系。
+
+5. **Possible Confusers**
+   - 裸岩；
+   - 采石场；
+   - 道路切坡；
+   - 冲沟；
+   - 河滩；
+   - 农田翻耕；
+   - 施工扰动；
+   - 阴影或低质量区域；
+   - 其他可能与滑坡外观相似的地表区域。
+
+6. **Evidence Sufficiency and Summary**
+   - 当前图像是否足以支持清晰区域描述；
+   - 哪些特征清晰可见；
+   - 哪些特征因分辨率、遮挡、阴影或图像质量无法判断；
+   - 一段简短、客观的综合描述。
+
+---
+
+#### 4.5 描述边界
+
+Stage 4 的描述对象是“人工 mask 指定的滑坡区域及其周围遥感环境”，不是重新判断该区域是否一定为滑坡。
+
+允许描述：
+
+- 图像中直接可见的颜色、纹理、形态和植被特征；
+- mask 区域与周围环境的视觉差异；
+- 区域所处的相对位置；
+- 周围地表覆盖和邻近地物；
+- 可能存在的视觉混淆对象；
+- 图像证据的充分性和局限性。
+
+禁止描述：
+
+- 滑坡发生的具体时间；
+- 降雨、地震或工程活动等确定触发原因；
+- 精确位移速度；
+- 运动方向和变形阶段；
+- 稳定性等级；
+- 危险性或风险等级；
+- 灾害规模等级；
+- 对人员、道路或建筑的实际威胁；
+- 现场调查才能确认的地质结构和物质组成。
+
+所有输出均应使用“mask 指定区域”“目标区域”或“标注滑坡区域”等表述，不将视觉描述扩张为新的地质灾害确认结论。
+
+---
+
+#### 4.6 数据资产划分
+
+Stage 4 形成两个相互独立的资产。
+
+##### A. Mask-Grounded Landslide Region Corpus
+
+用于开发和可选训练，只使用 OA-AuxSeg Benchmark 的 train split。
+
+Corpus 包括：
+
+- 原始光学影像；
+- 二值 GT mask；
+- clean context crop；
+- 可选的人工审核 overlay；
+- 程序确定性区域事实；
+- 结构化区域描述；
+- 数据来源和资产身份；
+- 描述审核状态。
+
+Corpus 首版不要求对全部 train 样本生成长文本。建议采用分层抽样方式，覆盖：
+
+- 不同数据源；
+- 不同 mask 面积；
+- 单连通和多连通区域；
+- 不同区域位置；
+- 清晰和模糊边界；
+- 不同周围环境；
+- 典型困难负背景。
+
+Teacher Silver 不作为 Stage 4 必须完成的资产。只有 Stage 5 表明通用遥感 VLM 无法稳定理解 mask 或区域上下文时，才对 train split 中的部分样本生成候选 Silver，并经过规则过滤和专家抽查后用于可选 Adapter 训练。
+
+##### B. OA-GroundedEval
+
+OA-GroundedEval 用于评价 VLM 的 mask-grounded 区域理解能力，不用于训练。
+
+OA-GroundedEval 使用与训练 Corpus 不重叠的 val/test 样本，并至少覆盖：
+
+- 小、中、大面积滑坡区域；
+- 单连通和多连通区域；
+- 不同图像位置；
+- 清晰和模糊区域边界；
+- 不同植被覆盖和地表环境；
+- 裸岩、道路切坡、采石场和施工扰动等混淆背景；
+- 低对比度、阴影和低质量图像；
+- no-target 或 empty-mask 样本。
+
+开发阶段只使用 val 构建 OA-GroundedEval-dev。正式 test 必须保持封存，在描述协议、模型输入形式、评价字段和阈值冻结后才允许使用。
+
+---
+
+#### 4.7 反事实评价
+
+为了验证 VLM 是否真正使用 mask，而不是只进行整图描述，OA-GroundedEval 增加少量由现有 GT mask 确定性生成的反事实样本。
+
+包括：
+
+1. **Empty Mask**
+   - 将二值 mask 置空；
+   - 模型应报告无指定目标区域；
+   - 不得继续描述原滑坡区域。
+
+2. **Mask Shift**
+   - 将 mask 平移到同一影像中的非目标区域；
+   - 描述应随关注区域变化；
+   - 不得复用原目标区域描述。
+
+3. **Mask Swap**
+   - 在同一影像存在多个区域时交换 mask；
+   - 描述应对应新的 mask 区域。
+
+4. **Context Removal**
+   - 只提供 mask 区域，不提供完整影像或上下文裁剪；
+   - 用于评价周围环境信息对描述质量的影响。
+
+这些反事实 mask 只用于评价，不作为滑坡训练真值，也不替代原始 GT mask。
+
+---
+
+#### 4.8 评价任务与指标
+
+OA-GroundedEval 主要评价以下能力：
+
+1. **Mask–Region Consistency**
+   - 描述是否对应 mask 内部区域；
+   - 是否错误描述 mask 外部的其他显著地物。
+
+2. **Target Appearance Accuracy**
+   - 色调、纹理、植被和边界描述是否正确。
+
+3. **Surrounding Environment Accuracy**
+   - 周围地表覆盖和邻近地物描述是否正确。
+
+4. **Region–Context Relation Accuracy**
+   - 是否准确描述目标与周围环境的差异和空间关系。
+
+5. **Confuser Recognition**
+   - 是否能够指出可能的视觉混淆对象；
+   - 是否避免把所有裸露区域都解释为确定滑坡证据。
+
+6. **Unsupported Claim Rate**
+   - 是否生成触发原因、时间、风险、稳定性和精确运动信息等不受支持结论。
+
+7. **Evidence Sufficiency Accuracy**
+   - 是否能够在低质量或证据不足时正确降低结论强度。
+
+8. **Counterfactual Sensitivity**
+   - mask 变化后描述是否发生合理变化；
+   - empty mask 时是否拒绝生成目标区域描述。
+
+评价以专家结构化字段判断为主，传统 BLEU、ROUGE 和 BERTScore 只作为文本相似性的补充指标，不作为主要科学结论。
+
+---
+
+#### 4.9 人工标注与质量控制
+
+专家不需要为每条样本撰写长篇滑坡报告，只需完成统一结构化字段和简短摘要。
+
+推荐审核流程：
+
+1. 第一名标注者完成区域和环境描述；
+2. 第二名标注者检查 mask 对应、事实正确性和禁止结论；
+3. 对 target appearance、surrounding environment、possible confusers 和 evidence sufficiency 的分歧进行仲裁；
+4. 冻结最终 Gold 描述和评价字段；
+5. 保存标注者、审核者、版本和时间信息。
+
+质量控制必须包括：
+
+- train/val/test 隔离；
+- sample ID 和资产身份绑定；
+- 图像、mask 和 crop 尺寸一致；
+- 二值 mask 严格为 0/1 或 0/255；
+- context crop 可由 mask 确定性重建；
+- overlay 不进入正式 VLM 输入；
+- 不从文件名推断地理位置或物理意义；
+- 不修改原始光学影像像素；
+- 不允许 test 样本进入 prompt 调优、Teacher Silver 或 Adapter 训练。
+
+---
+
+#### 4.10 Stage 4 实施顺序
+
+Stage 4 按以下顺序执行：
+
+1. 冻结现有 train-only deterministic Auto Corpus；
+2. 增加独立二值 mask 资产；
+3. 将红色 overlay 降级为人工审核资产；
+4. 构建 original full image + binary mask + clean context crop 的正式输入协议；
+5. 建立永久 Stage 4 数据与消息合同测试；
+6. 从 val split 构建小规模 OA-GroundedEval-dev；
+7. 完成专家结构化标注和审核；
+8. 在 Base Qwen3-VL 与 RS-General Adapter 上运行 GT-mask 区域描述基线；
+9. 比较 full image、crop、overlay、binary mask 和 full + mask + crop 等输入方式；
+10. 根据评价结果决定是否需要 Teacher Silver 或 Landslide-Evidence Adapter；
+11. 冻结正式 OA-GroundedEval 协议；
+12. 在后续 Gate 冻结后才使用 sealed test。
+
+---
+
+#### 4.11 Stage 4 完成标准
+
+Stage 4 只有同时满足以下条件才视为完成：
+
+- 已建立不修改原始 RGB 的 mask-grounded 输入协议；
+- 已完成 train-only Region Corpus；
+- 已完成 OA-GroundedEval-dev；
+- 已完成专家结构化标注与审核；
+- 已实现 correct mask、empty mask 和 mask shift 等反事实评价；
+- Base 与 RS-General Adapter 的 GT-mask baseline 已运行；
+- 已报告 mask-region consistency、区域特征、周围环境、unsupported claim 和反事实指标；
+- 已明确判断是否需要 Teacher Silver；
+- val/test 与训练数据保持严格隔离；
+- 正式 test 仍保持封存；
+- 没有使用 OA-AuxSeg 预测 mask 或未通过 Gate A 的分割结果。
+
+Stage 4 的输出是一个独立的 mask-grounded 区域描述数据和评价基础，不代表 OA-AuxSeg 已通过科学验证，也不代表完整 OA-GroundRAG、RAG 或端到端系统已经完成。
 
 ### Stage 5：Mask-Grounded Baseline
 
