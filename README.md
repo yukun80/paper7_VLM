@@ -80,6 +80,7 @@ python scripts/phase2_oa_auxseg/run_oa_auxseg.py --help
 python scripts/phase3_rs_generaldesc/run_rs_generaldesc.py --help
 python scripts/phase4_rs_vlm/run_rs_vlm.py --help
 python scripts/stage4_landslide_evidence/run_landslide_evidence.py --help
+python scripts/stage4_landslide_evidence/run_mask_grounded_region.py --help
 ```
 
 ### OA-AuxSeg
@@ -147,6 +148,29 @@ python scripts/stage4_landslide_evidence/run_landslide_evidence.py validate \
 Corpus record 可保留面向未来的 Silver/review 字段，但 Auto Corpus 本身不是人工真值、
 完整案例知识库、分割 Benchmark 或 OA-GroundedEval。Teacher Silver、专家审核和
 OA-GroundedEval 必须作为独立授权任务实施。
+
+新版 Mask-Grounded Region 工具使用独立 schema 和输出根：Corpus 只允许人工 GT mask
+与 train shard；OA-GroundedEval-dev 只允许 val shard，并在代码级拒绝 test。正式 VLM
+输入将未加标记的 full RGB、独立 PNG-L binary mask 和 clean context crop 分开组织，
+彩色 overlay 仅作为 audit-only 资产。
+
+```bash
+python scripts/stage4_landslide_evidence/run_mask_grounded_region.py \
+  build-region-corpus --config <region-corpus-config.yaml>
+
+python scripts/stage4_landslide_evidence/run_mask_grounded_region.py \
+  validate-region-corpus --root <region-corpus-root>
+
+python scripts/stage4_landslide_evidence/run_mask_grounded_region.py \
+  build-eval-dev --config <oa-grounded-eval-dev-config.yaml>
+
+python scripts/stage4_landslide_evidence/run_mask_grounded_region.py \
+  validate-eval-dev --root <eval-dev-root> --train-corpus-root <region-corpus-root>
+```
+
+同一入口还提供 `export-annotation-queue`、`validate-annotations`、`render-messages` 和
+`evaluate-dev`。其中 message renderer 不调用模型；开发 evaluator 只消费已有 prediction，
+在专家协议和阈值冻结前始终输出 `formal_acceptance=false`。
 
 ## 核心科学边界
 

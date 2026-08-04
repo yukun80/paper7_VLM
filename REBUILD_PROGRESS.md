@@ -6,20 +6,20 @@
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
 - stage: `4`
 - stage_name: `LANDSLIDE_EVIDENCE_CORPUS_AND_OA_GROUNDED_EVAL`
-- stage_status: `in_progress`
-- current_task: `DOCUMENTATION_SINGLE_SOURCE_GOVERNANCE`
-- current_task_status: `complete`
+- stage_status: `engineering_complete_annotation_pending`
+- current_task: `STAGE4_MASK_GROUNDED_REGION_CORPUS_AND_OA_GROUNDED_EVAL_DEV`
+- current_task_status: `engineering_complete`
 - next_gate: `A (OA-AuxSeg branch) / C (after Stage 4–5)`
-- scientific_status: `Stage 4A Landslide Evidence Corpus deterministic Auto pilot completed / Teacher Silver approach redesign, expert review and OA-GroundedEval pending`
-- execution_date: `2026-08-03`
+- scientific_status: `Stage 4A frozen / Stage 4 v2 engineering and train/val-dev asset publication complete / expert annotation, protocol freeze and scientific acceptance pending`
+- execution_date: `2026-08-04`
 - branch: `main`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
 - stage3_gate_b_evidence_baseline_head: `2ad01f0723eaf698c0cbaff9bb3e993122bd87e0`
 - stage4a_auto_pilot_baseline_head: `ee71e02127476da8e75b6bc9f2ce007fc38f77e5`
-- algorithm_design_baseline_head: `ee71e02127476da8e75b6bc9f2ce007fc38f77e5`
-- algorithm_design_sha256: `2886d70cac03791f901e80c966be9c1486fd1dca7f539b8a76ca521f91cc450a`
+- algorithm_design_baseline_head: `768d68804d48ab0384f28832a6ee4c838be3e493`
+- algorithm_design_sha256: `dbf93a4ceea1ae973974fb039d5bd2c35d8a62b615ce2add3ab1583f91366d36`
 - algorithm_design_document_immutable: `true`
 - progress_single_source: `REBUILD_PROGRESS.md`
 - active_training_process_found: `false`
@@ -31,6 +31,10 @@
 - stage3_adapter_formal_acceptance: `true`
 - stage4a_auto_pilot_built: `true`
 - stage4a_auto_pilot_validated: `true`
+- stage4_region_corpus_built: `true`
+- stage4_region_corpus_validated: `true`
+- oa_grounded_eval_dev_built: `true`
+- oa_grounded_eval_dev_validated: `true`
 - retired_teacher_silver_provider: `true`
 - teacher_silver_formal_generation_performed: `false`
 - stage4_silver_generated: `false`
@@ -49,8 +53,9 @@
 
 Stage 0 权威迁移、Stage 1 工程定版、Stage 2 RS-GeneralDesc Benchmark native v1
 重发布与验收、Stage 3 Adapter 重训和 Gate B，以及 Stage 4A deterministic Auto Pilot
-均已完成。当前没有活动的 Teacher Silver 实现或正式 Silver 产物；Teacher Silver、
-专家审核和 OA-GroundedEval 尚待重新设计与实施。
+均已完成。当前没有活动的 Teacher Silver 实现或正式 Silver 产物；新版 train-only
+Region Corpus 与 val-only OA-GroundedEval-dev 工程资产已发布，专家标注、审核、仲裁、
+正式 OA-GroundedEval 协议冻结和 sealed-test 科学验收仍未完成。
 依赖分为 OA-AuxSeg
 工程定版 → 未来 Gate A → formal fixed masks，以及 RS-GeneralDesc Stage 2 → Adapter
 重训 → Gate B；两者在 Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不推翻
@@ -58,26 +63,19 @@ Stage 0 权威迁移、Stage 1 工程定版、Stage 2 RS-GeneralDesc Benchmark n
 
 ## 文档单一来源治理
 
-`docs/OA-GroundRAG_算法构建方案.md` 已逐字恢复为 Stage 4A 开始前的
-`ee71e02127476da8e75b6bc9f2ce007fc38f77e5` 设计基线，文件 SHA-256 为
-`2886d70cac03791f901e80c966be9c1486fd1dca7f539b8a76ca521f91cc450a`。其中的
-“当前状态”是设计冻结快照，不再随实施进度更新。
+2026-08-04 开发开始时，现场算法方案已更新到包含新版 Stage 4 的 HEAD
+`768d68804d48ab0384f28832a6ee4c838be3e493`，文件 SHA-256 为
+`dbf93a4ceea1ae973974fb039d5bd2c35d8a62b615ce2add3ab1583f91366d36`。
+本文件此前记录的 `ee71e021...` / `2886d70c...` 已过期；本次首次写入只修复上述
+算法身份并将新版设计重新冻结。算法方案正文未被本次实施修改，其中的状态文字仍是
+设计冻结快照，不用于判断现场进度。
 
 `README.md` 只保留长期有效的项目结构、合同边界和运行入口；`AGENTS.md`
 只保留操作、授权、安全和文档治理规则。阶段状态、运行结果、正式产物
 身份、验收证据和下一任务只在本文件维护。
 
-本次文档治理不改变本文件中的 Stage 4A Corpus、Stage 4B 退役、Gate B、
-OA-AuxSeg 和 RS-GeneralDesc 现场记录。没有修改算法代码、配置、测试、Benchmark、
-checkpoint、模型权重或正式输出；没有运行 GPU、训练、评价或数据重建。
-
-| 文档治理检查 | Exit | 结果 |
-| --- | ---: | --- |
-| 算法方案与 `ee71e02` 逐字比较 | 0 | 无差异；SHA-256 与冻结值一致 |
-| README / AGENTS 进度信息扫描 | 0 | 无产物 SHA、日期化运行记录、测试通过数或 Stage 结论 |
-| Markdown 本地链接 | 0 | 四份活动文档的本地链接目标均存在 |
-| 非文档 Git diff SHA-256 | 0 | 修改前后均为 `d736ef647b7ee123afe2c5eb189bdaec57d76aa9e8258e0fb751855b5da18b80` |
-| `git diff --check` | 0 | 无 whitespace 错误 |
+`README.md` 只保留长期有效入口；`AGENTS.md`、算法方案和 `docs/archive/` 本次未修改。
+旧算法身份仅作为历史现场记录，不再是当前授权基线。
 
 ## Stage 0 已完成
 
@@ -526,3 +524,142 @@ bootstrap 和 finish reason。
 - 正式 Gate B artifact、training report、best pointer、checkpoint、Adapter 权重或
   Benchmark 修改
 - 数据、模型、依赖下载、commit 或 push
+
+## Stage 4 Mask-Grounded Region Corpus 与 OA-GroundedEval-dev 工程闭环（2026-08-04）
+
+### 授权基线与写入边界
+
+- 开始分支 / HEAD / upstream：`main` /
+  `768d68804d48ab0384f28832a6ee4c838be3e493` / `origin/main`；开始时工作区干净。
+- 当前算法文档 SHA-256：
+  `dbf93a4ceea1ae973974fb039d5bd2c35d8a62b615ce2add3ab1583f91366d36`；
+  本文件中的旧算法身份已在首次写入时修复。
+- Stage 4A 根、OA-AuxSeg Benchmark/checkpoint、RS-GeneralDesc Benchmark/Adapter、
+  Gate B 产物全程只读；没有修改 `../datasets`、`../benchmark`、`../external`、
+  checkpoint、模型权重或既有 outputs。
+- 新开发仅处理原始光学 RGB 与人工 GT binary mask。没有读取 test shard，没有使用
+  predicted mask、OA-AuxSeg 推理、RAG、Teacher Silver、Gold 或外部多模态 API。
+
+### 实际代码与合同
+
+新增实现文件：
+
+- `oa_groundrag/landslide_evidence/region_contracts.py`：集中定义 Region/Eval schema、
+  frozen 数据合同、representation mode、字段 enum 和严格 JSON 工具；
+- `oa_groundrag/landslide_evidence/region_pipeline.py`：复核冻结 Stage 4A ordered IDs，
+  从 OA Benchmark train GT 原子构建 full/mask/crop/audit-overlay 与 annotation queue；
+- `oa_groundrag/landslide_evidence/grounded_eval.py`：val-only 配额选样、边界清晰度 proxy、
+  deterministic shift 和反事实组构建；
+- `oa_groundrag/landslide_evidence/annotation.py`：annotation queue 导出、人工 JSONL
+  严格导入和全新 annotation package 发布；
+- `oa_groundrag/landslide_evidence/region_validation.py`：重算 split/parent/source/几何/
+  crop/shift/角色、逐资产 SHA/size/mode/pixel，以及 symlink/hardlink/path-escape 防护；
+- `oa_groundrag/phase4/grounded_evaluation.py`：开发自动评价、反事实敏感性与可选专家
+  聚合；所有报告强制 `formal_acceptance=false`；
+- `scripts/stage4_landslide_evidence/run_mask_grounded_region.py`：八个薄子命令；
+- `configs/stage4_landslide_evidence/region_corpus_train_v1.yaml` 与
+  `oa_grounded_eval_dev_v1.yaml`：独立 train Corpus / val Eval-dev 配置；
+- `tests/stage4_landslide_evidence/fixture_helpers.py` 及六个 `test_*.py`：28 个永久 CPU
+  回归测试。
+
+增量修改文件：
+
+- `oa_groundrag/phase4/evidence.py`：严格 binary mask、clean/tight crop、audit overlay、
+  程序几何与 deterministic shift；
+- `oa_groundrag/phase4/messages.py`：独立 v2 有序多图消息和 formal/audit role 隔离；
+- `oa_groundrag/phase4/outputs.py`：Stage 4 v2 严格输出 parser、禁止结论检测和版本化
+  prediction/failure/provenance；
+- `oa_groundrag/phase4/errors.py`、`oa_groundrag/landslide_evidence/__init__.py`：新增集中
+  reason code 与公共接口导出；
+- `README.md`：只增加长期有效的八个 CLI 入口；本文件记录动态进度。
+
+未修改旧 `contracts.py`、`pipeline.py`、`validation.py` 和
+`run_landslide_evidence.py` 的语义；Stage 4A `build-auto` / `validate` 继续通过。
+
+冻结 schema：
+
+- `oa_groundrag.mask_grounded_region.{config,manifest,record,annotation_queue,annotation,annotation_package}.v1`
+- `oa_groundrag.oa_grounded_eval_dev.{config,manifest,counterfactual_group}.v1`
+- `rs_vlm.mask_grounded_region_output.v2`
+- `rs_vlm.mask_grounded_region_{prediction,failure,provenance}.v1`
+- `oa_groundrag.oa_grounded_eval_dev.report.v1`
+
+### 正式新资产身份
+
+| 资产 | 现场结果 |
+| --- | --- |
+| `mask_grounded_region_corpus_train_v1_500` | 500 train records；400 target / 100 no-target；五来源各 100；1,800 assets；Silver/专家标注/formal acceptance 均为 false |
+| Corpus manifest | `79f8d796d38156ee77dc86bdc2efad2f9992d59090687da2f0bf19d47c52db81` |
+| Corpus records | `608df31ae0bd0550caeb4bd7a5c313174647e4ffcb94615b010155a58e173382` |
+| Corpus ledger | `c3037a072a448e762f6f157a6cda4517ad3b3ea7496ecaa6126fadc53ab38f82` |
+| Corpus annotation queue | `e1ac12fb7573d5426392560c1d9c1a3210ef195bf4a0f93958aee8f03ef876f4` |
+| `oa_grounded_eval_dev_v1_100` | 100 unique val baselines；80 target / 20 no-target；340 total records；760 assets；train/val sample 与 parent 交集均为 0；排除 7 个 train-parent-overlap val rows |
+| Eval-dev manifest | `bec0bc71972889ef23935e7e00dc9d0b4531b468c42b98e4a2b6a602146a62e5` |
+| Eval-dev records | `ca01e944b69fcdc5eb69a8685091044927a984874a36fab67f2b0a2e7ee8ce9d` |
+| Eval-dev ledger | `26ce0913510547cb0ca3e4f5967063078b9b8044c83d959d990086c1bb2e7f2a` |
+| Eval-dev annotation queue | `261a21527d64cf08c725b9b82dc743e1675c8513e40587ec9c63b8735579b22d` |
+| Counterfactual groups | 80 groups；baseline/empty/shift/context-removal 完整；合法 mask-swap 为 0；文件 SHA `bc4d12ef045b6dc7452169dfcf439cdf4e9ce15c3ed3ef8164099d18cc1d0718` |
+
+Eval-dev 明确为 development-only，`sealed_test_accessed=false`、
+`expert_annotation_completed=false`、`formal_acceptance=false`。没有生成伪 Gold，
+没有用 VLM 填写专家字段。
+
+### 验证结果
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| Stage 4 新永久测试 | 0 | 28/28；binary mask、crop 重建、消息顺序、split 隔离、反事实、严格 parser、annotation、tamper/path/link 与 evaluator |
+| 既有 Phase 4 回归 | 0 | 82/82；argparse 错误文本来自预期负向用例 |
+| 既有 Phase 3 回归 | 0 | 45/45 |
+| Python compileall | 0 | `oa_groundrag` 与 `scripts` 全部通过；cache 定向写入任务 `/tmp` 根 |
+| `git diff --check` | 0 | 无 whitespace 错误 |
+| 冻结 Stage 4A 真实只读 `validate` | 0 | 500 records / 2,200 assets；manifest/records/ledger/ordered-ID 身份一致 |
+| 正式 train Corpus build + 独立 validate | 0 | 500 records / 1,800 assets；逐文件及程序事实验证通过 |
+| 正式 val Eval-dev build + 独立 validate | 0 | 100 baselines / 340 records / 760 assets；split、parent、反事实验证通过 |
+| Gate B 正确参数只读 verifier | 0 | 256 paired；selection、predictions、scores、report 与六项既有判据一致；未重跑 Gate |
+| `render-messages` 临时 smoke | 0 | 340 messages；`model_invoked=false`，未调用 Qwen 生成 |
+| `export-annotation-queue` 临时 smoke | 0 | 340 items；ledger 绑定导出通过 |
+
+Gate B verifier 的前两次调用仅因 protocol 路径和 expected SHA 参数误传而在验证前拒绝；
+修正为已发布 protocol 文件及其 SHA 后只读验证通过，没有写入 Gate B 根。
+
+### 既有资产复核与清理
+
+以下交付后 SHA 与开始时冻结身份一致：
+
+- Stage 4A manifest / records / ledger：`37aebb9c...` / `36f5dcbf...` / `0b0f7a14...`；
+- OA Benchmark manifest / index：`9a3b1478...` / `38987722...`；
+- OA `checkpoint_best.pt`：`672d39ab...`；
+- RS-GeneralDesc `metadata/hashes.json`：`55ac26d9...`；
+- RS-General Adapter step-1000 权重：`a367e39c...`；
+- Gate B protocol / selection / Base predictions / Adapter predictions / paired scores / report：
+  `8378f6f1...` / `98290aaa...` / `862759c4...` / `a7c791fc...` /
+  `64d6802e...` / `b150de8e...`。
+
+本任务唯一临时根 `/tmp/oa_groundrag_stage4_v2_20260804` 已精确删除并确认不存在；
+其中只含临时 message/annotation smoke 输出和定向 Python cache。仓库根未遗留 debug、
+scratch、临时 PNG/JSON 或临时测试目录；永久 tests 和两个正式新输出根保留。
+
+### 当前阻塞、未运行项与下一步
+
+工程合同、正式 train/val-dev 资产、validator、annotation 接口、v2 message/parser 和
+开发 evaluator 已完成。仍需专家对 queue 完成 annotation、review 和必要 adjudication；
+之后才能冻结字段级 Gold、开发阈值和正式 OA-GroundedEval 协议。本次结论不得解释为
+Stage 4 科学验收通过。
+
+未运行：GPU、训练、optimizer/backward、正式 Qwen 生成、Base/Adapter mask-grounded
+baseline、sealed test、任何 Gate、RAG、Teacher Silver、Gold、外部 API、模型/数据/依赖
+下载、commit 或 push。
+
+下一步人工命令（仅建议，未自动运行）：
+
+```bash
+python scripts/stage4_landslide_evidence/run_mask_grounded_region.py export-annotation-queue \
+  --root outputs/stage4_landslide_evidence/oa_grounded_eval_dev_v1_100 \
+  --output-root <fresh-annotation-export-root>
+
+python scripts/stage4_landslide_evidence/run_mask_grounded_region.py validate-annotations \
+  --asset-root outputs/stage4_landslide_evidence/oa_grounded_eval_dev_v1_100 \
+  --annotations <expert.jsonl> \
+  --output-root <fresh-annotation-package-root>
+```

@@ -235,6 +235,136 @@ def render_context_crop(
     return optical.crop(window), window
 
 
+def render_binary_mask(mask: np.ndarray) -> Image.Image:
+    """将内部 bool/0-1 mask 发布为严格 PNG-L 语义的 0/255 图像。
+
+    二值 mask 必须独立于 RGB；这里不执行 alpha blending，也不携带类别或置信度。
+    """
+
+    array = np.asarray(mask)
+    if array.ndim != 2:
+        raise EvidenceError(ReasonCode.MASK_INVALID, "binary mask 必须是二维数组")
+    if array.dtype == np.bool_:
+        binary = array
+    elif np.issubdtype(array.dtype, np.integer) and set(np.unique(array).tolist()).issubset({0, 1}):
+        binary = array.astype(bool)
+    else:
+        raise EvidenceError(ReasonCode.MASK_INVALID, "binary mask 只允许 bool 或 0/1")
+    return Image.fromarray(binary.astype(np.uint8) * 255)
+
+
+def binary_mask_array(image: Image.Image) -> np.ndarray:
+    """严格读取模型输入 mask，并在进入后续逻辑前转换为 bool。"""
+
+    if image.mode != "L":
+        raise EvidenceError(ReasonCode.MASK_INVALID, "发布 binary mask 必须是 PNG L 模式")
+    array = np.asarray(image)
+    if not set(np.unique(array).tolist()).issubset({0, 255}):
+        raise EvidenceError(ReasonCode.MASK_INVALID, "发布 binary mask 像素必须严格为 0/255")
+    return array == 255
+
+
+def render_tight_target_crop(
+    optical: Image.Image,
+    mask: np.ndarray,
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    """构建 context-removal 专用 bbox-tight 无标记 RGB crop。"""
+
+    optical = optical.convert("RGB")
+    binary = np.asarray(mask, dtype=bool)
+    if binary.shape != (optical.height, optical.width) or not bool(binary.any()):
+        raise EvidenceError(ReasonCode.MASK_SHAPE_MISMATCH, "tight crop 需要同尺寸非空 mask")
+    window = mask_bbox(binary)
+    return optical.crop(window), window
+
+
+def deterministic_shift_mask(mask: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    """从固定 3x3 anchor 候选中选择低重叠且不越界的平移 mask。
+
+    反事实只改变评价输入，不裁剪、不环绕，也绝不写回 GT mask。排序依次最小化
+    mask IoU、最大化质心位移，再按 ``(dy, dx)`` 固定打破并列。
+    """
+
+    binary = np.asarray(mask, dtype=bool)
+    if binary.ndim != 2 or not bool(binary.any()):
+        raise EvidenceError(ReasonCode.COUNTERFACTUAL_INVALID, "mask shift 需要非空二维 GT mask")
+    height, width = binary.shape
+    left, top, right, bottom = mask_bbox(binary)
+    mask_width, mask_height = right - left, bottom - top
+    x_positions = sorted({0, max(0, (width - mask_width) // 2), width - mask_width})
+    y_positions = sorted({0, max(0, (height - mask_height) // 2), height - mask_height})
+    original_area = int(binary.sum())
+    original_centroid = mask_centroid(binary)
+    candidates: list[tuple[float, float, int, int, np.ndarray]] = []
+    for next_left in x_positions:
+        for next_top in y_positions:
+            dx, dy = next_left - left, next_top - top
+            if dx == 0 and dy == 0:
+                continue
+            shifted = np.zeros_like(binary)
+            ys, xs = np.nonzero(binary)
+            next_xs, next_ys = xs + dx, ys + dy
+            if (
+                int(next_xs.min()) < 0
+                or int(next_ys.min()) < 0
+                or int(next_xs.max()) >= width
+                or int(next_ys.max()) >= height
+            ):
+                continue
+            shifted[next_ys, next_xs] = True
+            intersection = int(np.count_nonzero(binary & shifted))
+            union = original_area * 2 - intersection
+            iou = 0.0 if union == 0 else float(intersection / union)
+            next_centroid = mask_centroid(shifted)
+            distance = math.hypot(
+                next_centroid[0] - original_centroid[0],
+                next_centroid[1] - original_centroid[1],
+            )
+            candidates.append((iou, -distance, dy, dx, shifted))
+    if not candidates:
+        raise EvidenceError(ReasonCode.COUNTERFACTUAL_INVALID, "GT mask 没有合法的非零 anchor shift")
+    iou, negative_distance, dy, dx, shifted = min(candidates, key=lambda item: item[:4])
+    if int(shifted.sum()) != original_area:
+        raise EvidenceError(ReasonCode.COUNTERFACTUAL_INVALID, "mask shift 意外改变面积")
+    return shifted, {
+        "algorithm": "mask_shift_3x3_anchor_min_iou.v1",
+        "dx_pixels": int(dx),
+        "dy_pixels": int(dy),
+        "mask_iou_with_gt": float(iou),
+        "centroid_distance_pixels": float(-negative_distance),
+        "evaluation_only": True,
+    }
+
+
+def boundary_contrast_proxy(optical: Image.Image, mask: np.ndarray) -> float:
+    """计算一像素 mask 内外边界环的 RGB 差异，仅作为选样 proxy。
+
+    该数值不是专家“清晰/困难”标签，不能进入地质或风险结论。
+    """
+
+    rgb = np.asarray(optical.convert("RGB"), dtype=np.float64) / 255.0
+    binary = np.asarray(mask, dtype=bool)
+    if binary.shape != rgb.shape[:2] or not bool(binary.any()):
+        raise EvidenceError(ReasonCode.MASK_SHAPE_MISMATCH, "boundary proxy 需要同尺寸非空 mask")
+    padded = np.pad(binary, 1, constant_values=False)
+    neighbors = (
+        padded[:-2, 1:-1], padded[2:, 1:-1], padded[1:-1, :-2], padded[1:-1, 2:],
+        padded[:-2, :-2], padded[:-2, 2:], padded[2:, :-2], padded[2:, 2:],
+    )
+    erosion = binary.copy()
+    dilation = binary.copy()
+    for neighbor in neighbors:
+        erosion &= neighbor
+        dilation |= neighbor
+    inner = binary & ~erosion
+    outer = dilation & ~binary
+    if not bool(inner.any()) or not bool(outer.any()):
+        return 0.0
+    inside = rgb[inner].mean(axis=0)
+    outside = rgb[outer].mean(axis=0)
+    return float(np.abs(inside - outside).mean())
+
+
 def deterministic_auxiliary_facts(
     values: np.ndarray,
     pixel_valid: np.ndarray,

@@ -1,0 +1,22 @@
+schema_version: oa_groundrag.mask_grounded_region.config.v1
+benchmark:
+  root: /home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/full
+  schema_version: oa_auxseg_hdf5_v1
+  manifest_sha256: 9a3b1478ed844f234e32b839fded67a937c49d202e3d8f5efd7db52596b5a00a
+  index_sha256: 389877226249d2477bdda62d937950339e9fa60df35558b945d02757e8d0da42
+  payload_sha256: 1679d80da36d0760e50cf3fcfb10fcefffd392ca4e7ea50f5ad8db4dda3871e2
+  build_config_sha256: 396a4fdb2c4cec0bce16150c3d63f85195ac6b5c94102e4bb2a403120ddad974
+  ledger_file_sha256: ea00feff6174ee2b9ec45e538ed21a8b9f62d81f4ce2baebedbbe97c121d0a22
+  registry_sha256: b351cf5732011bfc5e7281e0d12aadf70dec8a84a38b9037daccd8a5b4137e93
+  train_split_sha256: 97496521dfce55d500523c717ef83b3f8042aa937723716698a6eed7f3925a7c
+stage4a_selection:
+  root: /home/yukun80/codes/paper7_VLM/outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500
+  manifest_sha256: 37aebb9c5f8ceb720e0a1a3c8621212d44562fa6b6786d145c31e11ffa94f9bb
+  records_sha256: 36f5dcbf8fe6008be09ccb291eb64a8a72398f01337ebb84ce13063d3a870c5d
+  ledger_sha256: 0b0f7a1488e2069ce5d5ed03365d756905f81e742f12d2848dfb9b81de3ef430
+  ordered_sample_ids_sha256: 84e1801fe9ec37284d7bf02b663153d057145726fc78c6d54e87ded11e185936
+  sample_count: 500
+output_root: /home/yukun80/codes/paper7_VLM/outputs/stage4_landslide_evidence/mask_grounded_region_corpus_train_v1_500
+rendering:
+  context_margin_ratio: 0.15
+  overlay_alpha: 0.45
