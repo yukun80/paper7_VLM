@@ -35,6 +35,17 @@ class RegionContractTest(unittest.TestCase):
         self.assertEqual(corpus.stage4a_selection.sample_count, 500)
         self.assertEqual(evaluation.sample_count, 100)
         self.assertEqual(evaluation.per_source.target, 16)
+        benchmark_stage4 = REPO.parent / "benchmark/oa_grounded_stage4_v1"
+        self.assertEqual(
+            corpus.output_root,
+            benchmark_stage4
+            / "region_corpus/mask_grounded_region_corpus_train_v1_500",
+        )
+        self.assertEqual(evaluation.train_corpus_root, corpus.output_root)
+        self.assertEqual(
+            evaluation.output_root,
+            benchmark_stage4 / "eval_dev/oa_grounded_eval_dev_v1_100",
+        )
         self.assertEqual(RepresentationMode.FULL_PLUS_MASK_PLUS_CROP.value, "full_plus_mask_plus_crop")
 
     def test_test_split_is_rejected_at_config_parse(self) -> None:

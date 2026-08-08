@@ -14,6 +14,10 @@ from oa_groundrag.landslide_evidence.annotation import SCORE_FIELDS
 from oa_groundrag.landslide_evidence.contracts import fail
 from oa_groundrag.landslide_evidence.region_pipeline import ledger_rows
 from oa_groundrag.landslide_evidence.region_validation import validate_eval_dev
+from oa_groundrag.landslide_evidence.single_expert_package import (
+    VERIFIED_PACKAGE_SCHEMA,
+    validate_verified_annotation_package,
+)
 
 from .outputs import (
     REGION_PREDICTION_SCHEMA_VERSION,
@@ -40,12 +44,70 @@ def _asset_identities(queue: list[dict[str, Any]]) -> dict[str, str]:
     return result
 
 
-def _human_metrics(annotations_root: Path | None, *, eval_root: Path) -> dict[str, Any] | None:
+def _description_leaves(value: Any, *, prefix: str = "$") -> dict[str, str]:
+    """把结构化参考展开为确定性叶字段；列表整体比较，避免伪装语义指标。"""
+
+    if isinstance(value, Mapping):
+        result: dict[str, str] = {}
+        for key in sorted(value):
+            if key == "schema_version":
+                continue
+            result.update(_description_leaves(value[key], prefix=f"{prefix}.{key}"))
+        return result
+    return {prefix: canonical_json(value)}
+
+
+def _human_metrics(
+    annotations_root: Path | None,
+    *,
+    eval_root: Path,
+    valid_outputs: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any] | None:
     if annotations_root is None:
         return None
     manifest = read_json(annotations_root / "manifest.json")
     if not isinstance(manifest, dict) or manifest.get("source_manifest_sha256") != sha256_file(eval_root / "manifest.json"):
         fail("ANNOTATION_INVALID", "annotation package 未绑定当前 Eval-dev manifest")
+    if manifest.get("schema_version") == VERIFIED_PACKAGE_SCHEMA:
+        package = validate_verified_annotation_package(
+            asset_root=eval_root,
+            package_root=annotations_root,
+        )
+        if (
+            package.manifest.get("intended_use") != "single_expert_dev_reference"
+            or package.manifest.get("training_eligible") is not False
+        ):
+            fail("SPLIT_FORBIDDEN", "开发评价只接受 val baseline 单专家参考 package")
+        comparable = 0
+        exact = 0
+        matched_fields = 0
+        total_fields = 0
+        for annotation in package.annotations:
+            prediction = valid_outputs.get(str(annotation["record_id"]))
+            if prediction is None:
+                continue
+            comparable += 1
+            reference = parse_region_model_output(annotation["description"]).to_dict()
+            parsed_prediction = parse_region_model_output(prediction).to_dict()
+            exact += canonical_json(reference) == canonical_json(parsed_prediction)
+            reference_fields = _description_leaves(reference)
+            prediction_fields = _description_leaves(parsed_prediction)
+            total_fields += len(reference_fields)
+            matched_fields += sum(
+                prediction_fields.get(key) == expected
+                for key, expected in reference_fields.items()
+            )
+        return {
+            "reference_authority": "single_expert",
+            "annotation_count": len(package.annotations),
+            "expert_verified_count": len(package.annotations),
+            "expert_consensus": False,
+            "expert_review_completed": False,
+            "scores_available": False,
+            "auxiliary_comparable_baseline_count": comparable,
+            "auxiliary_structured_exact_match_rate": _ratio(exact, comparable),
+            "auxiliary_field_exact_match_rate": _ratio(matched_fields, total_fields),
+        }
     rows = read_jsonl(annotations_root / "annotations.jsonl")
     weights = {"correct": 1.0, "partially_correct": 0.5, "incorrect": 0.0}
     aggregates: dict[str, Any] = {}
@@ -178,6 +240,11 @@ def evaluate_dev(
         "complete_prediction_set": len(seen) == len(records),
     }
     annotation_path = None if annotations_root is None else Path(os.path.abspath(Path(annotations_root)))
+    human_metrics = _human_metrics(
+        annotation_path,
+        eval_root=eval_root,
+        valid_outputs=valid_outputs,
+    )
     report = {
         "schema_version": GROUNDED_EVAL_REPORT_SCHEMA,
         "eval_root": str(eval_root),
@@ -185,11 +252,17 @@ def evaluate_dev(
         "predictions_path": str(predictions_path),
         "predictions_sha256": sha256_file(predictions_path),
         "automatic_metrics": automatic,
-        "human_metrics": _human_metrics(annotation_path, eval_root=eval_root),
+        "human_metrics": human_metrics,
+        "reference_authority": (
+            None if human_metrics is None
+            else human_metrics.get("reference_authority", "legacy_expert_annotation")
+        ),
         "validation_identity": validation,
         "development_only": True,
         "sealed_test_accessed": False,
+        "sealed_test_evaluated": False,
         "thresholds_frozen": False,
+        "scientific_acceptance": False,
         "formal_acceptance": False,
     }
     output = Path(os.path.abspath(Path(output_root)))
@@ -205,6 +278,9 @@ def evaluate_dev(
             "report_schema_version": GROUNDED_EVAL_REPORT_SCHEMA,
             "report_sha256": sha256_file(writer.path("report.json")),
             "ledger_sha256": sha256_file(writer.path("SHA256SUMS.jsonl")),
+            "thresholds_frozen": False,
+            "scientific_acceptance": False,
+            "sealed_test_evaluated": False,
             "formal_acceptance": False,
         })
         root = writer.publish()

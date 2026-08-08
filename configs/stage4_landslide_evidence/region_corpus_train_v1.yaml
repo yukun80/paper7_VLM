@@ -16,7 +16,7 @@ stage4a_selection:
   ledger_sha256: 0b0f7a1488e2069ce5d5ed03365d756905f81e742f12d2848dfb9b81de3ef430
   ordered_sample_ids_sha256: 84e1801fe9ec37284d7bf02b663153d057145726fc78c6d54e87ded11e185936
   sample_count: 500
-output_root: /home/yukun80/codes/paper7_VLM/outputs/stage4_landslide_evidence/mask_grounded_region_corpus_train_v1_500
+output_root: /home/yukun80/codes/benchmark/oa_grounded_stage4_v1/region_corpus/mask_grounded_region_corpus_train_v1_500
 rendering:
   context_margin_ratio: 0.15
   overlay_alpha: 0.45

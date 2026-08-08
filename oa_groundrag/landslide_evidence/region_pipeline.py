@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import os
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -99,9 +99,12 @@ class RegionBenchmarkAccess:
         expected: Mapping[str, str],
         *,
         allowed_split: str,
+        cache_size: int = 8,
     ) -> None:
         if allowed_split not in {"train", "val"}:
             fail("SPLIT_FORBIDDEN", "RegionBenchmarkAccess 只允许 train 或 val，明确拒绝 test")
+        if isinstance(cache_size, bool) or not isinstance(cache_size, int) or cache_size < 1:
+            fail("CONFIG_INVALID", "RegionBenchmarkAccess cache_size 必须是正整数")
         self.root = Path(os.path.abspath(root))
         linked = first_symlink_component(self.root)
         if linked is not None or not self.root.is_dir():
@@ -174,7 +177,9 @@ class RegionBenchmarkAccess:
         if set(self.dataset_indices) != set(self.rows_by_id):
             fail("BENCHMARK_INVALID", f"BenchmarkDataset {allowed_split} membership 不一致")
         self._verified_shards: set[str] = set()
-        self._cache: dict[str, RegionLoadedSample] = {}
+        # 大规模 Corpus 构建只需保留最近样本；无界缓存会让数千条 image/mask tensor 常驻内存。
+        self._cache_size = cache_size
+        self._cache: OrderedDict[str, RegionLoadedSample] = OrderedDict()
         self.manifest = manifest
         self.source_order = tuple(str(item) for item in manifest["included_sources"])
         self.expected = dict(expected)
@@ -204,7 +209,9 @@ class RegionBenchmarkAccess:
     def load(self, sample_id: str) -> RegionLoadedSample:
         self.reject_wrong_split(sample_id)
         if sample_id in self._cache:
-            return self._cache[sample_id]
+            loaded = self._cache.pop(sample_id)
+            self._cache[sample_id] = loaded
+            return loaded
         row = self.rows_by_id[sample_id]
         self._verify_shard(str(row["storage"]["shard"]))
         sample = self.dataset[self.dataset_indices[sample_id]]
@@ -227,6 +234,8 @@ class RegionBenchmarkAccess:
             mask_facts=deterministic_mask_facts(mask) if bool(mask.any()) else None,
         )
         self._cache[sample_id] = loaded
+        while len(self._cache) > self._cache_size:
+            self._cache.popitem(last=False)
         return loaded
 
     def shard_sha256(self, row: Mapping[str, Any]) -> str:
@@ -240,13 +249,20 @@ def _save_png(image: Image.Image, path: Path) -> None:
     image.save(path, format="PNG", optimize=False, compress_level=9)
 
 
-def _asset_identity(root: Path, assets: Mapping[str, Any]) -> str:
+def region_asset_identity(root: Path, assets: Mapping[str, Any]) -> str:
+    """重算一条 Region record 的发布资产身份。
+
+    单专家标注与训练导出必须重新绑定同一批 full/mask/crop，而不能只相信工作目录中
+    保存的 record_id。这里保留 audit overlay 的身份，但它仍不会进入正式模型输入。
+    """
+
     identities = {}
     for role, relative in sorted(assets.items()):
         if relative is None:
             identities[role] = None
             continue
         path = safe_join(root, str(relative), location=f"assets.{role}")
+        _ordinary_file(path, hardlink=True)
         identities[role] = {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)}
     return sha256_text(canonical_json(identities))
 
@@ -382,7 +398,7 @@ def annotation_queue_rows(records: Iterable[Mapping[str, Any]], root: Path) -> l
             "target_status": record["target_status"],
             "representation_mode": record["representation_mode"],
             "assets": dict(record["assets"]),
-            "asset_identity_sha256": _asset_identity(root, record["assets"]),
+            "asset_identity_sha256": region_asset_identity(root, record["assets"]),
             "program_facts": dict(record["program_facts"]),
             "description_template": empty_description_template(),
             "annotation": annotation_state_template(),

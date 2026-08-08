@@ -42,7 +42,11 @@ from .region_contracts import (
     parent_identity,
     validate_region_record,
 )
-from .region_pipeline import RegionBenchmarkAccess, frozen_stage4a_ids
+from .region_pipeline import (
+    RegionBenchmarkAccess,
+    frozen_stage4a_ids,
+    region_asset_identity,
+)
 
 
 def _mapping(value: Any, location: str) -> dict[str, Any]:
@@ -131,11 +135,33 @@ def _validate_files(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]], s
     return manifest, ledger, ledger_files
 
 
-def _benchmark_access(manifest: Mapping[str, Any], *, split: str) -> RegionBenchmarkAccess:
+def validate_region_asset_files(root: Path | str) -> dict[str, Any]:
+    """只验证发布根的 manifest/ledger/全文件身份，不访问 Benchmark shard。"""
+
+    resolved = Path(os.path.abspath(Path(root)))
+    manifest, ledger, ledger_files = _validate_files(resolved)
+    if manifest.get("schema_version") not in {REGION_MANIFEST_SCHEMA, EVAL_MANIFEST_SCHEMA}:
+        fail("SCHEMA_MISMATCH", "单专家工作流只接受 Stage 4 Region/Eval 发布根")
+    return {
+        "valid": True,
+        "root": str(resolved),
+        "manifest_sha256": sha256_file(resolved / "manifest.json"),
+        "ledger_sha256": sha256_file(resolved / "SHA256SUMS.jsonl"),
+        "ledger_entry_count": len(ledger),
+        "bound_file_count": len(ledger_files),
+    }
+
+
+def _manifest_benchmark_identity(manifest: Mapping[str, Any]) -> tuple[Path, dict[str, str]]:
     benchmark = _mapping(manifest["benchmark"], "manifest.benchmark")
     _exact(benchmark, ("root", *EXPECTED_IDENTITY_FIELDS), "manifest.benchmark")
-    expected = dict(benchmark)
-    root = Path(str(expected.pop("root")))
+    root = Path(str(benchmark["root"]))
+    expected = {field: str(benchmark[field]) for field in EXPECTED_IDENTITY_FIELDS}
+    return root, expected
+
+
+def _benchmark_access(manifest: Mapping[str, Any], *, split: str) -> RegionBenchmarkAccess:
+    root, expected = _manifest_benchmark_identity(manifest)
     return RegionBenchmarkAccess(root, expected, allowed_split=split)
 
 
@@ -160,14 +186,7 @@ def _validate_queue(
         record = by_record.get(row.get("record_id"))
         if record is None or row.get("assets") != record["assets"] or row.get("program_facts") != record["program_facts"]:
             fail("ANNOTATION_INVALID", f"annotation_queue[{index}] 未绑定原 record")
-        identities = {}
-        for role, relative in sorted(record["assets"].items()):
-            if relative is None:
-                identities[role] = None
-            else:
-                path = safe_join(root, relative, location=f"queue[{index}].assets.{role}")
-                identities[role] = {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)}
-        if row.get("asset_identity_sha256") != sha256_text(canonical_json(identities)):
+        if row.get("asset_identity_sha256") != region_asset_identity(root, record["assets"]):
             fail("ANNOTATION_INVALID", f"annotation_queue[{index}] asset identity 不一致")
     for path in ("annotation_queue.jsonl", "annotation_guideline.json", "records.jsonl"):
         if not any(item["path"] == path for item in ledger):
@@ -362,6 +381,14 @@ def validate_region_corpus(root: Path | str, *, verify_source: bool = True) -> d
         or sha256_text(canonical_json(ids)) != selection.get("ordered_sample_ids_sha256")
     ):
         fail("SELECTION_IDENTITY_MISMATCH", "Region Corpus ordered IDs 不一致")
+    _, benchmark_identity = _manifest_benchmark_identity(manifest)
+    expected_corpus_id = sha256_text(canonical_json({
+        "benchmark": benchmark_identity,
+        "config": selection.get("config_semantic_sha256"),
+        "sample_ids": ids,
+    }))
+    if manifest.get("corpus_id") != expected_corpus_id:
+        fail("SELECTION_IDENTITY_MISMATCH", "Region Corpus corpus_id 重算不一致")
     if access is not None:
         from .region_contracts import FrozenStage4ASelection, RegionCorpusConfig
 
@@ -424,10 +451,44 @@ def validate_eval_dev(
     train_records = read_jsonl(train_root / "records.jsonl")
     train_samples = {record["sample_id"] for record in train_records}
     train_parents = {record["parent_id"] for record in train_records}
+    train_contract = _mapping(manifest.get("train_corpus"), "manifest.train_corpus")
+    _exact(
+        train_contract,
+        ("root", "manifest_sha256", "records_sha256", "ledger_sha256", "parent_count"),
+        "manifest.train_corpus",
+    )
+    expected_train_contract = {
+        "root": str(train_root),
+        "manifest_sha256": train_report["manifest_sha256"],
+        "records_sha256": train_report["records_sha256"],
+        "ledger_sha256": train_report["ledger_sha256"],
+        "parent_count": len(train_parents),
+    }
+    _same(
+        train_contract,
+        expected_train_contract,
+        location="manifest.train_corpus",
+    )
     if train_samples & {record["sample_id"] for record in baseline_records}:
         fail("SPLIT_LEAKAGE", "train/val sample 相交")
     if train_parents & {record["parent_id"] for record in baseline_records}:
         fail("PARENT_OVERLAP", "train/val parent 相交")
+    ordered_samples = [record["sample_id"] for record in baseline_records]
+    ordered_parents = [record["parent_id"] for record in baseline_records]
+    if (
+        selection.get("sample_count") != len(baseline_records)
+        or selection.get("ordered_sample_ids") != ordered_samples
+        or selection.get("ordered_parent_ids") != ordered_parents
+    ):
+        fail("SELECTION_IDENTITY_MISMATCH", "Eval baseline sample/parent 顺序身份不一致")
+    _, benchmark_identity = _manifest_benchmark_identity(manifest)
+    expected_eval_id = sha256_text(canonical_json({
+        "benchmark": benchmark_identity,
+        "config": selection.get("config_semantic_sha256"),
+        "baseline_samples": ordered_samples,
+    }))
+    if manifest.get("eval_id") != expected_eval_id:
+        fail("SELECTION_IDENTITY_MISMATCH", "Eval eval_id 重算不一致")
     groups = read_jsonl(root / "counterfactual_groups.jsonl")
     target_baselines = [record for record in baseline_records if record["target_status"] == "target_present"]
     if len(groups) != len(target_baselines):

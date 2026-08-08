@@ -81,6 +81,8 @@ python scripts/phase3_rs_generaldesc/run_rs_generaldesc.py --help
 python scripts/phase4_rs_vlm/run_rs_vlm.py --help
 python scripts/stage4_landslide_evidence/run_landslide_evidence.py --help
 python scripts/stage4_landslide_evidence/run_mask_grounded_region.py --help
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py --help
+python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py --help
 ```
 
 ### OA-AuxSeg
@@ -171,6 +173,93 @@ python scripts/stage4_landslide_evidence/run_mask_grounded_region.py \
 同一入口还提供 `export-annotation-queue`、`validate-annotations`、`render-messages` 和
 `evaluate-dev`。其中 message renderer 不调用模型；开发 evaluator 只消费已有 prediction，
 在专家协议和阈值冻结前始终输出 `formal_acceptance=false`。
+
+单专家最小标注入口将本地 Qwen 草稿与专家最终答案分离。train package 只用于
+`expert_verified_train_supervision`，val baseline package 只作为
+`single_expert_dev_reference`；两者都不是 Gold 或专家共识。只有草稿生成命令使用 GPU，
+且配置强制 `local_files_only=true`，不会调用外部 API 或自动下载模型。
+草稿生成按记录逐条执行：模型在一次命令中只加载一次，每次只处理一个 sample；`--limit 1`
+只限制本次生成数量。人工工作台固定写入 `annotator="expert"`；`pending` 视图只显示当前
+partition 中已有草稿且尚未核验的记录，`all` 视图用于重新打开已核验答案。
+
+新版 Region Corpus、Eval-dev、可恢复工作根和最终训练资产统一位于
+`../benchmark/oa_grounded_stage4_v1/`。train 的稳定一键入口如下；它首次推进 20 条
+calibration 并在核验完成后退出，负责人检查 prompt/config 后再次运行同一命令，才推进
+剩余 480 条。达到 500/500 后会自动发布并严格验证 annotation package 与 training messages。
+
+```bash
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py \
+  run-train-workflow
+```
+
+该一键命令只接受可选的 `--port`。中断后重复运行会跳过已有草稿和已核验记录；合法的部分
+发布会继续完成，非法既有发布根则拒绝覆盖。显存释放和调度由运行负责人在命令外管理。
+工作台启动前只在当前 Python 进程中保留并精确补全 `NO_PROXY` / `no_proxy` 的
+`127.0.0.1,localhost`，无需改动 shell 或手工关闭全局代理；Gradio 启动失败会关闭已部分
+启动的服务并返回结构化错误。
+
+模型消息只提供字段、类型、英文枚举和逐维视觉问题，不向 Qwen 注入完整答案模板。生成后会
+独立重算 `informative`、`limited_but_specific`、`low_information` 或
+`not_applicable_no_target`；JSON 合法不等于草稿有信息，target 空模板复制会在工作台启动前
+被拒绝。人工界面同时提供分组字段表单、始终可见的只读 canonical JSON 和折叠的高级 JSON
+文本区；高级 JSON 只有通过严格解析后才能同步回表单。数组按每行一项编辑，no-target 的区域
+字段自动锁定，窄幅 crop 只显示警告而不替换原始输入，audit overlay 继续默认折叠。
+
+项目创建时会复制当时的 prompt 供 20 条 calibration 使用。只有 calibration 全部核验完成、
+负责人再次运行一键命令确认进入 remaining 阶段时，仓库 prompt 才会原子同步到工作根，并与
+generation config 一起冻结身份；冻结后继续运行会拒绝 prompt 或 config 漂移。
+以下细粒度命令保留用于只读验证、开发参考和人工恢复：
+
+```bash
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py \
+  create-annotation-project --asset-root <region-or-eval-root> \
+  --output-root <fresh-work-root> --intended-use <intended-use> \
+  --prompt <prompt.txt>
+
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py \
+  generate-annotation-drafts --project-root <work-root> \
+  --config <local-qwen-config.yaml> --partition <calibration-or-remaining-or-all>
+
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py \
+  serve-annotation --project-root <work-root> \
+  --partition <calibration-or-remaining-or-all> --view <pending-or-all>
+
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py \
+  export-verified-annotations --project-root <work-root> \
+  --output-root <fresh-package-root>
+
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py \
+  validate-annotations --asset-root <region-or-eval-root> \
+  --package-root <package-root>
+
+python scripts/stage4_landslide_evidence/run_single_expert_annotation.py \
+  export-training-messages --asset-root <train-region-root> \
+  --annotations-root <train-package-root> --output-root <fresh-messages-root>
+```
+
+创建 val 项目时使用 `--train-project-root <frozen-train-work-root>`，不再提供 `--prompt`，
+以强制复用 train calibration 后冻结的 prompt 和草稿配置。训练消息导出代码级拒绝
+val/test package；`MaskGroundedTrainingMessageDataset` 会重新验证 source、annotation、
+message 和 ledger identity，再返回现有 `DescriptionCollator` 可消费的监督样本。
+
+大规模模型辅助监督使用独立的 Stage 4 v2 根
+`../benchmark/oa_grounded_stage4_v2/`。扩展 Corpus 只从 OA Benchmark 的 train GT 构建；
+轻量 collection 通过强身份引用冻结的 500 条 Corpus 与新增成员，不复制旧图像资产。先运行
+CPU 准备命令，再由负责人显式启动本地模型逐条补齐草稿：
+
+```bash
+python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
+  prepare-expanded-corpus
+
+python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
+  run-train-workflow
+```
+
+第二条命令只使用本地冻结 Qwen 配置，不调用外部 API，也不启动人工界面；中断后重跑会跳过
+已原子落盘的草稿。已有专家答案优先标记为 `expert_verified`，其他通过严格 parser、禁止结论
+和信息量检查的草稿标记为 `model_generated_unreviewed`，不合格项进入 exclusions。因此训练
+messages 数量由实际合格记录决定，不等同于 collection 总数。该混合监督不是 Gold、专家共识
+或科学验收，所有发布 manifest 均保持 `formal_acceptance=false`。
 
 ## 核心科学边界
 

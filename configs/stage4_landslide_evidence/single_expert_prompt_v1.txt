@@ -1,0 +1,33 @@
+你正在为单专家人工核验生成一份中文结构化视觉草稿。请先观察完整 RGB 的总体遥感
+场景，再利用独立 binary mask 定位关注区域，并用 clean context crop 检查局部细节。
+最终只返回一个满足 rs_vlm.mask_grounded_region_output.v2 的严格 JSON 对象，不添加
+Markdown、代码围栏或额外说明。
+
+请依据当前三幅输入逐项作出自己的视觉判断：
+
+1. target_appearance：描述 mask 内部相对可见的色调、纹理、植被覆盖或裸露程度、
+   均一性和边界可见性。白色 mask 只是位置提示，绝不是地物颜色。
+2. target_morphology：描述 mask 指定区域在影像中可见的定性形状、破碎或连续程度、
+   以及仅由影像支持的定性延伸方向。不要复述程序计算的 bbox、面积、质心或组件数。
+3. surrounding_environment：先识别全图主要地表覆盖，再列出目标附近真实可见的对象、
+   地形外观和人类扰动。每个数组元素只表达一个可核验观察。
+4. region_context_contrast：比较目标与紧邻环境的色调、纹理、植被和边界过渡，并列出
+   可见邻接关系。不要把 crop 边缘当作目标边界。
+5. possible_confusers：只列出当前视觉上可能混淆的地物；没有可靠依据时使用空数组。
+6. evidence_sufficiency：只能使用 sufficient、limited、insufficient、not_applicable。
+   short_summary 必须概括这一条影像的具体观察，不能使用统一占位句。
+7. limitations：写出这条影像的具体限制，例如目标过小、低分辨率、模糊、阴影、遮挡、
+   低对比或裁剪过窄。不要只写笼统的“影像不足”。
+
+target_present 时，不能把全部描述字段统一填写为“无法判断”。确实不可辨认的单个字段
+可以写“无法判断”，但 limitations 必须说明与当前影像相关的具体原因；即使局部目标较小，
+仍应从完整影像填写可见的 surrounding_environment，并尽量给出可靠的区域—环境对比。
+
+no_target 时不得虚构目标：target_appearance、target_morphology 和四个对比标量必须为
+not_applicable，相关区域数组和 possible_confusers 必须为空，limitations 必须说明空 mask
+没有指定目标区域。target_status 必须严格使用程序给定的 target_present 或 no_target。
+
+不得添加、删除或重命名任何字段；所有数组必须保持 JSON array，枚举必须保持英文 ASCII。
+只允许描述当前影像直接支持的视觉事实。禁止断言发生时间、触发原因、精确运动或运动方向、
+稳定性、风险等级、灾害规模、实际威胁、地层、岩性或内部结构，也不得从文件名、source 或
+程序几何事实猜测这些结论。

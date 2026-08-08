@@ -93,6 +93,9 @@ class GroundedEvaluationTest(unittest.TestCase):
             report = __import__("json").loads((output_root / "report.json").read_text())
             self.assertFalse(report["formal_acceptance"])
             self.assertFalse(report["thresholds_frozen"])
+            self.assertFalse(report["scientific_acceptance"])
+            self.assertFalse(report["sealed_test_evaluated"])
+            self.assertIsNone(report["reference_authority"])
 
 
 if __name__ == "__main__":

@@ -163,7 +163,7 @@ def build_mask_grounded_region_messages(
         RepresentationMode,
         validate_region_record,
     )
-    from oa_groundrag.phase4.outputs import REGION_OUTPUT_SCHEMA_VERSION
+    from oa_groundrag.phase4.outputs import region_output_contract
 
     row = validate_region_record(record)
     try:
@@ -214,13 +214,7 @@ def build_mask_grounded_region_messages(
             "image": _asset_path(asset_root, str(assets[role])),
         })
     contract = {
-        "schema_version": REGION_OUTPUT_SCHEMA_VERSION,
-        "target_status": row["target_status"],
-        "required_fields": [
-            "schema_version", "target_status", "target_appearance", "target_morphology",
-            "surrounding_environment", "region_context_contrast", "possible_confusers",
-            "evidence_sufficiency", "short_summary", "limitations",
-        ],
+        "strict_output_contract": region_output_contract(row["target_status"]),
         "program_facts_are_read_only": row["program_facts"],
         "formal_model_input_roles": list(roles) if mode is not RepresentationMode.OVERLAY_AUDIT_BASELINE else [],
         "audit_only": mode is RepresentationMode.OVERLAY_AUDIT_BASELINE,
@@ -228,11 +222,15 @@ def build_mask_grounded_region_messages(
     content.append({
         "type": "text",
         "text": (
-            "只描述 mask 指定区域中当前影像直接支持的视觉事实，同时结合完整影像区分："
-            "目标内部、周围环境、以及区域与环境之间的视觉差异。不要把白色 mask 当作真实"
+            "先观察完整影像中的总体遥感场景，再定位 mask 指定区域；只描述当前影像直接支持"
+            "的视觉事实，并严格区分目标内部、周围环境、以及区域与环境之间的视觉差异。"
+            "不要把白色 mask 当作真实"
             "颜色，不要把 crop 边缘当作目标边界，不要重写 bbox、面积、质心、组件数或 crop window。"
             "可以指出视觉混淆对象，但禁止断言发生时间、触发原因、精确运动、稳定性、风险、"
             "灾害规模、实际威胁或现场地质结构。证据不足时必须写 limitations。"
+            "target_status 和 evidence_sufficiency 只能使用合同列出的英文 ASCII 枚举，禁止翻译。"
+            "必须保持所有嵌套对象、数组及字段类型，short_summary 必须为非空字符串。"
+            "不要复制统一的保守答案；每个无法判断都必须有与当前影像相关的具体可见性原因。"
             "只返回一个严格 JSON 对象，不允许额外 prose。\nContract: "
             + canonical_json(contract)
         ),

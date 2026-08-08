@@ -6,13 +6,14 @@
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
 - stage: `4`
 - stage_name: `LANDSLIDE_EVIDENCE_CORPUS_AND_OA_GROUNDED_EVAL`
-- stage_status: `engineering_complete_annotation_pending`
-- current_task: `STAGE4_MASK_GROUNDED_REGION_CORPUS_AND_OA_GROUNDED_EVAL_DEV`
-- current_task_status: `engineering_complete`
+- stage_status: `model_assisted_expanded_corpus_published_work_imported_gpu_generation_pending`
+- current_task: `STAGE4_MODEL_ASSISTED_TRAIN_SUPERVISION_V2_8450`
+- current_task_status: `expanded_corpus_and_collection_validated_v2_project_ready_8430_drafts_pending`
 - next_gate: `A (OA-AuxSeg branch) / C (after Stage 4–5)`
-- scientific_status: `Stage 4A frozen / Stage 4 v2 engineering and train/val-dev asset publication complete / expert annotation, protocol freeze and scientific acceptance pending`
-- execution_date: `2026-08-04`
+- scientific_status: `Stage 4A and v1 Region/Eval-dev frozen / train-only extension 7950 and collection 8450 published / v2 work imported 20 drafts and 5 expert_verified / remaining 8430 drafts, mixed supervision package, training messages and scientific acceptance not completed`
+- execution_date: `2026-08-05`
 - branch: `main`
+- current_head: `a1efc73ce8d6e916c6e8aa4342e422e6684b488c`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
@@ -39,6 +40,22 @@
 - teacher_silver_formal_generation_performed: `false`
 - stage4_silver_generated: `false`
 - stage4_expert_review_completed: `false`
+- stage4_single_expert_tooling_completed: `true`
+- stage4_single_expert_model_verified: `true`
+- stage4_single_expert_annotation_project_created: `true`
+- stage4_single_expert_gpu_generation_performed: `true`
+- stage4_single_expert_failed_project_discarded: `true`
+- stage4_single_expert_train_annotations_completed: `false`
+- stage4_single_expert_dev_references_completed: `false`
+- stage4_single_expert_training_messages_exported: `false`
+- stage4_model_assisted_extension_built: `true`
+- stage4_model_assisted_extension_validated: `true`
+- stage4_model_assisted_collection_built: `true`
+- stage4_model_assisted_collection_validated: `true`
+- stage4_model_assisted_project_created: `true`
+- stage4_model_assisted_gpu_generation_performed: `false`
+- stage4_model_assisted_supervision_exported: `false`
+- stage4_model_assisted_training_messages_exported: `false`
 - oa_grounded_eval_completed: `false`
 - stage2_gpu_run_performed: `false`
 - stage2_native_full_deep_validation_performed: `true`
@@ -54,8 +71,14 @@
 Stage 0 权威迁移、Stage 1 工程定版、Stage 2 RS-GeneralDesc Benchmark native v1
 重发布与验收、Stage 3 Adapter 重训和 Gate B，以及 Stage 4A deterministic Auto Pilot
 均已完成。当前没有活动的 Teacher Silver 实现或正式 Silver 产物；新版 train-only
-Region Corpus 与 val-only OA-GroundedEval-dev 工程资产已发布，专家标注、审核、仲裁、
-正式 OA-GroundedEval 协议冻结和 sealed-test 科学验收仍未完成。
+Region Corpus 与 val-only OA-GroundedEval-dev 工程资产已迁移到统一 Benchmark v1 根并重新验证；
+本地模型草稿、固定 `annotator="expert"` 的单专家核验、一键恢复、不可变 package 和
+train-only messages 工具链已实现，本地 Qwen3-VL-8B 冻结身份已验证。当前 v1 工作根保留
+20 条信息化 calibration 草稿与 5 条 `expert_verified`，原 Gradio 进程已按精确 PID 正常关闭。
+在独立 Benchmark v2 根又发布了 train-only 7,950 条扩展 Corpus 和引用 base+extension 的
+8,450 条 collection，并创建模型辅助工作根，无损导入上述 20/5 条。剩余 8,430 条本地模型
+草稿尚未生成，混合 supervision package 与动态 training messages 尚未发布；多人 review、
+adjudication、Gold 和正式协议冻结不属于当前简化方案，科学验收仍未完成。
 依赖分为 OA-AuxSeg
 工程定版 → 未来 Gate A → formal fixed masks，以及 RS-GeneralDesc Stage 2 → Adapter
 重训 → Gate B；两者在 Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不推翻
@@ -584,7 +607,10 @@ bootstrap 和 finish reason。
 - `rs_vlm.mask_grounded_region_{prediction,failure,provenance}.v1`
 - `oa_groundrag.oa_grounded_eval_dev.report.v1`
 
-### 正式新资产身份
+### 首次发布身份（迁移前历史）
+
+以下为 2026-08-04 在仓库 `outputs/` 首次发布时的身份；2026-08-05 当前 Benchmark
+路径与重基线 manifest 以“Benchmark 迁移与身份重基线”小节为准，payload SHA 保持不变。
 
 | 资产 | 现场结果 |
 | --- | --- |
@@ -642,24 +668,336 @@ scratch、临时 PNG/JSON 或临时测试目录；永久 tests 和两个正式�
 
 ### 当前阻塞、未运行项与下一步
 
-工程合同、正式 train/val-dev 资产、validator、annotation 接口、v2 message/parser 和
-开发 evaluator 已完成。仍需专家对 queue 完成 annotation、review 和必要 adjudication；
-之后才能冻结字段级 Gold、开发阈值和正式 OA-GroundedEval 协议。本次结论不得解释为
-Stage 4 科学验收通过。
+Region/Eval 工程合同、正式 train/val-dev 资产、validator、v2 message/parser 和开发
+evaluator 已完成。后续标注已由下节的“单专家最小可训练标注”方案接管：不再要求多人
+review、adjudication、Gold、正式阈值或正式 OA-GroundedEval 接受协议。本次工程结论仍
+不得解释为专家核验完成、训练语料完成或 Stage 4 科学验收通过。
 
-未运行：GPU、训练、optimizer/backward、正式 Qwen 生成、Base/Adapter mask-grounded
-baseline、sealed test、任何 Gate、RAG、Teacher Silver、Gold、外部 API、模型/数据/依赖
-下载、commit 或 push。
+截至该节 Region/Eval 工程闭环时未运行 GPU、训练、optimizer/backward 或正式 Qwen 生成；
+此后首次单专家 calibration 曾运行 GPU 并产生 20 条 invalid 草稿，处置见下节。全程仍未运行
+Base/Adapter mask-grounded baseline、sealed test、任何 Gate、RAG、Teacher Silver、Gold、
+外部 API、模型/数据/依赖下载、commit 或 push。
 
-下一步人工命令（仅建议，未自动运行）：
+## Stage 4 Benchmark 迁移与单专家一键标注闭环（2026-08-05）
+
+### 现场与简化边界
+
+- 当前续作开始分支 / HEAD：`main` / `a1efc73ce8d6e916c6e8aa4342e422e6684b488c`；工作区已包含
+  中断前尚未提交的 Stage 4 单专家实现和本地模型目录，本次全部保留，未 commit/push。
+- 算法文档仍为冻结 SHA-256
+  `dbf93a4ceea1ae973974fb039d5bd2c35d8a62b615ce2add3ab1583f91366d36`；
+  本任务未修改算法文档、`AGENTS.md` 或 archive。
+- train 结果只称 `expert_verified_train_supervision`；val baseline 结果只称
+  `single_expert_dev_reference`。二者都不是 Gold 或专家共识，所有 package/report
+  强制 `formal_acceptance=false`、`scientific_acceptance=false`、
+  `thresholds_frozen=false`、`sealed_test_evaluated=false`。
+- 配置绑定的本地目录 `models_zoo/Qwen3-VL-8B-Instruct-r60595eb` 已就绪，并验证为
+  `Qwen/Qwen3-VL-8B-Instruct` revision
+  `60595ebc30ec8e3b1d3b9e65d4943ca011c0006a`。本任务没有修改模型目录，也没有自动下载、
+  改用 2B 或调用 API。
+- 显存查询和容量门槛已从活动工作流删除；显存释放与调度由负责人在运行命令前处理。
+  Benchmark 迁移阶段只做 CPU 测试；随后两次草稿运行分别暴露结构 invalid 和模板复制问题，
+  旧零核验 work 根均已按授权废弃。当前信息化修复已重新加载本地 8B 并只生成新一轮 20 条
+  calibration，实时身份和质量分布见本节末尾。
+
+### 实际代码、合同与入口
+
+新增：
+
+- `oa_groundrag/landslide_evidence/single_expert.py`：严格 project/assignment/draft/
+  verified 合同、seed `20260804` 的 20 条 train calibration、可恢复原子工作快照；
+- `single_expert_drafting.py`：只允许冻结本地 Qwen3-VL-8B 身份的一次 greedy 草稿，
+  复用现有 Qwen processor/model/collator，calibration 完成前拒绝 remaining；
+- `single_expert_workbench.py`：仅绑定 `127.0.0.1` 的最小 Gradio 专家核验界面；新增
+  `calibration / remaining / all` partition 与 `pending / all` view，pending 只遍历已有草稿
+  且尚未核验的记录，invalid 草稿使用严格空模板，核验后自动前进；一键模式在当前分区
+  全部核验后自动关闭服务；启动前仅在当前进程精确补全 loopback proxy bypass，启动异常
+  转为结构化 reason code 并关闭已部分启动的 app；
+- `single_expert_workflow.py`：固定 Benchmark/prompt/config 路径的一键状态机；首次停在
+  20 条 calibration 人工边界，第二次推进 480 条，500/500 后自动发布并验证 package 与
+  training messages，支持生成和部分发布中断恢复；calibration 使用项目创建时的 prompt，
+  仅在负责人第二次调用确认边界才将仓库 prompt 原子同步到 work 根并冻结 prompt/config；
+- `single_expert_package.py`：完整 500 train 或 100 val-baseline 单专家 package 的原子
+  发布、ledger 和独立验证；
+- `single_expert_training.py`：500/500 train-only messages 导出、严格重载及
+  `MaskGroundedTrainingMessageDataset`；
+- `scripts/stage4_landslide_evidence/run_single_expert_annotation.py`：增加只接受可选
+  `--port` 的 `run-train-workflow`，并保留六个细粒度薄子命令；活动单专家入口不再接受
+  `annotator_id`；
+- `configs/stage4_landslide_evidence/single_expert_prompt_v1.txt` 与
+  `single_expert_qwen3vl_8b_v1.yaml`；
+- `tests/stage4_landslide_evidence/single_expert_fixture_helpers.py` 及四个
+  `test_single_expert_*.py` 永久 CPU 测试。
+
+增量修改：`region_pipeline.py` 暴露共享 asset identity；`region_validation.py` 增加不读
+Benchmark shard 的发布 ledger 全文件验证，并重算 Corpus/Eval ID、严格绑定 Eval→Corpus
+root/manifest/records/ledger；`phase4/outputs.py` 集中提供可通过严格 parser 的 target/no-target
+模板和完整嵌套字段合同，并加固中英文禁止结论局部否定；`phase4/messages.py` 把完整类型、
+合法英文 enum、no-target 规则和模板注入 v2 prompt；`phase4/grounded_evaluation.py` 接受
+单专家 dev reference，但只计算辅助结构化一致率；
+`README.md` 只增加稳定入口；既有 Stage 4A、Gate B 和 external generic 路径未改语义。
+
+冻结 schema：
+
+- `oa_groundrag.mask_grounded_region.expert_verified_annotation.v1`
+- `oa_groundrag.mask_grounded_region.expert_verified_package.v1`
+- `oa_groundrag.mask_grounded_region.training_message.v1`
+- `oa_groundrag.mask_grounded_region.training_messages.v1`
+- `oa_groundrag.mask_grounded_region.train_workflow.v1`
+- `oa_groundrag.mask_grounded_region.train_workflow_state.v1`
+- `oa_groundrag.mask_grounded_region.{annotation_project,annotation_assignment,annotation_work,model_draft,model_draft_failure,model_draft_run,draft_config}.v1`
+
+活动单专家 annotation/work 快照固定写入 `annotator: "expert"`；严格拒绝旧
+`annotator_id`、其他 annotator 值和未知字段。既有通用多角色 annotation v1 保持不变，
+一键流程不调用它。
+
+唯一 train 一键入口为 `run-train-workflow [--port PORT]`。六个细粒度 CLI 仍为：
+`create-annotation-project`、`generate-annotation-drafts`、
+`serve-annotation`（要求 `--partition`，`--view` 默认 `pending`）、
+`export-verified-annotations`、`validate-annotations`、
+`export-training-messages`。不提供 review、adjudication、Gold、protocol freeze 或 API
+provider 命令。
+
+### Benchmark 迁移与身份重基线
+
+- 同一设备号 `2096` 上用目录 rename 将两个新版资产移动到：
+  - `/home/yukun80/codes/benchmark/oa_grounded_stage4_v1/region_corpus/mask_grounded_region_corpus_train_v1_500`；
+  - `/home/yukun80/codes/benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100`。
+- 旧 Region/Eval 数据根已消失，未保留副本、symlink 或 alias；冻结 Stage 4A
+  `outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500` 原位保留。
+- Corpus manifest 从 `79f8d796d38156ee77dc86bdc2efad2f9992d59090687da2f0bf19d47c52db81`
+  重基线为 `d18e6b4f3ab566447131ecd6fa45eb21b7675a582e85579ef8320289093ec32e`；
+  `corpus_id=74ed1ea9d207c084726781bb3de661a10e1d49a5bb493b58fd5bd1ea95eac342`。
+- Eval manifest 从 `bec0bc71972889ef23935e7e00dc9d0b4531b468c42b98e4a2b6a602146a62e5`
+  重基线为 `fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492`；
+  `eval_id=188b84cc6a1379868d01526df65298fdabb2473865da4a018fa7c649418deea7`，
+  并绑定新 Corpus manifest。
+- Corpus config file/semantic SHA 为 `fbbc47f7da454cb7492631d2f36fcd01dd0915ffa50b53b97ad509cd1b1a42c7` /
+  `08cefb21a3d1ca2b699886b6262d9e8a5eb392244fcf3dc88a120999d5b9e3d2`；
+  Eval config file/semantic SHA 为 `5b2d8e3e818fc22b7a512a27bb1029d50608c408bf4058379d02610554116a46` /
+  `e2466ec7a87a7fa91c7a21c5968ec34eb6e1971bb30cb61a0adc84d970d81c16`。
+- 仅两个 manifest 的配置派生字段发生变化。Corpus records/ledger/queue/guideline SHA 仍为
+  `608df31a...` / `c3037a07...` / `e1ac12fb...` / `d08e8638...`；Eval 对应 SHA 仍为
+  `ca01e944...` / `26ce0913...` / `261a2152...` / `d08e8638...`。
+  排除 manifest 后的文件数与 path/size/mtime 聚合分别保持 `1804`、`842eaaba...` 和
+  `765`、`b3dc93fd...`；迁移后 validator 又逐文件重算 SHA/size/pixel 并通过。
+- 可恢复 work、annotations 和 training_messages 父目录已建立，但三个正式子根均不存在；
+  没有创建 annotation project、package 或 training messages。
+
+### 本地 8B 身份与逐条工作台增量
+
+- 官方 Hugging Face cache verify 检查 16 个发布文件并通过；本地严格 JSON、index 和
+  safetensors 结构审计发现 4 个分片、750 个 tensor，未发现 missing、extra、错分片、
+  partial/lock、symlink 或 hardlink；离线 `AutoConfig` / processor 加载通过。
+- 四个权重分片 SHA-256 依次为：
+  `d5d0aef0eb170fc7453a296c43c0849a56f510555d3588e4fd662bb35490aefa`、
+  `8be88fb5501e4d5719a6d4cc212e6a13480330e74f3e8c77daa1a68f199106b5`、
+  `83de00eafe6e0d57ccd009dbcf71c9974d74df2f016c27afb7e95aafd16b2192`、
+  `0a88b98e9f96270973f567e6a2c103ede6ccdf915ca3075e21c755604d0377a5`；
+  均与官方身份一致。
+- 正式 train Corpus 的 20 条 calibration 在全局 assignment 中分散于 ordinal
+  `5, 30, 73, 92, 116, 148, 170, 187, 209, 244, 263, 281, 315, 322, 362, 388, 414, 436, 449, 483`；
+  工作台现在按过滤后视图序号逐条导航，不再遍历未生成草稿的其余 assignment。
+- `.gitignore` 继续精确排除 `/models_zoo/Qwen3-VL-8B-Instruct-r60595eb/`；已失效的仓库内
+  `/annotation_work/` 规则已删除，因为活动工作根位于仓库外的统一 Benchmark 根。
+
+### 验证、身份与未发布项
+
+| 检查 | Exit | 结果 |
+| --- | ---: | --- |
+| `python -m unittest discover -s tests/stage4_landslide_evidence -v` | 0 | 58/58；新增覆盖模型消息无答案模板、四级草稿质量、表单/canonical/高级 JSON 双向同步、no-target 控件锁定、低信息最终答案拒绝和模板复制 UI 前门控，并保留固定 expert、Benchmark、一键恢复、Region/Eval/Stage 4A 回归 |
+| `python -m unittest discover -s tests/phase4_rs_vlm -v` | 0 | 82/82；argparse 输出来自预期负向用例 |
+| `python -m unittest discover -s tests/phase3_rs_generaldesc -v` | 0 | 45/45 |
+| `python -m compileall oa_groundrag scripts` | 0 | 全部通过；cache 定向写入本任务 `/tmp` 根 |
+| `git diff --check` | 0 | 无 whitespace 错误 |
+| localhost/Gradio CPU smoke | 0 | 在 `NO_PROXY=no_proxy=127.*` 下自动得到 `127.*,127.0.0.1,localhost`；新版混合界面仅绑定 `127.0.0.1:17869`，启动后立即关闭，未加载模型 |
+| 一键 workflow synthetic 回归 | 0 | CPU-only；首次停在 calibration、第二次 remaining、package 后中断恢复、500 messages 发布、重复运行幂等；未启动监听服务或真实模型 |
+| 新 Benchmark Corpus 完整验证 | 0 | 500 records / 1,800 assets；源、GT、几何、crop、overlay、ledger 与重算 ID 全部通过 |
+| 新 Benchmark Eval-dev 完整验证 | 0 | 100 baseline / 340 records / 760 assets；严格绑定新 Corpus，split/parent/反事实/重算 ID 全部通过 |
+| 冻结 Stage 4A 真实只读验证 | 0 | 500 records / 2,200 assets；原路径和冻结身份不变 |
+
+当前 prompt 文件 SHA-256 为
+`7a1556e4a4069cb01c366e784bb7fd4c24cc341c21b1c0dd8adc4b0467f86f4e`；draft config 文件
+SHA-256 为 `6921decd3766dde578be78ada8a0f6364de8dfebda337237451aac6058524798`。
+本任务没有发布 annotation package 或 training messages，因此不存在可报告的正式新产物
+manifest/records/ledger 身份；不得把 synthetic 测试或 metadata-only 临时 project 当作产物。
+本任务唯一临时根 `/tmp/stage4_benchmark_migration_20260805.BYbXsX`（manifest 备份、迁移
+脚本和定向 Python cache）已精确删除并确认不存在；仓库根没有遗留临时 PNG/JSON、debug
+脚本、scratch 或 annotation 工作目录。
+
+### 首次 calibration 失败现场、修复与授权处置
+
+- 负责人首次运行 `run-train-workflow` 后，本地 Qwen3-VL-8B 正常加载并逐条完成 20 条
+  calibration；运行身份为 `draft_run_1bf65db8ab260e2a7c2ff16d`，当次 prompt SHA-256 为
+  `6930dd2f34d878f2bc5afe23775639d1dc96ff0432f2c9e8c4d24f3222ff44f3`。
+- 删除前状态严格复核为 `drafted=20 / valid_drafts=0 / failed_drafts=20 / verified=0`，
+  `workflow_state.phase=calibration`；20 条首个结构化失败码均为 `INVALID_ENUM`。原始输出均已
+  落盘，但消息只声明顶层字段，没有给 8B 完整嵌套结构和英文 enum，故这些草稿不具备训练资格。
+- Gradio 已绑定并打印 `127.0.0.1:7860`，随后其 HTTPX `startup-events` 自检因现场
+  `NO_PROXY/no_proxy` 只有 `127.*` 而未精确命中 `127.0.0.1`，请求误入 HTTP 代理并返回
+  503；这与 CUDA、模型加载、端口占用或 UI callback 无关。
+- 删除前确认 `verified/` 无记录，正式 annotation package 与 training messages 根均不存在；
+  Corpus/Eval manifest 仍分别为 `d18e6b4f3ab566447131ecd6fa45eb21b7675a582e85579ef8320289093ec32e` /
+  `fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492`。
+- 负责人已明确选择废弃本次失败 work 根并从修复后的 prompt 重新开始，不保留副本、symlink
+  或兼容 alias。删除前再次确认精确路径为
+  `/home/yukun80/codes/benchmark/oa_grounded_stage4_v1/work/stage4_train_expert_v1`、普通目录、
+  无 symlink、20 draft / 0 verified，且两个发布根不存在；随后只删除该 work 根并确认其
+  不再存在。删除不可恢复；当次处置结束时尚未创建新 project。
+- 修复后 `phase4/outputs.py`、v2 message、repo prompt 与 UI 空模板共享同一严格合同；target
+  与 no-target 模板均可直接通过 parser，enum 保持英文 ASCII，不进行宽松修复。calibration
+  prompt 副本不被仓库文件漂移改写；仅在 20/20 后第二次调用时原子同步并冻结。
+- Gradio 启动前只修改当前 Python 进程的 `NO_PROXY/no_proxy`，保留既有条目并精确追加
+  `127.0.0.1,localhost`；启动失败会返回 `ANNOTATION_UI_START_FAILED` 并关闭 app。真实
+  localhost CPU smoke 已在模拟 `127.*` 环境中启动并立即关闭，未再出现 503。
+- 删除后 Corpus/Eval manifest SHA 复核仍为
+  `d18e6b4f3ab566447131ecd6fa45eb21b7675a582e85579ef8320289093ec32e` /
+  `fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492`；正式 annotation
+  package 和 training messages 仍不存在。
+- 本次修复唯一临时根 `/tmp/stage4_invalid_http_fix.0jdOii`（定向 Python cache 与短暂
+  Gradio 临时文件）已按精确路径删除并确认不存在；未在仓库根留下临时脚本、图片或 JSON。
+
+### 第二次 calibration 模板复制现场与信息化草稿修复
+
+- 负责人在上述 JSON/HTTP 修复后第二次运行一键流程，本地 8B 又完成 20 条 calibration；
+  运行身份为 `draft_run_4d1ddcb3b9204545514a9ca3`，工作副本 prompt SHA-256 为
+  `87e3c1bae916ca957bf56de49e0851dbdf1f3e54d9598138541838b6bbb924ed`。
+- 本次 20 条均通过严格 JSON parser，且 `verified=0`；新增语义质量重算得到 16 条 target
+  `low_information` 且全部与 target 空模板逐字段等价，4 条 no-target 为合同要求的
+  `not_applicable_no_target`。因此 `valid_drafts=20` 只表示结构合法，不能解释为描述质量通过。
+- 当时处理器预检确认单条消息实际消费 3 幅图，输入 token 数为 2279，视觉 grid 依次为
+  `[1,14,14]`、`[1,14,14]`、`[1,18,4]`；模型确实接收 full、binary mask 和 crop，模板复制
+  不是缺图或 tokenizer 截断导致。
+- 根因为正式 v2 contract 和单专家 prompt 同时向 greedy 生成暴露完整 target/no-target
+  答案模板，并强调“以模板为起点”；8B 选择逐字复制最安全的合规答案，而没有把视觉观察
+  写入字段。该问题属于语义草稿失败，不是 parser、CUDA 或 HTTP 失败。
+- 当前修复从正式模型消息完全移除 `json_template` 和完整答案，只保留字段、类型、英文 enum、
+  禁止结论与逐维观察问题；人工空表单和 invalid 回退仍独立复用严格模板。新增可重算的
+  `informative / limited_but_specific / low_information / not_applicable_no_target` 质量诊断；
+  target 空模板复制会在启动 UI 前以 `DRAFT_QUALITY_FAILED` 停止，其他低信息草稿仍可由专家
+  修正，但低信息最终答案不得标记 `expert_verified`。
+- Gradio 专家区改为分组字段表单、始终可见的只读 canonical JSON，以及折叠的高级多行 JSON
+  Textbox；支持严格双向同步、数组逐行输入、no-target 控件锁定和窄幅 crop 警告。模型草稿、
+  程序事实、质量状态与 audit-only overlay 均保持只读或审计隔离。
+- 删除前现场再次严格核对：精确 work 根为普通非链接目录；只有上述一个 run；20 drafted、
+  20 parse-valid、16 target template copies、0 verified；正式 annotation package 与 training
+  messages 均不存在。仓库中修复后的 prompt SHA-256 为
+  `7a1556e4a4069cb01c366e784bb7fd4c24cc341c21b1c0dd8adc4b0467f86f4e`。CPU 回归全部通过后，
+  已只精确删除该零核验 work 根且确认不存在；没有保留副本、symlink 或 alias。删除后 Corpus、
+  Eval-dev、Stage 4A manifest 仍分别为 `d18e6b4f...`、`fed7d8b9...`、`37aebb9c...`。
+- 修复后 processor 只读预检仍为单条 3 图，输入 1925 tokens（上限 4096），视觉 grid 为
+  `[1,14,14]`、`[1,14,14]`、`[1,18,4]`。随后一键命令只重新生成 20 条 calibration，
+  新 run 为 `draft_run_4dab88a787a3eda6e7056706`，绑定的新 prompt SHA 与仓库当前值一致。
+- 新 run 共 20 drafted / 0 verified：6 `informative`、7 `limited_but_specific`、1
+  `low_information`、2 `not_applicable_no_target`、4 parse-invalid，且
+  `target_template_copies=0`。16 条 parse-valid canonical JSON 长度为 813–1109 字符，中位数
+  903；不再是保守模板复制。唯一 low-information target 的具体问题是缺少周围环境观察，仍可
+  在 UI 中由专家补充，但在修正前不能核验完成。
+- 4 条 failure 均为 `INVALID_MODEL_OUTPUT`：两条 no-target 错误填写了必须为空的区域数组，
+  两条输出缺少顶层 `target_status`。按单次生成合同不 repair、不重试；UI 保留 raw output 并为
+  这些记录加载严格空表单，由专家核验填写。
+- 质量门控确认模板复制数为 0 后，正式核验服务曾启动于 `http://127.0.0.1:7860`，当时命令
+  保持运行并等待专家操作。只读访问 live `/config` 确认存在始终可见的 canonical JSON、草稿
+  质量 JSON、分组表单和高级 Textbox，`gr.Code` 组件数为 0。未代替专家点击任何核验按钮。
+- 本次唯一临时根 `/tmp/stage4_informative_ui.Pg5laD`（定向 compile cache 与 synthetic
+  localhost smoke）已精确删除并确认不存在；正式 active work 根必须保留用于断点恢复。
+
+### Stage 4 v2 8,450 条模型辅助监督扩容
+
+#### 服务收尾与只读来源
+
+- 开始时只读确认 PID `2710557` 精确对应
+  `run_single_expert_annotation.py run-train-workflow`，cwd 为本仓库且只监听
+  `127.0.0.1:7860`；发送一次 `SIGINT` 后进程正常退出，端口已释放，未使用宽泛 `pkill`。
+- v1 工作根保留 500 assignments、20 drafts、5 `expert_verified` 和一个 draft run；停止前后
+  13 个文件的 path/size/SHA 聚合一致，没有删除、迁移、覆盖或创建 alias。
+- 导入来源根的 13 文件身份由 v2 provenance 完整冻结，
+  `files_root_sha256=51da12bcf63dced9b85ddfe6219f036218a7d708a056de882eec58107def4a6e`；
+  其中 prompt SHA 为 `7a1556e4...`，draft run 为
+  `draft_run_4dab88a787a3eda6e7056706`。新增、删除、symlink、hardlink、size 或 SHA 漂移都会使
+  v2 project/package validator 失败。
+
+#### 代码与合同
+
+- `expanded_region.py`：train-only 7,950 确定性分层选择、GT Region 资产原子发布、严格
+  validator 与不复制旧图像的 8,450 collection；seed 为 `20260805`。
+- `region_pipeline.py`：共享 OA Benchmark reader 改为默认最多 8 条样本的 LRU，避免数千条
+  image/mask tensor 常驻内存；既有 v1 输出语义未变。
+- `model_assisted.py`：collection 消费、旧 20/5 无损导入、单 runtime/batch-1 断点生成、
+  expert 优先、模型草稿准入/exclusion、混合 supervision package、动态 training messages
+  和 Dataset。
+- `model_assisted_workflow.py`：固定 v2 路径的准备、恢复、生成、部分发布恢复和只读复核状态机。
+- `run_model_assisted_supervision.py`：仅暴露 `prepare-expanded-corpus` 与
+  `run-train-workflow` 的薄 CLI；不查询显存、不调用 API、不启动 UI。
+- 新增冻结配置 `region_corpus_train_extension_v2_7950.yaml`，并新增三组永久回归
+  `test_expanded_region.py`、`test_model_assisted.py`、`test_model_assisted_workflow.py`。
+- 新 schema：
+  `oa_groundrag.mask_grounded_region.train_collection.v2`、
+  `oa_groundrag.mask_grounded_region.train_supervision_record.v2`、
+  `oa_groundrag.mask_grounded_region.train_supervision_package.v2`、
+  `oa_groundrag.mask_grounded_region.training_message.v2`、
+  `oa_groundrag.mask_grounded_region.training_messages.v2`。模型未复核项只能写成
+  `model_generated_unreviewed`；全链路固定 `reference_authority=mixed_model_and_single_expert`、
+  `gold=false`、`formal_acceptance=false`、`scientific_acceptance=false`。
+
+#### 正式 CPU 产物
+
+- extension root：
+  `/home/yukun80/codes/benchmark/oa_grounded_stage4_v2/region_corpus/mask_grounded_region_corpus_train_extension_v2_7950`
+  - manifest `a26f4267ba12fad8ac39481dcd16dd40a65dacdec7133453847cb2e2c71d43fe`
+  - corpus ID `3294404bf1e0091e44d84b3cbc815b707307796af11a5d0a1ddde17874f6c193`
+  - records `8ff4871d41b7b5d01cdb0b2ae4e4caae159317a35610385aec6120e9f2982304`
+  - annotation queue `301add26a10010ecc93bc1fff75c68f038e090d70415e760e5f02a4dfaa2e4cd`
+  - ledger `bad88b4b505ca55ca34377c3abc2281829f78c84970376d7b6f17364db16012d`
+  - 7,950 records / 30,402 assets / 1,834,018,875 asset bytes；target/no-target 为
+    `7,251/699`。
+- extension 每来源均为 1,590；target/no-target 分别为：
+  `gdcld 1535/55`、`lmhld 1482/108`、`landslidebench_agent 1367/223`、
+  `landslide4sense 1277/313`、`multimodal_landslide 1590/0`。最终加上 base 后 no-target
+  均不超过 338；`landslidebench_agent` 排除 11 个 Eval parent 后的 1,590 个 eligible
+  train sample 全部使用。
+- collection root：
+  `/home/yukun80/codes/benchmark/oa_grounded_stage4_v2/region_collection/mask_grounded_region_train_collection_v2_8450`
+  - manifest `cd2b86f6244f4f5f42d846166f11a34efdb9edd636239039b42444c453e435d2`
+  - collection ID `62a67b3d6c5454ffcf58d58c68f6627fe63dee65a2b1a183fcfcd5d058e0aeb1`
+  - member index `c4190db5bae68564b0a7b6e05df2445b0e070e7cbb3ff7c8324df36ad199db69`
+  - ledger `11784175b9c9793083c0e98e7cc55bbfb5557f8c61ca62f1f6aab0c040a5652b`
+  - base/extension 为 `500/7950`；五来源各 1,690；target/no-target 为 `7,651/799`；
+    ordered record/sample SHA 为 `965966d2...` / `6d46a4a8...`。
+  - 强绑定 Eval-dev manifest `fed7d8b9...` 及 100 个 baseline parent；collection 与其 parent
+    零交集，未读取 test 或 sealed test。
+- v2 work root：
+  `/home/yukun80/codes/benchmark/oa_grounded_stage4_v2/work/mask_grounded_region_model_assisted_train_v2_8450`
+  - project ID `model_assisted_project_2808706e63465ea4223f1233`
+  - project SHA `3910d7d7d580ef0e10138ec5b5ff2626aa8c7ffd44795a13e07b4301d118475b`
+  - import provenance SHA `afcb18ef03d928e13c1694804aa8d7ba2c5248a5014c7dd485b70aacc8e4b96d`
+  - 状态为 `total=8450 / drafted=20 / valid=16 / invalid=4 / verified=5 / pending=8430`。
+- supervision package 与 training messages 两个正式根均不存在；本次没有用合成内容补造。
+
+#### 验证与边界
+
+- Stage 4 永久测试：`75/75`；其中本次新增扩容/模型辅助/workflow 共 `17/17`，并永久覆盖
+  train extension 深验不得打开 val source shard。
+- Phase 4 RS-VLM：`82/82`；Phase 3 RS-GeneralDesc：`45/45`。
+- 新 extension 在正式发布时以 `verify_source=true` 完整重放选择、GT 几何、PNG/像素、crop、
+  overlay、ledger 和 identity；collection 严格验证 base/extension/Eval 绑定。
+- 旧 Stage 4A、v1 Region 和 v1 Eval-dev 真实只读 validator 均通过，manifest 仍为
+  `37aebb9c...`、`d18e6b4f...`、`fed7d8b9...`。
+- `compileall` 与 `git diff --check` 通过；本次唯一 cache 根
+  `/tmp/stage4_model_assisted_20260805.tM3yVK` 已精确删除并确认不存在。
+- 未运行：剩余 8,430 条 Qwen 生成、训练/optimizer/backward、val/test/sealed-test、RAG、
+  Teacher Silver、Gold、外部 API、任何 Gate、正式科学评价、commit 或 push。
+
+### 当前阻塞与下一条命令
+
+当前工程准备完成，唯一待执行长任务是负责人释放显存后启动本地 Qwen3-VL-8B，为缺失的
+8,430 条 train record 逐条生成一次草稿。命令会验证并复用当前 collection/work，跳过已导入
+20 条；全部草稿落盘后，自动按 expert/model/exclusion 规则发布 supervision package，再按
+实际 eligible 数量发布 training messages。它不会打开 Gradio，也不会把未复核模型草稿写成
+专家核验或 Gold：
 
 ```bash
-python scripts/stage4_landslide_evidence/run_mask_grounded_region.py export-annotation-queue \
-  --root outputs/stage4_landslide_evidence/oa_grounded_eval_dev_v1_100 \
-  --output-root <fresh-annotation-export-root>
-
-python scripts/stage4_landslide_evidence/run_mask_grounded_region.py validate-annotations \
-  --asset-root outputs/stage4_landslide_evidence/oa_grounded_eval_dev_v1_100 \
-  --annotations <expert.jsonl> \
-  --output-root <fresh-annotation-package-root>
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
+  run-train-workflow
 ```

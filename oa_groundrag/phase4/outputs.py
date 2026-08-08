@@ -400,9 +400,213 @@ _CONTRAST_FIELDS = {
     "tone_contrast", "texture_contrast", "vegetation_contrast", "boundary_transition", "adjacency",
 }
 
+
+def _region_target_status(value: str | TargetStatus) -> TargetStatus:
+    """规范化模板所用 target status；模板和严格 parser 使用同一枚举。"""
+
+    try:
+        return value if isinstance(value, TargetStatus) else TargetStatus(value)
+    except (TypeError, ValueError) as error:
+        raise ContractError(
+            ReasonCode.INVALID_ENUM,
+            "Stage 4 v2 模板 target_status 非法",
+        ) from error
+
+
+def region_output_template(
+    target_status: str | TargetStatus,
+) -> dict[str, Any]:
+    """返回可通过严格 parser 的独立空模板，仅供人工编辑器和生成失败回退。
+
+    正式模型消息不得包含这份完整答案，否则 greedy decoding 容易逐字复制模板。这里的
+    字符串是待专家替换的保守占位值，不含 bbox、面积或质心等程序事实。每次调用均返回
+    新对象，避免 UI 编辑时污染后续记录。
+    """
+
+    status = _region_target_status(target_status)
+    if status is TargetStatus.NO_TARGET:
+        return {
+            "schema_version": REGION_OUTPUT_SCHEMA_VERSION,
+            "target_status": status.value,
+            "target_appearance": {
+                "tone": "not_applicable",
+                "texture": "not_applicable",
+                "vegetation_or_exposure": "not_applicable",
+                "homogeneity": "not_applicable",
+                "boundary_visibility": "not_applicable",
+            },
+            "target_morphology": {
+                "shape": "not_applicable",
+                "fragmentation": "not_applicable",
+                "qualitative_orientation": "not_applicable",
+            },
+            "surrounding_environment": {
+                "land_cover": [],
+                "nearby_objects": [],
+                "visible_terrain_context": [],
+                "human_disturbance": [],
+            },
+            "region_context_contrast": {
+                "tone_contrast": "not_applicable",
+                "texture_contrast": "not_applicable",
+                "vegetation_contrast": "not_applicable",
+                "boundary_transition": "not_applicable",
+                "adjacency": [],
+            },
+            "possible_confusers": [],
+            "evidence_sufficiency": RegionEvidenceSufficiency.INSUFFICIENT.value,
+            "short_summary": "二值 mask 未指定可描述的目标区域。",
+            "limitations": ["空 mask 不提供目标区域，无法生成目标外观或形态描述。"],
+        }
+    return {
+        "schema_version": REGION_OUTPUT_SCHEMA_VERSION,
+        "target_status": status.value,
+        "target_appearance": {
+            "tone": "无法判断",
+            "texture": "无法判断",
+            "vegetation_or_exposure": "无法判断",
+            "homogeneity": "无法判断",
+            "boundary_visibility": "无法判断",
+        },
+        "target_morphology": {
+            "shape": "无法判断",
+            "fragmentation": "无法判断",
+            "qualitative_orientation": "无法判断",
+        },
+        "surrounding_environment": {
+            "land_cover": [],
+            "nearby_objects": [],
+            "visible_terrain_context": [],
+            "human_disturbance": [],
+        },
+        "region_context_contrast": {
+            "tone_contrast": "无法判断",
+            "texture_contrast": "无法判断",
+            "vegetation_contrast": "无法判断",
+            "boundary_transition": "无法判断",
+            "adjacency": [],
+        },
+        "possible_confusers": [],
+        "evidence_sufficiency": RegionEvidenceSufficiency.INSUFFICIENT.value,
+        "short_summary": "mask 指定区域尚待依据当前影像核验。",
+        "limitations": ["当前影像不足以支持更具体的视觉描述。"],
+    }
+
+
+def region_output_contract(
+    target_status: str | TargetStatus,
+) -> dict[str, Any]:
+    """返回供 VLM 阅读的 Stage 4 v2 字段、类型、枚举和目标状态合同。
+
+    合同只描述结构，不携带一份可直接提交的答案。保守空模板由
+    :func:`region_output_template` 独立提供给人工编辑器和失败回退，避免 VLM 在
+    greedy decoding 下把模板复制成看似合法、实则没有视觉信息的草稿。
+    """
+
+    status = _region_target_status(target_status)
+
+    def string_fields(fields: Iterable[str]) -> dict[str, dict[str, Any]]:
+        return {
+            field: {"type": "string", "non_empty": True} for field in fields
+        }
+
+    def list_fields(fields: Iterable[str]) -> dict[str, dict[str, Any]]:
+        return {
+            field: {
+                "type": "array",
+                "items": "non_empty_string",
+                "unique": True,
+            }
+            for field in fields
+        }
+
+    evidence_values = [item.value for item in RegionEvidenceSufficiency]
+    if status is TargetStatus.NO_TARGET:
+        evidence_values = [
+            RegionEvidenceSufficiency.INSUFFICIENT.value,
+            RegionEvidenceSufficiency.NOT_APPLICABLE.value,
+        ]
+    return {
+        "type": "object",
+        "additional_properties": False,
+        "required": sorted(_REGION_TOP_LEVEL),
+        "properties": {
+            "schema_version": {
+                "type": "string",
+                "const": REGION_OUTPUT_SCHEMA_VERSION,
+            },
+            "target_status": {"type": "string", "const": status.value},
+            "target_appearance": {
+                "type": "object",
+                "additional_properties": False,
+                "required": sorted(_APPEARANCE_FIELDS),
+                "properties": string_fields(sorted(_APPEARANCE_FIELDS)),
+            },
+            "target_morphology": {
+                "type": "object",
+                "additional_properties": False,
+                "required": sorted(_MORPHOLOGY_FIELDS),
+                "properties": string_fields(sorted(_MORPHOLOGY_FIELDS)),
+            },
+            "surrounding_environment": {
+                "type": "object",
+                "additional_properties": False,
+                "required": sorted(_SURROUNDING_FIELDS),
+                "properties": list_fields(sorted(_SURROUNDING_FIELDS)),
+            },
+            "region_context_contrast": {
+                "type": "object",
+                "additional_properties": False,
+                "required": sorted(_CONTRAST_FIELDS),
+                "properties": {
+                    **string_fields(sorted(_CONTRAST_FIELDS - {"adjacency"})),
+                    "adjacency": {
+                        "type": "array",
+                        "items": "non_empty_string",
+                        "unique": True,
+                    },
+                },
+            },
+            "possible_confusers": {
+                "type": "array",
+                "items": "non_empty_string",
+                "unique": True,
+            },
+            "evidence_sufficiency": {
+                "type": "string",
+                "enum": evidence_values,
+                "values_must_remain_ascii_and_must_not_be_translated": True,
+            },
+            "short_summary": {"type": "string", "non_empty": True},
+            "limitations": {
+                "type": "array",
+                "items": "non_empty_string",
+                "unique": True,
+                "min_items": 1 if status is TargetStatus.NO_TARGET else 0,
+            },
+        },
+        "target_specific_rules": (
+            {
+                "target_scalar_fields": "all_exactly_not_applicable",
+                "region_arrays": "all_empty",
+                "limitations": "must_explain_empty_or_no_target_mask",
+            }
+            if status is TargetStatus.NO_TARGET
+            else {
+                "unknown_scalar_value": "无法判断",
+                "not_visible_array_value": [],
+                "insufficient_evidence": "explain_in_limitations",
+            }
+        ),
+    }
+
 _FORBIDDEN_CLAIM_PATTERNS: Mapping[str, tuple[str, ...]] = {
     "event_time": (r"发生时间", r"\b(?:occurred|happened)\s+(?:in|on|at)\b"),
-    "trigger_cause": (r"(?:降雨|地震|施工|工程活动).{0,8}(?:导致|触发|引起)", r"\btriggered by\b", r"\bcaused by\b"),
+    "trigger_cause": (
+        r"(?:降雨|暴雨|强降雨|地震|施工|工程活动).{0,8}(?:导致|触发|引起)",
+        r"\btriggered by\b",
+        r"\bcaused by\b",
+    ),
     "precise_motion": (r"(?:位移|速度).{0,8}\d", r"\b\d+(?:\.\d+)?\s*(?:mm|cm|m)/(?:day|year|s)\b"),
     "movement_direction": (r"(?:滑动|运动|位移)方向", r"\bmovement direction\b"),
     "stability": (r"(?:稳定|不稳定)性?(?:等级|状态|为)", r"\bstability (?:class|level|is)\b"),
@@ -415,6 +619,23 @@ _UNCERTAINTY_MARKERS = (
     "无法判断", "不能判断", "无法确定", "不能确定", "证据不足", "不可见", "未提供",
     "cannot determine", "cannot infer", "insufficient evidence", "not visible", "unknown",
 )
+_UNCERTAINTY_BREAKERS = ("但", "但是", "然而", "不过", "but", "however", "yet")
+
+
+def _claim_is_locally_negated(text: str, start: int) -> bool:
+    """只豁免紧邻禁区断言的无法判断表述，防止用转折词夹带肯定结论。"""
+
+    prefix = text[max(0, start - 64):start]
+    positions = [
+        (prefix.rfind(marker), marker)
+        for marker in _UNCERTAINTY_MARKERS
+        if prefix.rfind(marker) >= 0
+    ]
+    if not positions:
+        return False
+    position, marker = max(positions, key=lambda item: item[0])
+    between = prefix[position + len(marker):]
+    return not any(breaker in between for breaker in _UNCERTAINTY_BREAKERS)
 
 
 def detect_forbidden_region_claims(value: Any) -> tuple[str, ...]:
@@ -436,12 +657,11 @@ def detect_forbidden_region_claims(value: Any) -> tuple[str, ...]:
     violations: set[str] = set()
     for text in texts:
         lowered = text.lower()
-        uncertain = any(marker in lowered for marker in _UNCERTAINTY_MARKERS)
-        if uncertain:
-            continue
         for code, patterns in _FORBIDDEN_CLAIM_PATTERNS.items():
-            if any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns):
-                violations.add(code)
+            for pattern in patterns:
+                for match in re.finditer(pattern, lowered, flags=re.IGNORECASE):
+                    if not _claim_is_locally_negated(lowered, match.start()):
+                        violations.add(code)
     return tuple(sorted(violations))
 
 
@@ -555,6 +775,171 @@ def parse_region_model_output(value: str | Mapping[str, Any]) -> RegionDescripti
             f"Stage 4 v2 含不受图像支持的肯定式结论：{list(violations)}",
         )
     return result
+
+
+class RegionDraftQualityStatus(StrEnum):
+    """单次模型草稿的确定性语义信息量状态；不进入专家最终 annotation。"""
+
+    INFORMATIVE = "informative"
+    LIMITED_BUT_SPECIFIC = "limited_but_specific"
+    LOW_INFORMATION = "low_information"
+    NOT_APPLICABLE_NO_TARGET = "not_applicable_no_target"
+
+
+@dataclass(frozen=True)
+class RegionDraftQualityAssessment:
+    """可重算的草稿质量诊断，用于区分 JSON 合法与视觉描述有信息。"""
+
+    status: RegionDraftQualityStatus
+    issues: tuple[str, ...]
+    metrics: Mapping[str, int | bool]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "issues": list(self.issues),
+            "metrics": dict(self.metrics),
+        }
+
+
+_DRAFT_PLACEHOLDER_VALUES = frozenset({
+    "无法判断", "不能判断", "无法确定", "不能确定", "不可见", "不确定",
+    "unknown", "not_applicable", "not applicable", "cannot determine",
+    "cannot infer", "not visible",
+})
+_DRAFT_GENERIC_LIMITATION_VALUES = frozenset({
+    "当前影像不足以支持更具体的视觉描述。",
+    "当前影像证据不足。",
+    "证据不足。",
+    "无法判断。",
+    "the current image is insufficient.",
+    "insufficient evidence.",
+    "cannot determine.",
+})
+_SPECIFIC_VISIBILITY_MARKERS = (
+    "目标过小", "区域过小", "尺寸过小", "分辨率", "像素", "模糊", "遮挡",
+    "阴影", "云", "低对比", "对比度低", "边界不清", "裁剪过窄", "长宽比",
+    "不可分辨", "无法看清", "too small", "low resolution", "blur", "occlusion",
+    "shadow", "cloud", "low contrast", "narrow crop", "not discernible",
+)
+
+
+def _draft_text_is_placeholder(value: str) -> bool:
+    normalized = " ".join(value.strip().lower().split())
+    if normalized in _DRAFT_PLACEHOLDER_VALUES:
+        return True
+    placeholder_prefixes = tuple(
+        marker for marker in _DRAFT_PLACEHOLDER_VALUES
+        if marker not in {"not_applicable", "not applicable"}
+    )
+    return (
+        normalized.startswith(placeholder_prefixes)
+        and not any(marker in normalized for marker in _SPECIFIC_VISIBILITY_MARKERS)
+    )
+
+
+def assess_region_draft_quality(
+    value: str | Mapping[str, Any] | RegionDescriptionOutput,
+) -> RegionDraftQualityAssessment:
+    """重算单条草稿的视觉信息量，不把 schema valid 误写成 informative。
+
+    target 草稿必须至少给出目标观察（或具体可见性限制）、场景环境和区域—环境
+    对比（或具体不可判断原因）。no-target 的目标拒绝是合同要求，不因与空模板一致
+    而判为低信息。
+    """
+
+    parsed = value if isinstance(value, RegionDescriptionOutput) else parse_region_model_output(value)
+    row = parsed.to_dict()
+    template = region_output_template(parsed.target_status)
+    template_match = canonical_json(row) == canonical_json(template)
+    summary_is_default = row["short_summary"] == template["short_summary"]
+    target_scalars = [
+        *row["target_appearance"].values(),
+        *row["target_morphology"].values(),
+    ]
+    contrast_scalars = [
+        row["region_context_contrast"][key]
+        for key in sorted(_CONTRAST_FIELDS - {"adjacency"})
+    ]
+    target_observations = sum(
+        not _draft_text_is_placeholder(text) for text in target_scalars
+    )
+    contrast_observations = sum(
+        not _draft_text_is_placeholder(text) for text in contrast_scalars
+    ) + len(row["region_context_contrast"]["adjacency"])
+    environment_items = sum(
+        len(items) for items in row["surrounding_environment"].values()
+    )
+    placeholder_scalars = sum(
+        _draft_text_is_placeholder(text)
+        for text in (*target_scalars, *contrast_scalars)
+    )
+    generic_limitation = template["limitations"][0]
+    generic_limitations = [
+        text
+        for text in row["limitations"]
+        if text.strip().lower() in _DRAFT_GENERIC_LIMITATION_VALUES
+        or text == generic_limitation
+    ]
+    specific_limitations = [
+        text
+        for text in row["limitations"]
+        if text != generic_limitation
+        and any(marker in text.lower() for marker in _SPECIFIC_VISIBILITY_MARKERS)
+    ]
+    metrics: dict[str, int | bool] = {
+        "template_match": template_match,
+        "summary_is_default": summary_is_default,
+        "target_observation_count": target_observations,
+        "environment_item_count": environment_items,
+        "contrast_observation_count": contrast_observations,
+        "specific_limitation_count": len(specific_limitations),
+        "generic_limitation_count": len(generic_limitations),
+        "placeholder_scalar_count": placeholder_scalars,
+        "descriptive_scalar_count": target_observations + contrast_observations,
+        "descriptive_scalar_total": len(target_scalars) + len(contrast_scalars),
+        "scene_array_item_count": environment_items,
+    }
+    if parsed.target_status is TargetStatus.NO_TARGET:
+        return RegionDraftQualityAssessment(
+            status=RegionDraftQualityStatus.NOT_APPLICABLE_NO_TARGET,
+            issues=(),
+            metrics=metrics,
+        )
+
+    issues: list[str] = []
+    if template_match:
+        issues.append("template_copy")
+    if summary_is_default:
+        issues.append("default_summary")
+    if target_observations == 0 and not specific_limitations:
+        issues.append("missing_target_observation_or_specific_limitation")
+    if environment_items == 0:
+        issues.append("missing_environment_observation")
+    if contrast_observations == 0 and not specific_limitations:
+        issues.append("missing_contrast_observation_or_specific_limitation")
+    if row["limitations"] and len(generic_limitations) == len(row["limitations"]):
+        issues.append("generic_limitation_only")
+    if issues:
+        return RegionDraftQualityAssessment(
+            status=RegionDraftQualityStatus.LOW_INFORMATION,
+            issues=tuple(issues),
+            metrics=metrics,
+        )
+    limited = (
+        placeholder_scalars > 0
+        or bool(specific_limitations)
+        or parsed.evidence_sufficiency is not RegionEvidenceSufficiency.SUFFICIENT
+    )
+    return RegionDraftQualityAssessment(
+        status=(
+            RegionDraftQualityStatus.LIMITED_BUT_SPECIFIC
+            if limited
+            else RegionDraftQualityStatus.INFORMATIVE
+        ),
+        issues=(),
+        metrics=metrics,
+    )
 
 
 def serialize_region_model_output(value: RegionDescriptionOutput) -> str:
