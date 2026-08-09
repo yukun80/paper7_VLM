@@ -840,163 +840,418 @@ Evidence Builder 必须输出：
 
 ---
 
-## 10. RAG 知识库构建
+## 10. Evidence-Constrained Text RAG
 
 ### 10.1 RAG 的定位
 
+OA-GroundRAG 中的 RAG 不负责重新识别图像，也不负责从知识库中“寻找理由”证明候选区域一定是滑坡。
+
+当前主线将能力明确拆分为：
+
+```text
+OA-AuxSeg
+→ Where：候选区域在哪里
+
+Mask-Grounded Region Adapter
+→ What：mask 指定区域看到了什么
+
+Evidence-Constrained Text RAG
+→ How to interpret：这些视觉观察在专业上可能意味着什么、还可能是什么、当前不能判断什么
+```
+
+因此 Stage 6 的核心问题是：
+
+> 给定 Mask-Grounded Region Adapter 已经得到的区域视觉观察，能否从滑坡、遥感和传感器专业资料中检索与当前证据直接相关的解释、混淆因素和证据限制，使 VLM 从“区域视觉描述”进一步提升为“有来源、有反例、有边界的专业解释”？
+
 RAG 负责：
 
-- 动态提供滑坡专业知识；
-- 解释不同环境下的判别差异；
-- 提供传感器和产品使用限制；
-- 检索相似正案例；
-- 检索困难负样本；
-- 生成可追溯引用。
+- 为当前视觉观察提供专业解释依据；
+- 主动补充可能的混淆对象和反例；
+- 提供光学、SAR、InSAR、DEM 等证据的适用条件和解释限制；
+- 在证据不足时给出需要补充的验证信息；
+- 为专业解释提供可追溯来源和页码。
 
 RAG 不负责：
 
-- 生成 mask；
-- 修改分割输出；
-- 覆盖程序事实；
-- 根据通用知识强制确认候选区域为滑坡。
+- 生成或修改 mask；
+- 改写 Programmatic Facts；
+- 改写 Pass-1 已得到的视觉观察；
+- 将候选区域自动升级为确认滑坡；
+- 根据通用知识推断发生时间、确定触发原因、稳定性或正式风险等级；
+- 在 Stage 6 首版中检索视觉案例、训练 learnable retriever 或建立知识图谱。
 
-### 10.2 知识库分层
+---
 
-#### 层一：专业规则库
+### 10.2 Landslide Text Evidence Bank
 
-来源：
+Stage 6 只建立一个物理知识库：
 
-- 地质灾害规范；
-- 滑坡遥感解译教材；
-- InSAR、SAR、DEM 技术资料；
-- 学术论文；
-- 调查报告；
-- 传感器产品说明。
+> **Landslide Text Evidence Bank**
 
-每个知识单元需要记录：
+首版语料来自项目已有的地质灾害规范、滑坡经典分类文献、官方手册、遥感识别规程以及 SAR/InSAR 专业资料。当前 `docs/RAG_knowledge/` 中已有资料可作为 v1 初始语料，不要求在 Stage 6 开发前继续大规模扩充来源。
 
-- 适用环境；
-- 适用模态；
-- 可观察证据；
-- 使用前提；
-- 支持结论；
-- 禁止结论；
-- 混淆因素；
-- 来源和页码。
+首版资料主要覆盖：
 
-#### 层二：滑坡正案例库
+- 滑坡类型、运动方式与专业术语；
+- 地质灾害遥感识别与调查规则；
+- 光学影像中的滑坡可见特征与判读边界；
+- InSAR LOS、相干性、解缠、大气和几何限制；
+- 地质灾害调查、核查和评价中的证据要求；
+- 可能导致错误解释的常见限制和混淆因素。
 
-保存 train split 中专家确认的 mask-description 案例。
+每个源文件必须保存：
 
-#### 层三：困难负样本库
+- `source_id`；
+- 原始文件名；
+- 文件 SHA-256；
+- 标题；
+- `source_kind`；
+- `authority_class`；
+- `source_status`；
+- 标准编号或年份（若明确存在）；
+- PDF 页数；
+- 解析覆盖率；
+- OCR/解析质量状态。
 
-包括：
+`source_status`、`authority_class` 和标准适用状态必须来自显式 source registry，不允许仅根据文件名自动猜测“现行、失效、草案或正式”等法律/规范状态。
 
-- 采石场；
-- 道路切坡；
-- 裸岩坡；
-- 河滩；
-- 冲沟；
-- 施工扰动；
-- 云影、山影；
-- SAR 叠掩、阴影和 speckle；
-- InSAR 低相干、大气和解缠异常。
+Stage 6 不自动下载新资料，不修改原始 PDF，不因为部分扫描页无法解析而伪造文本。无法可靠提取的页面必须标记为 `ocr_required` 或 `unavailable`，不得进入正式检索单元。
 
-#### 层四：传感器解释库
+---
 
-专门组织：
+### 10.3 Text Evidence Unit
 
-- InSAR LOS 限制；
-- 升降轨差异；
-- 相干性和低相干；
-- DEM 与坡度；
-- SAR 几何畸变；
-- 分辨率和尺度影响；
-- 数值单位和符号约定。
+Stage 6 不把固定长度的 PDF chunk 直接作为最终检索证据，而是构建较短、自包含、尽量保持“条件—解释—限制”完整性的 **Text Evidence Unit**。
 
-### 10.3 文本检索
+建议 schema：
 
-可继续使用：
+```text
+unit_id
+source_id
+source_sha256
+pdf_page
+printed_page
+section
+knowledge_type
+content
+modality
+conditions
+tags
+authority_class
+source_status
+extraction_method
+content_sha256
+```
 
-- SQLite FTS5；
-- BGE-M3；
-- Qdrant Embedded；
-- RRF；
-- BGE reranker；
-- authority boost。
+首版只保留三个核心 `knowledge_type`：
 
-检索查询来自：
+1. `interpretation`
+   - 解释某类视觉或遥感现象在滑坡识别中可能意味着什么；
+   - 强调“可作为证据”而不是“看到即确认”。
+
+2. `confounder`
+   - 记录与滑坡外观相似的道路切坡、采石场、裸岩、河滩、冲沟、施工扰动等；
+   - 记录这些对象为什么容易混淆，以及可用于区分的条件。
+
+3. `limitation`
+   - 记录单时相光学、SAR、InSAR、DEM 等证据的使用边界、误差来源和不可支持的推断；
+   - 可同时包含“建议补充哪些数据或核查手段”的内容，不再建立独立 verification index。
+
+专业术语、传感器名称、地貌和滑坡部位等不建立独立物理索引，只作为 `tags` 和查询扩展词使用。
+
+禁止把全局生成边界重复写入每个知识单元。诸如“不得给出正式风险等级”“不得由单时相确定发生时间”等通用限制由 Final Generation Policy 统一约束；只有当某条资料本身讨论特定限制时，才作为 `limitation` 单元入库。
+
+---
+
+### 10.4 语料切分原则
+
+Stage 6 首版优先采用：
+
+```text
+PDF
+→ page
+→ section / clause / paragraph
+→ self-contained Text Evidence Unit
+```
+
+切分遵循：
+
+- 标准优先按条款、章节或完整规则切分；
+- 论文、手册和培训资料优先按自然段或小节切分；
+- 不为了固定 token 数强行拆开同一条规则中的适用条件和限制；
+- 过长单元只在自然段边界继续拆分；
+- 保存 PDF 页码和 section；
+- 不使用大窗口 overlap 制造大量近重复 chunk；
+- exact duplicate 和内容 hash 重复项只保留可追溯关系，不重复进入检索候选。
+
+首版不要求使用 LLM 自动重写全部知识单元，也不要求人工为所有 PDF 构造复杂 Evidence Card。
+
+---
+
+### 10.5 Task-based RAG Switch
+
+Stage 6 不训练额外的 Retrieval Reflection 模型，而由现有 Task Controller 确定是否调用 RAG。
+
+默认规则：
+
+```text
+Segmentation
+Scene Description
+Mask Description
+→ RAG OFF
+
+Candidate Evaluation
+Multimodal Evidence QA
+Report Generation
+Knowledge QA
+→ RAG ON
+```
+
+其中 `Mask Description` 的目标只是客观描述 mask 区域和周围环境，不应被专业知识提前污染。
+
+---
+
+### 10.6 Evidence-conditioned Query Builder
+
+Stage 6 不直接把用户问题或整段 Pass-1 输出作为一个大查询，而只构造两个确定性 retrieval intent。
+
+输入：
 
 ```text
 用户问题
-+ candidate status
-+ Programmatic Facts
-+ Pass 1 visual observations
-+ environment metadata
-+ available modalities
-+ required claim types
++ target status
++ Programmatic Facts（只读）
++ Pass-1 Target Appearance
++ Pass-1 Target Morphology
++ Pass-1 Surrounding Environment
++ Pass-1 Region–Context Contrast
++ Pass-1 Possible Confusers
++ Pass-1 Evidence Sufficiency
++ Available Modalities
 ```
 
-### 10.4 图像和案例检索
+#### Query A：Interpretation Query
 
-不使用 OpenCLIP 统一图文空间。
+主要使用：
 
-建议采用分模态索引：
+- 用户问题；
+- Target Appearance；
+- Target Morphology；
+- Region–Context Contrast；
+- Available Modalities。
 
-- 光学区域：OA-AuxSeg optical feature 或 DINOv3；
-- DEM/slope：terrain encoder feature；
-- InSAR：InSAR auxiliary encoder feature；
-- SAR：SAR auxiliary encoder feature。
+用于检索 `interpretation` 单元。
 
-各模态只在同模态索引内检索，后期融合。
+#### Query B：Counter / Limitation Query
 
-### 10.5 案例筛选
+主要使用：
 
-只使用 train split。
+- Possible Confusers；
+- Surrounding Environment；
+- Evidence Sufficiency；
+- Available Modalities；
+- 用户问题中的限制性意图。
 
-必须排除：
+用于检索 `confounder` 与 `limitation` 单元。
 
-- val/test parent；
-- 同事件样本；
-- 同 source group 泄漏；
-- exact duplicate；
-- perceptual near duplicate；
-- 无专家确认 mask；
-- 缺少关键元数据的案例。
+Query Builder 不允许因为候选区域来自滑坡分割模型而自动加入“典型滑坡”“确认滑坡”等正向结论词。
 
-### 10.6 Evidence Cards
+---
 
-RAG 返回结构化证据，不直接生成最终回答。
+### 10.7 混合文本检索
 
-每条 Evidence Card 至少包含：
-
-- knowledge/case ID；
-- content；
-- source；
-- page/section；
-- modality；
-- environment；
-- applicable conditions；
-- supported claims；
-- forbidden claims；
-- confounders；
-- retrieval score；
-- authority class。
-
-### 10.7 检索融合
-
-建议顺序：
+Stage 6 首版只实现一种稳定、低复杂度的 Hybrid Retrieval：
 
 ```text
-metadata filter
-→ text lexical retrieval
-→ text dense retrieval
-→ same-modality case retrieval
-→ reciprocal rank fusion
-→ reranking
-→ source and evidence-type diversity
-→ final evidence cards
+source-status / modality metadata filter
+        ↓
+SQLite FTS5 lexical retrieval
++
+BGE-M3 dense retrieval
+        ↓
+Reciprocal Rank Fusion
+        ↓
+knowledge-type quota
+        ↓
+Balanced Evidence Packet
 ```
+
+首版不要求：
+
+- Qdrant；
+- cross-encoder reranker；
+- knowledge graph；
+- agentic retrieval；
+- learnable retriever；
+- multimodal image-text joint retriever；
+- 复杂的 authority boost 公式。
+
+知识库规模较小时，dense embedding 可直接保存为本地向量矩阵并使用余弦相似度检索。`authority_class` 用于过滤、报告和同分情况下的稳定排序，不需要引入复杂可学习权重。
+
+正式 Stage 6 配置使用 FTS5 + BGE-M3 + RRF。若本地 BGE-M3 暂不可用，可以保留 lexical-only 工程 fallback，但不得把 lexical-only 结果宣称为正式 Hybrid RAG 结果。
+
+---
+
+### 10.8 Balanced Evidence Packet
+
+Stage 6 不把相似度最高的 Top-K 文本全部发送给 VLM，而是按知识作用限制证据数量。
+
+首版建议最多返回 6 条：
+
+```text
+2 interpretation
+2 confounder
+2 limitation
+```
+
+当某一类证据不足时可以少于 6 条，不应使用其他类型无条件填满配额。
+
+每条 Evidence Item 只需包含：
+
+```text
+evidence_id
+unit_id
+knowledge_type
+content
+modality
+conditions
+source_id
+source_title
+pdf_page
+section
+authority_class
+source_status
+lexical_rank
+dense_rank
+rrf_score
+```
+
+这组结果统一形成：
+
+> **Balanced Evidence Packet**
+
+RAG 模块只返回 Evidence Packet，不直接生成最终用户答案。
+
+---
+
+### 10.9 两遍式推理
+
+Stage 6 使用严格解耦的两遍式流程。
+
+#### Pass 1：视觉观察
+
+```text
+Original Full RGB
++ Binary Mask
++ Clean Context Crop
+        ↓
+Mask-Grounded Region Adapter
+        ↓
+Structured Visual Observation
+```
+
+Pass 1 不访问知识库。
+
+#### Retrieval：文本证据检索
+
+```text
+Structured Visual Observation
++ User Question
+        ↓
+Two-query Builder
+        ↓
+Hybrid Retrieval
+        ↓
+Balanced Evidence Packet
+```
+
+#### Pass 2：专业解释
+
+```text
+User Question
++ target status / Programmatic Facts
++ Pass-1 Visual Observation
++ Balanced Evidence Packet
++ Generation Policy
+        ↓
+Qwen3-VL-2B + 当前 Mask-Grounded Region Adapter
+        ↓
+Evidence-Constrained Interpretation
+```
+
+Pass 2 首版只使用文本输入，不再次发送图像。这样可以：
+
+- 避免重复视觉 token；
+- 明确视觉事实来自 Pass 1；
+- 防止 RAG 阶段重新看图并改写 Pass-1 观察；
+- 使 no-RAG 与 text-RAG 使用同一生成器进行公平对比。
+
+若未来证明 text-only Pass 2 明显不足，再单独讨论 Final Generator，不作为 Stage 6 v1 的必需组件。
+
+---
+
+### 10.10 Pass-2 输出合同
+
+Stage 6 首版输出保持简洁：
+
+```text
+supporting_interpretation
+confounders
+limitations
+recommended_verification
+summary
+```
+
+其中前三类专业 claim 需要绑定 Evidence ID。
+
+示意：
+
+```json
+{
+  "supporting_interpretation": [
+    {"text": "...", "evidence_ids": ["E01"]}
+  ],
+  "confounders": [
+    {"text": "...", "evidence_ids": ["E03"]}
+  ],
+  "limitations": [
+    {"text": "...", "evidence_ids": ["E05"]}
+  ],
+  "recommended_verification": [
+    {"text": "...", "evidence_ids": ["E05"]}
+  ],
+  "summary": "..."
+}
+```
+
+约束：
+
+- RAG 不复制或重写 mask geometry；
+- RAG 不改变 target status 的程序事实；
+- RAG 不把 knowledge unit 内容声明成当前图像已经观察到的事实；
+- Evidence ID 必须真实存在于当前 Balanced Evidence Packet；
+- `text_rag` 模式下，专业解释、混淆因素和限制结论必须有 Evidence ID；
+- `no_rag` 对照允许 `evidence_ids=[]`，但使用相同 Pass-2 输出结构和同一生成器；
+- 最终仍称“候选区域”，不因知识检索自动升级为确认滑坡。
+
+---
+
+### 10.11 Stage 6 首版不做的内容
+
+为保证主算法框架尽快闭环，以下内容明确延后：
+
+- 正案例视觉检索；
+- 困难负样本图像检索；
+- DINO/CLIP/Region Feature 相似案例索引；
+- SAR/InSAR/DEM 分模态视觉 embedding；
+- case-only / hybrid case RAG；
+- multimodal retriever 训练；
+- 知识图谱；
+- 多 Agent 检索；
+- RAG 专用 LoRA；
+- sealed-test 正式 RAG 评价。
+
+这些内容只有在 Stage 6 文本 RAG 已证明有效后才考虑扩展。
 
 ---
 
@@ -1056,6 +1311,21 @@ InSAR 和 DEM 是否支持该候选区域？
 
 纯文本问题直接调用 RAG，不必运行 OA-AuxSeg。
 
+### 11.8 RAG Routing
+
+统一接口不对所有任务强制调用知识库。
+
+```text
+Segmentation               → OA-AuxSeg only
+Scene Description          → RS-General / Region VLM, RAG OFF
+Mask Description           → Mask-Grounded Region Adapter, RAG OFF
+Candidate Evaluation       → Pass 1 + Text RAG + Pass 2
+Multimodal Evidence QA     → Programmatic Facts + Pass 1 + Text RAG + Pass 2
+Report Generation          → Pass 1 + Text RAG + Pass 2
+Knowledge QA               → Text RAG + text-only generator
+```
+
+该路由替代额外的 learned retrieval-decision model，减少参数和训练工作量。
 ---
 
 ## 12. 训练与实施阶段
@@ -1508,19 +1778,63 @@ Stage 4 的输出是一个独立的 mask-grounded 区域描述数据和评价基
 8. fixed predicted mask；
 9. wrong mask。
 
-### Stage 6：文本 RAG
+### Stage 6：Evidence-Constrained Text RAG
 
-- 将 RAG_tmp 改为 Evidence Provider；
-- 构建规则知识；
-- 接入 EvidenceBuilder 查询；
-- 完成 no RAG vs text RAG。
+Stage 6 在现有 Mask-Grounded Region Adapter 之后构建文本专业知识增强闭环。
 
-### Stage 7：案例 RAG
+实施顺序：
 
-- 构建正案例；
-- 构建困难负样本；
-- 建立分模态索引；
-- 完成 text-only、case-only 和 hybrid 对照。
+1. 审计 `docs/RAG_knowledge/` 中现有 PDF，并建立显式 Source Registry；
+2. 完成 PDF 文本解析和质量报告，不可靠扫描页标记为 `ocr_required`；
+3. 按 section / clause / paragraph 构建自包含 Text Evidence Unit；
+4. 将知识单元归为 `interpretation / confounder / limitation` 三类；
+5. 构建 SQLite FTS5 索引和本地 BGE-M3 dense embedding；
+6. 实现 lexical + dense + RRF Hybrid Retrieval；
+7. 实现两个确定性 query：Interpretation 与 Counter/Limitation；
+8. 实现最多 2+2+2 的 Balanced Evidence Packet；
+9. 实现 text-only Pass-2 message 与严格输出合同；
+10. 在 OA-GroundedEval-dev 中现有可用 baseline records 上完成 bounded no-RAG vs text-RAG 开发对照；
+11. 保存 retrieval provenance、Evidence ID、source/page/section 和生成身份；
+12. Stage 6 不访问 sealed test，不修改 Stage 5 checkpoint，也不因为 64 条 no-target 失败阻塞文本 RAG 主链开发。
+
+Stage 6 的核心对照必须使用相同 Pass-1、相同 Pass-2 generator 和相同生成参数：
+
+```text
+Pass-1 Observation + Pass-2 without retrieved evidence
+vs
+Pass-1 Observation + Balanced Evidence Packet + Pass-2
+```
+
+这样可以把性能差异尽量归因于外部知识，而不是第二遍生成本身。
+
+Stage 6 工程完成标准：
+
+- Text Evidence Bank v1 可构建、可验证、可追溯；
+- 三类知识单元可检索；
+- FTS5 + BGE-M3 + RRF 路径可运行；
+- 两个 query builder 可确定性重算；
+- Balanced Evidence Packet 可稳定生成；
+- Pass-2 text-only 路径与当前 Region Adapter 打通；
+- no-RAG / text-RAG 使用同一输出 schema；
+- Evidence ID 与 source/page/section 可以严格验证；
+- 知识库失败时不会修改分割或 Pass-1 结果；
+- 当前只完成 development protocol，不声称 Gate D、sealed-test 或最终科学验收通过。
+
+---
+
+### Stage 7：可选 Case RAG 扩展
+
+Stage 7 不作为 Stage 6 完成前提。
+
+只有 Stage 6 表明文本 RAG 对专业解释有稳定增益后，才考虑：
+
+- train-only 正案例；
+- 困难负样本案例；
+- optical region embedding；
+- same-modality case retrieval；
+- text-only vs case-only vs text+case。
+
+首版主论文若文本 Evidence RAG 已能完整支撑核心结论，可以将 Stage 7 作为扩展实验而非强制主线模块。
 
 ### Stage 8：可选 Landslide-Evidence Adapter
 
@@ -1652,16 +1966,29 @@ task-aware metric、grouped bootstrap 和 finish reason，并使用全新输出�
 
 若失败，先优化 Evidence Representation，而不是直接加入 RAG。
 
-### Gate D：RAG 是否提供真实增益
+### Gate D：文本 RAG 是否提供真实增益
 
-比较：
+Stage 6 首版 Gate D 只比较：
 
-- no RAG；
-- text RAG；
-- case RAG；
-- hybrid RAG。
+```text
+no RAG
+vs
+Evidence-Constrained Text RAG
+```
 
-必须降低 unsupported claim，并提高专家事实性和引用准确率。
+不把 case RAG、hybrid case RAG 作为 Stage 6 Gate D 的必需条件。
+
+Gate D 重点回答：
+
+1. RAG 是否使专业解释更有依据，而不是只增加语言长度；
+2. 是否能够稳定检索到 interpretation、confounder 和 limitation 三类证据；
+3. citation 是否真实指向当前 Evidence Packet 和原始 PDF 页码；
+4. RAG 是否没有增加 forbidden / unsupported claim；
+5. 在证据不足时，RAG 是否能够保留或增强 limitation，而不是强行确认候选区域。
+
+在缺少人工 Gold 的当前阶段，Gate D 先作为 development gate，只完成自动合同、检索质量和 bounded qualitative evaluation，不冻结最终科学阈值。
+
+正式 Gate D 及 sealed-test 阈值在完整算法框架完成、人工评价协议补齐后再冻结。
 
 ### Gate E：是否需要 Landslide-Evidence Adapter
 
@@ -1706,17 +2033,38 @@ task-aware metric、grouped bootstrap 和 finish reason，并使用全新输出�
 - expert factuality；
 - no-target correctness。
 
-### 14.3 RAG 评价
+## 14.3 RAG 评价
+
+Stage 6 v1 优先评价少量真正与当前设计相关的指标。
+
+### 检索层
+
+- Evidence Unit identity validity；
+- source/page/section traceability；
+- lexical/dense/RRF 可重算性；
+- knowledge-type coverage；
+- duplicate evidence rate；
+- modality applicability；
+- citation validity。
+
+在后续建立人工 retrieval gold 后，再增加：
 
 - Recall@K；
 - MRR；
 - nDCG；
+- expert relevance。
+
+### 生成层
+
+- output schema validity；
+- claim–evidence binding validity；
+- forbidden claim rate；
 - citation precision；
-- expert relevance；
-- source diversity；
-- confounder retrieval；
-- irrelevant knowledge robustness；
-- modality match accuracy。
+- evidence-type utilization；
+- limitation preservation；
+- no-RAG vs text-RAG 专业解释差异。
+
+当前没有人工 dev Gold 时，不使用 BLEU/ROUGE 作为 RAG 的主要结论。
 
 ### 14.4 端到端评价
 
@@ -1733,75 +2081,67 @@ wrong mask + RAG
 
 ---
 
-## 15. 关键消融
+## 15. RAG 关键消融
 
-### 分割
+Stage 6 首版只保留：
 
-- optical-only；
-- direct concat；
-- mean fusion；
-- CMNeXt injection；
-- quality selection；
-- modality dropout。
+```text
+no RAG
+vs
+text RAG
+```
 
-### VLM
+可选的低成本检索消融：
 
-- Base；
-- RS-General Adapter；
-- optional Landslide-Evidence Adapter；
-- full image；
-- crop；
-- overlay；
-- overlay + crop；
-- multimodal evidence。
+```text
+FTS5 only
+vs
+BGE-M3 only
+vs
+FTS5 + BGE-M3 + RRF
+```
 
-### RAG
+可选的证据平衡消融：
 
-- no RAG；
-- text-only；
-- positive cases；
-- hard-negative cases；
-- text + cases；
-- 无 metadata filter；
-- environment-conditioned filter；
-- sensor-conditioned filter。
+```text
+Top-K similarity only
+vs
+Balanced 2 interpretation + 2 confounder + 2 limitation
+```
 
-### 反事实
+暂不要求：
 
-- mask swap；
-- region swap；
-- empty mask；
-- modality removal；
-- wrong sign/unit；
-- irrelevant knowledge injection；
-- conflicting knowledge；
-- wrong predicted mask。
+- case-only；
+- hard-negative case retrieval；
+- text + case hybrid；
+- reranker 消融；
+- knowledge graph；
+- multi-agent retrieval。
 
 ---
 
-## 16. RAG 防止合理化错误分割
+## 16. 防止 RAG 合理化候选区域
 
-最终提示和任务定义不得写：
+最终提示不得写：
 
 ```text
 这是一个滑坡，请解释其特征。
 ```
 
-应写为：
+应使用候选区域表述：
 
 ```text
-该区域由滑坡分割模型标记为候选区域。请根据当前视觉证据、
-程序事实和检索知识，评估其是否具备滑坡遥感特征，并列出
-支持证据、反对证据、可能混淆对象和证据限制。
+该区域由当前空间提示或分割模块指定为候选区域。
+请只依据 Pass-1 视觉观察和给定的专业证据，说明哪些现象可能支持滑坡解释，
+哪些混淆对象也可能产生相似表现，以及当前证据不能支持哪些结论。
 ```
 
-RAG Query Builder 必须同时检索：
+Stage 6 通过两项简单机制降低确认偏差：
 
-- 滑坡支持知识；
-- 相似正案例；
-- 困难负样本；
-- 证据限制；
-- 传感器误差来源。
+1. Query Builder 同时生成 Interpretation Query 与 Counter/Limitation Query；
+2. Balanced Evidence Packet 固定保留 confounder 和 limitation 配额，不允许全部 Top-K 都是正向滑坡知识。
+
+Stage 6 首轮只需在现有可用开发样本上验证该机制可运行。wrong-mask、shifted-mask、empty-mask 的完整 anti-rationalization 实验可在整体框架打通后统一补做，不阻塞当前 Stage 6 工程开发。
 
 ---
 
@@ -1845,27 +2185,166 @@ Codex 不因普通子任务结束而暂停。仅在以下情况停止：
 
 ## 18. 最终完成定义
 
-主线完成必须满足：
+OA-GroundRAG 主线完成的判断标准不是“所有代码均已实现”或“所有模型均已训练”，而是空间感知、区域视觉理解、专业知识检索和证据约束生成已经形成相互独立、可追溯且能够端到端组合的完整闭环。
 
-1. OA-AuxSeg 完成负责人定版的工程报告，并在未来完成正式评价和 Gate A；跑满计划
-   `max_steps` 不是独立完成条件；
-2. RS-GeneralDesc Benchmark 完成 external-only 验收；
-3. RS-General Adapter 完成训练并通过通用遥感 gate；
-4. Landslide Evidence Corpus 完成 Auto、Silver 和必要 Gold；
-5. OA-GroundedEval 完成人工审核并封存 test；
-6. Evidence Builder 能构建光学、辅助模态、程序事实和证据约束；
-7. Qwen3-VL 能完成 mask-grounded 视觉观察；
-8. RAG 能返回文本规则、正案例和困难负样本；
-9. RAG 返回结构化 Evidence Cards 和引用；
-10. 最终 VLM 输出支持、反对、混淆对象和限制；
-11. wrong-mask + RAG 不会被稳定合理化为滑坡；
-12. GT、fixed predicted 和 end-to-end 分层评价；
-13. 可选 Landslide-Evidence Adapter 只在 Gate 失败时实施；
-14. 通用遥感能力 retention 得到验证；
-15. 统一 Task Controller 能编排分割、描述、证据问答和报告；
-16. RAG 失败不影响分割模型独立运行；
-17. README 只保留当前有效命令；
-18. `REBUILD_PROGRESS.md` 反映真实科学完成状态，而不是仅反映代码存在。
+工程完成、开发评价、科学 Gate 和 sealed-test 正式评价必须严格区分。某一模块代码存在、训练完成或开发集结果可用，不自动表示对应科学 Gate 已通过。
+
+主线最终完成至少满足以下条件。
+
+1. **OA-AuxSeg 完成稳定的多源滑坡空间感知能力。**
+
+   OA-AuxSeg 保持光学影像为必要主模态，并支持 DEM、slope、InSAR、SAR、多光谱等真实存在的任意辅助模态组合。
+
+   系统能够稳定输出：
+
+   - global mask；
+   - candidate regions；
+   - no-target；
+   - segmentation confidence；
+   - 必要的 region information。
+
+   当前负责人定版 checkpoint 可以作为工程主权重，但正式使用 predicted mask 进入最终评价前仍需要完成 Gate A。Gate A 至少验证分割性能、no-target FPR、不同辅助模态组合和 checkpoint 可恢复性。
+
+   跑满计划 `max_steps` 不是独立完成条件。
+
+2. **RS-GeneralDesc Benchmark 与 RS-General Adapter 完成并保持可追溯。**
+
+   RS-GeneralDesc Benchmark 只承担通用遥感视觉语言能力训练，不混入 OA-GroundedEval、test 或滑坡专业知识库内容。
+
+   RS-General Adapter 需要：
+
+   - 完成可恢复 LoRA 训练；
+   - 保持模型、processor、Benchmark 和 checkpoint 身份可追溯；
+   - 通过独立 Gate B；
+   - 证明相对于 Base Qwen3-VL 在通用遥感任务上具有稳定增益。
+
+   Gate B 的结论只代表通用遥感能力适配成功，不自动扩张到 mask-grounded、RAG 或完整系统。
+
+3. **Mask-Grounded Landslide Region Corpus 建立稳定的区域视觉监督。**
+
+   Corpus 只使用允许进入训练的 train split，并至少包含：
+
+   - Original Full RGB；
+   - Binary Mask；
+   - Clean Context Crop；
+   - Programmatic Facts；
+   - structured region description；
+   - source / parent / split；
+   - asset identity；
+   - supervision provenance。
+
+   数据可以来自人工核验或经过严格规则过滤的模型辅助监督，但必须明确标记 supervision authority，不得把未审核模型输出伪装成 Gold。
+
+4. **Mask-Grounded Region Adapter 能够完成 Pass-1 区域视觉观察。**
+
+   Region Adapter 在 RS-General Adapter 基础上进行第二阶段轻量适配，用于学习：
+
+   - mask 指定区域的视觉关注；
+   - Target Appearance；
+   - Target Morphology；
+   - Surrounding Environment；
+   - Region–Context Contrast；
+   - Possible Confusers；
+   - Evidence Sufficiency。
+
+   Pass-1 的职责仅为回答：
+
+   > 当前 mask 指定区域及其周围环境“看起来是什么”。
+
+   Pass-1 不访问专业知识库，不生成确定触发原因、发生时间、稳定性、正式风险等级等图像无法直接支持的专业结论。
+
+5. **OA-GroundedEval 能够独立评价 mask-grounded 区域理解。**
+
+   OA-GroundedEval 与训练数据保持 parent/split 隔离，并至少支持：
+
+   - correct mask；
+   - no-target；
+   - empty mask；
+   - shifted mask；
+   - context removal；
+   - 必要时的 mask swap。
+
+   开发阶段允许先使用 automatic-contract evaluation 验证主链。完整科学评价阶段再补充必要的人工 reference、专家事实性判断和最终阈值冻结。
+
+   当前存在的局部 no-target 或结构化输出问题可以作为后续完整性优化处理，但在正式 Gate C 或 sealed-test 之前必须明确解决或纳入失败统计，不得静默修复。
+
+6. **Mask-Grounded Evidence Builder 能够提供不可被语言模型改写的确定性证据。**
+
+   Evidence Builder 至少组织：
+
+   - target status；
+   - bbox；
+   - centroid；
+   - mask area / area ratio；
+   - component count；
+   - crop window；
+   - image size；
+   - modality availability；
+   - asset identity；
+   - 已知物理量、单位和有效覆盖；
+   - missing evidence。
+
+   Programmatic Facts 与视觉生成结果必须分离。
+
+   VLM 和 RAG 都不能修改这些程序确定性事实。
+
+7. **Landslide Text Evidence Bank v1 完成并具有完整来源追溯能力。**
+
+   Stage 6 建立一个统一 Text Evidence Bank，而不是多个复杂物理知识库。
+
+   首版知识只划分为三类：
+
+   - `interpretation`：解释某类遥感视觉现象可能支持什么专业判断；
+   - `confounder`：描述道路切坡、采石场、裸岩、河滩、施工扰动等混淆对象；
+   - `limitation`：描述不同遥感证据的适用边界、误差来源及进一步核查要求。
+
+   每个 Text Evidence Unit 至少绑定：
+
+   - unit ID；
+   - source ID；
+   - source SHA-256；
+   - PDF page；
+   - section / clause；
+   - knowledge type；
+   - content；
+   - modality；
+   - conditions；
+   - tags；
+   - authority class；
+   - source status；
+   - content hash。
+
+   原始 PDF、解析文本、知识单元和索引之间必须能够追溯。
+
+8. **知识切分保持专业规则的“条件—解释—限制”完整性。**
+
+   Stage 6 不以固定 token chunk 作为唯一切分依据。
+
+   标准优先按条款或章节切分，论文、手册和培训资料优先按自然段或小节切分。
+
+   不允许为了满足固定长度而把：
+
+   > 适用条件 → 可支持解释 → 使用限制
+
+   拆成互相失去上下文的独立证据。
+
+9. **Task Controller 能够确定性控制是否启用 RAG。**
+
+   不额外训练 Retrieval Reflection 模型。
+
+   默认路由为：
+
+   ```text
+   Segmentation
+   Scene Description
+   Mask Description
+   → RAG OFF
+
+   Candidate Evaluation
+   Multimodal Evidence QA
+   Report Generation
+   Knowledge QA
+   → RAG ON
 
 ---
 
@@ -1882,6 +2361,25 @@ OA-AuxSeg 负责可靠空间感知；
 RAG 负责环境、传感器和滑坡专业知识；
 最终 VLM 负责生成受证据约束的报告。
 ```
+
+建议将最终研究叙事中的 RAG 核心表述统一为：
+
+```text
+OA-AuxSeg 负责候选区域的空间感知；
+程序负责确定性几何和已知物理统计；
+RS-General / Mask-Grounded Region Adapter 负责遥感场景和区域视觉观察；
+Evidence-Constrained Text RAG 根据当前视觉观察检索解释、混淆和限制知识；
+第二遍生成器在不改变视觉事实的条件下完成有来源约束的专业解释。
+```
+
+Stage 6 的核心创新不需要表述为“提出复杂的新型 RAG 网络”，而应强调两个与地质灾害遥感解释直接相关的设计：
+
+1. **Evidence-conditioned Retrieval**：检索条件来自 mask-grounded visual observation，而不是仅来自用户问题或整幅图像；
+2. **Balanced Evidence Retrieval**：知识检索同时保留解释、混淆和限制证据，避免只检索正向滑坡知识造成确认偏差。
+
+最终需要证明的是：
+
+> 在不继续增加滑坡领域参数微调、不改变候选 mask 和视觉事实的情况下，专业文本知识能否把区域视觉描述提升为更有依据、更知道反例、更清楚证据边界的滑坡遥感解释。
 
 最终论文应证明：
 
