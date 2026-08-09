@@ -4,16 +4,16 @@
 
 - program: `OA_GROUNDRAG_V2`
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
-- stage: `4`
-- stage_name: `LANDSLIDE_EVIDENCE_CORPUS_AND_OA_GROUNDED_EVAL`
-- stage_status: `model_assisted_expanded_corpus_published_work_imported_gpu_generation_pending`
-- current_task: `STAGE4_MODEL_ASSISTED_TRAIN_SUPERVISION_V2_8450`
-- current_task_status: `expanded_corpus_and_collection_validated_v2_project_ready_8430_drafts_pending`
+- stage: `5`
+- stage_name: `MASK_GROUNDED_BASELINE_AND_ADAPTER`
+- stage_status: `mask_grounded_region_adapter_engineering_complete`
+- current_task: `STAGE5_MASK_GROUNDED_REGION_ADAPTER`
+- current_task_status: `training_dev_evaluation_and_retention_complete_automatic_only`
 - next_gate: `A (OA-AuxSeg branch) / C (after Stage 4–5)`
-- scientific_status: `Stage 4A and v1 Region/Eval-dev frozen / train-only extension 7950 and collection 8450 published / v2 work imported 20 drafts and 5 expert_verified / remaining 8430 drafts, mixed supervision package, training messages and scientific acceptance not completed`
-- execution_date: `2026-08-05`
+- scientific_status: `Stage 4 mixed model/single-expert compact supervision has 6974 rows; Stage 5 RS-General-warm-start Adapter trained to step 1000 with best step 900 and automatic-only dev/retention reports complete; 276/340 Region predictions valid, no Gold/expert val/formal or scientific acceptance`
+- execution_date: `2026-08-09`
 - branch: `main`
-- current_head: `a1efc73ce8d6e916c6e8aa4342e422e6684b488c`
+- current_head: `912c5ce92a965ffda06f84cd924d3cd9e84c23ea`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
@@ -53,16 +53,22 @@
 - stage4_model_assisted_collection_built: `true`
 - stage4_model_assisted_collection_validated: `true`
 - stage4_model_assisted_project_created: `true`
-- stage4_model_assisted_gpu_generation_performed: `false`
-- stage4_model_assisted_supervision_exported: `false`
-- stage4_model_assisted_training_messages_exported: `false`
+- stage4_model_assisted_gpu_generation_performed: `true`
+- stage4_model_assisted_supervision_exported: `true`
+- stage4_model_assisted_training_messages_exported: `true`
+- stage5_compact_training_published: `true`
+- stage5_training_completed: `true`
+- stage5_region_dev_evaluated: `true`
+- stage5_rs_general_retention_reported: `true`
+- stage5_formal_acceptance: `false`
+- stage5_scientific_acceptance: `false`
 - oa_grounded_eval_completed: `false`
 - stage2_gpu_run_performed: `false`
 - stage2_native_full_deep_validation_performed: `true`
 - identity_hardening_repackage_performed: `false`
 - identity_hardening_deep_validation_performed: `false`
 - identity_hardening_gpu_run_performed: `false`
-- current_task_training_or_optimizer_step_performed: `false`
+- current_task_training_or_optimizer_step_performed: `true`
 - formal_evaluation_performed: `true`
 - test_split_evaluated: `false`
 - commit_performed: `false`
@@ -76,9 +82,11 @@ Region Corpus 与 val-only OA-GroundedEval-dev 工程资产已迁移到统一 Be
 train-only messages 工具链已实现，本地 Qwen3-VL-8B 冻结身份已验证。当前 v1 工作根保留
 20 条信息化 calibration 草稿与 5 条 `expert_verified`，原 Gradio 进程已按精确 PID 正常关闭。
 在独立 Benchmark v2 根又发布了 train-only 7,950 条扩展 Corpus 和引用 base+extension 的
-8,450 条 collection，并创建模型辅助工作根，无损导入上述 20/5 条。剩余 8,430 条本地模型
-草稿尚未生成，混合 supervision package 与动态 training messages 尚未发布；多人 review、
-adjudication、Gold 和正式协议冻结不属于当前简化方案，科学验收仍未完成。
+8,450 条 collection；8B 已完成 8,450 条草稿，其中 6,974 条合格监督被发布为脱离 raw
+work/package 的 compact v3。Stage 5 已从冻结 RS-General Adapter warm-start 完成 1,000-step
+Mask-Grounded Region LoRA、340 条 automatic-only dev 评价和冻结 Gate B selection 上的
+只报告 retention。多人 review、adjudication、Gold、人工 val reference、retention 阈值和
+正式协议冻结不属于当前简化方案，科学验收仍未完成。
 依赖分为 OA-AuxSeg
 工程定版 → 未来 Gate A → formal fixed masks，以及 RS-GeneralDesc Stage 2 → Adapter
 重训 → Gate B；两者在 Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不推翻
@@ -1001,3 +1009,186 @@ manifest/records/ledger 身份；不得把 synthetic 测试或 metadata-only 临
   scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
   run-train-workflow
 ```
+
+## Stage 4 模型辅助生成完成与 Stage 5 开始（2026-08-08）
+
+负责人已在本地完成剩余 8,430 条逐条 Qwen3-VL-8B 生成。现场只读复核确认：
+
+- draft run：`draft_run_ed39d5ec0d946b025910d63f`；总计 8,450 drafts；
+- 新生成 8,430 条中 parse-invalid 1,470；全量最终排除 1,476 条，其中
+  `parse_invalid=1474 / generic_low_information=2`；
+- supervision package：8,450 source / 6,974 eligible / 1,476 excluded；
+- eligible authority：`expert_verified=5 / model_generated_unreviewed=6969`；
+- package manifest SHA-256：
+  `dd8b58e57e621599028758b65a0001cc35115387329c2371d6bfd3dfedcb5de2`；
+- training messages manifest SHA-256：
+  `370c0727bd64ea0cb363f2a4efed21d04ccf334cf2c6c3fe8ed3e1cc9304579a`；
+- messages JSONL SHA-256：
+  `434a2c86abbe6508badc44fdc929ae3d6a8b8bd0984fdcd8aa201fa3742afabf`；
+- collection manifest 仍为
+  `cd2b86f6244f4f5f42d846166f11a34efdb9edd636239039b42444c453e435d2`；
+- prompt SHA 为 `7a1556e4a4069cb01c366e784bb7fd4c24cc341c21b1c0dd8adc4b0467f86f4e`，
+  8B revision 为 `60595ebc30ec8e3b1d3b9e65d4943ca011c0006a`。
+
+该 6,974 条资产是 `mixed_model_and_single_expert` 监督，不是 Gold。负责人进一步授权
+Stage 5：先发布不依赖 raw work/package 的 compact 训练合同，再精确删除旧 work、package
+和被替代的 v2 messages；以 Gate-B-accepted RS-General Adapter step-1000 为 LoRA
+warm-start，在全新根使用 90% Region / 10% RS-General replay 训练。Region 数据按 parent
+90% train / 10% monitor，含 5 条 expert 记录的 parent 强制进入 train；retention 只报告，
+不设置通过阈值。OA-GroundedEval-dev 不建设人工 reference，仅做自动合同与反事实开发评价；
+所有新报告继续固定 `formal_acceptance=false / scientific_acceptance=false / sealed_test_evaluated=false`。
+
+本次开发开始时为 `main@912c5ce92a965ffda06f84cd924d3cd9e84c23ea`，工作区干净，
+没有活动生成或训练进程。算法文档 SHA-256 仍为
+`dbf93a4ceea1ae973974fb039d5bd2c35d8a62b615ce2add3ab1583f91366d36`，正文不修改。
+
+### Stage 5 compact 发布与 raw 清理前冻结证据
+
+已原子发布并全量验证新的独立 compact 根：
+
+- root：`../benchmark/oa_grounded_stage4_v2/training_messages/mask_grounded_region_compact_training_messages_train_v3_6974`；
+- schema：`oa_groundrag.mask_grounded_region.compact_training_messages.v3`；
+- count：`6974`；compact ID：
+  `compact_678ae42424619323115a0f0eb9ea2020304b568c5be725bfcb2d17581bfdcebe`；
+- manifest SHA-256：`746f641f1fbe48f4301ffc0c52b586437a1dc0b68a5add4be1e3db50d69a1184`；
+- messages SHA-256：`8fcf1dbfb57b6a1e0541cac51e273ba86360280142fc45986d889ff6f3752486`；
+- ledger SHA-256：`21c9c3a2bb6f87cc57df48d64a02d4a9a64b2f881f511743402ea3579808e74d`。
+
+compact loader 不读取旧 work/package/v2 messages；它只绑定保留的 8,450 collection，
+逐条重算 6,974 个 GT-mask asset identity、full/mask/crop 消息和 canonical assistant JSON。
+真实 Qwen processor/collator smoke 为 3 images、1,739 input tokens、442 supervised tokens，
+role=`mask_grounded_train`。旧 raw 精确删除前身份如下：
+
+- work：36,054,190 bytes；project SHA-256
+  `3910d7d7d580ef0e10138ec5b5ff2626aa8c7ffd44795a13e07b4301d118475b`；
+- annotation package：42,500,378 bytes；manifest SHA-256
+  `dd8b58e57e621599028758b65a0001cc35115387329c2371d6bfd3dfedcb5de2`；
+- v2 messages：55,594,009 bytes；manifest/messages SHA-256 分别为
+  `370c0727bd64ea0cb363f2a4efed21d04ccf334cf2c6c3fe8ed3e1cc9304579a` /
+  `434a2c86abbe6508badc44fdc929ae3d6a8b8bd0984fdcd8aa201fa3742afabf`。
+
+三根均为普通非 symlink 目录，未发现 symlink、hardlink 或活动生成/训练进程。按负责人
+明确授权，下一动作仅精确删除上述三个 raw 根；Region base/extension/collection、图像、
+Eval-dev、Stage 4A、RS-General Adapter 与 Gate B 继续保留且只读。
+
+### Stage 5 首次正式运行与 CUDA OOM 阻塞（2026-08-08）
+
+- compact 全量 validator、真实 Dataset/Collator smoke 通过后，已按上述精确清单删除旧
+  work、annotation package 和 v2 training messages；删除后再次完整验证 compact，确认其
+  不依赖三个 raw 根。保留的 Region base/extension/collection、图像和 Eval-dev 未修改。
+- parent split 固定为 `6278 train records / 696 monitor records`、`5784 train parents /
+  643 monitor parents`，5 个含专家记录的 parent 均在 train，train/monitor parent 零交集。
+  mixed sampler 每个 8,000 micro-sample epoch 精确为 `7200 Region / 800 external_train replay`；
+  retention 使用独立冻结的 128 个 `external_val` parent，未把 external_val 用作 replay。
+- 正式 Stage 5 工作流根为
+  `outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1`。Base 与冻结
+  RS-General Adapter 的 340 条 GT-mask 自动 baseline 均已完成并原子发布；两者都未产生可被
+  Stage 4 v2 严格 parser 接受的 prediction。Base 为 `0 valid / 340 INVALID_MODEL_OUTPUT`；
+  RS-General Adapter 为 `0 valid / 340 failures`，其中 `INVALID_MODEL_OUTPUT=311 /
+  UNKNOWN_FIELD=10 / TYPE_MISMATCH=19`。这是真实的零命中开发基线，不是正式科学验收。
+- 冻结 RS-General retention teacher-forced loss：Base overall/macro-task 为
+  `3.6994192158 / 3.3185156617`；RS-General Adapter 为
+  `1.1323244887 / 0.7763413345`。retention 只报告，`retention_gate_frozen=false`，不改写
+  Gate B，也不据此阻止 checkpoint 发布。
+- warm-start 严格加载旧 step-1000 LoRA
+  `a367e39c626338a151dad33e6f7a7f9cc9887206dbcd261d147837e6408becc1`；optimizer、
+  scheduler、RNG 和 sampler 均重新初始化，旧 checkpoint 只读。训练完成 step 10 后在下一
+  optimizer step 的某个 micro-sample 发生 CUDA OOM；尚未到 step-100 checkpoint，因此没有
+  可恢复 checkpoint，Region monitor validation 尚未运行。
+- OOM 前 telemetry：step 10 累计 160 samples、236,650 input tokens、451 images；当前 allocated
+  约 4.05 GiB、历史 allocated peak 约 7.65 GiB，但 CUDA allocator reserved 已增长到约
+  24.91 GiB。CPU 按确定性 sampler 重建 sequence 152--183：step 11 的 Region 样本均为
+  1,548--1,703 tokens / 3 images，replay 为 244 tokens / 1 image，全部远低于 4,096-token 与
+  5-image 上限。现场证据指向跨可变形状 micro-sample 的 CUDA 缓存/碎片累积，而不是异常样本
+  或数据合同越界。
+- 负责人已于 2026-08-09 批准“训练前及每个 optimizer step 后精确清理 CUDA cache、
+  不改变 4,096-token/5-image/90:10/训练超参数”的内存卫生修复，并明确失败目录后续无消费
+  价值时直接删除、不保留 failed-attempt 副本。删除前再次确认 `training/` 只有三个普通
+  单链接文件，无 checkpoint、best pointer、validation result 或 training report：
+  `config_snapshot.json` 为 4,430 bytes / SHA-256
+  `7972cad61b7e889776ba82ef3c32d1a4f00d45035acd6669398e1bdbdc36eda2`，
+  `validation_selection.json` 为 171,112 bytes / SHA-256
+  `028bbef7c26eababbc7e14c97d0390884cec84ae1b27a91be093e366fe9e1e4d`，
+  `train_log.jsonl` 为 1,397 bytes / SHA-256
+  `e57d4160ebae8ee85139407f788682feff436dab891922c016d6ea0db69b66d6`。
+  该目录不可恢复且不含可用模型权重；下一动作是只精确删除它，然后从同一 warm-start
+  step 0 重新训练。未降低输入上限、未更换模型或量化。
+
+### Stage 5 OOM 修复与 20-step GPU smoke（2026-08-09）
+
+- 上述首次失败 `training/` 已按精确绝对路径删除并确认不存在；没有创建 failed-attempt、
+  failure manifest、副本或 alias。两个 GT-mask baseline、`retention_losses.json`、compact、
+  warm-start checkpoint 和 Gate B 均保留。
+- 通用 trainer 新增默认关闭的 CUDA cache cleanup interval；默认 training layout 字节语义
+  不变，既有 Phase 3/Gate B checkpoint 继续按原字段验证。Stage 5 固定 interval=1，并将
+  `cuda_cache_cleanup_interval_steps=1` 写入自身 checkpoint training layout；不同策略的
+  checkpoint/resume 会被拒绝。
+- 每个 micro-sample backward 后立即释放 batch、logits/result、loss 和 labels 引用；每个
+  optimizer step 后调用一次 `torch.cuda.empty_cache()`。进入 Stage 5 正式训练前另执行
+  `gc.collect()` 与 cache cleanup；不修改活跃权重、optimizer 数学、数据顺序或任何冻结
+  训练超参数。
+- 同一 Qwen3-VL-2B、同一 RS-General step-1000 warm-start、同一 compact split/sampler 的
+  20-step GPU smoke 已通过：320 micro-samples，精确 `288 Region / 32 external_train replay`，
+  生成临时 step-20 checkpoint。step 10/20 的 CUDA reserved 均约 4.04 GiB；历史 allocated
+  peak 约 7.75 GiB，未复现首次运行约 24.91 GiB reserved 后 OOM。临时 checkpoint 不进入
+  正式训练或评价，将随本任务唯一 `/tmp` 根精确删除。
+- 修复后的 CPU 回归：Stage 4 `77/77`、Phase 4 `92/92`、Phase 3 `45/45`；`compileall` 与
+  `git diff --check` 通过。下一动作是复用已完成 Base/RS-General baseline，从相同 warm-start
+  重新开始正式 Stage 5 step 0；首个正式可恢复边界仍为 step 100。
+
+### Stage 5 正式训练、自动评价与 retention 闭环（2026-08-09）
+
+- 修复后从冻结 RS-General step-1000 LoRA 重新开始 Stage 5 step 0，正式训练完整到
+  `1000/1000`，未再发生 OOM。共消费 16,000 deterministic micro-samples，精确为
+  `14,400 Mask-Grounded Region / 1,600 RS-General external_train replay`；replay 七任务计数为
+  `global_caption=230 / bbox_region_caption=230 / 其余五类各 228`。累计 23,620,604 input
+  tokens、4,375,209 supervised tokens、44,834 images；CUDA allocated peak 为 7.78494 GiB，
+  cache cleanup 后 reserved 在训练日志中稳定约 4.04 GiB。
+- 每 100 step 保存并在固定 696 条 Region monitor 上验证。step 100--1000 loss 依次为
+  `0.395320 / 0.323436 / 0.294082 / 0.277639 / 0.267240 / 0.260312 / 0.255890 /
+  0.253285 / 0.252161 / 0.252246`。按最小 Region monitor loss、平手取更早 step 的冻结规则，
+  best 为 step 900，而不是最后一步。
+- 正式训练身份：training report SHA-256
+  `c0751415a2da4ec72c92892975ab713d688aa316a1480b7a82b8ce8e9d5916ab`；best pointer
+  `368bc48fec6e5303c80e8b2c0d397f4d55eb8c6d51fe70d9da417833ac8a2c1b`；step-900 manifest
+  `c203823597c7b3ecf7f1bce9b3030efe7f5ef2dc5c1ae58bbc58e0982aae5c30`；Adapter
+  `858e12ff7e902ce0a3fdfb1a3dfbc2e58ad0892dec870a73fa4fc0a3411f84d7`。checkpoint
+  training layout 明确绑定 `cuda_cache_cleanup_interval_steps=1`。
+- Mask-Grounded Region Adapter 在 OA-GroundedEval-dev 340 条上得到 `276 valid / 64
+  INVALID_MODEL_OUTPUT`。64 条均为严格 no-target 区域数组非空，其中 `11 baseline / 53
+  empty_mask`；未自动修复。有效集 schema validity、target-status correctness、binary-mask
+  identity、prediction/evidence identity 均为 `1.0`，forbidden claim 与 overlay leakage rate
+  均为 `0.0`；但 complete prediction set 为 false，empty refusal、shift/context sensitivity 和
+  counterfactual completeness 均为 `0.3375`，不能解释为科学通过。prediction manifest / report
+  SHA-256 分别为 `4b090b4392a906817379357d1a8295f8b5eea10339eeb610847bc9bd2ef26a6b` /
+  `362e9c0036403382627b677ffedd79125fbcd46ca6ac9d77492f7d9199c07ea1`。
+- 128-parent teacher-forced RS-General retention：Base overall/macro 为
+  `3.699419 / 3.318516`，RS-General Adapter 为 `1.132324 / 0.776341`，Region Adapter step-900
+  为 `1.136405 / 0.804547`。该变化只报告，不阻止 checkpoint。
+- 冻结 Gate B selection 上的 256 条 paired retention 已完成；总体 primary delta 相对冻结
+  RS-General predictions 为 `-0.00035484`。七任务 delta 为
+  `bbox +0.018711 / global +0.004518 / object_count -0.040918 / scene +0.024814 /
+  spatial -0.000786 / visible_change -0.010101 / VQA +0.000275`。report / manifest SHA-256 为
+  `8f99b28a98bb8d8414e7f9e4e39b6c2ae604eae3cdb7e8c5bd854f4650a9df16` /
+  `c35363d3ae6624b6784aa1fe87436c5c3959bb497d5acd62f16b952f0c1bf96e`；ledger 逐文件复核通过。
+- retention 首次在 340 条 Region 评价发布后暴露两项路径/身份问题：先误把 frozen protocol
+  JSON 当作 static YAML；修正后，正式 Gate B loader 又正确拒绝当前 Stage 5 实现 SHA 与历史
+  frozen implementation 不一致。最终保留正式 loader 的严格拒绝语义，新增 Stage 5 专用
+  selection consumer：除历史 `implementation_files` fingerprint 外，仍严格验证 frozen
+  protocol canonical SHA、selection、Benchmark、shards、monitor exclusion 和 predictions。
+  retention 资产显式写入 `selection_authority=frozen_gate_b_selection_only`、
+  `historical_gate_b_implementation_match=false`、`historical_gate_b_acceptance_reused=false`；
+  不改写或重新宣称历史 Gate B。一次默认沙箱续跑因 GPU 不可见返回 `CUDA_REQUIRED`，没有
+  生成资产；随后按已授权 GPU 边界正常续跑完成。
+- workflow state SHA-256 为
+  `9c5a90743e26576f55a83157e8a1bd3fcf28c1005cc97ff098be1a3b02a62efa`，stage=`complete`；
+  `reference_authority=automatic_contract_only`、`expert_metrics_available=false`、
+  `retention_gate_frozen=false`、`formal_acceptance=false`、`scientific_acceptance=false`、
+  `sealed_test_evaluated=false`。
+- 最终回归：Stage 4 `77/77`、Phase 4 `94/94`、Phase 3 `45/45`，总计 `216/216`；
+  `compileall`、`git diff --check` 和新评价 ledger 校验通过。compact、Eval-dev、Stage 4A、
+  RS-General warm-start 与 Gate B selection 的冻结文件 SHA 未漂移。本任务唯一临时根
+  `/tmp/paper7_stage5_oom_fix_20260809.7J4ENs` 已精确删除并确认不存在。
+- 未运行：sealed test、RAG、Teacher Silver、Gold、外部 API、Gate A/C/D/E/F、commit 或
+  push。当前工程闭环已完成；仍需负责人决定是否针对 64 条 no-target 合同失败开展下一轮
+  prompt/supervision 改进，以及未来是否建设专家 dev reference 与冻结 retention/科学阈值。

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""用途：准备 Stage 4 v2 扩展 Region，并运行模型辅助 train supervision 闭环。
+"""用途：准备 Stage 4 v2 扩展 Region、模型辅助监督及 Stage 5 compact 训练资产。
 
-命令：本脚本仅提供 prepare-expanded-corpus 与 run-train-workflow 两个固定路径子命令。
+命令：提供扩展准备、生成工作流、compact 发布与 compact 严格验证四个固定子命令。
 输入：冻结 v1 train Region、既有 500 条单专家工作根、仓库 prompt 与本地 Qwen 配置。
 输出：../benchmark/oa_grounded_stage4_v2 下的 7,950 扩展、8,450 集合、工作与发布根。
 写入：只创建固定新根；合法既有根复用，非法既有根失败，正式 package/messages 不覆盖。
-阶段：Stage 4 模型辅助训练监督准备；不是 Gold、人工共识或正式科学评价。
+阶段：Stage 4 监督准备与 Stage 5 compact 发布；不是 Gold、人工共识或正式科学评价。
 运行：草稿只由本地模型一次 runtime 补齐；不查询 GPU，不调用外部 API，不启动 UI。
 """
 
@@ -23,11 +23,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
+from oa_groundrag.landslide_evidence.compact_training import (
+    load_compact_training_messages,
+    publish_compact_training_messages,
+)
 from oa_groundrag.landslide_evidence.model_assisted_workflow import (
     ModelAssistedWorkflowPaths,
     prepare_expanded_corpus,
     run_model_assisted_train_workflow,
 )
+from oa_groundrag.phase3.common import sha256_file
 from oa_groundrag.phase3.errors import RSGeneralDescError
 from oa_groundrag.phase4.errors import Phase4Error
 
@@ -81,6 +86,11 @@ MODEL_ASSISTED_WORKFLOW_PATHS = ModelAssistedWorkflowPaths(
         / "single_expert_qwen3vl_8b_v1.yaml"
     ),
 )
+COMPACT_TRAINING_ROOT = (
+    STAGE4_V2_ROOT
+    / "training_messages"
+    / "mask_grounded_region_compact_training_messages_train_v3_6974"
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -95,6 +105,14 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "run-train-workflow",
         help="一次 runtime 补齐缺失草稿，并在 8,450/8,450 后发布训练资产",
+    )
+    commands.add_parser(
+        "publish-compact-training",
+        help="从已验证 v2 messages 原子发布独立 6,974 条 compact 训练资产",
+    )
+    commands.add_parser(
+        "validate-compact-training",
+        help="严格验证 compact 消息、collection 资产和 assistant 合同",
     )
     return parser
 
@@ -116,6 +134,22 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
                 paths=MODEL_ASSISTED_WORKFLOW_PATHS,
                 progress_callback=lambda value: _print(value, stream=sys.stderr),
             )
+        elif args.command == "publish-compact-training":
+            result = publish_compact_training_messages(
+                source_training_root=MODEL_ASSISTED_WORKFLOW_PATHS.training_messages_root,
+                output_root=COMPACT_TRAINING_ROOT,
+            )
+        elif args.command == "validate-compact-training":
+            artifact = load_compact_training_messages(COMPACT_TRAINING_ROOT)
+            result = {
+                "ok": True,
+                "root": str(artifact.root),
+                "compact_id": artifact.manifest["compact_id"],
+                "manifest_sha256": sha256_file(artifact.root / "manifest.json"),
+                "record_count": len(artifact.rows),
+                "authority_counts": artifact.manifest["authority_counts"],
+                "formal_acceptance": False,
+            }
         else:
             raise AssertionError("unreachable")
         _print(result)

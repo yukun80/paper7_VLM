@@ -253,6 +253,12 @@ python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
 
 python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
   run-train-workflow
+
+python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
+  publish-compact-training
+
+python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
+  validate-compact-training
 ```
 
 第二条命令只使用本地冻结 Qwen 配置，不调用外部 API，也不启动人工界面；中断后重跑会跳过
@@ -260,6 +266,18 @@ python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py \
 和信息量检查的草稿标记为 `model_generated_unreviewed`，不合格项进入 exclusions。因此训练
 messages 数量由实际合格记录决定，不等同于 collection 总数。该混合监督不是 Gold、专家共识
 或科学验收，所有发布 manifest 均保持 `formal_acceptance=false`。
+
+Stage 5 使用独立 compact 消息作为训练入口，并从冻结的 RS-General Adapter LoRA 权重
+warm-start；状态机会依次执行 Base/RS-General GT-mask baseline、Region 训练与自动开发评价，
+最后仅报告 RS-General retention 变化：
+
+```bash
+python scripts/phase4_rs_vlm/run_mask_grounded_adapter.py \
+  run-stage5-workflow \
+  --config configs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml
+```
+
+该入口不读取 sealed test，不把 retention 结果解释成 Gate F，也不产生正式科学接受结论。
 
 ## 核心科学边界
 

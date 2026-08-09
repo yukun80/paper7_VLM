@@ -7,7 +7,7 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import numpy as np
 import torch
@@ -144,12 +144,28 @@ def set_global_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def training_layout_identity(config: Phase4Config) -> dict[str, Any]:
+def training_layout_identity(
+    config: Phase4Config,
+    *,
+    cuda_cache_cleanup_interval_steps: int | None = None,
+) -> dict[str, Any]:
     """返回 checkpoint/resume 所需的不可变物理训练布局。"""
 
+    if (
+        cuda_cache_cleanup_interval_steps is not None
+        and (
+            isinstance(cuda_cache_cleanup_interval_steps, bool)
+            or not isinstance(cuda_cache_cleanup_interval_steps, int)
+            or cuda_cache_cleanup_interval_steps <= 0
+        )
+    ):
+        raise ModelError(
+            ReasonCode.TYPE_MISMATCH,
+            "CUDA cache 清理间隔必须是正整数或 null",
+        )
     batch_size = config.training.batch_size
     accumulation_steps = config.training.gradient_accumulation_steps
-    return {
+    result = {
         "physical_batch_size": batch_size,
         "gradient_accumulation_steps": accumulation_steps,
         "effective_batch_size": batch_size * accumulation_steps,
@@ -163,6 +179,19 @@ def training_layout_identity(config: Phase4Config) -> dict[str, Any]:
         "pin_memory": config.training.pin_memory,
         "sample_trace_schema_version": SAMPLE_TRACE_SCHEMA_VERSION,
     }
+    # 仅 Stage 5 写入该扩展字段；默认省略以保持既有 Phase 3 checkpoint 身份不变。
+    if cuda_cache_cleanup_interval_steps is not None:
+        result["cuda_cache_cleanup_interval_steps"] = (
+            cuda_cache_cleanup_interval_steps
+        )
+    return result
+
+
+def clear_cuda_cache(device: torch.device) -> None:
+    """仅在 CUDA 设备释放 allocator 未使用缓存，不改变活跃 tensor。"""
+
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
 
 def _scheduler(
@@ -692,11 +721,12 @@ def _load_validation_history(
     path: Path,
     *,
     checkpoint_step: int,
+    row_parser: Callable[[Mapping[str, Any]], ValidationResult] = _validation_from_row,
 ) -> list[ValidationResult]:
     if not path.exists():
         return []
     rows = read_jsonl(_regular_file(path, label="validation_results"))
-    results = [_validation_from_row(row) for row in rows]
+    results = [row_parser(row) for row in rows]
     steps = [result.step for result in results]
     if (
         steps != sorted(set(steps))
@@ -756,6 +786,7 @@ def _best_pointer(
     *,
     output_root: Path,
     result: ValidationResult,
+    selection_metric: str = "macro_task_loss",
 ) -> dict[str, Any]:
     checkpoint = output_root / "checkpoints" / f"step-{result.step:08d}"
     if not checkpoint.is_dir() or checkpoint.is_symlink():
@@ -765,7 +796,7 @@ def _best_pointer(
         )
     return {
         "schema_version": BEST_CHECKPOINT_SCHEMA_VERSION,
-        "selection_metric": "macro_task_loss",
+        "selection_metric": selection_metric,
         "step": result.step,
         "macro_task_loss": result.macro_task_loss,
         "overall_loss": result.overall_loss,
@@ -788,6 +819,13 @@ class DescriptionTrainer:
         processor_identity: Mapping[str, Any],
         device: torch.device,
         progress: TrainingProgress | None = None,
+        allowed_training_roles: frozenset[str] = frozenset({"external_train"}),
+        sampler_factory: Callable[[DescriptionTrainingDataset], Any] | None = None,
+        validation_evaluator: Callable[..., ValidationResult] = evaluate_teacher_forced_loss,
+        validation_better: Callable[[ValidationResult, ValidationResult | None], bool] = validation_is_better,
+        validation_selection_metric: str = "macro_task_loss",
+        validation_row_parser: Callable[[Mapping[str, Any]], ValidationResult] = _validation_from_row,
+        cuda_cache_cleanup_interval_steps: int | None = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -799,6 +837,26 @@ class DescriptionTrainer:
         self.processor_identity = dict(processor_identity)
         self.device = device
         self.progress = progress
+        self.allowed_training_roles = frozenset(allowed_training_roles)
+        self.sampler_factory = sampler_factory
+        self.validation_evaluator = validation_evaluator
+        self.validation_better = validation_better
+        self.validation_selection_metric = validation_selection_metric
+        self.validation_row_parser = validation_row_parser
+        self.cuda_cache_cleanup_interval_steps = (
+            cuda_cache_cleanup_interval_steps
+        )
+        if not self.allowed_training_roles or not validation_selection_metric:
+            raise ModelError(
+                ReasonCode.TYPE_MISMATCH,
+                "trainer 角色集合和 validation selection metric 不能为空",
+            )
+        training_layout_identity(
+            config,
+            cuda_cache_cleanup_interval_steps=(
+                self.cuda_cache_cleanup_interval_steps
+            ),
+        )
         if model.trainable_parameter_count <= 0:
             raise ModelError(
                 ReasonCode.MODEL_IDENTITY_MISMATCH,
@@ -834,21 +892,37 @@ class DescriptionTrainer:
                 ReasonCode.OUTPUT_LINK,
                 f"training output_root 含链接组件：{linked}",
             )
-        expected_training_role = "external_train"
-        if any(
-            record.get("logical_role") != expected_training_role
-            for record in dataset.records
-        ):
+        actual_training_roles = {
+            str(record.get("logical_role")) for record in dataset.records
+        }
+        if not actual_training_roles or actual_training_roles - self.allowed_training_roles:
             raise ModelError(
                 ReasonCode.ROLE_FORBIDDEN,
-                f"训练 Dataset 必须严格只含 {expected_training_role}",
+                "训练 Dataset 含未授权 logical_role",
+                details={
+                    "allowed": sorted(self.allowed_training_roles),
+                    "actual": sorted(actual_training_roles),
+                },
             )
-        sampler = ParentBalancedSampler(
-            dataset,
-            seed=config.run.seed,
-            source_weights=config.data.source_weights,
-            task_weights=config.data.task_weights,
+        sampler = (
+            self.sampler_factory(dataset)
+            if self.sampler_factory is not None
+            else ParentBalancedSampler(
+                dataset,
+                seed=config.run.seed,
+                source_weights=config.data.source_weights,
+                task_weights=config.data.task_weights,
+            )
         )
+
+        def select_best_result(
+            history: Sequence[ValidationResult],
+        ) -> ValidationResult | None:
+            best: ValidationResult | None = None
+            for result in history:
+                if self.validation_better(result, best):
+                    best = result
+            return best
         trainable_parameters = [
             parameter
             for parameter in self.model.model.parameters()
@@ -867,7 +941,12 @@ class DescriptionTrainer:
         model_identity = self.model.identity.to_dict()
         benchmark_row = self.benchmark_identity.training_identity_dict()
         validation_identity = self.validation_selection.identity_dict()
-        training_layout = training_layout_identity(config)
+        training_layout = training_layout_identity(
+            config,
+            cuda_cache_cleanup_interval_steps=(
+                self.cuda_cache_cleanup_interval_steps
+            ),
+        )
         worker_collators = tuple(
             self.collator.clone_for_worker()
             for _ in range(config.training.num_workers)
@@ -1018,6 +1097,7 @@ class DescriptionTrainer:
             validation_history = _load_validation_history(
                 validation_path,
                 checkpoint_step=cursor.global_step,
+                row_parser=self.validation_row_parser,
             )
             pending_validation = _pending_validation_at_checkpoint(
                 validation_history,
@@ -1033,7 +1113,7 @@ class DescriptionTrainer:
                 )
                 cumulative_images = int(last_log["images"])
                 ema_loss = float(last_log["ema_loss"])
-            expected_best = _best_result(validation_history)
+            expected_best = select_best_result(validation_history)
             if expected_best is None:
                 if best_path.exists() or best_path.is_symlink():
                     raise ModelError(
@@ -1047,6 +1127,7 @@ class DescriptionTrainer:
                 if saved_best != _best_pointer(
                     output_root=output_root,
                     result=expected_best,
+                    selection_metric=self.validation_selection_metric,
                 ):
                     raise ModelError(
                         ReasonCode.CHECKPOINT_INCOMPATIBLE,
@@ -1174,7 +1255,7 @@ class DescriptionTrainer:
                 worker_collators=worker_collators,
             )
             if pending_validation:
-                validation = evaluate_teacher_forced_loss(
+                validation = self.validation_evaluator(
                     model=self.model,
                     collator=self.validation_collator,
                     dataset=self.validation_dataset,
@@ -1191,13 +1272,14 @@ class DescriptionTrainer:
                         for item in validation_history
                     ),
                 )
-                incumbent = _best_result(validation_history[:-1])
-                if validation_is_better(validation, incumbent):
+                incumbent = select_best_result(validation_history[:-1])
+                if self.validation_better(validation, incumbent):
                     atomic_write_json(
                         best_path,
                         _best_pointer(
                             output_root=output_root,
                             result=validation,
+                            selection_metric=self.validation_selection_metric,
                         ),
                     )
             optimizer_step_started = time.perf_counter()
@@ -1263,6 +1345,9 @@ class DescriptionTrainer:
                         }
                     )
                 micro_step += 1
+                # backward 已完成后立即释放 logits/batch 等大对象，避免下一次 forward
+                # 求值期间仍持有上一条可变形状样本的显存。
+                del labels, scaled, loss, result, batch, prepared
                 if micro_step < config.training.gradient_accumulation_steps:
                     continue
                 gradient_norm_tensor = torch.nn.utils.clip_grad_norm_(
@@ -1280,6 +1365,13 @@ class DescriptionTrainer:
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
                 micro_step = 0
+                del gradient_norm_tensor
+                cleanup_interval = self.cuda_cache_cleanup_interval_steps
+                if (
+                    cleanup_interval is not None
+                    and global_step % cleanup_interval == 0
+                ):
+                    clear_cuda_cache(self.device)
                 step_loss = (
                     accumulated_loss
                     / config.training.gradient_accumulation_steps
@@ -1400,7 +1492,7 @@ class DescriptionTrainer:
                         seconds=time.perf_counter() - checkpoint_started,
                     )
                 if validation_due:
-                    validation = evaluate_teacher_forced_loss(
+                    validation = self.validation_evaluator(
                         model=self.model,
                         collator=self.validation_collator,
                         dataset=self.validation_dataset,
@@ -1417,13 +1509,14 @@ class DescriptionTrainer:
                             for item in validation_history
                         ),
                     )
-                    incumbent = _best_result(validation_history[:-1])
-                    if validation_is_better(validation, incumbent):
+                    incumbent = select_best_result(validation_history[:-1])
+                    if self.validation_better(validation, incumbent):
                         atomic_write_json(
                             best_path,
                             _best_pointer(
                                 output_root=output_root,
                                 result=validation,
+                                selection_metric=self.validation_selection_metric,
                             ),
                         )
                 if log_due and (checkpoint_due or validation_due):
@@ -1462,7 +1555,7 @@ class DescriptionTrainer:
                 time.perf_counter() - session_started
             )
             memory = _cuda_memory(self.device)
-            best_result = _best_result(validation_history)
+            best_result = select_best_result(validation_history)
             best_checkpoint = (
                 None
                 if best_result is None

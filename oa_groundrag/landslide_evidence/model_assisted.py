@@ -178,12 +178,16 @@ class ModelAssistedTrainingArtifact:
     rows: tuple[Mapping[str, Any], ...]
 
 
-def _load_collection_context(value: Path | str) -> ModelAssistedCollectionContext:
+def _load_collection_context(
+    value: Path | str,
+    *,
+    verify_members: bool = True,
+) -> ModelAssistedCollectionContext:
     """经 expanded-region validator 装载 collection，不猜成员路径或资产语义。"""
 
     from .expanded_region import load_expanded_collection_context
 
-    expanded = load_expanded_collection_context(value, verify_members=True)
+    expanded = load_expanded_collection_context(value, verify_members=verify_members)
     entries: list[ModelAssistedCollectionEntry] = []
     seen: set[str] = set()
     for expected_ordinal, item in enumerate(expanded.entries):

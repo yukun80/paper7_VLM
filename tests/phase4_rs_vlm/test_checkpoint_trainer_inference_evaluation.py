@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -326,7 +327,13 @@ class TrainerCheckpointTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def trainer(self, config, model):
+    def trainer(
+        self,
+        config,
+        model,
+        *,
+        cuda_cache_cleanup_interval_steps=None,
+    ):
         return DescriptionTrainer(
             config=config,
             model=model,
@@ -345,7 +352,64 @@ class TrainerCheckpointTests(unittest.TestCase):
                 stream=io.StringIO(),
                 force_tty=False,
             ),
+            cuda_cache_cleanup_interval_steps=(
+                cuda_cache_cleanup_interval_steps
+            ),
         )
+
+    def test_cuda_cache_cleanup_is_opt_in_and_checkpoint_bound(self) -> None:
+        generic_config = replace(
+            self.config,
+            run=replace(
+                self.config.run,
+                output_root=self.base / "generic-cache-policy",
+            ),
+        )
+        with patch("oa_groundrag.phase4.trainer.clear_cuda_cache") as cleanup:
+            self.trainer(generic_config, TinyAdapter()).fit(
+                TinyDataset(),
+                stop_after_steps=1,
+            )
+        cleanup.assert_not_called()
+        self.assertNotIn(
+            "cuda_cache_cleanup_interval_steps",
+            training_layout_identity(generic_config),
+        )
+
+        stage5_config = replace(
+            self.config,
+            run=replace(
+                self.config.run,
+                output_root=self.base / "stage5-cache-policy",
+            ),
+        )
+        with patch("oa_groundrag.phase4.trainer.clear_cuda_cache") as cleanup:
+            first = self.trainer(
+                stage5_config,
+                TinyAdapter(),
+                cuda_cache_cleanup_interval_steps=1,
+            ).fit(TinyDataset(), stop_after_steps=1)
+        cleanup.assert_called_once_with(torch.device("cpu"))
+        expected = training_layout_identity(
+            stage5_config,
+            cuda_cache_cleanup_interval_steps=1,
+        )
+        manifest = read_json(first.checkpoint / "manifest.json")
+        self.assertEqual(manifest["training_layout"], expected)
+
+        with self.assertRaises(CheckpointError):
+            self.trainer(stage5_config, TinyAdapter()).fit(
+                TinyDataset(),
+                resume_checkpoint=first.checkpoint,
+            )
+        with patch("oa_groundrag.phase4.trainer.clear_cuda_cache") as cleanup:
+            resumed = self.trainer(
+                stage5_config,
+                TinyAdapter(),
+                cuda_cache_cleanup_interval_steps=1,
+            ).fit(TinyDataset(), resume_checkpoint=first.checkpoint)
+        self.assertEqual(resumed.cursor.global_step, 2)
+        cleanup.assert_called_once_with(torch.device("cpu"))
 
     def test_interrupted_resume_matches_uninterrupted_next_sample_and_weights(
         self,

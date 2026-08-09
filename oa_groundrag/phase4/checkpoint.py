@@ -53,7 +53,7 @@ _CHECKPOINT_MANIFEST_FIELDS = {
     "multireference_epoch",
     "files",
 }
-_TRAINING_LAYOUT_FIELDS = {
+_BASE_TRAINING_LAYOUT_FIELDS = {
     "physical_batch_size",
     "gradient_accumulation_steps",
     "effective_batch_size",
@@ -63,6 +63,7 @@ _TRAINING_LAYOUT_FIELDS = {
     "pin_memory",
     "sample_trace_schema_version",
 }
+_CUDA_CACHE_LAYOUT_FIELD = "cuda_cache_cleanup_interval_steps"
 
 
 def _validated_training_layout(
@@ -70,7 +71,12 @@ def _validated_training_layout(
     *,
     label: str,
 ) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != _TRAINING_LAYOUT_FIELDS:
+    fields = set(value) if isinstance(value, Mapping) else set()
+    allowed_fields = {
+        frozenset(_BASE_TRAINING_LAYOUT_FIELDS),
+        frozenset((*_BASE_TRAINING_LAYOUT_FIELDS, _CUDA_CACHE_LAYOUT_FIELD)),
+    }
+    if not isinstance(value, Mapping) or frozenset(fields) not in allowed_fields:
         raise CheckpointError(
             ReasonCode.CHECKPOINT_INCOMPATIBLE,
             f"{label} training_layout 字段不匹配",
@@ -99,6 +105,13 @@ def _validated_training_layout(
             ReasonCode.CHECKPOINT_INCOMPATIBLE,
             f"{label} training_layout.pin_memory 必须是 bool",
         )
+    if _CUDA_CACHE_LAYOUT_FIELD in result:
+        interval = result[_CUDA_CACHE_LAYOUT_FIELD]
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval <= 0:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                f"{label} training_layout.{_CUDA_CACHE_LAYOUT_FIELD} 必须是正整数",
+            )
     backend = result["input_pipeline_backend"]
     if (
         result["effective_batch_size"]

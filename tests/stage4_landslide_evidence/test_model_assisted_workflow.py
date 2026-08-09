@@ -292,7 +292,7 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
                 result = run_model_assisted_train_workflow(paths=paths)
             self.assertEqual(result["stage"], "complete")
 
-    def test_cli_has_only_two_argument_free_commands_and_fixed_v2_roots(self) -> None:
+    def test_cli_has_fixed_argument_free_commands_and_v2_roots(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "stage4_model_assisted_cli",
             CLI_PATH,
@@ -307,6 +307,14 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
         self.assertEqual(
             vars(module._parser().parse_args(["run-train-workflow"])),
             {"command": "run-train-workflow"},
+        )
+        self.assertEqual(
+            vars(module._parser().parse_args(["publish-compact-training"])),
+            {"command": "publish-compact-training"},
+        )
+        self.assertEqual(
+            vars(module._parser().parse_args(["validate-compact-training"])),
+            {"command": "validate-compact-training"},
         )
         paths = module.MODEL_ASSISTED_WORKFLOW_PATHS
         expected = REPO_ROOT.parent / "benchmark" / "oa_grounded_stage4_v2"
@@ -347,6 +355,12 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
             expected
             / "training_messages"
             / "mask_grounded_region_model_assisted_training_messages_train_v2_source8450",
+        )
+        self.assertEqual(
+            module.COMPACT_TRAINING_ROOT,
+            expected
+            / "training_messages"
+            / "mask_grounded_region_compact_training_messages_train_v3_6974",
         )
         source = CLI_PATH.read_text(encoding="utf-8")
         self.assertNotIn("nvidia-smi", source)

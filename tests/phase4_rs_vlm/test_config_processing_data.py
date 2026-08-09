@@ -79,6 +79,7 @@ from oa_groundrag.phase4.model import (
     local_model_identity,
 )
 from oa_groundrag.phase4.reference import MAIN_REFERENCE
+from oa_groundrag.phase4.stage5_config import STAGE5_CONFIG_SCHEMA, load_stage5_config
 from tests.phase3_rs_generaldesc.fixture_helpers import (
     make_all_sources,
     write_build_config,
@@ -100,6 +101,7 @@ def phase4_yaml_contracts() -> dict[str, tuple[Path, ...]]:
     grouped: dict[str, list[Path]] = {
         CONFIG_SCHEMA_VERSION: [],
         GATE_B_PROTOCOL_SCHEMA_VERSION: [],
+        STAGE5_CONFIG_SCHEMA: [],
     }
     for path in sorted(CONFIG_ROOT.glob("*.yaml")):
         row = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -241,6 +243,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
         contracts = phase4_yaml_contracts()
         config_paths = contracts[CONFIG_SCHEMA_VERSION]
         protocol_paths = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION]
+        stage5_paths = contracts[STAGE5_CONFIG_SCHEMA]
         configs = {
             path.name: load_config(path)
             for path in config_paths
@@ -253,6 +256,16 @@ class ConfigAndPreflightTests(unittest.TestCase):
             tuple(path.name for path in protocol_paths),
             ("rs_generaldesc_gate_b_qwen3vl_2b.yaml",),
         )
+        self.assertEqual(
+            tuple(path.name for path in stage5_paths),
+            ("mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml",),
+        )
+        stage5 = load_stage5_config(stage5_paths[0])
+        self.assertEqual(stage5.schema_version, STAGE5_CONFIG_SCHEMA)
+        self.assertEqual(stage5.data_contract.split_seed, 20260808)
+        self.assertEqual(stage5.data_contract.region_micro_ratio, 0.9)
+        self.assertEqual(stage5.data_contract.replay_micro_ratio, 0.1)
+        self.assertFalse(hasattr(stage5, "evidence"))
         for path in protocol_paths:
             self.assertEqual(
                 load_gate_b_protocol(path).raw["schema_version"],

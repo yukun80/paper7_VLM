@@ -31,6 +31,9 @@ from .gate_b_contracts import (
     GATE_B_TASK_ORDER,
     GateBProtocolSource,
     build_frozen_protocol,
+    load_gate_b_protocol,
+    read_frozen_protocol,
+    static_protocol_snapshot,
     validate_frozen_protocol,
 )
 from .preflight import BenchmarkAccess, open_benchmark_access
@@ -100,6 +103,7 @@ class GateBSelectionContext:
     protocol_source: GateBProtocolSource
     selection: Mapping[str, Any]
     access: BenchmarkAccess
+    historical_implementation_match: bool = True
 
 
 def _fail(message: str, *, details: Mapping[str, Any] | None = None) -> None:
@@ -770,10 +774,9 @@ def _strict_selection(row: Mapping[str, Any]) -> None:
         _fail("selection monitoring exclusion 结论非法")
 
 
-def load_gate_b_selection(
-    protocol_path: Path | str,
-    selection_path: Path | str,
-) -> GateBSelectionContext:
+def _selection_paths(selection_path: Path | str) -> tuple[Path, Path]:
+    """解析 frozen selection 及其 sibling protocol，并拒绝链接替换。"""
+
     selection_path = Path(selection_path)
     linked = first_symlink_component(selection_path)
     if linked is not None:
@@ -792,8 +795,18 @@ def load_gate_b_selection(
             "frozen selection 必须是普通单链接文件",
             details={"path": str(selection_path)},
         )
-    frozen_path = selection_path.parent / "gate_b_protocol.json"
-    frozen, source = validate_frozen_protocol(protocol_path, frozen_path)
+    return selection_path, selection_path.parent / "gate_b_protocol.json"
+
+
+def _load_selection_context(
+    *,
+    frozen: Mapping[str, Any],
+    source: GateBProtocolSource,
+    selection_path: Path,
+    historical_implementation_match: bool,
+) -> GateBSelectionContext:
+    """共享 selection/Benchmark 核验；不在 Stage 5 复制 Gate B 数据合同。"""
+
     try:
         selection = read_json(selection_path)
     except RSGeneralDescError as error:
@@ -830,6 +843,47 @@ def load_gate_b_selection(
         protocol_source=source,
         selection=selection,
         access=access,
+        historical_implementation_match=historical_implementation_match,
+    )
+
+
+def load_gate_b_selection(
+    protocol_path: Path | str,
+    selection_path: Path | str,
+) -> GateBSelectionContext:
+    """正式 Gate B 读取：要求当前实现与冻结时字节身份完全一致。"""
+
+    selection_path, frozen_path = _selection_paths(selection_path)
+    frozen, source = validate_frozen_protocol(protocol_path, frozen_path)
+    return _load_selection_context(
+        frozen=frozen,
+        source=source,
+        selection_path=selection_path,
+        historical_implementation_match=True,
+    )
+
+
+def load_gate_b_selection_for_stage5_retention(
+    protocol_path: Path | str,
+    selection_path: Path | str,
+) -> GateBSelectionContext:
+    """Stage 5 只消费冻结集合，不把新实现伪装成历史 Gate B 重放。"""
+
+    selection_path, frozen_path = _selection_paths(selection_path)
+    frozen = read_frozen_protocol(frozen_path)
+    source = load_gate_b_protocol(protocol_path)
+    current = static_protocol_snapshot(source)
+    frozen_static = dict(frozen["static_protocol"])
+    historical_implementation = frozen_static.pop("implementation_files", None)
+    current_implementation = current.pop("implementation_files", None)
+    if current != frozen_static:
+        _fail("Stage 5 retention 的 Gate B 数据/模型/评价静态合同发生变化")
+    implementation_match = current_implementation == historical_implementation
+    return _load_selection_context(
+        frozen=frozen,
+        source=source,
+        selection_path=selection_path,
+        historical_implementation_match=implementation_match,
     )
 
 
