@@ -22,8 +22,8 @@ Stage 2  RS-GeneralDesc Benchmark 验收
 Stage 3  RS-General Adapter 评价
 Stage 4  Landslide Evidence Corpus 与 OA-GroundedEval
 Stage 5  Mask-Grounded Baseline
-Stage 6  文本 RAG
-Stage 7  案例 RAG
+Stage 6  Evidence-Constrained Text RAG
+Stage 7  可选 Case RAG
 Stage 8  可选 Landslide-Evidence Adapter
 Stage 9  统一推理与报告
 ```
@@ -52,8 +52,8 @@ phase3 只处理 External 通用遥感文本数据；mask-grounded 证据、OA-G
 - 修改 `../datasets`、`../benchmark` 或 `../external`；
 - 修改或复制第三方参考实现；
 - 修改既有 Benchmark、checkpoint、训练输出或模型权重；
-- 未经授权重新实现或运行 Teacher Silver、生成 Gold/OA-GroundedEval，或实施
-  Stage 6 或 Stage 7 RAG；
+- 未经授权重新实现或运行 Teacher Silver、生成 Gold/OA-GroundedEval；
+- 修改、重建或扩展现有 Stage 6、实施 Stage 7、运行正式 Gate D 或访问 sealed test；
 - 创建 legacy 目录、兼容包装、alias 或旧接口适配层。
 
 Gate 的科学判据必须只基于 train/val 预注册并在首次正式 test 前冻结，不得读取
@@ -84,16 +84,20 @@ HDF5 格式统一不代表字段、模态、配准、数值范围或科学语义
 
 ## 5. 新系统边界
 
+- 活动算法框架固定为 OA-AuxSeg → RS-GeneralDesc/RS-VLM → Mask-Grounded Region
+  Adapter → Evidence-Constrained Text RAG → 可选 Case RAG；各阶段通过版本化合同和
+  可重算身份衔接，不增加并行的替代主链。
 - 光学影像是分割主模态和空间边界基准。
 - SAR、InSAR、DEM、多光谱等只能作为可选辅助证据。
 - 分割模型只输出概率图、mask、no-target 状态和区域信息。
 - RS-General VLM 先完成通用遥感视觉理解，再基于 mask、光学区域和可用辅助证据完成
   候选区域观察。
-- Landslide RAG 只检索专业规则、案例、反例和限制，不生成 mask、不改写确定性事实，
-  也不得把错误候选稳定合理化为滑坡。
+- Stage 6 只消费用户问题、Programmatic Facts 和 Pass-1 structured visual observation，
+  从统一文本证据库检索 interpretation、confounder、limitation 三类专业知识，并在
+  text-only Pass-2 中完成证据受限解释。
+- Landslide RAG 不生成或修改 mask，不改写 Programmatic Facts 或 Pass-1 视觉观察，
+  不把检索知识描述为当前图像已经观察到的事实，也不得把候选区域升级为确认滑坡。
 - Landslide-Evidence Adapter 仅在 Gate E 失败时实施，不作为默认训练阶段。
-
-旧 SANE、QMEF、PMRD、MGRR、SegDesc、Bridge、proposal、query 和 reliability 路线不得恢复到活动代码。
 
 ## 6. 工程规则
 

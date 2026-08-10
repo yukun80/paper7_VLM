@@ -7,13 +7,13 @@
 - stage: `6`
 - stage_name: `EVIDENCE_CONSTRAINED_TEXT_RAG`
 - stage_status: `gate_d_development_automatic_only_complete`
-- current_task: `STAGE6_GATE_D_DEVELOPMENT_AUTOMATIC_ONLY`
-- current_task_status: `frozen_25pair_protocol_gpu_run_and_recomputable_auto_eval_complete`
+- current_task: `STAGE6_FRAMEWORK_DOCUMENTATION_GOVERNANCE`
+- current_task_status: `active_route_and_progress_synchronized`
 - next_gate: `A (OA-AuxSeg branch) / C-D (scientific protocols pending)`
 - scientific_status: `Stage 6 engineering and Gate D automatic-only development evaluation are complete: the 25-pair run is strict-valid and its descriptive report is recomputable; expert relevance, unsupported-claim rate, retrieval Gold, formal Gate D thresholds, scientific acceptance and sealed test remain pending`
 - execution_date: `2026-08-10`
 - branch: `main`
-- current_head: `eae76528b1fa7aaa1793af5451941d510d4bba29`
+- current_head: `d6478025fb448d3cf89a4eb95586e1d0ce41a573`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
@@ -83,6 +83,7 @@
 - current_task_training_or_optimizer_step_performed: `false`
 - formal_evaluation_performed: `true`
 - test_split_evaluated: `false`
+- sealed_test_accessed: `false`
 - commit_performed: `false`
 - push_performed: `false`
 
@@ -104,6 +105,21 @@ Mask-Grounded Region LoRA、340 条 automatic-only dev 评价和冻结 Gate B se
 重训 → Gate B；两者在 Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不推翻
 独立完成的 Stage 3 Gate B。Gate B 不表示 OA-Grounded、mask-grounded 或系统验收。
 
+## 当前算法框架进展总览
+
+| Stage | 当前状态 | 尚未越过的边界 |
+| --- | --- | --- |
+| Stage 0：权威路线与资产冻结 | 完成 | 冻结设计与历史 archive 继续保持只读 |
+| Stage 1：OA-AuxSeg | 工程定版完成 | Gate A、正式 fixed predicted masks 待完成 |
+| Stage 2：RS-GeneralDesc Benchmark | native v1 构建与验收完成 | 结论不扩张到 mask-grounded 或 RAG |
+| Stage 3：RS-General Adapter | 训练与 Gate B 完成 | Gate B 只覆盖冻结的 RS-GeneralDesc 作用域 |
+| Stage 4：区域证据与 OA-GroundedEval | Corpus、Eval-dev 和监督资产已具备 | 专家共识、正式 OA-GroundedEval 与科学闭环待完成 |
+| Stage 5：Mask-Grounded Region Adapter | 训练和 automatic-only dev 评价完成 | Gate C、no-target 缺陷处置与科学验收待完成 |
+| Stage 6：Evidence-Constrained Text RAG | 工程主链和 25-pair automatic-only 开发评价完成 | 专家评价、retrieval Gold、正式 Gate D 与 sealed test 待完成 |
+| Stage 7：可选 Case RAG | 未开始 | 只在 Stage 6 证明稳定增益后考虑 |
+| Stage 8：可选 Landslide-Evidence Adapter | 条件未触发 | 只在 Gate E 失败时训练 |
+| Stage 9：统一推理与报告 | 未开始 | 在前述科学协议和条件分支明确后实施 |
+
 ## 文档单一来源治理
 
 当前冻结算法方案来自 HEAD
@@ -114,11 +130,12 @@ Mask-Grounded Region LoRA、340 条 automatic-only dev 评价和冻结 Gate B se
 `768d6880...` / `dbf93a4c...` 是旧设计身份，只保留在历史运行段落中。
 
 `README.md` 只保留长期有效的项目结构、合同边界和运行入口；`AGENTS.md`
-只保留操作、授权、安全和文档治理规则。阶段状态、运行结果、正式产物
+只保留当前活动框架、操作授权、安全和文档治理规则。阶段状态、运行结果、正式产物
 身份、验收证据和下一任务只在本文件维护。
 
-`README.md` 只保留长期有效入口；`AGENTS.md`、算法方案和 `docs/archive/` 本次未修改。
-旧算法身份仅作为历史现场记录，不再是当前授权基线。
+本轮以 `d6478025fb448d3cf89a4eb95586e1d0ce41a573` 为现场 HEAD，只同步
+`AGENTS.md` 与本文件的活动路线和当前进展；冻结算法方案、`README.md` 和
+`docs/archive/` 保持不变。旧算法身份仅作为历史产物的审计锚点，不再作为当前授权基线。
 
 ## Stage 0 已完成
 
@@ -381,21 +398,21 @@ Gate B 正式产物和既有训练 outputs。
 `gate-b-locate-media` 是独立的 Gate B 只读人工检查工具，继续保留其严格身份校验和
 10 项永久测试；它不是 Teacher Silver Provider。
 
-## 后续冻结顺序
+## 当前后续冻结顺序
 
-1. **Teacher Silver 方案重新设计。** 基于算法方案中的 Provider 无关原则，重新确定模型、
-   mask/overlay/crop 空间提示、结构化输出、规则过滤和有界验证协议；未经负责人授权不实现
-   或运行。
-2. **Stage 4 后续人工资产。** Silver 候选通过有界验证后，另行授权专家审核、必要 Gold
-   和 OA-GroundedEval 的人工标注与冻结。
-3. **Stage 5：Mask-Grounded Baseline。** 比较 full/crop/overlay/multimodal 与
-   GT/fixed/wrong/empty mask；Gate C 失败时先修 Evidence Representation。
-4. **Stage 6–7：文本与案例 RAG。** 重新实现 Evidence Retrieval Provider，先文本，
-   再正案例/困难负样本/分模态索引；RAG_tmp 不直接集成。
+1. **Gate A 分支。** 在 OA-AuxSeg 分支上完成独立科学协议；只有通过后才冻结正式
+   predicted-mask 资产，不用 Stage 5/6 的开发结果替代 Gate A。
+2. **Gate C。** 基于 correct/wrong/shifted/empty mask 与区域一致性证据，判断模型是否真正
+   关注 mask；失败时先修 Evidence Representation，不用 RAG 合理化错误候选。
+3. **正式 Gate D。** 在现有 25-pair automatic-only 资产之上补齐专家盲评、unsupported-claim
+   判定、retrieval Gold 和预注册阈值；在此之前不访问 sealed test，也不声称文本 RAG
+   获得科学增益。
+4. **Stage 7：可选 Case RAG。** 仅当 Stage 6 的专家评价表明文本 RAG 有稳定增益时，才考虑
+   train-only 正案例、困难负样本和同模态案例检索。
 5. **Stage 8：可选 Landslide-Evidence Adapter。** 仅 Gate E 失败时训练，并执行
-   RS-General retention Gate F。
-6. **Stage 9：统一推理与报告。** 最后实现 Task Controller、两遍式生成、Evidence
-   Cards、引用、failure artifact 和端到端评价。
+   RS-General retention Gate F；当前条件未触发。
+6. **Stage 9：统一推理与报告。** 在前述科学协议与条件分支明确后，统一 Task Controller、
+   两遍式生成、Evidence Cards、引用、failure artifact 和端到端评价。
 
 ## 已知科学与数据边界
 
@@ -406,11 +423,12 @@ Gate B 正式产物和既有训练 outputs。
   不得生成定量位移或物理方向结论。
 - LMHLD 和 Landslide4Sense 缺少可靠地理 group；不得从文件名或 sample ID 伪造空间
   身份。
-- 当前有负责人定版的 OA-AuxSeg final checkpoint 和已验证的 Stage 4A Auto Corpus，
-  但没有 Gate-A-accepted checkpoint、fixed predicted mask、活动的 Teacher Silver
-  实现、正式 Silver/Gold、OA-GroundedEval 或正式 mask-grounded test。
-- Gate C 通过前不得接入 RAG；RAG 不能为候选 mask 直接寻找支持理由，必须同时检索
-  反对证据、混淆对象、困难负样本和传感器限制。
+- 当前已有 OA-AuxSeg final checkpoint、Stage 4 Region/Eval-dev 与监督资产、Stage 5
+  Region Adapter，以及 Stage 6 Text RAG 开发资产；但仍没有 Gate-A-accepted checkpoint、
+  正式 fixed predicted masks、专家共识 OA-GroundedEval、正式 Gate C/D 或 sealed-test 结论。
+- Stage 6 当前评价仅覆盖 dev 中 `target_present + baseline_correct_mask` records，不能替代
+  Gate C、wrong/shifted/empty-mask anti-rationalization 或 fixed predicted-mask 验收。RAG
+  必须同时提供 interpretation、confounder 和 limitation，不得只为候选 mask 寻找支持理由。
 
 ## Stage 0 验收
 
@@ -1300,17 +1318,18 @@ Programmatic Facts 或 Pass-1 observation。
 
 ### 验证、清理与边界
 
-- Stage 6 永久 synthetic tests `22/22`；Stage 4 `77/77`、Phase 4/Stage 5 `94/94`、
-  Phase 3 `45/45`，既有回归合计 `216/216`。Bank、retrieval 和 paired-run validator 均从
-  持久化文件重算通过。
+- Stage 6 当前永久测试为 `33/33`（含后续 Gate D automatic-only 合同测试）；Stage 4
+  `77/77`、Phase 4/Stage 5 `94/94`、Phase 3 `45/45`，既有回归合计 `216/216`。
+  Bank、retrieval 和 paired-run validator 均从持久化文件重算通过。
 - 已精确删除非正式 debug root、BGE `.cache/huggingface`（含停滞传输 incomplete）、
   editable-install 产生的未跟踪 egg-info；未创建一次性程序。正式三根、BGE/OCR 运行权重、
   永久测试和 Stage 0–5 产物均保留。
 - 本阶段运行了 bounded BGE/Qwen GPU inference；没有训练、optimizer/backward、权重改写、
-  sealed test、Gate A/C/D/E/F、外部付费 API、commit 或 push。
-- 当前状态仅为 `stage6_text_rag_engineering_complete`。没有 retrieval Gold 或专家
-  no-RAG vs RAG reference，Gate D 未冻结且未执行，因此 `formal_acceptance=false /
-  scientific_acceptance=false`。下一步只读复核命令：
+  sealed test、正式 Gate A/C/D/E/F、外部付费 API、commit 或 push。
+- 该工程闭环随后已扩展为下一节记录的 Gate D automatic-only 开发评价；当前仍没有
+  retrieval Gold、专家 no-RAG vs RAG reference 或正式 Gate D 阈值，因此
+  `formal_acceptance=false / scientific_acceptance=false`。以下命令只读复核底层
+  5-pair paired smoke，不代表总体 Gate D 开发评价：
 
 ```bash
 /home/yukun80/miniconda3/envs/qwen3vl/bin/python \
@@ -1400,7 +1419,7 @@ branch 与 HEAD 未改变，未 commit 或 push。现有 5-pair smoke 只作为�
   永久测试、Stage 0–5 产物和 `docs/archive/` 均保留。
 - 当前状态只记录为 `gate_d_development_automatic_only_complete`，不是 Gate D scientific
   pass。专家相关性、unsupported-claim 人工判定、retrieval Gold、正式阈值、sealed test 和
-  Gate D scientific acceptance 均未执行。下一步只读复核命令：
+  Gate D scientific acceptance 均未执行。当前总体只读复核入口：
 
 ```bash
 /home/yukun80/miniconda3/envs/qwen3vl/bin/python \
@@ -1408,3 +1427,19 @@ branch 与 HEAD 未改变，未 commit 或 push。现有 5-pair smoke 只作为�
   --config configs/stage6_text_rag/gate_d_dev_v1.yaml \
   validate
 ```
+
+## Stage 6 活动框架文档治理同步（2026-08-10）
+
+- 现场 HEAD 为 `main@d6478025fb448d3cf89a4eb95586e1d0ce41a573`。本轮只修改
+  `AGENTS.md` 与 `REBUILD_PROGRESS.md`，将活动路线统一为 OA-AuxSeg →
+  RS-GeneralDesc/RS-VLM → Mask-Grounded Region Adapter → Evidence-Constrained Text RAG
+  → 可选 Case RAG，并删除活动治理文档中的早期替代路线名称。
+- 冻结算法方案、`README.md`、`docs/archive/`、代码、测试、模型、Benchmark 和正式输出均未
+  修改。算法文档 SHA-256 仍为
+  `d94a8048f10beca592b972dda3e7d7b744b9242ed163b7a89b7da36c75ffe6f5`。
+- 本轮没有运行 GPU、训练、测试套件、正式科学评价或产物重建，也没有访问 sealed test、
+  commit 或 push。Stage 6 的 Bank、retrieval、5-pair smoke、25-pair run 和 automatic-only
+  evaluation 身份沿用已发布且已只读验证通过的现有资产。
+- 文档同步不改变科学边界：`gate_d_development_automatic_only_complete` 保持成立，
+  `gate_d_pass=null`、`formal_acceptance=false`、`scientific_acceptance=false`、
+  `sealed_test_accessed=false`。
