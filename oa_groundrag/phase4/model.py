@@ -395,6 +395,7 @@ class Qwen3VLModelAdapter:
         do_sample: bool,
         temperature: float,
         top_p: float,
+        logits_processor: Any | None = None,
     ) -> list[str]:
         self.eval()
         tensors = model_tensor_batch(batch)
@@ -408,6 +409,8 @@ class Qwen3VLModelAdapter:
                 temperature=temperature,
                 top_p=top_p,
             )
+        if logits_processor is not None:
+            generation_arguments["logits_processor"] = logits_processor
         generated = self.model.generate(**tensors, **generation_arguments)
         input_length = tensors["input_ids"].shape[1]
         continuation = generated[:, input_length:]

@@ -37,10 +37,12 @@ oa_groundrag/phase2/                    OA-AuxSeg
 oa_groundrag/phase3/                    RS-GeneralDesc Benchmark
 oa_groundrag/phase4/                    RS-VLM、区域证据与评价核心
 oa_groundrag/landslide_evidence/        Landslide Evidence Corpus
+oa_groundrag/text_rag/                  Evidence-Constrained Text RAG
 scripts/phase2_oa_auxseg/               OA-AuxSeg 薄 CLI
 scripts/phase3_rs_generaldesc/           RS-GeneralDesc 薄 CLI
 scripts/phase4_rs_vlm/                   RS-VLM 薄 CLI
 scripts/stage4_landslide_evidence/       Evidence Corpus 薄 CLI
+scripts/stage6_text_rag/                 Text RAG 薄 CLI
 configs/                                人工维护的严格配置
 tests/                                  单元与合成回归测试
 ```
@@ -279,6 +281,55 @@ python scripts/phase4_rs_vlm/run_mask_grounded_adapter.py \
 
 该入口不读取 sealed test，不把 retention 结果解释成 Gate F，也不产生正式科学接受结论。
 
+### Evidence-Constrained Text RAG
+
+Stage 6 只消费用户问题、已发布的 Pass-1 structured visual observation 和程序事实；它不再
+输入图像，不生成或修改 mask，也不改写 Pass-1 视觉观察。依赖安装与统一入口如下：
+
+```bash
+python -m pip install -e '.[phase4,stage6]'
+python scripts/stage6_text_rag/run_text_rag.py --help
+python scripts/stage6_text_rag/run_text_rag.py preflight
+```
+
+正式配置显式绑定知识来源、固定 revision 的本地 dense 权重、Stage 5 best pointer、
+OA-GroundedEval-dev 和 Pass-1 predictions。首次构建必须使用全新输出根；已有正式根只运行
+只读 validator，不允许静默覆盖：
+
+```bash
+python scripts/stage6_text_rag/run_text_rag.py build-bank
+python scripts/stage6_text_rag/run_text_rag.py validate-bank
+python scripts/stage6_text_rag/run_text_rag.py prepare-dev
+python scripts/stage6_text_rag/run_text_rag.py retrieve-dev
+python scripts/stage6_text_rag/run_text_rag.py validate-retrieval
+```
+
+paired Pass-2 使用相同 Pass-1、generator、prompt 主体和 greedy decoding；`no_rag` 与
+`text_rag` 的唯一主要差异是 evidence packet。该命令需要 CUDA，只运行配置冻结的开发样本：
+
+```bash
+python scripts/stage6_text_rag/run_text_rag.py generate-paired --limit 5
+python scripts/stage6_text_rag/run_text_rag.py validate-run
+```
+
+在既有 80-record retrieval 与工程 smoke 之上，automatic-only Gate D 开发评价使用独立
+严格协议。`prepare` 冻结并审计样本与 text-only token，`generate` 需要 CUDA，`evaluate`
+只计算可重算的结构、引用和成对文本描述性指标，`validate` 只读复核全部三层产物：
+
+```bash
+python scripts/stage6_text_rag/run_gate_d_dev.py \
+  --config configs/stage6_text_rag/gate_d_dev_v1.yaml prepare
+python scripts/stage6_text_rag/run_gate_d_dev.py \
+  --config configs/stage6_text_rag/gate_d_dev_v1.yaml generate
+python scripts/stage6_text_rag/run_gate_d_dev.py \
+  --config configs/stage6_text_rag/gate_d_dev_v1.yaml evaluate
+python scripts/stage6_text_rag/run_gate_d_dev.py \
+  --config configs/stage6_text_rag/gate_d_dev_v1.yaml validate
+```
+
+Bank/retrieval/paired validator 通过仅表示工程合同成立，不表示 Gate D、专家评价或科学验收
+通过；正式产物身份和当前边界只查 `REBUILD_PROGRESS.md`。
+
 ## 核心科学边界
 
 - 光学影像是分割主模态和空间边界基准。
@@ -299,6 +350,7 @@ python -m unittest discover -s tests/phase1_benchmark_build -v
 python -m unittest discover -s tests/phase2_oa_auxseg -v
 python -m unittest discover -s tests/phase3_rs_generaldesc -v
 python -m unittest discover -s tests/phase4_rs_vlm -v
+python -m unittest discover -s tests/stage6_text_rag -v
 git diff --check
 ```
 

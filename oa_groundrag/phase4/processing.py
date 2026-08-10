@@ -105,6 +105,12 @@ class ProcessorAdapter(Protocol):
     ) -> EncodedSample:
         ...
 
+    def encode_text_inference(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+    ) -> EncodedSample:
+        ...
+
 
 class Qwen3VLProcessorAdapter:
     """本地 AutoProcessor + qwen-vl-utils 的薄适配层。"""
@@ -263,6 +269,83 @@ class Qwen3VLProcessorAdapter:
             labels=None,
             input_token_count=int(tensors["input_ids"].numel()),
             image_count=image_count,
+        )
+
+    def encode_text_inference(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+    ) -> EncodedSample:
+        """Stage 6 文本 Pass-2 专用入口；不改变既有视觉接口的至少一图合同。"""
+
+        raw_messages = [dict(message) for message in messages]
+        continue_final_message = (
+            len(raw_messages) == 2
+            and raw_messages[0].get("role") == "user"
+            and raw_messages[1].get("role") == "assistant"
+        )
+        if continue_final_message:
+            assistant_content = raw_messages[1].get("content")
+            if (
+                not isinstance(assistant_content, list)
+                or len(assistant_content) != 1
+                or assistant_content[0].get("type") != "text"
+                or not isinstance(assistant_content[0].get("text"), str)
+                or not assistant_content[0]["text"]
+            ):
+                raise ProcessingError(
+                    ReasonCode.TYPE_MISMATCH,
+                    "text-only assistant prefill 必须是单一非空文本块",
+                )
+            message_list = raw_messages
+        else:
+            message_list = strip_assistant_message(raw_messages)
+        if count_message_images(message_list) != 0:
+            raise ProcessingError(
+                ReasonCode.TYPE_MISMATCH,
+                "text-only inference 不接受图像",
+            )
+        text = self.processor.apply_chat_template(
+            message_list,
+            tokenize=False,
+            add_generation_prompt=not continue_final_message,
+            continue_final_message=continue_final_message,
+        )
+        encoded = self.processor(
+            text=[text],
+            padding=False,
+            return_tensors="pt",
+        )
+        allowed = {"input_ids", "attention_mask", "mm_token_type_ids"}
+        required = {"input_ids", "attention_mask"}
+        unknown = set(encoded) - allowed
+        if unknown or required - set(encoded):
+            raise ProcessingError(
+                ReasonCode.MODEL_IDENTITY_MISMATCH,
+                "Qwen text-only processor tensor keys 不匹配",
+                details={
+                    "unknown": sorted(unknown),
+                    "missing": sorted(required - set(encoded)),
+                },
+            )
+        output: dict[str, Tensor] = {}
+        for key, value in encoded.items():
+            if not isinstance(value, Tensor) or value.ndim != 2 or value.shape[0] != 1:
+                raise ProcessingError(
+                    ReasonCode.TYPE_MISMATCH,
+                    f"text-only processor {key} shape/type 非法",
+                )
+            output[key] = value[0].contiguous()
+        token_count = int(output["input_ids"].numel())
+        if token_count > self.max_input_tokens:
+            raise ProcessingError(
+                ReasonCode.TOKEN_LIMIT_EXCEEDED,
+                f"text-only input tokens={token_count} 超过上限 {self.max_input_tokens}",
+            )
+        return EncodedSample(
+            tensors=output,
+            labels=None,
+            input_token_count=token_count,
+            image_count=0,
         )
 
     def _validate_images(

@@ -28,6 +28,11 @@ phase4 = [
     "safetensors>=0.6,<1",
     "transformers>=5.3,<6",
 ]
+stage6 = [
+    "PyMuPDF>=1.26,<2",
+    "rapidocr>=3,<4",
+    "onnxruntime>=1.22,<2",
+]
 
 [project.scripts]
 oa-auxseg = "oa_groundrag.phase2.cli:main"
@@ -39,5 +44,6 @@ include = [
     "scripts.phase1_benchmark_build*",
     "scripts.phase3_rs_generaldesc*",
     "scripts.phase4_rs_vlm*",
+    "scripts.stage6_text_rag*",
 ]
 namespaces = true

@@ -1,0 +1,159 @@
+schema_version: oa_groundrag.text_rag.source_registry.v1
+source_root: ../../docs/RAG_knowledge
+sources:
+  - source_id: insar_systematic_review
+    title: "Applications and Advancements of Spaceborne InSAR in Landslide Monitoring and Susceptibility Mapping: A Systematic Review"
+    source_kind: peer_reviewed_review
+    authority_class: scientific_reference
+    source_status: published
+    publication_year: null
+    standard_number: null
+    language: en
+    relative_path: "Applications and Advancements of Spaceborne InSAR in Landslide Monitoring and Susceptibility Mapping A Systematic Review.pdf"
+    expected_sha256: e377e45370e253febd6c97160962361dda8f63087b66bc137a83584ad17fa63d
+    parser_profile: paper
+    default_modalities: [insar]
+    retrieval_enabled: true
+  - source_id: cruden_varnes_1996
+    title: Landslide Types and Processes
+    source_kind: handbook_chapter
+    authority_class: foundational_scientific_reference
+    source_status: historical
+    publication_year: 1996
+    standard_number: null
+    language: en
+    relative_path: "Cruden and Varnes (1996).pdf"
+    expected_sha256: be796c1c613dc1ba5f00ce41d3663195196535071e635fab9ed47fb73795e292
+    parser_profile: paper
+    default_modalities: [general]
+    retrieval_enabled: true
+  - source_id: dzt_0438_2023
+    title: 地质灾害风险调查评价规范（1∶50 000）
+    source_kind: industry_standard
+    authority_class: geological_industry_standard
+    source_status: unverified
+    publication_year: 2023
+    standard_number: DZ/T 0438-2023
+    language: zh
+    relative_path: "DZT 0438-2023 地质灾害风险调查评价规范(1：50000).pdf"
+    expected_sha256: 0774c1f565174d89ba19ab78e74867d8981a6b5cba61da6c7a62f6b040278ff2
+    parser_profile: standard
+    default_modalities: [general, optical]
+    retrieval_enabled: true
+  - source_id: dzt_0502_2025
+    title: 地质灾害隐患综合遥感识别技术规程
+    source_kind: industry_standard
+    authority_class: geological_industry_standard
+    source_status: unverified
+    publication_year: 2025
+    standard_number: DZ/T 0502-2025
+    language: zh
+    relative_path: "DZ_T 0502-2025 地质灾害隐患综合遥感识别技术规程.pdf"
+    expected_sha256: 144ae83ca996b37867e6f043b81a7c9b84b5cfa5b7c0e2b23625b10a18859cef
+    parser_profile: standard
+    default_modalities: [general, optical, sar, insar]
+    retrieval_enabled: true
+  - source_id: gbt_40112_2021
+    title: 地质灾害危险性评估规范
+    source_kind: national_standard
+    authority_class: national_recommended_standard
+    source_status: unverified
+    publication_year: 2021
+    standard_number: GB/T 40112-2021
+    language: zh
+    relative_path: "GB∕T+40112-2021+地质灾害危险性评估规范.pdf"
+    expected_sha256: 9768cc3fa49ac5a99316d6b5878599ea995d15e784a69f0bbc26a419c9972331
+    parser_profile: standard
+    default_modalities: [general]
+    retrieval_enabled: true
+  - source_id: hungr_2014
+    title: The Varnes Classification of Landslide Types, an Update
+    source_kind: peer_reviewed_article
+    authority_class: scientific_reference
+    source_status: published
+    publication_year: 2014
+    standard_number: null
+    language: en
+    relative_path: "Hungr et al. (2014).pdf"
+    expected_sha256: 03ac58c4ca0b17621986714ba071cc2d1adfa2a09bb2b58d62950a423500447e
+    parser_profile: paper
+    default_modalities: [general]
+    retrieval_enabled: true
+  - source_id: sar_2024_insar_basics
+    title: SAR 2024 Part 2 Final（InSAR 基础、干涉相位、相干性及解释）
+    source_kind: technical_training_material
+    authority_class: training_reference
+    source_status: unverified
+    publication_year: 2024
+    standard_number: null
+    language: zh_en
+    relative_path: "SAR 2024 Part 2 Final(InSAR 基础、干涉相位、相干性及解释).pdf"
+    expected_sha256: cf1e214ec516bb42ffa20cb1f812c78eca58f4c1527f3b09def1ac03ea9405c9
+    parser_profile: slides
+    default_modalities: [sar, insar]
+    retrieval_enabled: true
+  - source_id: usgs_landslide_handbook
+    title: The Landslide Handbook—A Guide to Understanding Landslides
+    source_kind: government_handbook
+    authority_class: government_scientific_handbook
+    source_status: published
+    publication_year: 2008
+    standard_number: null
+    language: en
+    relative_path: "USGS《The Landslide Handbook》.pdf"
+    expected_sha256: 378244cdf3b47d688926330707d40848934329f7cc53197fb895c37c9e80774c
+    parser_profile: handbook
+    default_modalities: [general, optical]
+    retrieval_enabled: true
+  - source_id: varnes_1978
+    title: Slope Movement Types and Processes
+    source_kind: handbook_chapter
+    authority_class: foundational_scientific_reference
+    source_status: historical
+    publication_year: 1978
+    standard_number: null
+    language: en
+    relative_path: "Varnes (1978).pdf"
+    expected_sha256: a44c5a4ccb84363a9f9e4a3165d71fb94bedb9a758cc908cac1d459bc7d8ba97
+    parser_profile: paper
+    default_modalities: [general]
+    retrieval_enabled: true
+  - source_id: nasa_arset_sar_2019
+    title: Using SAR for Disaster Management—Landslide InSAR Physics, Product Generation and Interpretation
+    source_kind: government_training_material
+    authority_class: government_training_reference
+    source_status: published
+    publication_year: 2019
+    standard_number: null
+    language: en
+    relative_path: "arset-SARdisasters2019-part2-用滑坡 InSAR 物理、产品生成与解释课程.pdf"
+    expected_sha256: adca2b5c15fd12b5cf79407fea94eac748115134fab8b5b28eab0c5c492c7ef8
+    parser_profile: slides
+    default_modalities: [sar, insar]
+    retrieval_enabled: true
+  - source_id: geological_disaster_survey_50000
+    title: 地质灾害调查技术要求（1∶50 000）
+    source_kind: technical_specification
+    authority_class: geological_survey_specification
+    source_status: unverified
+    publication_year: null
+    standard_number: null
+    language: zh
+    relative_path: "地质灾害调查技术要求（1∶50 000）.pdf"
+    expected_sha256: d2e720b0bbd50a877c2feedf70c3c12378a0ada9ea1c744cf0b27807c5f3240d
+    parser_profile: standard
+    default_modalities: [general, optical]
+    retrieval_enabled: true
+  - source_id: detailed_disaster_survey_50000
+    title: 滑坡崩塌泥石流灾害详细调查规范（1∶50 000）
+    source_kind: technical_specification
+    authority_class: geological_survey_specification
+    source_status: unverified
+    publication_year: null
+    standard_number: null
+    language: zh
+    relative_path: "滑坡崩塌泥石流灾害详细调查规范（150000）.pdf"
+    expected_sha256: 530bae893156393d0180d04fa33df0288d17e8f64e0ff381cb2ab6fcdd15bb3d
+    parser_profile: standard
+    default_modalities: [general, optical]
+    retrieval_enabled: true

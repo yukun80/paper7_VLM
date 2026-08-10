@@ -4,23 +4,23 @@
 
 - program: `OA_GROUNDRAG_V2`
 - authority: `docs/OA-GroundRAG_算法构建方案.md`
-- stage: `5`
-- stage_name: `MASK_GROUNDED_BASELINE_AND_ADAPTER`
-- stage_status: `mask_grounded_region_adapter_engineering_complete`
-- current_task: `STAGE5_MASK_GROUNDED_REGION_ADAPTER`
-- current_task_status: `training_dev_evaluation_and_retention_complete_automatic_only`
-- next_gate: `A (OA-AuxSeg branch) / C (after Stage 4–5)`
-- scientific_status: `Stage 4 mixed model/single-expert compact supervision has 6974 rows; Stage 5 RS-General-warm-start Adapter trained to step 1000 with best step 900 and automatic-only dev/retention reports complete; 276/340 Region predictions valid, no Gold/expert val/formal or scientific acceptance`
-- execution_date: `2026-08-09`
+- stage: `6`
+- stage_name: `EVIDENCE_CONSTRAINED_TEXT_RAG`
+- stage_status: `gate_d_development_automatic_only_complete`
+- current_task: `STAGE6_GATE_D_DEVELOPMENT_AUTOMATIC_ONLY`
+- current_task_status: `frozen_25pair_protocol_gpu_run_and_recomputable_auto_eval_complete`
+- next_gate: `A (OA-AuxSeg branch) / C-D (scientific protocols pending)`
+- scientific_status: `Stage 6 engineering and Gate D automatic-only development evaluation are complete: the 25-pair run is strict-valid and its descriptive report is recomputable; expert relevance, unsupported-claim rate, retrieval Gold, formal Gate D thresholds, scientific acceptance and sealed test remain pending`
+- execution_date: `2026-08-10`
 - branch: `main`
-- current_head: `912c5ce92a965ffda06f84cd924d3cd9e84c23ea`
+- current_head: `eae76528b1fa7aaa1793af5451941d510d4bba29`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
 - stage3_gate_b_evidence_baseline_head: `2ad01f0723eaf698c0cbaff9bb3e993122bd87e0`
 - stage4a_auto_pilot_baseline_head: `ee71e02127476da8e75b6bc9f2ce007fc38f77e5`
-- algorithm_design_baseline_head: `768d68804d48ab0384f28832a6ee4c838be3e493`
-- algorithm_design_sha256: `dbf93a4ceea1ae973974fb039d5bd2c35d8a62b615ce2add3ab1583f91366d36`
+- algorithm_design_baseline_head: `eae76528b1fa7aaa1793af5451941d510d4bba29`
+- algorithm_design_sha256: `d94a8048f10beca592b972dda3e7d7b744b9242ed163b7a89b7da36c75ffe6f5`
 - algorithm_design_document_immutable: `true`
 - progress_single_source: `REBUILD_PROGRESS.md`
 - active_training_process_found: `false`
@@ -62,13 +62,25 @@
 - stage5_rs_general_retention_reported: `true`
 - stage5_formal_acceptance: `false`
 - stage5_scientific_acceptance: `false`
+- stage6_text_evidence_bank_built: `true`
+- stage6_text_evidence_bank_validated: `true`
+- stage6_hybrid_retrieval_completed: `true`
+- stage6_paired_gpu_smoke_completed: `true`
+- stage6_engineering_complete: `true`
+- stage6_gate_d_dev_protocol_frozen: `true`
+- stage6_gate_d_dev_25pairs_completed: `true`
+- stage6_gate_d_automatic_eval_completed: `true`
+- stage6_gate_d_development_automatic_only_complete: `true`
+- stage6_gate_d_scientific_pass: `false`
+- stage6_formal_acceptance: `false`
+- stage6_scientific_acceptance: `false`
 - oa_grounded_eval_completed: `false`
 - stage2_gpu_run_performed: `false`
 - stage2_native_full_deep_validation_performed: `true`
 - identity_hardening_repackage_performed: `false`
 - identity_hardening_deep_validation_performed: `false`
 - identity_hardening_gpu_run_performed: `false`
-- current_task_training_or_optimizer_step_performed: `true`
+- current_task_training_or_optimizer_step_performed: `false`
 - formal_evaluation_performed: `true`
 - test_split_evaluated: `false`
 - commit_performed: `false`
@@ -94,12 +106,12 @@ Mask-Grounded Region LoRA、340 条 automatic-only dev 评价和冻结 Gate B se
 
 ## 文档单一来源治理
 
-2026-08-04 开发开始时，现场算法方案已更新到包含新版 Stage 4 的 HEAD
-`768d68804d48ab0384f28832a6ee4c838be3e493`，文件 SHA-256 为
-`dbf93a4ceea1ae973974fb039d5bd2c35d8a62b615ce2add3ab1583f91366d36`。
-本文件此前记录的 `ee71e021...` / `2886d70c...` 已过期；本次首次写入只修复上述
-算法身份并将新版设计重新冻结。算法方案正文未被本次实施修改，其中的状态文字仍是
-设计冻结快照，不用于判断现场进度。
+当前冻结算法方案来自 HEAD
+`eae76528b1fa7aaa1793af5451941d510d4bba29`，文件 SHA-256 为
+`d94a8048f10beca592b972dda3e7d7b744b9242ed163b7a89b7da36c75ffe6f5`。
+它已包含简化后的 Stage 6 Evidence-Constrained Text RAG 设计。本次 Stage 6 实施没有修改
+算法方案正文；其中的状态文字仍是设计冻结快照，不用于判断现场进度。此前在本文件记录的
+`768d6880...` / `dbf93a4c...` 是旧设计身份，只保留在历史运行段落中。
 
 `README.md` 只保留长期有效的项目结构、合同边界和运行入口；`AGENTS.md`
 只保留操作、授权、安全和文档治理规则。阶段状态、运行结果、正式产物
@@ -1192,3 +1204,207 @@ Eval-dev、Stage 4A、RS-General Adapter 与 Gate B 继续保留且只读。
 - 未运行：sealed test、RAG、Teacher Silver、Gold、外部 API、Gate A/C/D/E/F、commit 或
   push。当前工程闭环已完成；仍需负责人决定是否针对 64 条 no-target 合同失败开展下一轮
   prompt/supervision 改进，以及未来是否建设专家 dev reference 与冻结 retention/科学阈值。
+
+## Stage 6 Evidence-Constrained Text RAG 工程闭环（2026-08-10）
+
+本次从干净的
+`main@eae76528b1fa7aaa1793af5451941d510d4bba29` 开始。Stage 5 的 64 条 no-target
+strict-output failure 保持原状，不作为本阶段阻塞项。Stage 6 仅消费 OA-GroundedEval-dev
+和 valid Pass-1；未读取 test/sealed test，未运行 OA-AuxSeg，未修改 Stage 5 权重、mask、
+Programmatic Facts 或 Pass-1 observation。
+
+### 环境、权重与冻结输入
+
+- `qwen3vl` 环境保持 PyTorch `2.8.0+cu128`、Transformers `5.3.0`、PEFT `0.15.2`、
+  NumPy `2.1.2`；Stage 6 新增 PyMuPDF `1.28.2`、RapidOCR `3.9.2`、ONNX Runtime
+  `1.28.0`。安装 dry-run 未要求降级或替换 torch/transformers/peft。
+- 本地 dense 模型为 `BAAI/bge-m3` 固定 revision
+  `5617a9f61b028005a4858fdac845db406aefb181`。使用 `hf 1.26.0` 固定 revision 与
+  allowlist 下载；大权重传输停滞后仅通过同一官方 fixed-revision resolve URL 做 byte-range
+  续传。`pytorch_model.bin` 为 `2,271,145,830` bytes，SHA-256
+  `b5e0ce3470abf5ef3831aa1bd5553b486803e83251590ab7ff35a117cf6aad38`；12 个保留文件的
+  identity 为 `8cb129bae94b7ef5f3fe2e8eec3f64527615ba1f5dcebe1ce4f39e4dad26e9a7`。
+- BGE 以 `local_files_only=true / trust_remote_code=false` 加载，模型类型
+  `xlm-roberta`、dense 维度 `1024`、最大 token `1024`。真实 CUDA smoke 的 3 个中英文
+  向量 shape 为 `(3, 1024)`、L2 norm 均为 1、重复编码最大差值为 0，相关段落排名第一。
+- RapidOCR 使用安装包自带 ONNX：detector / recognizer / classifier SHA-256 分别为
+  `090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f` /
+  `6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884` /
+  `e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c`，三模型 identity
+  `037b737ea343c5c6997ecdb17d6b5dffe6f3332839f062ebca3c3e05abf1dd8e`；未调用外部 OCR API。
+- Stage 5 best 始终从 pointer 动态解析为 step 900。pointer / checkpoint manifest /
+  Adapter / workflow state SHA-256 仍为 `368bc48f...` / `c2038235...` / `858e12ff...` /
+  `9c5a9074...`。Pass-2 只加载 LoRA trainable state，显式排除 optimizer、scheduler、RNG
+  和 sampler。真实本地 Qwen text-only processor smoke 为 0 image / 38 input tokens；原视觉
+  inference 的至少一幅图约束保持不变。
+
+### Text Evidence Bank
+
+- Source Registry 显式登记 `docs/RAG_knowledge/` 的 12 个 PDF；registry semantic SHA-256
+  `f18a65169af4fa1a8529f8c3d17287f957943080f5801620e391964586070fc0`。原 PDF 全程只读，
+  authority/status 不从文件名猜测。
+- 全量 page ledger 共 649 页：原生 text-layer 474 页、RapidOCR 可用 163 页、OCR 失败并
+  明确排除 12 页，共 637 页可用。12 个来源均产生可用 Evidence Unit。
+- 共构建 2,929 units；正式索引 1,283，其中 `interpretation=872 / confounder=138 /
+  limitation=273`。另有 1,643 个 unclassified unit 保留审计但不索引；检测 exact duplicate
+  22 个，只索引 canonical unit。
+- 正式根：`outputs/stage6_text_rag/text_evidence_bank_v1`。Bank ID
+  `9322a9139d04be7665feb154153b7dc1c2d35b0871fc32bbd6a6daa942fabb28`；manifest / ledger
+  SHA-256 为 `9b891e191581746173a27b80356caa18ec9be5d3c36eaee67444b05a070f0bcc` /
+  `1c73fbd6135daaaf4767f8427e7c9e1ba69f09e0223aaad2c3e151a013c1e650`。
+- lexical index 为 SQLite FTS5，英文 token 与中文 unigram+bigram 显式分析；dense index 为
+  BGE-M3 CLS + L2 normalization 的 NumPy matrix，检索使用 brute-force cosine。Hybrid
+  ranking 固定 metadata/modality filter → lexical+dense → RRF (`rrf_k=60`) → 类型 quota。
+
+### 80 条 dev retrieval
+
+- OA-GroundedEval-dev manifest 为 `fed7d8b9...`；Stage 5 Pass-1 manifest / predictions
+  SHA-256 为 `4b090b43...` / `84d06ed5...`。只选择 valid 的
+  `target_present + baseline_correct_mask`：五来源各 16 条，共 80 条；先按来源排序并
+  round-robin 冻结，selection ID
+  `fd1d07f6fdd9d66cdbd21d1bd9a5f1045133eb1e47c4f3d5483180840ef95f40`。
+- 两个 deterministic builder 共生成 160 queries；80 个 packet 共 480 items，严格为
+  `interpretation=160 / confounder=160 / limitation=160`，same-source/page duplicate 为 0，
+  全部 source/page/section 可追溯。query 与 rank 重算一致。
+- 正式根：`outputs/stage6_text_rag/dev_retrieval_v1`。Retrieval ID
+  `e7edfb2ae05a5114c105ce82e7c9bcc87c089dd54d1bd68a5bc43ea860c2f1c2`；manifest / ledger
+  SHA-256 为 `da0e207b284bee81824b3542efb8a4b19138c92f07ba09e0afc3f11c4c0b9e7c` /
+  `9dd99e6c459ffc91d4e05d604b83a1cc07137dfb4bb532baf7c277c1d839c84d`。
+- 没有 retrieval Gold；Recall@K、MRR、nDCG 均明确为 `null`，不据此声称 retrieval 科学通过。
+
+### Text-only paired Pass-2
+
+- Query、Balanced Packet 和 Pass-2 均为版本化严格合同。Task router 只让
+  `candidate_interpretation / professional_qa / evidence_constrained_report` 进入 RAG；纯
+  scene/region description 不检索，未知任务拒绝。
+- Pass-2 输出固定包含 supporting interpretations、alternative explanations、limitations、
+  recommended verification、summary，每项为 `{text,evidence_ids}`。生成时 deterministic
+  JSON FSM 只约束字段结构和当前 packet 内、类型相容的 citation ID；自然语言 token 仍由
+  Stage 5 best generator greedy 生成，validator 直接重解析 raw output，不做输出后修复。
+- 从冻结 selection 的前 5 条各取一个来源，每条运行 `no_rag` 与 `text_rag`，共 10 次。
+  两模式使用相同 Pass-1、程序事实、问题、generator、prompt 主体、batch 1、greedy 和
+  `max_new_tokens=768`，唯一主要差异为 evidence packet。generator identity SHA-256 为
+  `9ecd73ce3e823abb3b6054c59f6dcaed954f85d5cd82f6144ccaf2bafd6b0425`。
+- 首次 5-pair pre-release 尝试暴露 prompt/结构生成缺陷（9 条 strict JSON invalid、1 条输入
+  超限），未发布正式根；随后只用同一冻结首条做 bounded debug，改为生成时 JSON/citation
+  约束，debug root 在验收后删除。下一次全量尝试又因 1 条明确否定的 limitation 被否定作用域
+  规则误判而拒绝发布；永久测试补入该否定句后，使用同一冻结 5 条从头重跑。全过程没有换
+  样本、保留失败正式根或自动修复模型输出。最终为
+  schema/citation/evidence-ID `10/10`、text-RAG 四类字段利用 `5/5`、evidence binding rate
+  `1.0`、forbidden claim `0`、failure `0`。生成总时长约 `228.97 s`，peak VRAM
+  `4,906,324,992` bytes（约 4.57 GiB），GPU 为 RTX 4090 D。
+- 正式根：`outputs/stage6_text_rag/pass2_gpu_smoke_v1`。Run ID
+  `ab8a0dfd339e71f84fe382b8c19cb093759d75cd1f7ecadb3a7e5620edb9215d`；manifest / ledger
+  SHA-256 为 `987b6f7601e4f16632f9c07d8901242717a6551ed3b6758819eb44d0b097a6eb` /
+  `91975b47fbc4e49e336bddcf63e7ea5c72a9a353a4e6e3d1648d423fdef68a59`。
+
+### 验证、清理与边界
+
+- Stage 6 永久 synthetic tests `22/22`；Stage 4 `77/77`、Phase 4/Stage 5 `94/94`、
+  Phase 3 `45/45`，既有回归合计 `216/216`。Bank、retrieval 和 paired-run validator 均从
+  持久化文件重算通过。
+- 已精确删除非正式 debug root、BGE `.cache/huggingface`（含停滞传输 incomplete）、
+  editable-install 产生的未跟踪 egg-info；未创建一次性程序。正式三根、BGE/OCR 运行权重、
+  永久测试和 Stage 0–5 产物均保留。
+- 本阶段运行了 bounded BGE/Qwen GPU inference；没有训练、optimizer/backward、权重改写、
+  sealed test、Gate A/C/D/E/F、外部付费 API、commit 或 push。
+- 当前状态仅为 `stage6_text_rag_engineering_complete`。没有 retrieval Gold 或专家
+  no-RAG vs RAG reference，Gate D 未冻结且未执行，因此 `formal_acceptance=false /
+  scientific_acceptance=false`。下一步只读复核命令：
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage6_text_rag/run_text_rag.py \
+  --config configs/stage6_text_rag/dev_v1.yaml \
+  validate-run
+```
+
+## Stage 6 Gate D automatic-only 开发评价（2026-08-10）
+
+本轮从同一 `main@eae76528b1fa7aaa1793af5451941d510d4bba29` 工作树继续实施；结束时
+branch 与 HEAD 未改变，未 commit 或 push。现有 5-pair smoke 只作为工程调试样本，不进入
+本轮描述性增益结论。本轮没有建立专家工作台、retrieval Gold、正式 Gate D 阈值或 Stage 7，
+也没有训练、下载新权重、修改 Stage 5 checkpoint 或访问 sealed test。
+
+### 冻结协议与 prompt 审计
+
+- 新增严格配置 `configs/stage6_text_rag/gate_d_dev_v1.yaml`、业务模块
+  `oa_groundrag/text_rag/gate_d.py` 和薄 CLI
+  `scripts/stage6_text_rag/run_gate_d_dev.py`，提供 `prepare / generate / evaluate /
+  validate`。既有 paired generator 抽成显式 selected-record consumer，原 Stage 6
+  `generate-paired --limit 5` 和 v1 validator 身份保持不变。
+- `prepare` 先重算 Bank、80-record retrieval 和 5-pair smoke。它从 smoke predictions
+  重算并排除 5 个 record ID，再按原 80 条 selection 顺序对
+  `gdcld / landslide4sense / landslidebench_agent / lmhld / multimodal_landslide`
+  各取最前 5 条剩余记录，并按固定来源顺序 round-robin；25 条与 smoke 零重叠，五来源
+  均为 5 条。ordered-record identity 为
+  `dedefb405297611b96e45ae9547c4f3e73584808f6ea5ea788b6cd27b1eabc40`。
+- 真实 Qwen processor 对 50 个 text-only prompt 的 token 审计范围为 `915–3785`，0 条
+  超过 4096，0 条含图输入。
+- 正式根 `outputs/stage6_text_rag/gate_d_dev_protocol_v1`；Protocol ID
+  `6d54e63f23cc6bb78d4f35b4f6737262e3a600f8b5c2b22d29a4ccf69ee261f9`；manifest / ledger
+  SHA-256 为 `8ddf9829c38ae8ab7d583a47f7ba1e4bdf5be0b4dc200618df63669159fa3cd5` /
+  `f12f67c3bcc163f887d78da0d09d32cbffdc8bd58d53e91f1ef4fbc84c14d38d`。
+
+### 25-pair GPU run
+
+- 在 `/home/yukun80/miniconda3/envs/qwen3vl/bin/python` 和 RTX 4090 D 上运行；每条均为
+  `no_rag + text_rag`，共 50 次，batch size 1、greedy、`max_new_tokens=768`。两模式共享
+  Pass-1、Programmatic Facts、问题、Stage 5 step-900 best generator 与 prompt 主体，唯一
+  主要差异是 evidence packet。只加载 trainable LoRA state，未加载 optimizer、scheduler、
+  RNG 或 sampler。
+- 第一次全量尝试得到 48 条 strict-valid，但确定性 forbidden-claim 检测器把“工程活动导致
+  局部地表扰动”误判为滑坡诱因，并把“可能被误认为滑坡”误判为候选升级，因此整体拒绝发布。
+  修复只区分反例语境与真实“诱因导致滑坡/确认滑坡”断言；新增永久测试仍拒绝“暴雨导致
+  滑坡”和转折后的确认升级。失败尝试没有正式根，也没有复用、换样或输出后修复；随后在
+  同一 Protocol ID 上从头重跑全部 50 次。
+- 最终 run 为 records `25/25`、predictions `50/50`、schema/evidence-ID/citation
+  `50/50`、prompt fairness pairs `25/25`、failure `0`、forbidden claim `0`。text-RAG 的
+  interpretation/confounder/limitation/recommended-verification 四类字段均为 `25/25`。
+  实际生成时长 `1461.909153 s`，peak VRAM `4,917,782,016` bytes（约 4.58 GiB）。
+- 正式根 `outputs/stage6_text_rag/gate_d_dev_25pairs_v1`；Run ID
+  `0231fd2adfcd24874562198cdfe5304db9205ffbf644bb4ed00a5daaceaf2f86`；manifest / ledger
+  SHA-256 为 `170ad8acaadc626e224b3a93e9a7e1758f78d07438b9adcf9ad60027f49673b5` /
+  `a0e52e0c5a94f6e1c14f54547f877d5d78db6b2895eeb59913347cd849da1e92`。
+
+### Automatic-only 报告
+
+- 正式根 `outputs/stage6_text_rag/gate_d_dev_auto_eval_v1`；Evaluation ID
+  `1fd09e5f536b448642fa524fa85a9f94bc8e82ef8cb2e2b408ead971be2e80d8`；manifest / ledger
+  SHA-256 为 `85a0efdda16e582b768128a16348bda22448639cf1c4694dbe37d64e53fc22f6` /
+  `791e3253b4402339a4ab5ced68f926460353effdcc15ea6491659cb5be08299f`。
+- 25 个 pair 全部完整，schema `50/50`，no-RAG 空 citation `25/25`，text-RAG citation
+  valid `25/25`，forbidden/candidate-upgrade 均为 0；两模式五个字段非空率均为 `25/25`，
+  25 个 pair 均至少一个字段文本变化。各字段变化数依次为 supporting `19`、alternative
+  `24`、limitations `21`、verification `25`、summary `19`；limitations 双模式保留
+  `25/25`。
+- no-RAG / text-RAG 每 pair 平均字符数为 `240.8 / 239.44`，平均差 `-1.36`；125 个
+  citation references 全部具备 source/page/section traceability，涉及 11 个 unique evidence
+  IDs，类型计数为 interpretation `50`、confounder `25`、limitation `50`。
+- `unsupported_claim_rate / expert_relevance / Recall@K / MRR / nDCG / gate_d_pass`
+  全部严格为 `null`；`expert_reference_available=false`、
+  `retrieval_gold_available=false`、`formal_acceptance=false`、
+  `scientific_acceptance=false`。
+
+### 验证、清理与当前边界
+
+- Stage 6 永久测试更新为 `33/33`；Stage 4 `77/77`、Phase 4/Stage 5 `94/94`、Phase 3
+  `45/45`，既有回归仍为 `216/216`。Bank、retrieval、5-pair smoke、Gate D protocol、
+  25-pair run 与 automatic evaluation validators 均从持久化文件重算通过；`compileall` 与
+  `git diff --check` 通过。Ruff 在 `qwen3vl` 中不可用（`No module named ruff`），未为此
+  安装额外工具。
+- 清理前检查了 ownership、Git tracking、链接、打开文件和活动进程。没有遗留 Gate D
+  `_work`、debug/pre-release 或 `.staging-*` 根；精确删除了
+  `oa_groundrag/text_rag/__pycache__`、`scripts/stage6_text_rag/__pycache__`、
+  `tests/stage6_text_rag/__pycache__`。没有创建一次性程序。正式六根、BGE/OCR 运行权重、
+  永久测试、Stage 0–5 产物和 `docs/archive/` 均保留。
+- 当前状态只记录为 `gate_d_development_automatic_only_complete`，不是 Gate D scientific
+  pass。专家相关性、unsupported-claim 人工判定、retrieval Gold、正式阈值、sealed test 和
+  Gate D scientific acceptance 均未执行。下一步只读复核命令：
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/stage6_text_rag/run_gate_d_dev.py \
+  --config configs/stage6_text_rag/gate_d_dev_v1.yaml \
+  validate
+```

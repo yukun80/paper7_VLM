@@ -651,6 +651,157 @@ class CheckpointManager:
             sampler_state=training_state["sampler_state"],
         )
 
+    def inspect_trainable(
+        self,
+        root: Path,
+        *,
+        expected_config_semantic_sha256: str,
+        expected_benchmark_identity: Mapping[str, Any],
+        expected_validation_selection_identity: Mapping[str, Any],
+        expected_model_identity: Mapping[str, Any],
+        expected_processor_identity: Mapping[str, Any],
+        expected_training_layout: Mapping[str, Any],
+        expected_trainable_names: tuple[str, ...],
+    ) -> Mapping[str, Any]:
+        """只读校验 inference 所需身份与 payload；不反序列化任何训练状态。"""
+
+        root = Path(root)
+        linked = first_symlink_component(root)
+        if linked is not None or root.is_symlink() or not root.is_dir():
+            raise CheckpointError(
+                ReasonCode.OUTPUT_LINK,
+                f"checkpoint root 不存在或含链接：{root}",
+            )
+        manifest = _read_checkpoint_json(self._file(root, "manifest.json"))
+        if not isinstance(manifest, dict) or set(manifest) != _CHECKPOINT_MANIFEST_FIELDS:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint manifest 字段不匹配",
+            )
+        if manifest.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "checkpoint schema 不兼容",
+            )
+        expected_layout = _validated_training_layout(
+            expected_training_layout,
+            label="当前运行",
+        )
+        saved_layout = _validated_training_layout(
+            manifest.get("training_layout"),
+            label="checkpoint",
+        )
+        comparisons = {
+            "config_semantic_sha256": expected_config_semantic_sha256,
+            "benchmark_identity": dict(expected_benchmark_identity),
+            "validation_selection_identity": dict(
+                expected_validation_selection_identity
+            ),
+            "model_identity": dict(expected_model_identity),
+            "processor_identity": dict(expected_processor_identity),
+            "training_layout": expected_layout,
+            "trainable_parameter_names": list(expected_trainable_names),
+        }
+        actual = {
+            key: saved_layout if key == "training_layout" else manifest.get(key)
+            for key in comparisons
+        }
+        mismatches = {
+            key: {"expected": value, "actual": actual[key]}
+            for key, value in comparisons.items()
+            if value != actual[key]
+        }
+        if mismatches:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "checkpoint inference identity 不兼容",
+                details=mismatches,
+            )
+        files = manifest.get("files")
+        if not isinstance(files, dict):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint manifest.files 非法",
+            )
+        actual_files = {
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*")
+            if path.is_file() and path.name != "manifest.json"
+        }
+        if any(path.is_symlink() for path in root.rglob("*")) or actual_files != set(files):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint payload 文件集或链接状态不合法",
+            )
+        for relative, contract in files.items():
+            if (
+                not isinstance(relative, str)
+                or not isinstance(contract, dict)
+                or set(contract) != {"size_bytes", "sha256"}
+            ):
+                raise CheckpointError(
+                    ReasonCode.CHECKPOINT_CORRUPT,
+                    "checkpoint file contract 非法",
+                )
+            path = self._file(root, relative)
+            if (
+                path.stat().st_size != contract.get("size_bytes")
+                or sha256_file(path) != contract.get("sha256")
+            ):
+                raise CheckpointError(
+                    ReasonCode.CHECKPOINT_CORRUPT,
+                    f"checkpoint file hash/size 不一致：{relative}",
+                )
+        return manifest
+
+    def load_trainable(
+        self,
+        root: Path,
+        *,
+        expected_config_semantic_sha256: str,
+        expected_benchmark_identity: Mapping[str, Any],
+        expected_validation_selection_identity: Mapping[str, Any],
+        expected_model_identity: Mapping[str, Any],
+        expected_processor_identity: Mapping[str, Any],
+        expected_training_layout: Mapping[str, Any],
+        expected_trainable_names: tuple[str, ...],
+    ) -> tuple[Mapping[str, Any], Mapping[str, Tensor]]:
+        """校验后仅加载 LoRA tensor；不读取 optimizer、scheduler 或 RNG。"""
+
+        keyword = {
+            "expected_config_semantic_sha256": expected_config_semantic_sha256,
+            "expected_benchmark_identity": expected_benchmark_identity,
+            "expected_validation_selection_identity": expected_validation_selection_identity,
+            "expected_model_identity": expected_model_identity,
+            "expected_processor_identity": expected_processor_identity,
+            "expected_training_layout": expected_training_layout,
+            "expected_trainable_names": expected_trainable_names,
+        }
+        manifest = self.inspect_trainable(root, **keyword)
+        try:
+            trainable = load_safetensors(
+                str(self._file(Path(root), "adapter/adapter_model.safetensors")),
+                device="cpu",
+            )
+        except (OSError, RuntimeError, SafetensorError, ValueError) as error:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "adapter safetensors 无法读取",
+                details={"error": str(error)},
+            ) from error
+        if set(trainable) != set(expected_trainable_names):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "adapter safetensors 参数名不兼容",
+            )
+        parameter_count = sum(value.numel() for value in trainable.values())
+        if parameter_count != manifest.get("trainable_parameter_count"):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "adapter 参数量与 manifest 不一致",
+            )
+        return manifest, trainable
+
     @staticmethod
     def _file(root: Path, relative: str) -> Path:
         path = root / relative

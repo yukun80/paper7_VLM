@@ -1,0 +1,35 @@
+schema_version: oa_groundrag.text_rag.gate_d_dev_config.v1
+
+stage6:
+  config: dev_v1.yaml
+  expected_semantic_sha256: 15343b90dd4e447bb13e65c106af9e817c41f70e2b5e6e0b2c22b6040a4afb6a
+
+upstream:
+  selection_id: fd1d07f6fdd9d66cdbd21d1bd9a5f1045133eb1e47c4f3d5483180840ef95f40
+  retrieval_id: e7edfb2ae05a5114c105ce82e7c9bcc87c089dd54d1bd68a5bc43ea860c2f1c2
+  retrieval_manifest_sha256: da0e207b284bee81824b3542efb8a4b19138c92f07ba09e0afc3f11c4c0b9e7c
+
+smoke_run:
+  root: ../../outputs/stage6_text_rag/pass2_gpu_smoke_v1
+  run_id: ab8a0dfd339e71f84fe382b8c19cb093759d75cd1f7ecadb3a7e5620edb9215d
+  manifest_sha256: 987b6f7601e4f16632f9c07d8901242717a6551ed3b6758819eb44d0b097a6eb
+
+selection:
+  source_order:
+    - gdcld
+    - landslide4sense
+    - landslidebench_agent
+    - lmhld
+    - multimodal_landslide
+  per_source: 5
+
+outputs:
+  protocol_root: ../../outputs/stage6_text_rag/gate_d_dev_protocol_v1
+  run_root: ../../outputs/stage6_text_rag/gate_d_dev_25pairs_v1
+  evaluation_root: ../../outputs/stage6_text_rag/gate_d_dev_auto_eval_v1
+
+gpu:
+  minimum_total_memory_bytes: 21474836480
+  minimum_free_memory_bytes: 10737418240
+
+reference_authority: automatic_contract_only
