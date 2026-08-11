@@ -7,15 +7,15 @@
 - stage: `P0`
 - stage_name: `INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE`
 - stage_status: `engineering_complete`
-- current_task: `P0_INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE`
-- current_task_status: `engineering_complete_cuda_smoke_complete`
+- current_task: `P0_POST_RELEASE_DOCUMENTATION_SYNC`
+- current_task_status: `documentation_synchronized`
 - next_gate: `P1 Multi-Source Grounded Evidence`
 - scientific_status: `P0 unified runtime engineering is complete and six-task inference-only CUDA smoke is executable; this does not change Gate A/C/D, formal acceptance, scientific acceptance or sealed-test status`
 - execution_date: `2026-08-11`
 - branch: `main`
 - upstream: `origin/main`
 - upstream_relation: `ahead=0 / behind=0`
-- current_head: `087ae4b438a26cc0bdcd3c453b339bccadcc9e85`
+- current_head: `6d9cd816495f79bf9b13263d9725d6e159fe448b`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
@@ -81,6 +81,11 @@
 - p0_cpu_fake_provider_tests_passed: `true`
 - p0_cuda_inference_smoke_completed: `true`
 - p0_cuda_inference_smoke_tasks_passed: `6/6`
+- p0_implementation_commit: `6d9cd816495f79bf9b13263d9725d6e159fe448b`
+- p0_implementation_parent_head: `087ae4b438a26cc0bdcd3c453b339bccadcc9e85`
+- p0_local_origin_main_tracking_ref: `6d9cd816495f79bf9b13263d9725d6e159fe448b`
+- p0_local_origin_main_contains_implementation_commit: `true`
+- p0_remote_github_live_verified: `false`
 - p0_formal_evaluation_performed: `false`
 - p0_scientific_acceptance: `false`
 - oa_grounded_eval_completed: `false`
@@ -93,8 +98,8 @@
 - formal_evaluation_performed: `true`
 - test_split_evaluated: `false`
 - sealed_test_accessed: `false`
-- commit_performed: `false`
-- push_performed: `false`
+- current_documentation_task_commit_performed: `false`
+- current_documentation_task_push_performed: `false`
 
 Stage 0 权威迁移、Stage 1 工程定版、Stage 2 RS-GeneralDesc Benchmark native v1
 重发布与验收、Stage 3 Adapter 重训和 Gate B，以及 Stage 4A deterministic Auto Pilot
@@ -1546,3 +1551,20 @@ branch 与 HEAD 未改变，未 commit 或 push。现有 5-pair smoke 只作为�
 ### 下一步
 
 进入 P1 Multi-Source Grounded Evidence。
+
+## P0 发布后文档同步（2026-08-11）
+
+- 当前现场为 `main@6d9cd816495f79bf9b13263d9725d6e159fe448b`，其 parent 为 P0 实施
+  基线 `087ae4b438a26cc0bdcd3c453b339bccadcc9e85`。本地 `origin/main` tracking ref
+  指向同一提交，`ahead=0 / behind=0`。
+- 提交 `6d9cd816...` 已包含 P0 unified runtime、公共 provider helper、配置、CLI、测试和
+  对应文档。当前会话无法连接 GitHub 远端进行实时查询，因此只确认本地 remote-tracking
+  identity，不把它扩张为独立的 GitHub 在线验证。
+- 上一节“未 commit 或 push”记录的是 P0 实施会话结束时的历史事实；随后出现的提交属于
+  当前仓库既有状态。本次文档同步没有创建新 commit，也没有执行 push。
+- 本次只更新 `REBUILD_PROGRESS.md` 的实时元数据，没有重新运行 Python/CUDA 测试、模型
+  inference、训练、正式评价或 artifact 校验，也没有修改 checkpoint、Text Evidence Bank、
+  Benchmark、正式 outputs、冻结设计或 archive。
+- P0 仍只标记为 `engineering_complete`；Gate A/C/D、formal acceptance、scientific
+  acceptance 和 `sealed_test_accessed=false` 均保持不变。下一任务仍为
+  `P1 Multi-Source Grounded Evidence`，本次未开始 P1。
