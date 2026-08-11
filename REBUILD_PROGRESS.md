@@ -2,25 +2,27 @@
 
 ## 当前状态
 
-- program: `OA_GROUNDRAG_V2`
-- authority: `docs/OA-GroundRAG_算法构建方案.md`
-- stage: `6`
-- stage_name: `EVIDENCE_CONSTRAINED_TEXT_RAG`
-- stage_status: `gate_d_development_automatic_only_complete`
-- current_task: `STAGE6_FRAMEWORK_DOCUMENTATION_GOVERNANCE`
-- current_task_status: `active_route_and_progress_synchronized`
-- next_gate: `A (OA-AuxSeg branch) / C-D (scientific protocols pending)`
-- scientific_status: `Stage 6 engineering and Gate D automatic-only development evaluation are complete: the 25-pair run is strict-valid and its descriptive report is recomputable; expert relevance, unsupported-claim rate, retrieval Gold, formal Gate D thresholds, scientific acceptance and sealed test remain pending`
-- execution_date: `2026-08-10`
+- program: `OA_GROUNDRAG_V3`
+- authority: `docs/OA-GroundRAG_算法构建方案_0811.md`
+- stage: `P0`
+- stage_name: `INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE`
+- stage_status: `engineering_complete`
+- current_task: `P0_INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE`
+- current_task_status: `engineering_complete_cuda_smoke_complete`
+- next_gate: `P1 Multi-Source Grounded Evidence`
+- scientific_status: `P0 unified runtime engineering is complete and six-task inference-only CUDA smoke is executable; this does not change Gate A/C/D, formal acceptance, scientific acceptance or sealed-test status`
+- execution_date: `2026-08-11`
 - branch: `main`
-- current_head: `d6478025fb448d3cf89a4eb95586e1d0ce41a573`
+- upstream: `origin/main`
+- upstream_relation: `ahead=0 / behind=0`
+- current_head: `087ae4b438a26cc0bdcd3c453b339bccadcc9e85`
 - stage0_baseline_head: `1436c9dab5121f8d766bb939d6812334d2ca6409`
 - stage1_finalization_baseline_head: `88fec508048b1a8b3bc8dc8085396ba64449d33b`
 - stage2_native_migration_baseline_head: `c198f0eb89148032f86c47e5163ac2a05498118d`
 - stage3_gate_b_evidence_baseline_head: `2ad01f0723eaf698c0cbaff9bb3e993122bd87e0`
 - stage4a_auto_pilot_baseline_head: `ee71e02127476da8e75b6bc9f2ce007fc38f77e5`
-- algorithm_design_baseline_head: `eae76528b1fa7aaa1793af5451941d510d4bba29`
-- algorithm_design_sha256: `d94a8048f10beca592b972dda3e7d7b744b9242ed163b7a89b7da36c75ffe6f5`
+- algorithm_design_baseline_head: `087ae4b438a26cc0bdcd3c453b339bccadcc9e85`
+- algorithm_design_sha256: `fd088b0a25b3fc8888e7b4c07971ef36858c784ffcfaa735219e8e8514251243`
 - algorithm_design_document_immutable: `true`
 - progress_single_source: `REBUILD_PROGRESS.md`
 - active_training_process_found: `false`
@@ -74,6 +76,13 @@
 - stage6_gate_d_scientific_pass: `false`
 - stage6_formal_acceptance: `false`
 - stage6_scientific_acceptance: `false`
+- p0_unified_inference_core_implemented: `true`
+- p0_six_explicit_tasks_routed: `true`
+- p0_cpu_fake_provider_tests_passed: `true`
+- p0_cuda_inference_smoke_completed: `true`
+- p0_cuda_inference_smoke_tasks_passed: `6/6`
+- p0_formal_evaluation_performed: `false`
+- p0_scientific_acceptance: `false`
 - oa_grounded_eval_completed: `false`
 - stage2_gpu_run_performed: `false`
 - stage2_native_full_deep_validation_performed: `true`
@@ -99,7 +108,8 @@ train-only messages 工具链已实现，本地 Qwen3-VL-8B 冻结身份已验�
 work/package 的 compact v3。Stage 5 已从冻结 RS-General Adapter warm-start 完成 1,000-step
 Mask-Grounded Region LoRA、340 条 automatic-only dev 评价和冻结 Gate B selection 上的
 只报告 retention。多人 review、adjudication、Gold、人工 val reference、retention 阈值和
-正式协议冻结不属于当前简化方案，科学验收仍未完成。
+正式协议冻结不属于当前简化方案，科学验收仍未完成。P0 已在这些既有只读能力之上增加
+显式任务路由和按需 provider 编排；它不改变既有 Gate、模型权重或科学结论。
 依赖分为 OA-AuxSeg
 工程定版 → 未来 Gate A → formal fixed masks，以及 RS-GeneralDesc Stage 2 → Adapter
 重训 → Gate B；两者在 Mask-Grounded 阶段汇合。Gate A 延后不等于通过，也不推翻
@@ -118,24 +128,24 @@ Mask-Grounded Region LoRA、340 条 automatic-only dev 评价和冻结 Gate B se
 | Stage 6：Evidence-Constrained Text RAG | 工程主链和 25-pair automatic-only 开发评价完成 | 专家评价、retrieval Gold、正式 Gate D 与 sealed test 待完成 |
 | Stage 7：可选 Case RAG | 未开始 | 只在 Stage 6 证明稳定增益后考虑 |
 | Stage 8：可选 Landslide-Evidence Adapter | 条件未触发 | 只在 Gate E 失败时训练 |
-| Stage 9：统一推理与报告 | 未开始 | 在前述科学协议和条件分支明确后实施 |
+| Stage 9：统一推理与报告 | P0 Instruction-Routed Unified Inference Core 工程完成 | P1 多源 grounded evidence、统一指令调优及科学验收均未开始 |
 
 ## 文档单一来源治理
 
-当前冻结算法方案来自 HEAD
-`eae76528b1fa7aaa1793af5451941d510d4bba29`，文件 SHA-256 为
-`d94a8048f10beca592b972dda3e7d7b744b9242ed163b7a89b7da36c75ffe6f5`。
-它已包含简化后的 Stage 6 Evidence-Constrained Text RAG 设计。本次 Stage 6 实施没有修改
-算法方案正文；其中的状态文字仍是设计冻结快照，不用于判断现场进度。此前在本文件记录的
-`768d6880...` / `dbf93a4c...` 是旧设计身份，只保留在历史运行段落中。
+当前冻结算法方案为 `docs/OA-GroundRAG_算法构建方案_0811.md`，来自 HEAD
+`087ae4b438a26cc0bdcd3c453b339bccadcc9e85`，文件 SHA-256 为
+`fd088b0a25b3fc8888e7b4c07971ef36858c784ffcfaa735219e8e8514251243`。
+P0 实施未修改该算法方案正文；其中的状态文字仍是设计冻结快照，不用于判断现场进度。
+此前记录的设计路径和 SHA 只保留在历史运行段落中，不再作为当前授权基线。
 
 `README.md` 只保留长期有效的项目结构、合同边界和运行入口；`AGENTS.md`
 只保留当前活动框架、操作授权、安全和文档治理规则。阶段状态、运行结果、正式产物
 身份、验收证据和下一任务只在本文件维护。
 
-本轮以 `d6478025fb448d3cf89a4eb95586e1d0ce41a573` 为现场 HEAD，只同步
-`AGENTS.md` 与本文件的活动路线和当前进展；冻结算法方案、`README.md` 和
-`docs/archive/` 保持不变。旧算法身份仅作为历史产物的审计锚点，不再作为当前授权基线。
+本轮以 `087ae4b438a26cc0bdcd3c453b339bccadcc9e85` 为现场 HEAD；实施 P0 代码、测试、
+配置和稳定入口，并同步 `AGENTS.md`、`README.md` 与本文件。冻结算法方案和
+`docs/archive/` 保持不变。实施前本文件的 `current_head=d647802...` 仅是元数据漂移，
+不据此判定任何模型或 artifact 失败。
 
 ## Stage 0 已完成
 
@@ -1443,3 +1453,96 @@ branch 与 HEAD 未改变，未 commit 或 push。现有 5-pair smoke 只作为�
 - 文档同步不改变科学边界：`gate_d_development_automatic_only_complete` 保持成立，
   `gate_d_pass=null`、`formal_acceptance=false`、`scientific_acceptance=false`、
   `sealed_test_accessed=false`。
+
+## P0 Instruction-Routed Unified Inference Core 工程闭环（2026-08-11）
+
+### 现场基线与实现边界
+
+- 实施基线为 `main@087ae4b438a26cc0bdcd3c453b339bccadcc9e85`，upstream 为
+  `origin/main` 且 `ahead=0 / behind=0`；初始工作树为空，初始 `git diff --check` 通过。
+- 实施前本文件中的 `current_head=d647802...` 与真实 HEAD 不一致，仅记录为元数据漂移；
+  未据此判断模型、checkpoint 或 artifact 失败。
+- 冻结设计 `docs/OA-GroundRAG_算法构建方案_0811.md` 与 `docs/archive/` 未修改；既有
+  checkpoint、Text Evidence Bank、Benchmark 和正式 `outputs/` 均保持只读。
+- 未训练、未运行 backward 或 optimizer step，未新增 LoRA、special token、segmentation
+  decoder 或模型结构，未执行正式评价、Gate 重跑、阈值选择、Case RAG、P1/P2、commit
+  或 push，未访问 test/sealed test。
+
+### 统一合同、路由与执行图
+
+- 新增 `oa_groundrag.unified`，将 contracts、纯路由、provider adapter、配置和 runtime
+  orchestration 分层；`CapabilityRouter` 不导入 torch、不加载模型、不读取 Bank。
+- 六类显式任务的实际图为：
+  - `VLM_ONLY`: Shared MLLM；
+  - `SEGMENT_ONLY`: OA-AuxSeg；
+  - `REGION_UNDERSTANDING`: Evidence → Shared MLLM Pass-1；
+  - `SEGMENT_AND_UNDERSTAND`: OA-AuxSeg → global region → release spatial → Evidence →
+    Shared MLLM Pass-1；
+  - `KNOWLEDGE_QA`: Text RAG retrieval → release retriever → Shared MLLM Pass-2；
+  - `REGION_INTERPRETATION`: user mask 或 OA-AuxSeg candidate/global selection → Evidence →
+    Shared MLLM Pass-1 → release shared → Text RAG retrieval → release retriever → Shared MLLM
+    Pass-2。
+- `GT_MASK` 仅保留为 evaluation-side 枚举，普通 runtime 拒绝；未知 task、字段冲突和
+  test/sealed 路径均在 provider 加载前 fail closed。
+- `OA_AUXSEG_CANDIDATE` 精确 ID 命中时选择该 candidate；ID 缺失、ID 不存在或无候选时
+  均成功回退 global mask，分别记录 `CANDIDATE_ID_MISSING`、
+  `CANDIDATE_ID_NOT_FOUND`、`NO_CANDIDATES`。不自动 Top-1；requested/effective source、
+  reason 和 limitation 均进入非 audit-only 响应。global mask 为空或 no-target 仍执行完整
+  Pass-1、retrieval 和 Pass-2。
+
+### 复用与只读接口提取
+
+- Phase 2 新增 `SpatialInferenceSession` 和 single-batch helper，复用原 checkpoint reader、
+  `model_from_checkpoint`、batch preparation、`OAAuxSegModel`、`OAAuxSegOutput` 和
+  `extract_regions_and_features`；原 `run_inference` 改为调用公共 helper，网络、阈值、
+  candidate 数学和 checkpoint 合同未变。
+- Stage 5 best pointer、identity 校验和 generator loader 提升为公共只读 helper，Stage 6 与
+  Unified Runtime 共同调用；继续复用 `Qwen3VLModelAdapter`、
+  `Qwen3VLProcessorAdapter` 和 `CheckpointManager.load_trainable`，只加载 trainable LoRA
+  state，不加载 optimizer、scheduler、RNG 或 sampler。RS-General 仅保留训练 curriculum
+  身份，不作为 runtime 串联阶段。
+- Grounded provider 复用 `EvidenceBuilder`、既有 region geometry/no-target helper、
+  `build_mask_grounded_region_messages` 和严格 Pass-1 parser；P0 区域输入仍为 full optical、
+  binary mask、context crop，no-target 不伪造 crop。`AuxiliaryView` 只保留扩展接口，没有实现
+  新的 SAR/InSAR/DEM grounded evidence 算法。
+- Text RAG runtime 只读验证既有 Bank，并复用 `route_text_rag`、`HybridRetriever`、双 query
+  builder、Balanced Evidence Packet、Pass-2 builder、logits FSM 和严格 parser；不调用
+  `retrieve_dev`，不重建或修改 Bank。citation 只接受实际 packet ID。
+
+### 自动测试与回归
+
+- `tests/unified`: `31/31` 通过；覆盖六类调用矩阵、严格顺序、candidate 三种兼容回退、
+  no-target 完整路径、错误 reason、GT/test/sealed 保护、dry-run 零加载、fresh-root 与
+  symlink/path-escape 保护、lazy load/release 和旧 CLI `--help`。
+- `tests/phase2_oa_auxseg`: 共 41 项，`37` 通过、`4` 失败。新增 single-batch 与原数学等价
+  测试通过；四个失败均因本机缺少
+  `/home/yukun80/codes/benchmark/oa_auxseg_hdf5_v1/small/index.jsonl` 或 `manifest.json`，
+  未为通过测试而构造或重建该缺失资产。
+- `tests/phase4_rs_vlm`: `94/94` 通过；`tests/stage6_text_rag`: `33/33` 通过。
+- `/home/yukun80/miniconda3/envs/qwen3vl/bin/python -m compileall oa_groundrag scripts` 与
+  `git diff --check` 通过。
+
+### 六任务真实 CUDA inference smoke
+
+- 所有任务均在 `qwen3vl`、RTX 4090 D 上以独立进程、fresh `/tmp` root 执行，仅做 inference。
+  `SEGMENT_ONLY` 与 `KNOWLEDGE_QA` 位于
+  `/tmp/oa_groundrag_unified_cuda_smoke_20260811_p0_v1`；修复公共 processor 中视觉 tensor
+  batching 接口后，其余四个视觉任务在
+  `/tmp/oa_groundrag_unified_cuda_smoke_20260811_p0_v2` 从头运行，最终六类任务 `6/6`
+  成功。首次 visual smoke 的失败 root 保留为诊断证据，未覆盖或伪造成成功。
+- peak CUDA allocated bytes：`VLM_ONLY=4291956736`、`SEGMENT_ONLY=818003456`、
+  `REGION_UNDERSTANDING=4496515072`、`SEGMENT_AND_UNDERSTAND=4510289408`、
+  `KNOWLEDGE_QA=4548749824`、`REGION_INTERPRETATION=4743080448`，均低于 24 GiB。
+  heavy provider release 后 allocated 回落约 `8519680` bytes，结束后无残留 compute process。
+- candidate smoke 省略 ID，得到
+  `requested=OA_AUXSEG_CANDIDATE / effective=OA_AUXSEG_GLOBAL /
+  status=FALLBACK_GLOBAL / reason=CANDIDATE_ID_MISSING / candidate_count=1`，随后完整完成
+  Evidence、Pass-1、retrieval 和 Pass-2，并返回 6 个有效 packet citations。
+- 本机只读解析到 OA-AuxSeg best、Stage 5 step-900 best 和 Bank ID
+  `9322a9139d04be7665feb154153b7dc1c2d35b0871fc32bbd6a6daa942fabb28`。这些 checkpoint、
+  Bank、benchmark 和 GPU 均为本地资产，GitHub 仓库无法独立验证；smoke 只证明工程可执行，
+  不构成 Gate、质量指标、formal acceptance 或 scientific acceptance。
+
+### 下一步
+
+进入 P1 Multi-Source Grounded Evidence。

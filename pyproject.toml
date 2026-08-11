@@ -45,5 +45,6 @@ include = [
     "scripts.phase3_rs_generaldesc*",
     "scripts.phase4_rs_vlm*",
     "scripts.stage6_text_rag*",
+    "scripts.unified*",
 ]
 namespaces = true

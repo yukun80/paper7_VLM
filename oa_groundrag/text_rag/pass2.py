@@ -11,7 +11,13 @@ from oa_groundrag.phase3.common import canonical_json, sha256_text
 from oa_groundrag.phase4.errors import ContractError, ReasonCode
 from oa_groundrag.phase4.outputs import detect_forbidden_region_claims
 
-from .contracts import PASS2_OUTPUT_SCHEMA, RagMode, strict_contract_mapping
+from .contracts import (
+    PASS2_OUTPUT_SCHEMA,
+    RagMode,
+    TextRagTask,
+    route_text_rag,
+    strict_contract_mapping,
+)
 
 
 _OUTPUT_FIELDS = (
@@ -545,7 +551,20 @@ def build_pass2_messages(
     program_facts: Mapping[str, Any],
     observation: Mapping[str, Any],
     packet: Mapping[str, Any] | None,
+    task: TextRagTask | str = TextRagTask.CANDIDATE_INTERPRETATION,
 ) -> list[dict[str, Any]]:
+    try:
+        task_value = task if isinstance(task, TextRagTask) else TextRagTask(task)
+    except (TypeError, ValueError) as error:
+        raise ContractError(
+            ReasonCode.INVALID_ENUM,
+            f"非法 Pass-2 task：{task!r}",
+        ) from error
+    if not route_text_rag(task_value):
+        raise ContractError(
+            ReasonCode.RAG_FORBIDDEN,
+            f"Pass-2 task 不启用 RAG：{task_value.value}",
+        )
     payload = build_pass2_payload(
         question=question,
         target_status=target_status,
@@ -553,15 +572,26 @@ def build_pass2_messages(
         observation=observation,
         packet=packet,
     )
-    instruction = (
-        "你正在执行文本-only 的候选区域专业解释。视觉事实只能来自只读 Pass-1 observation；"
-        "不得重新观察、补造视觉事实、修改 mask/程序事实，或把候选区域确认成滑坡。"
-        "区分支持性解释、混淆因素、证据限制和建议核查，不给出危险性、稳定性、失效概率或风险等级。"
-        "retrieved_evidence 为空时所有 evidence_ids 必须为空；非空时每个 item 必须引用当前 packet 中"
-        "与字段类型相容的真实 Evidence ID，禁止虚构 ID。严格保持合同字段与类型。"
-        "只返回一个严格 JSON 对象，不要复制 Contract，不要输出 Markdown、解释或额外字段。"
-        "\nContract: "
-    )
+    if task_value is TextRagTask.PROFESSIONAL_QA:
+        instruction = (
+            "你正在执行文本-only 的遥感与地质灾害专业问答。回答只能依据用户问题和当前 packet；"
+            "不得声称存在未提供的当前影像、mask、区域观察或现场事实。区分支持性解释、替代解释、"
+            "证据限制和建议核查，不给出当前场景的危险性、稳定性、失效概率或风险等级。"
+            "每个 item 必须引用当前 packet 中与字段类型相容的真实 Evidence ID，禁止虚构 ID。"
+            "严格保持合同字段与类型。只返回一个严格 JSON 对象，不要复制 Contract，不要输出"
+            "Markdown、解释或额外字段。\nContract: "
+        )
+    else:
+        # 默认分支保持既有 Stage 6 candidate prompt 字节不变。
+        instruction = (
+            "你正在执行文本-only 的候选区域专业解释。视觉事实只能来自只读 Pass-1 observation；"
+            "不得重新观察、补造视觉事实、修改 mask/程序事实，或把候选区域确认成滑坡。"
+            "区分支持性解释、混淆因素、证据限制和建议核查，不给出危险性、稳定性、失效概率或风险等级。"
+            "retrieved_evidence 为空时所有 evidence_ids 必须为空；非空时每个 item 必须引用当前 packet 中"
+            "与字段类型相容的真实 Evidence ID，禁止虚构 ID。严格保持合同字段与类型。"
+            "只返回一个严格 JSON 对象，不要复制 Contract，不要输出 Markdown、解释或额外字段。"
+            "\nContract: "
+        )
     return [
         {"role": "user", "content": [{"type": "text", "text": instruction + canonical_json(payload)}]},
         {"role": "assistant", "content": [{"type": "text", "text": PASS2_ASSISTANT_PREFILL}]},

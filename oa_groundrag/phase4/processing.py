@@ -87,6 +87,57 @@ class EncodedSample:
     image_count: int
 
 
+def single_inference_tensor_batch(encoded: EncodedSample) -> dict[str, Tensor]:
+    """将单个 EncodedSample 变成 Qwen generate batch，不改视觉拼接维。"""
+
+    if encoded.labels is not None:
+        raise ProcessingError(
+            ReasonCode.LOSS_MASK_INVALID,
+            "single inference batch 不接受 labels",
+        )
+    token_keys = {"input_ids", "attention_mask", "mm_token_type_ids"}
+    output: dict[str, Tensor] = {}
+    for key, value in encoded.tensors.items():
+        if key in token_keys:
+            if value.ndim != 1:
+                raise ProcessingError(
+                    ReasonCode.TYPE_MISMATCH,
+                    f"single inference {key} 必须是一维",
+                )
+            output[key] = value.unsqueeze(0)
+        elif key == "pixel_values":
+            if value.ndim != 2:
+                raise ProcessingError(
+                    ReasonCode.TYPE_MISMATCH,
+                    "single inference pixel_values 必须保持二维拼接",
+                )
+            output[key] = value
+        elif key == "image_grid_thw":
+            if value.ndim != 2 or value.shape[1] != 3:
+                raise ProcessingError(
+                    ReasonCode.TYPE_MISMATCH,
+                    "single inference image_grid_thw 必须是 [images,3]",
+                )
+            output[key] = value
+        else:
+            raise ProcessingError(
+                ReasonCode.MODEL_IDENTITY_MISMATCH,
+                f"single inference 出现未知 tensor：{key}",
+            )
+    if "input_ids" not in output or "attention_mask" not in output:
+        raise ProcessingError(
+            ReasonCode.MODEL_IDENTITY_MISMATCH,
+            "single inference 缺少 input_ids/attention_mask",
+        )
+    visual = {"pixel_values", "image_grid_thw"} & set(output)
+    if visual and visual != {"pixel_values", "image_grid_thw"}:
+        raise ProcessingError(
+            ReasonCode.MODEL_IDENTITY_MISMATCH,
+            "single inference 视觉 tensors 必须成对出现",
+        )
+    return output
+
+
 class ProcessorAdapter(Protocol):
     pad_token_id: int
 

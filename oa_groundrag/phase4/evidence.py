@@ -34,7 +34,27 @@ class EvidenceBuildResult:
     root: Path
 
 
+@dataclass(frozen=True)
+class RuntimeRegionEvidenceResult:
+    record: dict[str, Any]
+    root: Path
+
+
 def _rgb_image(value: Any, *, location: str) -> Image.Image:
+    if isinstance(value, (str, Path)):
+        path = Path(value)
+        if (
+            first_symlink_component(path) is not None
+            or not path.is_file()
+            or path.is_symlink()
+            or path.stat().st_nlink != 1
+        ):
+            raise EvidenceError(
+                ReasonCode.ASSET_MISSING,
+                f"{location}: 图像路径不是普通文件：{path}",
+            )
+        with Image.open(path) as image:
+            return image.convert("RGB").copy()
     if isinstance(value, Image.Image):
         return value.convert("RGB")
     array = np.asarray(value)
@@ -634,6 +654,157 @@ class EvidenceBuilder:
             )
             staging.replace(root)
             return EvidenceBuildResult(bundle=bundle, root=root)
+        except BaseException:
+            if staging.exists():
+                shutil.rmtree(staging)
+            raise
+
+    def build_runtime_region(
+        self,
+        *,
+        optical_image: Any,
+        mask: Any,
+        output_root: Path,
+        sample_id: str,
+        source: str,
+        split: str,
+        mask_source: str,
+        source_identity: Mapping[str, Any],
+    ) -> RuntimeRegionEvidenceResult:
+        """物化 Unified Runtime 的 full/mask/crop record，不改变旧 build()。"""
+
+        from collections.abc import Mapping
+
+        from oa_groundrag.landslide_evidence.contracts import no_target_mask_facts
+        from oa_groundrag.landslide_evidence.region_contracts import (
+            COORDINATE_BASIS,
+            FORMAL_ROLES,
+            MASK_RENDERER_VERSION,
+            REGION_RECORD_SCHEMA,
+            ParentIdentityStatus,
+            RegionTargetStatus,
+            RepresentationMode,
+            annotation_state_template,
+            empty_description_template,
+            validate_region_record,
+        )
+        from oa_groundrag.phase3.common import canonical_json, sha256_text
+
+        if not all(isinstance(value, str) and value.strip() for value in (sample_id, source, split, mask_source)):
+            raise EvidenceError(
+                ReasonCode.TYPE_MISMATCH,
+                "runtime region sample/source/split/mask_source 必须非空",
+            )
+        root = Path(output_root)
+        linked = first_symlink_component(root)
+        if linked is not None:
+            raise EvidenceError(ReasonCode.OUTPUT_LINK, f"runtime evidence root 含链接：{linked}")
+        if root.exists() or root.is_symlink():
+            raise EvidenceError(ReasonCode.OUTPUT_EXISTS, f"runtime evidence root 已存在：{root}")
+        root.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{root.name}.staging-", dir=root.parent))
+        try:
+            optical = _rgb_image(optical_image, location="optical_image")
+            if isinstance(mask, (str, Path)):
+                mask_path = Path(mask)
+                if (
+                    first_symlink_component(mask_path) is not None
+                    or not mask_path.is_file()
+                    or mask_path.is_symlink()
+                    or mask_path.stat().st_nlink != 1
+                ):
+                    raise EvidenceError(ReasonCode.ASSET_MISSING, f"user mask 不存在：{mask_path}")
+                with Image.open(mask_path) as mask_image:
+                    binary = binary_mask_array(mask_image).copy()
+            elif isinstance(mask, Image.Image):
+                binary = binary_mask_array(mask).copy()
+            else:
+                if hasattr(mask, "detach"):
+                    mask = mask.detach().cpu().numpy()
+                array = np.asarray(mask)
+                if array.ndim == 3 and array.shape[0] == 1:
+                    array = array[0]
+                if array.ndim != 2:
+                    raise EvidenceError(ReasonCode.MASK_INVALID, "runtime mask 必须是二维数组")
+                if array.dtype == np.bool_:
+                    binary = array.copy()
+                elif np.issubdtype(array.dtype, np.integer) and set(np.unique(array).tolist()).issubset({0, 1}):
+                    binary = array.astype(bool)
+                else:
+                    raise EvidenceError(ReasonCode.MASK_INVALID, "runtime mask 只允许 bool/0/1")
+            if binary.shape != (optical.height, optical.width):
+                raise EvidenceError(
+                    ReasonCode.MASK_SHAPE_MISMATCH,
+                    "runtime mask 与 optical image 尺寸不一致",
+                )
+            target = bool(binary.any())
+            if mask_source == "user_mask" and not target:
+                raise EvidenceError(ReasonCode.MASK_INVALID, "user mask 不允许为空")
+            optical.save(staging / "optical_full.png", format="PNG")
+            render_binary_mask(binary).save(staging / "binary_mask.png", format="PNG")
+            crop_relative: str | None = None
+            crop_window: list[int] | None = None
+            if target:
+                crop, window = render_context_crop(
+                    optical,
+                    binary,
+                    margin_ratio=self.context_margin_ratio,
+                )
+                crop.save(staging / "context_crop.png", format="PNG")
+                crop_relative = "context_crop.png"
+                crop_window = list(window)
+                mode = RepresentationMode.FULL_PLUS_MASK_PLUS_CROP
+                target_status = RegionTargetStatus.TARGET_PRESENT
+                mask_facts = {
+                    "status": "available",
+                    **deterministic_mask_facts(binary),
+                    "crop_window_xyxy_pixel_half_open": crop_window,
+                }
+            else:
+                mode = RepresentationMode.FULL_PLUS_MASK
+                target_status = RegionTargetStatus.NO_TARGET
+                mask_facts = no_target_mask_facts()
+            assets = {
+                "optical_full": "optical_full.png",
+                "binary_mask": "binary_mask.png",
+                "context_crop": crop_relative,
+                "audit_overlay": None,
+            }
+            record = {
+                "schema_version": REGION_RECORD_SCHEMA,
+                "record_id": "runtime_" + sha256_text(canonical_json([
+                    sample_id, source, split, mask_source, source_identity,
+                ]))[:24],
+                "parent_id": sample_id,
+                "parent_identity_status": ParentIdentityStatus.SAMPLE_ONLY.value,
+                "sample_id": sample_id,
+                "source": source,
+                "split": split,
+                "source_identity": dict(source_identity),
+                "mask_source": mask_source,
+                "target_status": target_status.value,
+                "representation_mode": mode.value,
+                "assets": assets,
+                "formal_model_input_roles": list(FORMAL_ROLES[mode]),
+                "audit_only_roles": [],
+                "program_facts": {
+                    "image": {
+                        "width_pixels": optical.width,
+                        "height_pixels": optical.height,
+                        "rgb_renderer": "unified_explicit_optical_rgb.v1",
+                    },
+                    "mask": mask_facts,
+                    "coordinate_basis": COORDINATE_BASIS,
+                    "mask_renderer": MASK_RENDERER_VERSION,
+                    "difficulty_proxy": None,
+                    "counterfactual": None,
+                },
+                "description": empty_description_template(),
+                "annotation": annotation_state_template(),
+            }
+            validate_region_record(record)
+            staging.replace(root)
+            return RuntimeRegionEvidenceResult(record=record, root=root)
         except BaseException:
             if staging.exists():
                 shutil.rmtree(staging)

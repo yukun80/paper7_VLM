@@ -28,7 +28,11 @@ from .contracts import (
     StructuredModelOutput,
     TargetStatus,
 )
-from .evidence import EvidenceBuilder, deterministic_mask_facts
+from .evidence import (
+    EvidenceBuilder,
+    RuntimeRegionEvidenceResult,
+    deterministic_mask_facts,
+)
 from .config import Phase4Config, apply_runtime_overrides, load_config
 from .data import (
     DescriptionSample,
@@ -93,6 +97,7 @@ __all__ = [
     "Qwen3VLProcessorAdapter",
     "Qwen3VLModelAdapter",
     "RUN_MANIFEST_SCHEMA_VERSION",
+    "RuntimeRegionEvidenceResult",
     "RegionCandidate",
     "RegionInventory",
     "ReferenceProject",

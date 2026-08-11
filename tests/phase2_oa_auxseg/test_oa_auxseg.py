@@ -37,6 +37,7 @@ from oa_groundrag.phase2.contracts import (
 )
 from oa_groundrag.phase2.data import (
     AuxiliarySubsetSampler,
+    PreparedBatch,
     StatefulTrainingBatcher,
     available_auxiliaries_by_sample,
     benchmark_contract_from_root,
@@ -45,6 +46,7 @@ from oa_groundrag.phase2.data import (
     registry_from_benchmark,
 )
 from oa_groundrag.phase2.engine import (
+    _autocast,
     _acceptance_collated,
     _capacity_acceptance,
     _metric_replay_delta,
@@ -60,9 +62,11 @@ from oa_groundrag.phase2.engine import (
     make_scaler,
     make_scheduler,
     optimizer_learning_rates,
+    prepare_policy_batch,
     require_local_backbone,
     run_inference,
 )
+from oa_groundrag.phase2.inference_runtime import SpatialInferenceSession
 from oa_groundrag.phase2.losses import bce_dice_loss
 from oa_groundrag.phase2.metrics import SegmentationMetrics
 from oa_groundrag.phase2.model import (
@@ -201,6 +205,51 @@ class OAAuxSegTest(unittest.TestCase):
     def setUp(self) -> None:
         self.model.variant = "proposed_dropout"
         self.model.eval()
+
+    def test_single_batch_inference_helper_matches_existing_math(self) -> None:
+        prepared = PreparedBatch(
+            model=self.batch,
+            mask=torch.zeros((self.batch.batch_size, 1, 32, 32)),
+            sample_ids=[f"sample-{index}" for index in range(self.batch.batch_size)],
+            metadata=[{} for _ in range(self.batch.batch_size)],
+        )
+        session = SpatialInferenceSession.__new__(SpatialInferenceSession)
+        session.config = SimpleNamespace(use_bf16=False)
+        session.model = self.model
+        session.device = torch.device("cpu")
+        helper = session.infer_prepared(prepared)
+
+        direct_prepared = prepared.to(torch.device("cpu"), non_blocking=False)
+        direct_batch, available, active = prepare_policy_batch(
+            direct_prepared.model,
+            variant=self.model.variant,
+            subset_sampler=None,
+        )
+        with torch.inference_mode(), _autocast(session.config, session.device):
+            direct = self.model(direct_batch, return_regions=True)
+        torch.testing.assert_close(helper.output.mask_logits, direct.mask_logits)
+        torch.testing.assert_close(helper.output.mask_probability, direct.mask_probability)
+        torch.testing.assert_close(helper.output.no_target_score, direct.no_target_score)
+        torch.testing.assert_close(helper.output.modality_weights, direct.modality_weights)
+        self.assertEqual(helper.available_modalities, tuple(tuple(row) for row in available))
+        self.assertEqual(helper.active_modalities, tuple(tuple(row) for row in active))
+        self.assertIsNotNone(helper.output.candidate_regions)
+        self.assertIsNotNone(direct.candidate_regions)
+        assert helper.output.candidate_regions is not None
+        assert direct.candidate_regions is not None
+        self.assertEqual(
+            [[region.region_id for region in rows] for rows in helper.output.candidate_regions],
+            [[region.region_id for region in rows] for rows in direct.candidate_regions],
+        )
+        for helper_rows, direct_rows in zip(
+            helper.output.candidate_regions,
+            direct.candidate_regions,
+            strict=True,
+        ):
+            for helper_region, direct_region in zip(helper_rows, direct_rows, strict=True):
+                torch.testing.assert_close(helper_region.mask, direct_region.mask)
+                self.assertEqual(helper_region.bbox_xyxy, direct_region.bbox_xyxy)
+                self.assertEqual(helper_region.area_pixels, direct_region.area_pixels)
 
     def test_real_small_sparse_contract_matches_five_sources(self) -> None:
         self.assertTrue((SMALL_ROOT / "index.jsonl").is_file())

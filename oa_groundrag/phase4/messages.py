@@ -152,6 +152,7 @@ def build_mask_grounded_region_messages(
     representation_mode: str | None = None,
     assistant_target: str | None = None,
     allow_audit_only: bool = False,
+    instruction: str | None = None,
 ) -> list[dict[str, Any]]:
     """构建 Stage 4 v2 有序多图消息，不改变旧 generic/Gate B renderer。
 
@@ -219,10 +220,21 @@ def build_mask_grounded_region_messages(
         "formal_model_input_roles": list(roles) if mode is not RepresentationMode.OVERLAY_AUDIT_BASELINE else [],
         "audit_only": mode is RepresentationMode.OVERLAY_AUDIT_BASELINE,
     }
+    if instruction is not None and (
+        not isinstance(instruction, str) or not instruction.strip()
+    ):
+        raise ContractError(
+            ReasonCode.TYPE_MISMATCH,
+            "instruction 必须是非空字符串或 null",
+        )
+    instruction_prefix = (
+        "" if instruction is None else f"用户任务：{instruction.strip()}\n"
+    )
     content.append({
         "type": "text",
         "text": (
-            "先观察完整影像中的总体遥感场景，再定位 mask 指定区域；只描述当前影像直接支持"
+            instruction_prefix
+            + "先观察完整影像中的总体遥感场景，再定位 mask 指定区域；只描述当前影像直接支持"
             "的视觉事实，并严格区分目标内部、周围环境、以及区域与环境之间的视觉差异。"
             "不要把白色 mask 当作真实"
             "颜色，不要把 crop 边缘当作目标边界，不要重写 bbox、面积、质心、组件数或 crop window。"

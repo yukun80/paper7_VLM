@@ -2741,20 +2741,22 @@ def run_inference(
     limit: int | None,
     output_dir: Path,
 ) -> dict[str, Any]:
-    benchmark_root, _, _, device = resolve_runtime(config, repo_root)
-    benchmark_contract = benchmark_contract_from_root(benchmark_root)
-    benchmark_hash = str(benchmark_contract["index_sha256"])
-    payload = read_checkpoint(
-        checkpoint_path,
-        expected_benchmark_contract=benchmark_contract,
-    )
-    model = model_from_checkpoint(payload, device=device)
-    _validate_inference_config(payload, model, config)
-    _validate_benchmark_registry(model, benchmark_root)
-    model.eval()
+    # 局部导入避免 inference_runtime 复用本模块 validation helper 时形成导入环。
+    from .inference_runtime import SpatialInferenceSession
+
     output_dir = Path(output_dir)
     if output_dir.exists():
         raise FileExistsError(f"推理输出目录已存在，拒绝覆盖：{output_dir}")
+    session = SpatialInferenceSession(
+        config,
+        repo_root=repo_root,
+        checkpoint_path=checkpoint_path,
+    )
+    benchmark_root = session.benchmark_root
+    device = session.device
+    benchmark_contract = session.benchmark_contract
+    benchmark_hash = str(benchmark_contract["index_sha256"])
+    model = session.model
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary_dir = Path(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent)
@@ -2773,16 +2775,11 @@ def run_inference(
         arrays: dict[str, np.ndarray] = {}
         seen = 0
         for collated in loader:
-            prepared = prepare_collated_batch(collated).to(
-                device, non_blocking=device.type == "cuda"
-            )
-            model_batch, available, active = prepare_policy_batch(
-                prepared.model, variant=model.variant, subset_sampler=None
-            )
-            with _autocast(config, device):
-                output = model(model_batch, return_regions=True)
-            if output.candidate_regions is None or output.region_features is None:
-                raise RuntimeError("推理未返回区域合同")
+            inference = session.infer_prepared(prepare_collated_batch(collated))
+            prepared = inference.prepared
+            output = inference.output
+            available = inference.available_modalities
+            active = inference.active_modalities
             for index, sample_id in enumerate(prepared.sample_ids):
                 if limit is not None and seen >= limit:
                     break
@@ -2870,7 +2867,7 @@ def run_inference(
             {
                 "schema_version": INFERENCE_SCHEMA_VERSION,
                 "checkpoint": str(Path(checkpoint_path).resolve()),
-                "checkpoint_step": int(payload["step"]),
+                "checkpoint_step": session.checkpoint_step,
                 "benchmark_index_sha256": benchmark_hash,
                 "benchmark_contract": dict(benchmark_contract),
                 "backbone_sha256": model.backbone_sha256,
@@ -2897,6 +2894,8 @@ def run_inference(
             child.unlink(missing_ok=True)
         temporary_dir.rmdir()
         raise
+    finally:
+        session.release()
     return {
         "output_dir": str(output_dir),
         "sample_count": len(rows),

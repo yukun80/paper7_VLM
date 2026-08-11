@@ -13,9 +13,6 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from oa_groundrag.landslide_evidence.compact_training import (
-    CompactTrainingMessageDataset,
-)
 from oa_groundrag.phase3.common import (
     canonical_json,
     first_symlink_component,
@@ -26,7 +23,6 @@ from oa_groundrag.phase3.common import (
     sha256_text,
 )
 from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.checkpoint import CheckpointManager
 from oa_groundrag.phase4.errors import (
     ContractError,
     ModelError,
@@ -34,24 +30,14 @@ from oa_groundrag.phase4.errors import (
     ReasonCode,
     SelectionError,
 )
-from oa_groundrag.phase4.model import Qwen3VLModelAdapter
 from oa_groundrag.phase4.outputs import parse_region_model_output
-from oa_groundrag.phase4.processing import Qwen3VLProcessorAdapter
 from oa_groundrag.phase4.stage5_config import (
     load_stage5_config,
-    with_monitor_parent_count,
 )
-from oa_groundrag.phase4.stage5_data import (
-    REGION_MONITOR_ROLE,
-    RegionSubsetDataset,
-    build_region_monitor_selection,
-    split_compact_by_parent,
+from oa_groundrag.phase4.stage5_runtime import (
+    load_stage5_best_generator,
+    resolve_stage5_best,
 )
-from oa_groundrag.phase4.stage5_workflow import (
-    STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS,
-    _compact_benchmark_identity,
-)
-from oa_groundrag.phase4.trainer import training_layout_identity
 
 from .bank import validate_bank
 from .contracts import (
@@ -90,6 +76,7 @@ from .retrieval import (
     make_query_row,
     quota_counts,
 )
+from .runtime import load_runtime_bank_payload
 
 
 _RETRIEVAL_PAYLOAD_FILES = frozenset({
@@ -187,51 +174,6 @@ def _validate_ledger(root: Path, payload_files: set[str] | frozenset[str]) -> st
     return sha256_file(root / "SHA256SUMS.jsonl")
 
 
-def _stage5_pointer(config: Stage6Config) -> tuple[Any, dict[str, Any], Path]:
-    stage5 = load_stage5_config(config.stage5.config_path)
-    state_path = stage5.workflow_root / "workflow_state.json"
-    _regular_file(state_path, label="Stage 5 workflow state", expected_sha256=config.stage5.workflow_state_sha256)
-    state = read_json(state_path)
-    if (
-        state.get("stage") != "complete"
-        or state.get("sealed_test_evaluated") is not False
-        or state.get("formal_acceptance") is not False
-    ):
-        raise ContractError(ReasonCode.CHECKPOINT_INCOMPATIBLE, "Stage 5 workflow 未完成或科学边界非法")
-    pointer_path = stage5.run.output_root / "best_checkpoint.json"
-    _regular_file(pointer_path, label="Stage 5 best pointer", expected_sha256=config.stage5.best_pointer_sha256)
-    pointer = read_json(pointer_path)
-    expected_pointer = {
-        "schema_version", "selection_metric", "step", "macro_task_loss",
-        "overall_loss", "checkpoint", "formal_acceptance",
-    }
-    if (
-        set(pointer) != expected_pointer
-        or pointer.get("selection_metric") != "region_monitor_loss"
-        or pointer.get("formal_acceptance") is not False
-        or isinstance(pointer.get("step"), bool)
-        or not isinstance(pointer.get("step"), int)
-        or pointer["step"] <= 0
-    ):
-        raise ContractError(ReasonCode.CHECKPOINT_CORRUPT, "Stage 5 best pointer 合同非法")
-    relative = portable_relative_path(str(pointer["checkpoint"]), location="best_checkpoint.checkpoint")
-    checkpoint = stage5.run.output_root.joinpath(*relative.parts)
-    try:
-        checkpoint.resolve().relative_to(stage5.run.output_root.resolve())
-    except ValueError as error:
-        raise ContractError(ReasonCode.PATH_ESCAPE, "Stage 5 best checkpoint 路径逃逸") from error
-    if checkpoint.is_symlink() or not checkpoint.is_dir() or first_symlink_component(checkpoint) is not None:
-        raise ContractError(ReasonCode.OUTPUT_LINK, "Stage 5 best checkpoint 不是普通目录")
-    manifest_path = checkpoint / "manifest.json"
-    adapter_path = checkpoint / "adapter" / "adapter_model.safetensors"
-    _regular_file(manifest_path, label="Stage 5 checkpoint manifest", expected_sha256=config.stage5.checkpoint_manifest_sha256)
-    _regular_file(adapter_path, label="Stage 5 Adapter", expected_sha256=config.stage5.adapter_sha256)
-    manifest = read_json(manifest_path)
-    if manifest.get("cursor", {}).get("global_step") != pointer["step"]:
-        raise ContractError(ReasonCode.CHECKPOINT_CORRUPT, "best pointer step 与 checkpoint 不一致")
-    return stage5, pointer, checkpoint
-
-
 def preflight(config_path: Path | str, *, require_dense_model: bool = True) -> dict[str, Any]:
     """只读核验 Stage 6 来源、dev、Stage 5 best 与本地权重边界。"""
 
@@ -239,7 +181,12 @@ def preflight(config_path: Path | str, *, require_dense_model: bool = True) -> d
     registry = load_source_registry(config.source_registry_path)
     _reject_sealed_path(config.dev.eval_root, label="OA-GroundedEval-dev")
     _reject_sealed_path(config.dev.prediction_root, label="Pass-1 predictions")
-    stage5, pointer, checkpoint = _stage5_pointer(config)
+    reference = resolve_stage5_best(config.stage5)
+    stage5, pointer, checkpoint = (
+        reference.config,
+        reference.pointer,
+        reference.checkpoint,
+    )
     eval_manifest_path = config.dev.eval_root / "manifest.json"
     prediction_manifest_path = config.dev.prediction_root / "manifest.json"
     predictions_path = config.dev.prediction_root / "predictions.jsonl"
@@ -376,15 +323,6 @@ def prepare_dev_selection(config: Stage6Config) -> dict[str, Any]:
     return row
 
 
-def _load_bank(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]], np.ndarray, list[str]]:
-    manifest = read_json(root / "manifest.json")
-    units = read_jsonl(root / "evidence_units.jsonl")
-    with (root / "dense_embeddings.npy").open("rb") as handle:
-        embeddings = np.load(handle, allow_pickle=False)
-    dense_index = read_json(root / "dense_index.json")
-    return manifest, units, embeddings, list(dense_index["unit_ids"])
-
-
 def _environment() -> dict[str, Any]:
     packages = {}
     for name in ("torch", "transformers", "peft", "numpy", "PyMuPDF", "rapidocr", "onnxruntime"):
@@ -405,7 +343,7 @@ def retrieve_dev(config_path: Path | str) -> dict[str, Any]:
     if config.retrieval_root.exists() or config.retrieval_root.is_symlink():
         raise ContractError(ReasonCode.OUTPUT_EXISTS, f"retrieval root 已存在：{config.retrieval_root}")
     selection = prepare_dev_selection(config)
-    bank_manifest, units, embeddings, dense_ids = _load_bank(config.bank_root)
+    bank_manifest, units, embeddings, dense_ids = load_runtime_bank_payload(config.bank_root)
     queries: list[dict[str, Any]] = []
     for selected in selection["records"]:
         shared = {
@@ -555,7 +493,7 @@ def validate_retrieval(root: Path | str, *, config: Stage6Config) -> dict[str, A
     if selection != expected_selection:
         raise ContractError(ReasonCode.VALIDATION_SELECTION_INVALID, "selection 与 dev 现场重算不一致")
     bank_validation = validate_bank(config.bank_root, config=config, verify_sources=True)
-    bank_manifest, units, embeddings, dense_ids = _load_bank(config.bank_root)
+    bank_manifest, units, embeddings, dense_ids = load_runtime_bank_payload(config.bank_root)
     units_by_id = {unit["unit_id"]: unit for unit in units if unit.get("indexed")}
     if manifest.get("bank_id") != bank_validation["bank_id"] or manifest.get("selection_id") != selection["selection_id"]:
         raise ContractError(ReasonCode.BENCHMARK_IDENTITY_MISMATCH, "retrieval manifest 上游身份不一致")
@@ -666,65 +604,6 @@ def validate_retrieval(root: Path | str, *, config: Stage6Config) -> dict[str, A
     }
 
 
-def _load_stage5_generator(config: Stage6Config, *, device: Any) -> tuple[Any, Qwen3VLProcessorAdapter, Qwen3VLModelAdapter, Path, dict[str, Any]]:
-    stage5, pointer, checkpoint = _stage5_pointer(config)
-    compact = CompactTrainingMessageDataset(stage5.data_contract.compact_training_root)
-    split = split_compact_by_parent(compact, seed=stage5.data_contract.split_seed)
-    stage5 = with_monitor_parent_count(stage5, len(split.monitor_parents))
-    benchmark_identity = _compact_benchmark_identity(compact)
-    monitor = RegionSubsetDataset(compact, split.monitor_indices, logical_role=REGION_MONITOR_ROLE)
-    selection = build_region_monitor_selection(
-        monitor,
-        benchmark_build_id=benchmark_identity.build_id,
-        benchmark_payload_sha256=benchmark_identity.payload_sha256,
-        seed=stage5.run.seed,
-    )
-    processor = Qwen3VLProcessorAdapter(
-        processor_path=stage5.model.processor_path,
-        local_files_only=stage5.model.local_files_only,
-        trust_remote_code=stage5.model.trust_remote_code,
-        min_pixels=stage5.limits.min_pixels,
-        max_pixels=stage5.limits.max_pixels,
-        max_images=stage5.limits.max_images,
-        max_input_tokens=stage5.limits.max_input_tokens,
-    )
-    model = Qwen3VLModelAdapter.load(
-        stage5.model,
-        stage5.adaptation,
-        device=device,
-        gradient_checkpointing=False,
-    )
-    manager = CheckpointManager()
-    manifest, trainable = manager.load_trainable(
-        checkpoint,
-        expected_config_semantic_sha256=stage5.semantic_sha256,
-        expected_benchmark_identity=benchmark_identity.training_identity_dict(),
-        expected_validation_selection_identity=selection.identity_dict(),
-        expected_model_identity=model.identity.to_dict(),
-        expected_processor_identity=processor.identity(),
-        expected_training_layout=training_layout_identity(
-            stage5,
-            cuda_cache_cleanup_interval_steps=STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS,
-        ),
-        expected_trainable_names=model.trainable_names,
-    )
-    model.load_trainable_state_dict(trainable)
-    generator_identity = {
-        "stage5_config_semantic_sha256": stage5.semantic_sha256,
-        "best_pointer_sha256": config.stage5.best_pointer_sha256,
-        "best_step": pointer["step"],
-        "checkpoint": str(checkpoint.resolve()),
-        "checkpoint_manifest_sha256": config.stage5.checkpoint_manifest_sha256,
-        "adapter_sha256": config.stage5.adapter_sha256,
-        "model_identity": model.identity.to_dict(),
-        "processor_identity": processor.identity(),
-        "trainable_parameter_count": manifest["trainable_parameter_count"],
-        "loaded_components": ["trainable_lora_state"],
-        "excluded_components": ["optimizer", "scheduler", "rng", "sampler"],
-    }
-    return stage5, processor, model, checkpoint, generator_identity
-
-
 def generate_paired(
     config_path: Path | str,
     *,
@@ -806,7 +685,11 @@ def _generate_selected_pairs(
             },
         )
     torch.cuda.empty_cache()
-    stage5, processor, model, _checkpoint, generator_identity = _load_stage5_generator(config, device=device)
+    generator = load_stage5_best_generator(config.stage5, device=device)
+    stage5 = generator.config
+    processor = generator.processor
+    model = generator.model
+    generator_identity = generator.identity
     model.eval()
     predictions: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []

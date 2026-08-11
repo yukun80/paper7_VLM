@@ -5,7 +5,7 @@
 
 ## 文档权威
 
-- [`docs/OA-GroundRAG_算法构建方案.md`](docs/OA-GroundRAG_算法构建方案.md) 是冻结的
+- [`docs/OA-GroundRAG_算法构建方案_0811.md`](docs/OA-GroundRAG_算法构建方案_0811.md) 是冻结的
   详细算法设计。文件中的状态文字属于设计冻结时的快照，不作为实时进度依据。
 - [`REBUILD_PROGRESS.md`](REBUILD_PROGRESS.md) 是唯一实施进度文件，保存阶段状态、运行
   结果、冻结产物身份、验收证据和下一任务。
@@ -38,11 +38,13 @@ oa_groundrag/phase3/                    RS-GeneralDesc Benchmark
 oa_groundrag/phase4/                    RS-VLM、区域证据与评价核心
 oa_groundrag/landslide_evidence/        Landslide Evidence Corpus
 oa_groundrag/text_rag/                  Evidence-Constrained Text RAG
+oa_groundrag/unified/                   Instruction-Routed Unified Inference
 scripts/phase2_oa_auxseg/               OA-AuxSeg 薄 CLI
 scripts/phase3_rs_generaldesc/           RS-GeneralDesc 薄 CLI
 scripts/phase4_rs_vlm/                   RS-VLM 薄 CLI
 scripts/stage4_landslide_evidence/       Evidence Corpus 薄 CLI
 scripts/stage6_text_rag/                 Text RAG 薄 CLI
+scripts/unified/                         Unified Runtime 薄 CLI
 configs/                                人工维护的严格配置
 tests/                                  单元与合成回归测试
 ```
@@ -85,7 +87,59 @@ python scripts/stage4_landslide_evidence/run_landslide_evidence.py --help
 python scripts/stage4_landslide_evidence/run_mask_grounded_region.py --help
 python scripts/stage4_landslide_evidence/run_single_expert_annotation.py --help
 python scripts/stage4_landslide_evidence/run_model_assisted_supervision.py --help
+python scripts/unified/run_oa_groundrag.py --help
 ```
+
+### Instruction-Routed Unified Inference
+
+P0 统一入口要求调用方显式提供 `UnifiedTask`，不会让 LLM 猜任务。稳定 Python API 为
+`UnifiedRequest → CapabilityRouter → ExecutionPlan → UnifiedInferenceRuntime → UnifiedResponse`；
+六个任务是 `VLM_ONLY`、`SEGMENT_ONLY`、`REGION_UNDERSTANDING`、
+`SEGMENT_AND_UNDERSTAND`、`KNOWLEDGE_QA` 和 `REGION_INTERPRETATION`。Router 只产生布尔
+capability 计划，不导入 torch，也不加载模型或 Bank。
+
+最小知识问答请求示例：
+
+```json
+{
+  "schema_version": "oa_groundrag.unified_request.v1",
+  "request_id": "example-knowledge-qa",
+  "task": "KNOWLEDGE_QA",
+  "instruction": "Why can InSAR LOS measurements not directly determine full 3-D displacement?",
+  "images": [],
+  "user_mask": null,
+  "spatial_input": null,
+  "region_source": "NONE",
+  "candidate_region_id": null,
+  "auxiliary_views": [],
+  "include_audit": true
+}
+```
+
+只校验请求和确定性计划，不构造 provider 或读取模型、Bank、checkpoint：
+
+```bash
+python scripts/unified/run_oa_groundrag.py \
+  --config configs/unified/inference_v1.yaml \
+  --request request.json \
+  --dry-run
+```
+
+真实推理只写调用方指定的全新输出根，并按任务惰性加载所需 provider：
+
+```bash
+python scripts/unified/run_oa_groundrag.py \
+  --config configs/unified/inference_v1.yaml \
+  --request request.json \
+  --output-root /tmp/oa_groundrag_request_001
+```
+
+`REGION_INTERPRETATION + OA_AUXSEG_CANDIDATE` 只按精确 candidate ID 选择。ID 缺失、ID
+不存在或 candidates 为空时，响应以 exit code 0 兼容回退到 OA-AuxSeg global mask，并在
+非审计字段 `region_selection` 和 `limitations` 中记录原因；不自动选择 Top-1。普通 runtime
+拒绝 `GT_MASK`、`test`/`sealed` 路径和已有输出根。Stage 5 best、OA-AuxSeg 与 BGE-M3
+采用单重型 provider 常驻策略；RS-General Adapter 只是训练 curriculum，不作为 runtime 的
+前置生成阶段。
 
 ### OA-AuxSeg
 

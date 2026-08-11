@@ -1,0 +1,15 @@
+schema_version: oa_groundrag.unified_inference.config.v1
+repository_root: ../..
+spatial:
+  config: ../phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json
+  checkpoint: ../../outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_best.pt
+  checkpoint_sha256: 672d39ab4220d8e1b4f949ca8d1d5dcd34f58898cecd1553dd56cdd9d84fb038
+stage6:
+  config: ../stage6_text_rag/dev_v1.yaml
+runtime:
+  device: cuda
+  release_spatial_before_shared: true
+  release_shared_before_rag: true
+  release_retriever_after_query: true
+  release_unused_between_requests: true
+  reject_test_paths: true
