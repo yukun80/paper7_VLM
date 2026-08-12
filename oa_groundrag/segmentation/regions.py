@@ -1,4 +1,4 @@
-"""Phase 2 从语义 mask 确定性提取区域，并在稳定空间特征上 mask pooling。"""
+"""从语义 mask 确定性提取区域，并在稳定空间特征上 mask pooling。"""
 
 from __future__ import annotations
 

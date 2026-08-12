@@ -8,8 +8,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import canonical_json, first_symlink_component, sha256_file, sha256_text
-from oa_groundrag.phase4.config import _load_yaml
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.vlm.config import _load_yaml
 
 CONFIG_SCHEMA = "oa_groundrag.landslide_evidence.config.v1"
 MANIFEST_SCHEMA = "oa_groundrag.landslide_evidence.manifest.v1"

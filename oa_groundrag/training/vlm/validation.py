@@ -11,12 +11,16 @@ from typing import Any, Mapping, Protocol, Sequence
 import torch
 from torch import Tensor
 
-from oa_groundrag.phase3.common import canonical_json, sha256_text, stable_hash
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_text,
+    stable_hash,
+)
 
-from .checkpoint import capture_rng_state, restore_rng_state
-from .data import REQUIRED_EXTERNAL_SOURCES, REQUIRED_EXTERNAL_TASKS, DescriptionSample
-from .errors import ModelError, ReasonCode
-from .processing import DescriptionCollator
+from oa_groundrag.vlm.checkpoint import capture_rng_state, restore_rng_state
+from oa_groundrag.vlm.data import REQUIRED_EXTERNAL_SOURCES, REQUIRED_EXTERNAL_TASKS, DescriptionSample
+from oa_groundrag.vlm.errors import ModelError, ReasonCode
+from oa_groundrag.vlm.processing import DescriptionCollator
 
 
 VALIDATION_SELECTION_SCHEMA_VERSION = (

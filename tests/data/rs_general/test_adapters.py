@@ -5,16 +5,16 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
-from fixture_helpers import make_all_sources, write_build_config
-from oa_groundrag.phase3.adapters import (
+from tests.data.rs_general.fixture_helpers import make_all_sources, write_build_config
+from oa_groundrag.data.rs_general.adapters import (
     DisasterM3Adapter,
     MMRS1MAdapter,
     RSGPTAdapter,
 )
-from oa_groundrag.phase3.config import load_build_config
-from oa_groundrag.phase3.builder import _enabled_adapters
-from oa_groundrag.phase3.contracts import TaskFamily
-from oa_groundrag.phase3.errors import ReasonCode
+from oa_groundrag.data.rs_general.config import load_build_config
+from oa_groundrag.data.rs_general.builder import _enabled_adapters
+from oa_groundrag.data.rs_general.contracts import TaskFamily
+from oa_groundrag.data.rs_general.errors import ReasonCode
 
 
 class AdapterTests(unittest.TestCase):

@@ -4,7 +4,7 @@ run:
   seed: 20260730
   mode: external_generic
   mask_mode: external_generic
-  output_root: ../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16
+  output_root: ../../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16
   resume_checkpoint: null
 data:
   benchmark_root: /home/yukun80/codes/benchmark/rs_generaldesc_v1
@@ -36,8 +36,8 @@ limits:
   max_records_per_shard: 256
   max_probe_records: 4864
 model:
-  path: ../../models_zoo/Qwen3-VL-2B-Instruct
-  processor_path: ../../models_zoo/Qwen3-VL-2B-Instruct
+  path: ../../../models_zoo/Qwen3-VL-2B-Instruct
+  processor_path: ../../../models_zoo/Qwen3-VL-2B-Instruct
   local_files_only: true
   dtype: bfloat16
   attn_implementation: sdpa

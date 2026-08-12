@@ -13,24 +13,26 @@ from typing import Any, Iterator, Mapping, Sequence
 import numpy as np
 from torch.utils.data import Dataset
 
-from oa_groundrag.phase3.common import (
-    first_symlink_component,
+from oa_groundrag.artifacts.identity import (
+    sha256_file,
+    stable_hash,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     portable_relative_path,
     read_json,
     read_jsonl_indices,
     reject_nonfinite,
-    sha256_file,
-    stable_hash,
 )
-from oa_groundrag.phase3.contracts import validate_canonical_record
-from oa_groundrag.phase3.dataset import (
+from oa_groundrag.data.rs_general.contracts import validate_canonical_record
+from oa_groundrag.data.rs_general.dataset import (
     CanonicalRecordLocation,
     RSGeneralDescDataset,
 )
-from oa_groundrag.phase3.exporter import render_canonical_messages
+from oa_groundrag.data.rs_general.exporter import render_canonical_messages
 
-from .config import Phase4Config
-from .contracts import (
+from .config import VLMConfig
+from oa_groundrag.grounding.contracts import (
     SUPPORTED_AUXSEG_INFERENCE_SCHEMA,
     DataMode,
     MaskMode,
@@ -230,7 +232,7 @@ def _asset_increment(
 
 
 def locate_bounded_external_records(
-    config: Phase4Config,
+    config: VLMConfig,
     *,
     access: BenchmarkAccess | None = None,
 ) -> BoundedCanonicalSelection:

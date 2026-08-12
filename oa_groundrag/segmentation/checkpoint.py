@@ -1,4 +1,4 @@
-"""Phase 2 OA-AuxSeg 当前 schema 的原子 checkpoint 保存与严格恢复。"""
+"""OA-AuxSeg 当前 schema 的原子 checkpoint 保存与严格恢复。"""
 
 from __future__ import annotations
 

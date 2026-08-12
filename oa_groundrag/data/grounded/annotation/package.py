@@ -7,20 +7,22 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    read_json,
-    read_jsonl,
-    safe_join,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+    safe_join,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 
-from .contracts import fail
-from .region_pipeline import ledger_rows
-from .region_validation import validate_region_asset_files
-from .single_expert import (
+from ..contracts import fail
+from ..region import ledger_rows
+from ..region_validation import validate_region_asset_files
+from .project import (
     ANNOTATION_ASSIGNMENT_SCHEMA,
     AnnotationAssetContext,
     AnnotationIntendedUse,

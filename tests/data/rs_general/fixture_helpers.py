@@ -1,4 +1,4 @@
-"""Phase 3 单元/合成测试的小型真实形状 fixture。"""
+"""RS-GeneralDesc 单元/合成测试的小型真实形状 fixture。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 import yaml
 from PIL import Image, ImageDraw
 
-from oa_groundrag.phase3.common import atomic_write_json
+from oa_groundrag.data.rs_general.io import atomic_write_json
 
 
 def make_image(

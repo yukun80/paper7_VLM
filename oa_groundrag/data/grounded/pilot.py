@@ -7,25 +7,33 @@ import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.phase2.data import registry_from_benchmark
-from oa_groundrag.phase2.model import optical_rgb_indices
-from oa_groundrag.phase3.common import (
-    canonical_json, first_symlink_component, portable_relative_path, read_json,
-    read_jsonl, safe_join, sha256_file, sha256_text,
+from oa_groundrag.segmentation.data import registry_from_benchmark
+from oa_groundrag.segmentation.model import optical_rgb_indices
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.contracts import MaskMode, RegionInventory, SelectionMode, SelectionRequest
-from oa_groundrag.phase4.evidence import (
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    portable_relative_path,
+    read_json,
+    read_jsonl,
+    safe_join,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.contracts import MaskMode, RegionInventory, SelectionMode, SelectionRequest
+from oa_groundrag.grounding.evidence import (
     deterministic_auxiliary_facts, deterministic_mask_facts, render_context_crop,
     render_evidence_image, render_mask_overlay,
 )
-from oa_groundrag.phase4.regions import RegionSelector
-from scripts.phase1_benchmark_build.benchmark_common import BenchmarkDataset
+from oa_groundrag.grounding.regions import RegionSelector
+from oa_groundrag.data.oa_auxseg.dataset import BenchmarkDataset
 
 from .contracts import (
     FALSE_FLAGS, MANIFEST_SCHEMA, RECORD_SCHEMA, SUPPORTED_MODALITIES, ForegroundBin,
@@ -434,7 +442,11 @@ def _ledger_rows(root: Path, relatives: Iterable[str]) -> list[dict[str, Any]]:
     return rows
 
 
-def build_auto(config_path: Path | str) -> BuildResult:
+def build_pilot_corpus(
+    config_path: Path | str,
+    *,
+    validator: Callable[[Path], Any] | None = None,
+) -> BuildResult:
     config = load_config(config_path)
     if config.output_root.exists() or config.output_root.is_symlink():
         fail("OUTPUT_EXISTS", f"Corpus output 已存在，拒绝覆盖：{config.output_root}")
@@ -494,8 +506,7 @@ def build_auto(config_path: Path | str) -> BuildResult:
             **{flag: False for flag in FALSE_FLAGS},
         }
         writer.write_json("manifest.json", manifest)
-        from .validation import validate_corpus
-
-        validate_corpus(writer.staging, verify_source=True)
+        if validator is not None:
+            validator(writer.staging)
         root = writer.publish()
     return BuildResult(root, sha256_file(root / "manifest.json"), selected_sha, len(records), len(asset_paths), asset_bytes)

@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from ..common import normalized_text, stable_hash
+from ..io import normalized_text, stable_hash
 from ..config import BuildConfig
 from ..contracts import AdapterResult, SourceExample
 

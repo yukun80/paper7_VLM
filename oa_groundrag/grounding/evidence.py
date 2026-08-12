@@ -12,7 +12,7 @@ from typing import Any, Sequence
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.phase3.common import first_symlink_component
+from oa_groundrag.artifacts.io import first_symlink_component
 
 from .contracts import (
     EVIDENCE_SCHEMA_VERSION,
@@ -24,7 +24,7 @@ from .contracts import (
     SelectedRegion,
     TargetStatus,
 )
-from .errors import EvidenceError, ReasonCode
+from oa_groundrag.vlm.errors import EvidenceError, ReasonCode
 from .regions import mask_bbox, mask_centroid
 
 
@@ -675,8 +675,8 @@ class EvidenceBuilder:
 
         from collections.abc import Mapping
 
-        from oa_groundrag.landslide_evidence.contracts import no_target_mask_facts
-        from oa_groundrag.landslide_evidence.region_contracts import (
+        from oa_groundrag.data.grounded.contracts import no_target_mask_facts
+        from oa_groundrag.data.grounded.region_contracts import (
             COORDINATE_BASIS,
             FORMAL_ROLES,
             MASK_RENDERER_VERSION,
@@ -688,7 +688,10 @@ class EvidenceBuilder:
             empty_description_template,
             validate_region_record,
         )
-        from oa_groundrag.phase3.common import canonical_json, sha256_text
+        from oa_groundrag.artifacts.identity import (
+            canonical_json,
+            sha256_text,
+        )
 
         if not all(isinstance(value, str) and value.strip() for value in (sample_id, source, split, mask_source)):
             raise EvidenceError(

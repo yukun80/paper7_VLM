@@ -17,7 +17,7 @@ from typing import Any, Sequence
 
 from torch.utils.data import DataLoader, Subset
 
-from benchmark_common import BenchmarkDataset, collate_benchmark_samples
+from .dataset import BenchmarkDataset, collate_benchmark_samples
 
 
 def smoke(root: Path, *, normalization: str = "none") -> dict[str, Any]:

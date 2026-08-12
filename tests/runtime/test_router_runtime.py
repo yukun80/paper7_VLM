@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.unified.contracts import (
+from oa_groundrag.runtime.contracts import (
     BenchmarkSampleRef,
     RegionSelectionStatus,
     RegionSource,
@@ -14,14 +14,14 @@ from oa_groundrag.unified.contracts import (
     UnifiedRequest,
     UnifiedTask,
 )
-from oa_groundrag.unified.providers import (
+from oa_groundrag.runtime.providers import (
     GroundedEvidenceResult,
     SpatialCandidate,
     SpatialResult,
     TextRAGResult,
 )
-from oa_groundrag.unified.router import CapabilityRouter
-from oa_groundrag.unified.runtime import UnifiedInferenceRuntime
+from oa_groundrag.runtime.router import CapabilityRouter
+from oa_groundrag.runtime.inference import UnifiedInferenceRuntime
 
 
 class FakeSpatial:

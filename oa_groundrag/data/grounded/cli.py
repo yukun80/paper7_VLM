@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""用途：构建、验证和评价 Stage 4 v2 Mask-Grounded Region 资产。
+"""用途：构建、验证和评价 Grounded Corpus 与 OA-GroundedEval 资产。
 
-命令：python scripts/stage4_landslide_evidence/run_mask_grounded_region.py --help
+命令：python scripts/data/grounded_corpus.py --help
 输入：冻结 OA-AuxSeg Benchmark 的人工 GT mask、v2 配置及可选人工 annotation/prediction。
 输出：全新 Region Corpus、OA-GroundedEval-dev、message、annotation 或开发评价根。
 写入：所有输出原子发布并拒绝覆盖；不修改 Benchmark、checkpoint、Gate B 或既有 Stage 4A。
@@ -18,31 +18,38 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.landslide_evidence.annotation import (
+from oa_groundrag.data.grounded.annotation.queue import (
     export_annotation_queue,
     validate_annotations,
 )
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.grounded_eval import build_eval_dev
-from oa_groundrag.landslide_evidence.region_pipeline import build_region_corpus
-from oa_groundrag.landslide_evidence.region_validation import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.grounded_eval import build_eval_dev
+from oa_groundrag.data.grounded.workflow import build_auto, build_region_corpus
+from oa_groundrag.data.grounded.region_validation import (
     validate_eval_dev,
     validate_region_corpus,
 )
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.phase4.grounded_evaluation import evaluate_dev
-from oa_groundrag.phase4.messages import render_mask_grounded_region_messages
+from oa_groundrag.data.grounded.validation import validate_corpus
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.evaluation.grounding.observations import evaluate_dev
+from oa_groundrag.grounding.messages import render_mask_grounded_region_messages
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Stage 4 v2 Mask-Grounded Region 工程入口")
+    parser = argparse.ArgumentParser(description="Grounded Corpus 数据与评价入口")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    commands.add_parser("build-pilot", help="构建 train-only deterministic pilot").add_argument(
+        "--config", type=Path, required=True
+    )
+    commands.add_parser("validate-pilot", help="严格验证 pilot Corpus").add_argument(
+        "--root", type=Path, required=True
+    )
     commands.add_parser("build-region-corpus", help="构建 train-only Region Corpus").add_argument(
         "--config", type=Path, required=True
     )
@@ -100,7 +107,20 @@ def _build_result(value: Any) -> dict[str, Any]:
 def entrypoint(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "build-region-corpus":
+        if args.command == "build-pilot":
+            result = build_auto(args.config)
+            _print({
+                "ok": True,
+                "root": str(result.root),
+                "manifest_sha256": result.manifest_sha256,
+                "selected_ids_sha256": result.selected_ids_sha256,
+                "record_count": result.record_count,
+                "asset_count": result.asset_count,
+                "asset_bytes": result.asset_bytes,
+            })
+        elif args.command == "validate-pilot":
+            _print(validate_corpus(args.root, verify_source=True))
+        elif args.command == "build-region-corpus":
             _print(_build_result(build_region_corpus(args.config)))
         elif args.command == "validate-region-corpus":
             _print(validate_region_corpus(args.root, verify_source=True))
@@ -133,7 +153,7 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
         else:
             raise AssertionError("unreachable")
         return 0
-    except (LandslideEvidenceError, Phase4Error, RSGeneralDescError) as error:
+    except (LandslideEvidenceError, VLMError, RSGeneralDescError) as error:
         _print(
             {
                 "ok": False,

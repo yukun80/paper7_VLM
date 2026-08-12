@@ -13,19 +13,21 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    read_json,
-    read_jsonl,
-    safe_join,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
-from oa_groundrag.phase4.outputs import REGION_OUTPUT_SCHEMA_VERSION, parse_region_model_output
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+    safe_join,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
+from oa_groundrag.grounding.outputs import REGION_OUTPUT_SCHEMA_VERSION, parse_region_model_output
 
-from .contracts import fail
+from ..contracts import fail
 from .model_assisted import (
     EXPERT_AUTHORITY,
     MODEL_AUTHORITY,
@@ -46,7 +48,7 @@ from .model_assisted import (
     _text,
     _validate_ledger,
 )
-from .region_pipeline import ledger_rows, region_asset_identity
+from ..region import ledger_rows, region_asset_identity
 
 
 EXPECTED_COMPACT_COUNT = 6_974
@@ -487,8 +489,8 @@ class CompactTrainingMessageDataset:
             fail("TYPE_MISMATCH", "compact epoch 必须是非负整数")
 
     def __getitem__(self, index: int) -> Any:
-        from oa_groundrag.phase4.contracts import MaskMode
-        from oa_groundrag.phase4.data import DescriptionSample
+        from oa_groundrag.grounding.contracts import MaskMode
+        from oa_groundrag.vlm.data import DescriptionSample
 
         if index < 0:
             index += len(self.records)

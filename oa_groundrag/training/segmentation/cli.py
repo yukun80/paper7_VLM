@@ -1,4 +1,4 @@
-"""OA-AuxSeg Phase 2 单一命令行入口。"""
+"""OA-AuxSeg 训练、定版、评价、推理与 smoke 命令入口。"""
 
 from __future__ import annotations
 
@@ -7,14 +7,13 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from .engine import (
-    finalize_training_run,
-    load_runtime_config,
-    run_evaluation,
-    run_inference,
-    run_smoke,
-    run_training,
-)
+from oa_groundrag.evaluation.segmentation import run_evaluation
+from oa_groundrag.segmentation.config import load_runtime_config
+from oa_groundrag.segmentation.inference import run_inference
+
+from .engine import run_training
+from .finalization import finalize_training_run
+from .smoke import run_smoke
 from .progress import (
     format_compact_finalization_report,
     format_compact_training_report,
@@ -28,7 +27,7 @@ def _path_from_repo(value: str, repo_root: Path) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="OA-GroundRAG Phase 2 OA-AuxSeg 统一入口"
+        description="OA-GroundRAG OA-AuxSeg 统一入口"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -92,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     config = load_runtime_config(arguments.config)
     if arguments.command == "train":
         report = run_training(

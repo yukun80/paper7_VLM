@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """用途：运行 Stage 4 单专家模型草稿、人工核验和 train-only 训练消息导出。
 
-命令：python scripts/stage4_landslide_evidence/run_single_expert_annotation.py --help
+命令：python scripts/data/grounded_annotation.py --help
 输入：../benchmark 中已冻结的 train Region Corpus 或 val Eval-dev、仓库 prompt、本地 Qwen 配置。
 输出：../benchmark/oa_grounded_stage4_v1 下的工作根、单专家 package 和训练 messages。
 写入：只写全新工作/发布根；工作快照原子替换，正式 package/messages 拒绝覆盖。
@@ -18,34 +18,34 @@ from pathlib import Path
 import sys
 from typing import Any, Sequence
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.single_expert import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.annotation.project import (
     AnnotationIntendedUse,
     create_annotation_project,
 )
-from oa_groundrag.landslide_evidence.single_expert_package import (
+from oa_groundrag.data.grounded.annotation.package import (
     export_verified_annotations,
     validate_verified_annotation_package,
 )
-from oa_groundrag.landslide_evidence.single_expert_training import (
+from oa_groundrag.data.grounded.annotation.training import (
     export_training_messages,
 )
-from oa_groundrag.landslide_evidence.single_expert_drafting import (
+from oa_groundrag.data.grounded.annotation.drafting import (
     generate_annotation_drafts,
 )
-from oa_groundrag.landslide_evidence.single_expert_workbench import (
+from oa_groundrag.data.grounded.annotation.workbench import (
     serve_annotation_workbench,
 )
-from oa_groundrag.landslide_evidence.single_expert_workflow import (
+from oa_groundrag.data.grounded.annotation.workflow import (
     TrainWorkflowPaths,
     run_train_annotation_workflow,
 )
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import Phase4Error
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import VLMError
 
 
 BENCHMARK_STAGE4_ROOT = REPO_ROOT.parent / "benchmark" / "oa_grounded_stage4_v1"
@@ -69,13 +69,14 @@ TRAIN_WORKFLOW_PATHS = TrainWorkflowPaths(
     prompt_path=(
         REPO_ROOT
         / "configs"
-        / "stage4_landslide_evidence"
+        / "grounding"
+        / "prompts"
         / "single_expert_prompt_v1.txt"
     ),
     draft_config_path=(
         REPO_ROOT
         / "configs"
-        / "stage4_landslide_evidence"
+        / "grounding"
         / "single_expert_qwen3vl_8b_v1.yaml"
     ),
 )
@@ -204,7 +205,7 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
             raise AssertionError("unreachable")
         _print(result)
         return 0
-    except (LandslideEvidenceError, Phase4Error, RSGeneralDescError) as error:
+    except (LandslideEvidenceError, VLMError, RSGeneralDescError) as error:
         _print(
             {
                 "ok": False,

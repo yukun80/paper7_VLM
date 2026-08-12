@@ -11,15 +11,19 @@ from typing import Any, Iterator, Mapping, Sequence
 import torch
 from torch import Tensor
 
-from oa_groundrag.landslide_evidence.compact_training import (
+from oa_groundrag.data.grounded.supervision.compact_training import (
     CompactTrainingMessageDataset,
     EXPERT_AUTHORITY,
 )
-from oa_groundrag.phase3.common import canonical_json, sha256_text, stable_hash
-from oa_groundrag.phase4.checkpoint import capture_rng_state, restore_rng_state
-from oa_groundrag.phase4.data import DescriptionSample
-from oa_groundrag.phase4.errors import ModelError, ReasonCode
-from oa_groundrag.phase4.validation import ValidationItem, ValidationResult
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_text,
+    stable_hash,
+)
+from oa_groundrag.vlm.checkpoint import capture_rng_state, restore_rng_state
+from oa_groundrag.vlm.data import DescriptionSample
+from oa_groundrag.vlm.errors import ModelError, ReasonCode
+from oa_groundrag.training.vlm.validation import ValidationItem, ValidationResult
 
 
 STAGE5_SPLIT_SCHEMA = "rs_vlm.mask_grounded_region_parent_split.v1"

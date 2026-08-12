@@ -1568,3 +1568,87 @@ branch 与 HEAD 未改变，未 commit 或 push。现有 5-pair smoke 只作为�
 - P0 仍只标记为 `engineering_complete`；Gate A/C/D、formal acceptance、scientific
   acceptance 和 `sealed_test_accessed=false` 均保持不变。下一任务仍为
   `P1 Multi-Source Grounded Evidence`，本次未开始 P1。
+
+## 能力驱动工程重构闭环（2026-08-11）
+
+### 现场基线与边界
+
+- 实施基线为 `main@c321748ec8cdf07b2114e6728c7753a0eb5e62a9`，与本地
+  `origin/main` 同步，初始工作树干净；本轮没有 commit 或 push。
+- 本轮只治理代码结构，不推进研究 Stage：未训练、未运行 backward/optimizer step、未新增
+  模型模块或 LoRA，未修改 checkpoint、Benchmark、Text Evidence Bank、正式 outputs、
+  冻结设计或 archive，未访问 Benchmark test split 或 sealed test 内容。
+- 发行名升级为 `oa-groundrag==0.2.0`；唯一 console entry 为
+  `oa-groundrag = oa_groundrag.runtime.cli:main`，不保留旧 distribution、console 或
+  phase/stage package alias。
+
+### 最终能力结构
+
+- runtime 主链固定为 `segmentation → vlm/grounding → retrieval → runtime`，分别对应
+  Spatial Perception、Grounded Multimodal Understanding、Knowledge Augmentation 与
+  Unified Inference。
+- 数据生产、训练和评价分别迁入 `oa_groundrag/data`、`oa_groundrag/training`、
+  `oa_groundrag/evaluation`；配置迁入 `configs/{segmentation,data,vlm,grounding,retrieval,runtime}`，
+  脚本按 `scripts/{data,train,infer,evaluate}` 组织，测试按能力镜像。
+- OA-AuxSeg Benchmark producer 已从 `scripts` 提升到 `oa_groundrag.data.oa_auxseg`，生产
+  package 不再反向导入 CLI。原 OA-AuxSeg engine 已拆为稳定 inference、training engine、
+  finalization、evaluation 与 smoke，模型数学函数原样保留。
+- Shared MLLM、Grounding contracts、RS-General data、Grounded Corpus/annotation/supervision、
+  Text RAG 与 Unified Runtime 已迁入长期能力路径。Corpus workflow 不再由 builder 反向导入
+  validator；AST package import graph 的三个既有循环全部消除。
+- canonical JSON/SHA 与 atomic byte/path primitives 收敛到 `oa_groundrag.artifacts`；只合并
+  同合同重复实现，保留 RS-General 专属严格读取/error 语义。VLM generic prediction 与
+  Grounding region output 已按事实边界拆分。
+- Unified config 升级为 `oa_groundrag.unified_inference.config.v2`，显式绑定 `spatial`、
+  `semantic_core`、`retrieval`。当前文件 SHA-256 为
+  `7811b6c8bfd217fd3f86f8c5edc6c1e897033036cf4df0844efbdb56d433a631`。
+- Retrieval 活动配置文件 SHA-256 为
+  `f175a99347184d75592ec9a1c61c88fc7a4b976dd7381cb9afafd209fb1f8b57`；运行路径只使用新目录，
+  identity-only 历史路径继续重现已发布 Bank semantic SHA-256
+  `15343b90dd4e447bb13e65c106af9e817c41f70e2b5e6e0b2c22b6040a4afb6a`。
+  Grounded curriculum 配置文件 SHA-256 为
+  `2998cd8c36ad69a703507b8446f3767035819d91f96c964a20969d2f6f3a64e2`；注入冻结
+  `monitor_parent_count=643` 后仍精确得到已发布 semantic SHA-256
+  `8ea33e0e058a75a9d27ce248684bd6734fc10e3d09ffe22db16cb5b904ca943d`。
+
+### 删除与零引用证据
+
+- 删除两个历史 shell orchestration `run_build_full.sh`、`run_build_small.sh`；底层 producer、
+  配置、测试和科学合同均保留并迁移。删除前后 `rg` 确认无活动 import、配置、CLI、测试或
+  正式 artifact 重算引用。
+- 旧 phase/stage/text_rag/unified wrapper、空目录和精确 `__pycache__` 已删除；活动源码、配置、
+  脚本、测试一级目录不存在 phase/stage，生产包无 `scripts` 或旧 package import。
+- 历史 schema、output root、checkpoint metadata、Gate implementation identity key 和本文件中的
+  Stage/phase provenance 保留原值；没有用 compatibility wrapper 伪造旧接口。
+
+### 验证结果
+
+- `unittest` 单次 discovery 共收集 `339` 项。授权范围内的 `335` 项全部完成：`331` 通过，
+  `4` 项因本机缺少 `oa_auxseg_hdf5_v1/small` 而在 `tests/integration` 显式 skip。另 `4` 项
+  synthetic 测试包含本轮明确禁止的 backward/optimizer step，故只收集、不执行；未将其伪报
+  为通过。新增架构测试 `8/8` 通过，覆盖能力根、公共 import、配置引用、全部 18 个 task CLI
+  `--help`、禁止 package→scripts、禁止旧 import 及零导入环。
+- `compileall` 使用唯一 `/tmp` pycache 根通过；安装 metadata/console target import smoke 与
+  `git diff --check` 通过。Ruff 未安装，准确结果为 `No module named ruff`。
+- 六任务 CUDA bounded inference 合计 `6/6` 通过：`VLM_ONLY`、`SEGMENT_ONLY`、
+  `REGION_UNDERSTANDING`、`SEGMENT_AND_UNDERSTAND`、`KNOWLEDGE_QA`、
+  `REGION_INTERPRETATION`。前四项位于
+  `/tmp/oa_groundrag_refactor_cuda_smoke_20260811_v1`；迁移路径引起的 Retrieval identity
+  诊断失败未覆盖，修复 identity/runtime 分离后两个 RAG 任务在 fresh
+  `/tmp/oa_groundrag_refactor_cuda_smoke_20260811_v2` 从头通过。所有 summary 均为
+  `training_performed=false`、`sealed_test_accessed=false`、`scientific_acceptance=false`。
+- Text Bank 严格只读验证通过，Bank ID 仍为
+  `9322a9139d04be7665feb154153b7dc1c2d35b0871fc32bbd6a6daa942fabb28`。Gate B media locator
+  仍能只读定位 canonical asset；Gate B verifier 如预期返回 `GATE_B_PROTOCOL_INVALID`，历史
+  PASS 继续绑定原验收提交，没有发布伪兼容协议。
+- 冻结设计、Gate B protocol/report、Text Bank manifest、Gate D protocol manifest/protocol、
+  run manifest 与 evaluation manifest 的复核 SHA-256 分别仍为 `fd088b0a…`、`8378f6f1…`、
+  `b150de8e…`、`9b891e19…`、`8ddf9829…`、`70b13b12…`、`170ad8ac…`、`85a0efdd…`，与实施前
+  记录逐项一致。
+
+### 当前结论与下一步
+
+- 本轮能力驱动工程重构完成；模型数学、checkpoint loader 行为、UnifiedTask 路由、Grounded
+  Evidence 事实合同、retrieval 算法和 published artifact identity 未改变。
+- 实时研究状态未因目录迁移升级；下一研究任务仍为 `P1 Multi-Source Grounded Evidence`，
+  开始前必须重新取得写入/GPU/评价授权。

@@ -1,4 +1,4 @@
-"""Phase 2 复用 oa_auxseg_hdf5_v1 的稀疏多模态 batch。"""
+"""OA-AuxSeg 复用 oa_auxseg_hdf5_v1 的稀疏多模态 batch。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
-from scripts.phase1_benchmark_build.benchmark_common import (
+from oa_groundrag.data.oa_auxseg.dataset import (
     SCHEMA_VERSION,
     BenchmarkDataset,
     collate_benchmark_samples,

@@ -12,24 +12,30 @@ from typing import Any, Callable, Mapping
 import torch
 from safetensors.torch import load_file as load_safetensors
 
-from oa_groundrag.landslide_evidence.compact_training import CompactTrainingMessageDataset
-from oa_groundrag.phase3.common import atomic_write_json, canonical_json, read_json, sha256_file, sha256_text
-from oa_groundrag.phase3.dataset import RSGeneralDescDataset
+from oa_groundrag.data.grounded.supervision.compact_training import CompactTrainingMessageDataset
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import atomic_write_json
+from oa_groundrag.data.rs_general.io import read_json
+from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
 
-from .checkpoint import CheckpointManager
-from .config import AdaptationSection
-from .data import ExternalDescriptionDataset
-from .errors import ModelError, ReasonCode
-from .model import Qwen3VLModelAdapter
-from .preflight import BenchmarkIdentity, open_benchmark_access
-from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
-from .stage5_config import (
+from oa_groundrag.vlm.checkpoint import CheckpointManager
+from oa_groundrag.vlm.config import AdaptationSection
+from oa_groundrag.vlm.data import ExternalDescriptionDataset
+from oa_groundrag.vlm.errors import ModelError, ReasonCode
+from oa_groundrag.vlm.model import Qwen3VLModelAdapter
+from oa_groundrag.vlm.preflight import BenchmarkIdentity, open_benchmark_access
+from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from .config import (
     Stage5Config,
     load_stage5_config,
     verify_warm_start_files,
     with_monitor_parent_count,
 )
-from .stage5_data import (
+from .data import (
     REGION_MONITOR_ROLE,
     REGION_TRAIN_ROLE,
     REPLAY_ROLE,
@@ -41,14 +47,14 @@ from .stage5_data import (
     parse_region_monitor_result,
     split_compact_by_parent,
 )
-from .stage5_evaluation import (
+from oa_groundrag.evaluation.grounding.adapter import (
     evaluate_stage5_dev,
     load_stage5_eval_samples,
     run_rs_general_retention_report,
     run_stage5_region_inference,
 )
-from .trainer import DescriptionTrainer, clear_cuda_cache, training_layout_identity
-from .validation import evaluate_teacher_forced_loss, select_bounded_external_validation
+from oa_groundrag.training.vlm.trainer import DescriptionTrainer, clear_cuda_cache, training_layout_identity
+from oa_groundrag.training.vlm.validation import evaluate_teacher_forced_loss, select_bounded_external_validation
 
 
 STAGE5_WORKFLOW_SCHEMA = "rs_vlm.mask_grounded_stage5_workflow.v1"
@@ -75,7 +81,7 @@ def _prepare_stage5_training_memory(device: torch.device) -> None:
 def _stage5_gate_b_protocol_path(config: Stage5Config) -> Path:
     """返回 Gate B 静态 YAML；frozen JSON 仅由 selection validator 旁路读取。"""
 
-    return config.config_path.parent / _GATE_B_STATIC_PROTOCOL_FILENAME
+    return config.base.config_path.parent / _GATE_B_STATIC_PROTOCOL_FILENAME
 
 
 def _compact_benchmark_identity(dataset: CompactTrainingMessageDataset) -> BenchmarkIdentity:

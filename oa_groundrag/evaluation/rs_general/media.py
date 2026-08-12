@@ -8,33 +8,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import (
-    first_symlink_component,
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     read_json,
     read_jsonl_indices,
 )
-from oa_groundrag.phase3.contracts import (
+from oa_groundrag.data.rs_general.contracts import (
     CANONICAL_SCHEMA_VERSION,
     MANIFEST_VERSION,
     RS_GENERALDESC_SOURCES,
     RS_GENERALDESC_TASK_FAMILIES,
 )
-from oa_groundrag.phase3.dataset import (
+from oa_groundrag.data.rs_general.dataset import (
     CanonicalRecordLocation,
     RSGeneralDescDataset,
 )
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from .contracts import PREDICTION_SCHEMA_VERSION
-from .errors import PredictionError, ReasonCode
-from .gate_b_contracts import (
+from oa_groundrag.grounding.contracts import PREDICTION_SCHEMA_VERSION
+from oa_groundrag.vlm.errors import PredictionError, ReasonCode
+from .contracts import (
     GATE_B_PROTOCOL_ID,
     QWEN_TEMPLATE_VERSION,
 )
 
 
 DEFAULT_GATE_B_BENCHMARK_ROOT = (
-    Path(__file__).resolve().parents[2].parent
+    Path(__file__).resolve().parents[3].parent
     / "benchmark"
     / "rs_generaldesc_v1"
 )

@@ -7,11 +7,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from oa_groundrag.phase3.common import canonical_json, sha256_text
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import ContractError, Phase4Error
-from oa_groundrag.text_rag.contracts import PASS2_OUTPUT_SCHEMA, RagMode
-from oa_groundrag.text_rag.gate_d import (
+from oa_groundrag.data.rs_general.io import canonical_json, sha256_text
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import ContractError, VLMError
+from oa_groundrag.retrieval.contracts import PASS2_OUTPUT_SCHEMA, RagMode
+from oa_groundrag.evaluation.retrieval.gate_d import (
     GATE_D_CONFIG_SCHEMA,
     audit_selected_prompts,
     build_automatic_evaluation,
@@ -126,10 +126,10 @@ class GateDTest(unittest.TestCase):
 
     def test_selection_rejects_wrong_smoke_and_split(self) -> None:
         records = _selection_records()
-        with self.assertRaises((Phase4Error, RSGeneralDescError)):
+        with self.assertRaises((VLMError, RSGeneralDescError)):
             select_gate_d_records(records, smoke_record_ids=["gdcld_0"], source_order=SOURCES, per_source=5)
         records[5]["split"] = "test"
-        with self.assertRaises((Phase4Error, RSGeneralDescError)):
+        with self.assertRaises((VLMError, RSGeneralDescError)):
             select_gate_d_records(
                 records,
                 smoke_record_ids=[f"{source}_0" for source in SOURCES],
@@ -152,7 +152,7 @@ class GateDTest(unittest.TestCase):
         self.assertEqual({row["mode"] for row in rows}, {mode.value for mode in RagMode})
         self.assertTrue(all(row["image_count"] == 0 for row in rows))
         self.assertEqual(len(identity), 64)
-        with self.assertRaises((Phase4Error, RSGeneralDescError)):
+        with self.assertRaises((VLMError, RSGeneralDescError)):
             audit_selected_prompts(
                 stage6,
                 selected,
@@ -160,7 +160,7 @@ class GateDTest(unittest.TestCase):
                 processor=_FakeProcessor(rag_tokens=220),
                 max_input_tokens=200,
             )
-        with self.assertRaises((Phase4Error, RSGeneralDescError)):
+        with self.assertRaises((VLMError, RSGeneralDescError)):
             audit_selected_prompts(
                 stage6,
                 selected,
@@ -185,7 +185,7 @@ class GateDTest(unittest.TestCase):
             observed = _selected_from_protocol(stage6, protocol)
             self.assertEqual([row["record_id"] for row in observed], [row["record_id"] for row in chosen])
             protocol["records"][0]["selection_record_sha256"] = "0" * 64
-            with self.assertRaises((Phase4Error, RSGeneralDescError)):
+            with self.assertRaises((VLMError, RSGeneralDescError)):
                 _selected_from_protocol(stage6, protocol)
 
     def test_automatic_evaluation_has_no_scientific_metrics(self) -> None:
@@ -243,14 +243,14 @@ class GateDTest(unittest.TestCase):
             "packet_id": f"pkt_{record_id}", "prediction_id": "r" * 64, "output": _output(citations=True),
         }
         rag_row["output"]["summary"]["evidence_ids"] = ["ev_unknown"]
-        with self.assertRaises((Phase4Error, RSGeneralDescError)):
+        with self.assertRaises((VLMError, RSGeneralDescError)):
             build_automatic_evaluation(
                 protocol=protocol,
                 run_manifest={"run_id": "u" * 64},
                 predictions=[no_row, rag_row],
                 packets={record_id: _packet(record_id)},
             )
-        with self.assertRaises((Phase4Error, RSGeneralDescError)):
+        with self.assertRaises((VLMError, RSGeneralDescError)):
             build_automatic_evaluation(
                 protocol=protocol,
                 run_manifest={"run_id": "u" * 64},
@@ -290,10 +290,10 @@ reference_authority: automatic_contract_only
             observed = load_gate_d_config(config)
             self.assertEqual(observed.per_source, 5)
             config.write_text(base.replace("protocol_root: protocol", "protocol_root: sealed_test"), encoding="utf-8")
-            with self.assertRaises((Phase4Error, RSGeneralDescError)):
+            with self.assertRaises((VLMError, RSGeneralDescError)):
                 load_gate_d_config(config)
             config.write_text(base + "unknown: true\n", encoding="utf-8")
-            with self.assertRaises((Phase4Error, RSGeneralDescError)):
+            with self.assertRaises((VLMError, RSGeneralDescError)):
                 load_gate_d_config(config)
 
     def test_upstream_identity_drift_is_rejected(self) -> None:
@@ -306,13 +306,13 @@ reference_authority: automatic_contract_only
         )
         stage6 = SimpleNamespace(semantic_sha256="a" * 64, bank_root=Path("bank"), retrieval_root=Path("retrieval"))
         with (
-            patch("oa_groundrag.text_rag.gate_d.load_stage6_config", return_value=stage6),
-            patch("oa_groundrag.text_rag.gate_d.validate_bank"),
-            patch("oa_groundrag.text_rag.gate_d.validate_retrieval", return_value={
+            patch("oa_groundrag.evaluation.retrieval.gate_d.load_stage6_config", return_value=stage6),
+            patch("oa_groundrag.evaluation.retrieval.gate_d.validate_bank"),
+            patch("oa_groundrag.evaluation.retrieval.gate_d.validate_retrieval", return_value={
                 "retrieval_id": "wrong", "selection_id": "s" * 64, "manifest_sha256": "m" * 64,
             }),
         ):
-            with self.assertRaises((Phase4Error, RSGeneralDescError)):
+            with self.assertRaises((VLMError, RSGeneralDescError)):
                 _validate_upstream(config)
 
     def test_protocol_publish_refuses_overwrite(self) -> None:
@@ -353,9 +353,9 @@ reference_authority: automatic_contract_only
             }
             audit = [{"record_id": "r"}]
             environment = {"python": "test"}
-            with patch("oa_groundrag.text_rag.gate_d._build_protocol", return_value=(protocol, audit, environment)):
+            with patch("oa_groundrag.evaluation.retrieval.gate_d._build_protocol", return_value=(protocol, audit, environment)):
                 prepare_gate_d_protocol(config_path)
-                with self.assertRaises((Phase4Error, RSGeneralDescError)):
+                with self.assertRaises((VLMError, RSGeneralDescError)):
                     prepare_gate_d_protocol(config_path)
 
 

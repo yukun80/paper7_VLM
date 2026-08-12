@@ -10,11 +10,19 @@ from typing import Any, Mapping
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.phase3.common import (
-    canonical_json, first_symlink_component, portable_relative_path, read_json,
-    read_jsonl, safe_join, sha256_file, sha256_text,
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
 )
-from oa_groundrag.phase4.evidence import (
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    portable_relative_path,
+    read_json,
+    read_jsonl,
+    safe_join,
+)
+from oa_groundrag.grounding.evidence import (
     context_crop_window, deterministic_auxiliary_facts, deterministic_mask_facts,
     render_context_crop, render_evidence_image, render_mask_overlay,
 )
@@ -24,7 +32,7 @@ from .contracts import (
     SUPPORTED_MODALITIES, ForegroundBin, PilotConfig, SourceQuota, derive_claims, fail,
     no_target_mask_facts, unavailable_auxiliary_facts, validate_record,
 )
-from .pipeline import (
+from .pilot import (
     CORPUS_NAME, OABenchmarkAccess, render_optical, select_pilot,
 )
 

@@ -9,9 +9,9 @@ from typing import Any, Iterator, Mapping, Protocol, Sequence
 
 from torch import Tensor
 
-from .data import DescriptionSample
-from .errors import ModelError, ReasonCode
-from .processing import DescriptionCollator
+from oa_groundrag.vlm.data import DescriptionSample
+from oa_groundrag.vlm.errors import ModelError, ReasonCode
+from oa_groundrag.vlm.processing import DescriptionCollator
 
 
 INPUT_PIPELINE_SYNC = "synchronous.v1"
@@ -244,7 +244,7 @@ class OrderedBatchPrefetcher:
             self._executors = [
                 ThreadPoolExecutor(
                     max_workers=1,
-                    thread_name_prefix=f"phase4-input-{index}",
+                    thread_name_prefix=f"vlm-input-{index}",
                 )
                 for index in range(num_workers)
             ]

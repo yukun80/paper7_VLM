@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""用途：运行 OA-GroundRAG v3 P0 Instruction-Routed Unified Inference。
+"""用途：运行 OA-GroundRAG Instruction-Routed Unified Inference。
 
-命令：python scripts/unified/run_oa_groundrag.py --config <YAML> --request <JSON> --output-root <fresh-root>。
+命令：oa-groundrag --config <YAML> --request <JSON> --output-root <fresh-root>。
 输入：显式 UnifiedTask、已有 OA-AuxSeg/Stage 5/Text Bank 合同及本地 train/val 或用户资产。
 输出：原子发布 request/response 或 failure、manifest、SHA ledger 与按需 sidecar。
 写入：仅写调用方给出的全新 output-root；--dry-run 完全不写入。
@@ -21,23 +21,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.phase3.common import read_json
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.unified.config import build_unified_runtime, load_unified_config
-from oa_groundrag.unified.contracts import (
+from oa_groundrag.data.rs_general.io import read_json
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.runtime.config import build_unified_runtime, load_unified_config
+from oa_groundrag.runtime.contracts import (
     UnifiedInferenceError,
     UnifiedRequest,
     reject_test_or_sealed_path,
 )
-from oa_groundrag.unified.router import CapabilityRouter
+from oa_groundrag.runtime.router import CapabilityRouter
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="OA-GroundRAG v3 P0 显式任务统一推理",
     )
-    parser.add_argument("--config", type=Path, required=True, help="Unified v1 严格 YAML")
+    parser.add_argument("--config", type=Path, required=True, help="Unified v2 严格 YAML")
     parser.add_argument("--request", type=Path, required=True, help="UnifiedRequest JSON")
     destination = parser.add_mutually_exclusive_group(required=True)
     destination.add_argument("--output-root", type=Path, help="必须不存在的新输出根")
@@ -59,7 +59,7 @@ def _print(value: Any, *, stream: Any | None = None) -> None:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _execute(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     reject_test_or_sealed_path(args.request, label="request JSON")
     config = load_unified_config(args.config)
@@ -86,13 +86,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def entrypoint(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     try:
-        return main(argv)
+        return _execute(argv)
     except UnifiedInferenceError as error:
         _print({"ok": False, **error.to_dict()}, stream=sys.stderr)
         return 2
-    except (Phase4Error, RSGeneralDescError) as error:
+    except (VLMError, RSGeneralDescError) as error:
         _print({
             "ok": False,
             "reason_code": getattr(getattr(error, "code", None), "value", "RUNTIME_ERROR"),
@@ -112,4 +112,4 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(entrypoint())
+    raise SystemExit(main())

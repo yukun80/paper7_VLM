@@ -10,17 +10,19 @@ from typing import Any, Mapping
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     portable_relative_path,
     read_json,
     read_jsonl,
     safe_join,
-    sha256_file,
-    sha256_text,
 )
-from oa_groundrag.phase4.evidence import (
+from oa_groundrag.grounding.evidence import (
     context_crop_window,
     deterministic_mask_facts,
     deterministic_shift_mask,
@@ -28,7 +30,7 @@ from oa_groundrag.phase4.evidence import (
 )
 
 from .contracts import EXPECTED_IDENTITY_FIELDS, fail, no_target_mask_facts
-from .pipeline import render_optical
+from .pilot import render_optical
 from .region_contracts import (
     ANNOTATION_QUEUE_SCHEMA,
     COUNTERFACTUAL_GROUP_SCHEMA,
@@ -42,7 +44,7 @@ from .region_contracts import (
     parent_identity,
     validate_region_record,
 )
-from .region_pipeline import (
+from .region import (
     RegionBenchmarkAccess,
     frozen_stage4a_ids,
     region_asset_identity,

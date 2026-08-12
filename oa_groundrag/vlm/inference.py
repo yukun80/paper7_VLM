@@ -8,16 +8,16 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from torch import Tensor
 
-from .artifacts import AtomicArtifactDirectory
-from .config import Phase4Config
-from .contracts import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from .config import VLMConfig
+from oa_groundrag.grounding.contracts import (
     RUN_MANIFEST_SCHEMA_VERSION,
     EvidenceSufficiency,
     MaskMode,
 )
 from .data import DescriptionSample
-from .errors import Phase4Error, PredictionError, ReasonCode
-from .outputs import (
+from .errors import VLMError, PredictionError, ReasonCode
+from oa_groundrag.vlm.outputs import (
     failure_row,
     generic_prediction_row,
     parse_model_output,
@@ -59,7 +59,7 @@ def _single_mask_mode(
 
 def run_inference(
     *,
-    config: Phase4Config,
+    config: VLMConfig,
     samples: Sequence[DescriptionSample],
     collator: DescriptionCollator,
     model: GenerativeAdapter,
@@ -175,7 +175,7 @@ def run_inference(
                         counterfactual=sample.counterfactual,
                     )
                 )
-        except Phase4Error as error:
+        except VLMError as error:
             if error.code in {
                 ReasonCode.TOKEN_LIMIT_EXCEEDED,
                 ReasonCode.IMAGE_LIMIT_EXCEEDED,

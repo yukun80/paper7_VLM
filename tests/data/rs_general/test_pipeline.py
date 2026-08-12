@@ -11,31 +11,31 @@ from unittest import mock
 
 from torch.utils.data import DataLoader
 
-from fixture_helpers import (
+from tests.data.rs_general.fixture_helpers import (
     make_all_sources,
     write_build_config,
     write_export_config,
 )
-from oa_groundrag.phase3.assets import AssetStore
-from oa_groundrag.phase3.builder import audit_sources, build_benchmark
-from oa_groundrag.phase3.common import read_json, read_jsonl
-from oa_groundrag.phase3.config import load_build_config, load_export_config
-from oa_groundrag.phase3.dataset import (
+from oa_groundrag.data.rs_general.assets import AssetStore
+from oa_groundrag.data.rs_general.builder import audit_sources, build_benchmark
+from oa_groundrag.data.rs_general.io import read_json, read_jsonl
+from oa_groundrag.data.rs_general.config import load_build_config, load_export_config
+from oa_groundrag.data.rs_general.dataset import (
     CanonicalRecordLocation,
     RSGeneralDescDataset,
     ParentBalancedSampler,
     collate_canonical_samples,
 )
-from oa_groundrag.phase3.contracts import validate_canonical_record
-from oa_groundrag.phase3.errors import (
+from oa_groundrag.data.rs_general.contracts import validate_canonical_record
+from oa_groundrag.data.rs_general.errors import (
     BuildError,
     ConfigError,
     ExportError,
     ReasonCode,
     SchemaError,
 )
-from oa_groundrag.phase3.exporter import export_qwen, render_canonical_messages
-from oa_groundrag.phase3.validator import validate_benchmark
+from oa_groundrag.data.rs_general.exporter import export_qwen, render_canonical_messages
+from oa_groundrag.data.rs_general.validator import validate_benchmark
 
 
 class PipelineTests(unittest.TestCase):

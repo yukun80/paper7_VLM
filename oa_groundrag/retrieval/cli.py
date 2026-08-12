@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""用途：构建并验证 OA-GroundRAG Stage 6 Evidence-Constrained Text RAG。
+"""用途：构建并验证 OA-GroundRAG Evidence-Constrained Text RAG。
 
-命令：python scripts/stage6_text_rag/run_text_rag.py --help
+命令：python scripts/infer/text_rag.py --help
 输入：Stage 6 YAML、只读 PDF、Stage 5 Pass-1/dev 与本地模型权重。
 输出：新 Bank、dev retrieval 或 bounded paired GPU artifact；全部拒绝覆盖。
 写入：仅写配置指定的新 Stage 6 输出根；不修改 PDF、Stage 5 或 sealed test。
@@ -21,11 +21,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.text_rag.bank import build_bank, validate_bank
-from oa_groundrag.text_rag.contracts import load_stage6_config
-from oa_groundrag.text_rag.workflow import (
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.retrieval.bank import build_bank, validate_bank
+from oa_groundrag.retrieval.contracts import load_stage6_config
+from oa_groundrag.retrieval.workflow import (
     generate_paired,
     preflight,
     prepare_dev_selection,
@@ -40,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/stage6_text_rag/dev_v1.yaml",
+        default=REPO_ROOT / "configs/retrieval/dev_v1.yaml",
         help="Stage 6 严格配置",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -103,7 +103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def entrypoint() -> int:
     try:
         return main()
-    except (Phase4Error, RSGeneralDescError) as error:
+    except (VLMError, RSGeneralDescError) as error:
         details = getattr(error, "details", {})
         code = getattr(getattr(error, "code", None), "value", "STAGE6_ERROR")
         print(

@@ -1,16 +1,16 @@
 schema_version: rs_vlm.mask_grounded_stage5_config.v1
-base_config: rs_generaldesc_lora_qwen3vl_2b.yaml
-workflow_root: ../../outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1
+base_config: ../rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml
+workflow_root: ../../../outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1
 data:
-  compact_training_root: ../../../benchmark/oa_grounded_stage4_v2/training_messages/mask_grounded_region_compact_training_messages_train_v3_6974
-  eval_dev_root: ../../../benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100
+  compact_training_root: ../../../../benchmark/oa_grounded_stage4_v2/training_messages/mask_grounded_region_compact_training_messages_train_v3_6974
+  eval_dev_root: ../../../../benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100
   split_seed: 20260808
   train_ratio: 0.9
   region_micro_ratio: 0.9
   replay_micro_ratio: 0.1
   replay_validation_parents: 128
 warm_start:
-  checkpoint_root: ../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16/checkpoints/step-00001000
+  checkpoint_root: ../../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen3vl_2b_b1a16/checkpoints/step-00001000
   best_pointer_sha256: 4d93e2c6c34fe01a10db373c00946166238b8d132bb32b9863b52e305b6f4db6
   checkpoint_step: 1000
   checkpoint_manifest_sha256: aa279659a4c563536f1d7554ed9e51643398365ce11539eb9865f77c1d3a621f

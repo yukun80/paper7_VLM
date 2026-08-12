@@ -7,11 +7,16 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import canonical_json, first_symlink_component, sha256_file, sha256_text
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
 
-from .config import Phase4Config, _load_yaml, load_config
-from .contracts import MaskMode
-from .errors import ConfigError, ReasonCode
+from oa_groundrag.vlm.config import VLMConfig, _load_yaml, load_config
+from oa_groundrag.grounding.contracts import MaskMode
+from oa_groundrag.vlm.errors import ConfigError, ReasonCode
 
 
 STAGE5_CONFIG_SCHEMA = "rs_vlm.mask_grounded_stage5_config.v1"
@@ -42,7 +47,7 @@ class Stage5Config:
     """兼容现有 trainer 属性，同时把 Stage 5 身份加入 checkpoint SHA。"""
 
     schema_version: str
-    base: Phase4Config
+    base: VLMConfig
     data_contract: Stage5DataContract
     warm_start: WarmStartContract
     workflow_root: Path

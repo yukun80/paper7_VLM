@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from ..common import read_json, safe_join, sha256_file
+from ..io import read_json, safe_join, sha256_file
 from ..contracts import (
     AdapterResult,
     AnnotationLayer,

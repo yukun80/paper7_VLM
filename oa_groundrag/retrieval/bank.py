@@ -15,16 +15,18 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.errors import ContractError, ModelError, ReasonCode
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.errors import ContractError, ModelError, ReasonCode
 
 from .contracts import (
     BANK_MANIFEST_SCHEMA,
@@ -36,7 +38,7 @@ from .contracts import (
     evidence_unit_id,
     load_source_registry,
 )
-from .retrieval import BGEM3DenseEmbedder, build_lexical_index
+from .search import BGEM3DenseEmbedder, build_lexical_index
 
 
 _BANK_PAYLOAD_FILES = frozenset({

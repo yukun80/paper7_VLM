@@ -7,8 +7,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypeVar
 
-from oa_groundrag.phase3.common import canonical_json, sha256_file, sha256_text
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 
 from .contracts import (
     ExecutionPlan,

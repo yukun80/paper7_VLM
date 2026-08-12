@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """用途：运行 Stage 6 Gate D automatic-only 开发评价。
 
-命令：python scripts/stage6_text_rag/run_gate_d_dev.py --help
+命令：python scripts/evaluate/gate_d.py --help
 输入：严格 Gate D 配置、已发布 Stage 6 retrieval 与 5-pair engineering smoke。
 输出：冻结 protocol、25-pair GPU run、automatic-only evaluation；均拒绝覆盖。
 写入：只写配置声明的新 Stage 6 输出根，不修改知识源、Stage 5 或 sealed test。
@@ -17,13 +17,13 @@ import sys
 from typing import Sequence
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.text_rag.gate_d import (
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.evaluation.retrieval.gate_d import (
     evaluate_gate_d,
     generate_gate_d_pairs,
     prepare_gate_d_protocol,
@@ -36,7 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/stage6_text_rag/gate_d_dev_v1.yaml",
+        default=REPO_ROOT / "configs/retrieval/gate_d_dev_v1.yaml",
         help="Gate D 严格配置",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -66,7 +66,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def entrypoint() -> int:
     try:
         return main()
-    except (Phase4Error, RSGeneralDescError) as error:
+    except (VLMError, RSGeneralDescError) as error:
         code = getattr(getattr(error, "code", None), "value", "GATE_D_DEV_ERROR")
         print(
             json.dumps(

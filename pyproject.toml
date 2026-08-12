@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "oa-auxseg-vlm"
-version = "0.1.0"
-description = "Optical-anchored arbitrary-auxiliary landslide segmentation and mask-grounded VLM research."
+name = "oa-groundrag"
+version = "0.2.0"
+description = "Spatial perception, grounded multimodal understanding, knowledge augmentation, and unified inference."
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.11"
@@ -21,30 +21,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-phase4 = [
+vlm = [
     "accelerate>=1.10,<2",
     "peft>=0.15,<1",
     "qwen-vl-utils>=0.0.14,<1",
     "safetensors>=0.6,<1",
     "transformers>=5.3,<6",
 ]
-stage6 = [
+retrieval = [
     "PyMuPDF>=1.26,<2",
     "rapidocr>=3,<4",
     "onnxruntime>=1.22,<2",
 ]
 
 [project.scripts]
-oa-auxseg = "oa_groundrag.phase2.cli:main"
+oa-groundrag = "oa_groundrag.runtime.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = [
-    "oa_groundrag*",
-    "scripts.phase1_benchmark_build*",
-    "scripts.phase3_rs_generaldesc*",
-    "scripts.phase4_rs_vlm*",
-    "scripts.stage6_text_rag*",
-    "scripts.unified*",
-]
+include = ["oa_groundrag*"]
 namespaces = true

@@ -7,23 +7,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
     stable_hash,
 )
-from oa_groundrag.phase3.contracts import validate_canonical_record
-from oa_groundrag.phase3.dataset import CanonicalRecordLocation
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.data.rs_general.contracts import validate_canonical_record
+from oa_groundrag.data.rs_general.dataset import CanonicalRecordLocation
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from .artifacts import AtomicArtifactDirectory
-from .contracts import GATE_B_SELECTION_SCHEMA_VERSION
-from .errors import ContractError, ReasonCode
-from .gate_b_contracts import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.contracts import GATE_B_SELECTION_SCHEMA_VERSION
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
+from .contracts import (
     GATE_B_PROTOCOL_ID,
     GATE_B_SAMPLE_COUNT,
     GATE_B_SEED,
@@ -36,8 +38,8 @@ from .gate_b_contracts import (
     static_protocol_snapshot,
     validate_frozen_protocol,
 )
-from .preflight import BenchmarkAccess, open_benchmark_access
-from .validation import VALIDATION_SELECTION_SCHEMA_VERSION
+from oa_groundrag.vlm.preflight import BenchmarkAccess, open_benchmark_access
+from oa_groundrag.training.vlm.validation import VALIDATION_SELECTION_SCHEMA_VERSION
 
 
 _SELECTION_FIELDS = {
@@ -876,6 +878,22 @@ def load_gate_b_selection_for_stage5_retention(
     frozen_static = dict(frozen["static_protocol"])
     historical_implementation = frozen_static.pop("implementation_files", None)
     current_implementation = current.pop("implementation_files", None)
+    # 能力化迁移改变了 YAML 相对路径文本与文件 SHA，但两份 VLM 配置的
+    # semantic_sha256 保持不变。retention 只消费冻结 selection，允许这一已声明的
+    # 工程迁移；正式 load_gate_b_selection 仍要求原始字节身份并继续失败。
+    for role in ("base", "adapter"):
+        current_role = current.get(role)
+        frozen_role = frozen_static.get(role)
+        if (
+            isinstance(current_role, dict)
+            and isinstance(frozen_role, dict)
+            and current_role.get("config_semantic_sha256")
+            == frozen_role.get("config_semantic_sha256")
+        ):
+            current_role["config_file_sha256"] = frozen_role.get(
+                "config_file_sha256"
+            )
+            current_role["config_path"] = frozen_role.get("config_path")
     if current != frozen_static:
         _fail("Stage 5 retention 的 Gate B 数据/模型/评价静态合同发生变化")
     implementation_match = current_implementation == historical_implementation

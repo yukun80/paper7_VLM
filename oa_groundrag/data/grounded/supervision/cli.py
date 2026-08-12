@@ -18,23 +18,23 @@ import sys
 from typing import Any, Sequence
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.compact_training import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.supervision.compact_training import (
     load_compact_training_messages,
     publish_compact_training_messages,
 )
-from oa_groundrag.landslide_evidence.model_assisted_workflow import (
+from oa_groundrag.data.grounded.supervision.workflow import (
     ModelAssistedWorkflowPaths,
     prepare_expanded_corpus,
     run_model_assisted_train_workflow,
 )
-from oa_groundrag.phase3.common import sha256_file
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import Phase4Error
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import VLMError
 
 
 BENCHMARK_ROOT = REPO_ROOT.parent / "benchmark"
@@ -44,7 +44,7 @@ MODEL_ASSISTED_WORKFLOW_PATHS = ModelAssistedWorkflowPaths(
     extension_config_path=(
         REPO_ROOT
         / "configs"
-        / "stage4_landslide_evidence"
+        / "grounding"
         / "region_corpus_train_extension_v2_7950.yaml"
     ),
     extension_root=(
@@ -76,13 +76,14 @@ MODEL_ASSISTED_WORKFLOW_PATHS = ModelAssistedWorkflowPaths(
     prompt_path=(
         REPO_ROOT
         / "configs"
-        / "stage4_landslide_evidence"
+        / "grounding"
+        / "prompts"
         / "single_expert_prompt_v1.txt"
     ),
     draft_config_path=(
         REPO_ROOT
         / "configs"
-        / "stage4_landslide_evidence"
+        / "grounding"
         / "single_expert_qwen3vl_8b_v1.yaml"
     ),
 )
@@ -154,7 +155,7 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
             raise AssertionError("unreachable")
         _print(result)
         return 0
-    except (LandslideEvidenceError, Phase4Error, RSGeneralDescError) as error:
+    except (LandslideEvidenceError, VLMError, RSGeneralDescError) as error:
         _print(
             {
                 "ok": False,

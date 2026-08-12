@@ -15,10 +15,10 @@ import torch
 import yaml
 from PIL import Image
 
-import oa_groundrag.phase4 as phase4_public
-from oa_groundrag.phase4.cli import entrypoint
-from oa_groundrag.phase3.builder import build_benchmark
-from oa_groundrag.phase3.common import (
+import oa_groundrag.vlm as vlm_public
+from oa_groundrag.vlm.cli import entrypoint
+from oa_groundrag.data.rs_general.builder import build_benchmark
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,
@@ -26,7 +26,7 @@ from oa_groundrag.phase3.common import (
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.contracts import (
+from oa_groundrag.data.rs_general.contracts import (
     BENCHMARK_SCOPE,
     BUILD_CONFIG_VERSION,
     CANONICAL_SCHEMA_VERSION,
@@ -35,26 +35,26 @@ from oa_groundrag.phase3.contracts import (
     STATISTICS_SCHEMA_VERSION,
     VALIDATION_VERSION,
 )
-from oa_groundrag.phase3.config import load_build_config
-from oa_groundrag.phase3.dataset import RSGeneralDescDataset
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase3.hash_ledger import HashLedgerVerifier
-from oa_groundrag.phase4.config import (
+from oa_groundrag.data.rs_general.config import load_build_config
+from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.data.rs_general.hash_ledger import HashLedgerVerifier
+from oa_groundrag.vlm.config import (
     CONFIG_SCHEMA_VERSION,
     apply_runtime_overrides,
     load_config,
 )
-from oa_groundrag.phase4.contracts import MaskMode
-from oa_groundrag.phase4.gate_b_contracts import (
+from oa_groundrag.grounding.contracts import MaskMode
+from oa_groundrag.evaluation.rs_general.contracts import (
     GATE_B_PROTOCOL_SCHEMA_VERSION,
     load_gate_b_protocol,
 )
-from oa_groundrag.phase4.data import (
+from oa_groundrag.vlm.data import (
     DescriptionSample,
     ExternalDescriptionDataset,
     inventory_from_auxseg_inference,
 )
-from oa_groundrag.phase4.errors import (
+from oa_groundrag.vlm.errors import (
     ConfigError,
     ContractError,
     ModelError,
@@ -62,32 +62,33 @@ from oa_groundrag.phase4.errors import (
     ProcessingError,
     ReasonCode,
 )
-from oa_groundrag.phase4.preflight import (
+from oa_groundrag.vlm.preflight import (
     inspect_benchmark_identity,
     run_preflight,
 )
-from oa_groundrag.phase4.processing import (
+from oa_groundrag.vlm.processing import (
     DescriptionCollator,
     EncodedSample,
     assistant_only_labels,
 )
-from oa_groundrag.phase4.model import (
+from oa_groundrag.vlm.model import (
     EXPECTED_QWEN3VL_2B_UNIQUE_PARAMETERS,
     ModelIdentity,
     Qwen3VLModelAdapter,
     assistant_sample_mean_causal_loss,
     local_model_identity,
 )
-from oa_groundrag.phase4.reference import MAIN_REFERENCE
-from oa_groundrag.phase4.stage5_config import STAGE5_CONFIG_SCHEMA, load_stage5_config
-from tests.phase3_rs_generaldesc.fixture_helpers import (
+from oa_groundrag.vlm.reference import MAIN_REFERENCE
+from oa_groundrag.training.grounding.config import STAGE5_CONFIG_SCHEMA, load_stage5_config
+from tests.data.rs_general.fixture_helpers import (
     make_all_sources,
     write_build_config,
 )
 
 
 REPO = Path(__file__).resolve().parents[2]
-CONFIG_ROOT = REPO / "configs/phase4_rs_vlm"
+CONFIG_ROOT = REPO / "configs/vlm/rs_general"
+GROUNDED_CONFIG_ROOT = REPO / "configs/vlm/grounded"
 EXPECTED_TRAINING_CONFIG_NAMES = (
     "bounded_smoke.yaml",
     "rs_generaldesc_lora_qwen3vl_2b.yaml",
@@ -95,7 +96,7 @@ EXPECTED_TRAINING_CONFIG_NAMES = (
 )
 
 
-def phase4_yaml_contracts() -> dict[str, tuple[Path, ...]]:
+def vlm_yaml_contracts() -> dict[str, tuple[Path, ...]]:
     """按顶层 schema 发现所有活动 YAML，未知合同立即失败。"""
 
     grouped: dict[str, list[Path]] = {
@@ -103,7 +104,7 @@ def phase4_yaml_contracts() -> dict[str, tuple[Path, ...]]:
         GATE_B_PROTOCOL_SCHEMA_VERSION: [],
         STAGE5_CONFIG_SCHEMA: [],
     }
-    for path in sorted(CONFIG_ROOT.glob("*.yaml")):
+    for path in sorted((*CONFIG_ROOT.glob("*.yaml"), *GROUNDED_CONFIG_ROOT.glob("*.yaml"))):
         row = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(row, dict):
             raise AssertionError(f"{path}: 顶层必须是对象")
@@ -230,17 +231,17 @@ def native_preflight_fixture(root: Path) -> dict[str, str]:
 
 class ConfigAndPreflightTests(unittest.TestCase):
     def test_inactive_mask_grounded_dataset_contract_is_not_public(self) -> None:
-        self.assertFalse(hasattr(phase4_public, "MaskGroundedExample"))
+        self.assertFalse(hasattr(vlm_public, "MaskGroundedExample"))
         self.assertFalse(
-            hasattr(phase4_public, "MaskGroundedDescriptionDataset")
+            hasattr(vlm_public, "MaskGroundedDescriptionDataset")
         )
-        from oa_groundrag.phase4 import data
+        from oa_groundrag.vlm import data
 
         self.assertFalse(hasattr(data, "MaskGroundedExample"))
         self.assertFalse(hasattr(data, "MaskGroundedDescriptionDataset"))
 
-    def test_all_phase4_yaml_contracts_are_discovered_and_strictly_parse(self) -> None:
-        contracts = phase4_yaml_contracts()
+    def test_all_vlm_yaml_contracts_are_discovered_and_strictly_parse(self) -> None:
+        contracts = vlm_yaml_contracts()
         config_paths = contracts[CONFIG_SCHEMA_VERSION]
         protocol_paths = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION]
         stage5_paths = contracts[STAGE5_CONFIG_SCHEMA]
@@ -489,7 +490,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
         self.assertFalse(identity.source_roots_embedded)
         self.assertTrue(identity.formal_acceptance_eligible)
         self.assertEqual(identity.formal_acceptance_blockers, ())
-        config_paths = phase4_yaml_contracts()[CONFIG_SCHEMA_VERSION]
+        config_paths = vlm_yaml_contracts()[CONFIG_SCHEMA_VERSION]
         for path in config_paths:
             with self.subTest(config=path.name):
                 preflight = run_preflight(
@@ -737,7 +738,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
 
     def test_train_cli_output_override_and_cuda_guard(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, mock.patch(
-            "oa_groundrag.phase4.cli.torch.cuda.is_available",
+            "oa_groundrag.vlm.cli.torch.cuda.is_available",
             return_value=False,
         ):
             output = Path(temporary) / "repo-local-run"
@@ -923,7 +924,7 @@ class RuntimeIdentityBindingTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         path.write_text(text.replace("\n", " \n", 1), encoding="utf-8")
         with mock.patch(
-            "oa_groundrag.phase3.dataset.read_jsonl",
+            "oa_groundrag.data.rs_general.dataset.read_jsonl",
             side_effect=AssertionError("drifted JSONL must not be parsed"),
         ) as parser:
             with self.assertRaises(RSGeneralDescError) as caught:
@@ -946,7 +947,7 @@ class RuntimeIdentityBindingTests(unittest.TestCase):
         asset_path = self.root / media["path"]
         Image.new("RGB", (8, 6), (1, 2, 3)).save(asset_path)
         with mock.patch(
-            "oa_groundrag.phase3.dataset.Image.open",
+            "oa_groundrag.data.rs_general.dataset.Image.open",
             side_effect=AssertionError("drifted asset must not be decoded"),
         ) as decoder:
             with self.assertRaises(RSGeneralDescError) as caught:
@@ -1228,7 +1229,7 @@ class ProcessingTests(unittest.TestCase):
         }
         canonical = CanonicalFixture()
         with tempfile.TemporaryDirectory() as temporary, mock.patch(
-            "oa_groundrag.phase4.data.render_canonical_messages",
+            "oa_groundrag.vlm.data.render_canonical_messages",
             return_value=(rendered, []),
         ) as renderer:
             dataset = ExternalDescriptionDataset(

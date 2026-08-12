@@ -8,13 +8,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.config import _load_yaml
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.vlm.config import _load_yaml
 
 from .contracts import EXPECTED_IDENTITY_FIELDS, fail
 

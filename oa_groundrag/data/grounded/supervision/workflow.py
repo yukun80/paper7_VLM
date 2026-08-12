@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .contracts import fail
+from ..contracts import fail
 
 
 MODEL_ASSISTED_WORKFLOW_SCHEMA = (

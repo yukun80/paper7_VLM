@@ -16,7 +16,7 @@ from .contracts import (
     SelectionRequest,
     TargetStatus,
 )
-from .errors import ReasonCode, SelectionError
+from oa_groundrag.vlm.errors import ReasonCode, SelectionError
 
 
 _LOCATIONS = (

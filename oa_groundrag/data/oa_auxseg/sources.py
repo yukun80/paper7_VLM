@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 import h5py
 import numpy as np
 
-from benchmark_common import (
+from .dataset import (
     SOURCE_ORDER,
     SPLIT_ORDER,
     canonical_json,

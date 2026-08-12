@@ -1,7 +1,7 @@
 schema_version: rs_generaldesc.qwen_export.v1
 profile: description_multitask.v1
-benchmark_root: ../../../benchmark/rs_generaldesc_v1
-output_root: ../../../benchmark/rs_generaldesc_qwen_train_v1
+benchmark_root: ../../../../benchmark/rs_generaldesc_v1
+output_root: ../../../../benchmark/rs_generaldesc_qwen_train_v1
 seed: 20260727
 purpose: training
 roles:

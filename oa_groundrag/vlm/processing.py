@@ -9,11 +9,12 @@ from typing import Any, Mapping, Protocol, Sequence
 import torch
 from torch import Tensor
 
-from oa_groundrag.phase3.common import first_symlink_component, sha256_file
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.artifacts.io import first_symlink_component
 
 from .data import DescriptionSample
 from .errors import ProcessingError, ReasonCode
-from .messages import strip_assistant_message
+from oa_groundrag.grounding.messages import strip_assistant_message
 
 
 def count_message_images(messages: Sequence[Mapping[str, Any]]) -> int:
@@ -438,7 +439,7 @@ class Qwen3VLProcessorAdapter:
         if video_inputs:
             raise ProcessingError(
                 ReasonCode.TYPE_MISMATCH,
-                "phase4 不接受 video 输入",
+                "Shared VLM 不接受 video 输入",
             )
         encoded = self.processor(
             text=[text],

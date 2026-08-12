@@ -6,15 +6,15 @@ from pathlib import Path
 
 import yaml
 
-from fixture_helpers import build_config_dict, make_all_sources, make_image
-from oa_groundrag.phase3.assets import (
+from tests.data.rs_general.fixture_helpers import build_config_dict, make_all_sources, make_image
+from oa_groundrag.data.rs_general.assets import (
     AssetStore,
     normalize_bbox_target,
     normalized_image_sha256,
 )
-from oa_groundrag.phase3.common import portable_relative_path, read_json
-from oa_groundrag.phase3.config import load_build_config, load_export_config
-from oa_groundrag.phase3.contracts import (
+from oa_groundrag.data.rs_general.io import portable_relative_path, read_json
+from oa_groundrag.data.rs_general.config import load_build_config, load_export_config
+from oa_groundrag.data.rs_general.contracts import (
     AdapterResult,
     AnnotationLayer,
     InputLayout,
@@ -30,11 +30,11 @@ from oa_groundrag.phase3.contracts import (
     record_id,
     validate_role_layer,
 )
-from oa_groundrag.phase3.errors import AssetError, ConfigError, ReasonCode, SchemaError
-from oa_groundrag.phase3.splitter import assign_external_splits
+from oa_groundrag.data.rs_general.errors import AssetError, ConfigError, ReasonCode, SchemaError
+from oa_groundrag.data.rs_general.splitter import assign_external_splits
 
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 
 class ConfigAndIdentityTests(unittest.TestCase):
@@ -137,7 +137,7 @@ class ConfigAndIdentityTests(unittest.TestCase):
 
     def test_native_full_semantic_identity_is_stable(self) -> None:
         config = load_build_config(
-            REPO / "configs/phase3_rs_generaldesc/full.yaml"
+            REPO / "configs/data/rs_general/full.yaml"
         )
         self.assertEqual(
             config.semantic_hash,

@@ -1,4 +1,4 @@
-"""Phase 3（仓库 phase4）的版本化公共数据合同。"""
+"""Grounded Evidence Interface 的版本化公共数据合同。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from .errors import ContractError, ReasonCode
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
 
 
 CONFIG_SCHEMA_VERSION = "rs_vlm.config.v2"

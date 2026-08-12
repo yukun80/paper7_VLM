@@ -12,20 +12,22 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
     stable_hash,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.config import _load_yaml
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.config import _load_yaml
 
-from .contracts import EXPECTED_IDENTITY_FIELDS, fail
-from .region_contracts import (
+from ..contracts import EXPECTED_IDENTITY_FIELDS, fail
+from ..region_contracts import (
     EVAL_MANIFEST_SCHEMA,
     MASK_RENDERER_VERSION,
     REGION_MANIFEST_SCHEMA,
@@ -43,7 +45,7 @@ from .region_contracts import (
     parent_identity,
     size_bin,
 )
-from .region_pipeline import (
+from ..region import (
     RegionBenchmarkAccess,
     RegionBuildResult,
     annotation_guideline,
@@ -77,7 +79,7 @@ BASE_PER_SOURCE = 100
 EXTENSION_PER_SOURCE = 1_590
 FINAL_PER_SOURCE = 1_690
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 BASE_REGION_ROOT = Path(os.path.abspath(
     REPOSITORY_ROOT.parent
     / "benchmark/oa_grounded_stage4_v1/region_corpus/mask_grounded_region_corpus_train_v1_500"
@@ -93,7 +95,7 @@ EXTENSION_ROOT = EXPANDED_STAGE4_ROOT / "region_corpus" / EXTENSION_CORPUS_NAME
 COLLECTION_ROOT = EXPANDED_STAGE4_ROOT / "region_collection" / TRAIN_COLLECTION_NAME
 EXTENSION_CONFIG_PATH = (
     REPOSITORY_ROOT
-    / "configs/stage4_landslide_evidence/region_corpus_train_extension_v2_7950.yaml"
+    / "configs/grounding/region_corpus_train_extension_v2_7950.yaml"
 )
 
 
@@ -602,7 +604,7 @@ def _validate_inputs(
     *,
     verify_source: bool,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], set[str]]:
-    from .region_validation import validate_eval_dev, validate_region_corpus
+    from ..region_validation import validate_eval_dev, validate_region_corpus
 
     base_report = validate_region_corpus(config.base_corpus.root, verify_source=verify_source)
     _check_binding(config.base_corpus, base_report, location="base_corpus")
@@ -816,7 +818,7 @@ def validate_region_extension(
 ) -> dict[str, Any]:
     """重算扩展选择、GT 几何、资产和 base/Eval 排除身份。"""
 
-    from .region_validation import _validate_common, validate_eval_dev, validate_region_corpus
+    from ..region_validation import _validate_common, validate_eval_dev, validate_region_corpus
 
     resolved = _ordinary_root(Path(root), location="extension root")
     manifest, ledger, records, assets, access = _validate_common(
@@ -1220,7 +1222,7 @@ def validate_expanded_region_collection(
 ) -> dict[str, Any]:
     """验证组合索引及两个成员根；collection 自身不拥有或复制图像资产。"""
 
-    from .region_validation import _validate_files, validate_eval_dev, validate_region_corpus
+    from ..region_validation import _validate_files, validate_eval_dev, validate_region_corpus
 
     resolved = _ordinary_root(Path(root), location="collection root")
     manifest, ledger, ledger_files = _validate_files(resolved)

@@ -1,18 +1,18 @@
-"""Mask-grounded evidence 消息构造；External 消息由 phase3 renderer 提供。"""
+"""Mask-grounded evidence 消息构造；External 消息由 RS-General renderer 提供。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import canonical_json
+from oa_groundrag.artifacts.identity import canonical_json
 
 from .contracts import (
     MODEL_OUTPUT_SCHEMA_VERSION,
     EvidenceBundle,
     TargetStatus,
 )
-from .errors import ContractError, ReasonCode
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
 
 
 def _asset_path(root: Path, relative: str) -> str:
@@ -140,7 +140,7 @@ def strip_assistant_message(
     if len(result) != 1:
         raise ContractError(
             ReasonCode.TYPE_MISMATCH,
-            "phase4 单轮消息必须只有一个 user 和可选 assistant",
+            "VLM 单轮消息必须只有一个 user 和可选 assistant",
         )
     return result
 
@@ -159,12 +159,12 @@ def build_mask_grounded_region_messages(
     二值 mask 作为独立图像发送；audit overlay 只有调用方显式启用消融时才可进入消息。
     """
 
-    from oa_groundrag.landslide_evidence.region_contracts import (
+    from oa_groundrag.data.grounded.region_contracts import (
         FORMAL_ROLES,
         RepresentationMode,
         validate_region_record,
     )
-    from oa_groundrag.phase4.outputs import region_output_contract
+    from oa_groundrag.grounding.outputs import region_output_contract
 
     row = validate_region_record(record)
     try:
@@ -186,7 +186,7 @@ def build_mask_grounded_region_messages(
             raise ContractError(ReasonCode.ASSET_MISSING, f"representation 缺少资产：{role}")
         if role == "binary_mask":
             from PIL import Image
-            from oa_groundrag.phase4.evidence import binary_mask_array
+            from oa_groundrag.grounding.evidence import binary_mask_array
 
             with Image.open(_asset_path(asset_root, str(assets[role]))) as mask_image:
                 # 先严格转为 bool，确认 0/255 资产不会被误当灰度置信度；正式 Qwen wrapper
@@ -269,10 +269,14 @@ def render_mask_grounded_region_messages(
 
     import os
 
-    from oa_groundrag.landslide_evidence.contracts import fail
-    from oa_groundrag.landslide_evidence.region_pipeline import ledger_rows
-    from oa_groundrag.phase3.common import read_jsonl, sha256_file, sha256_text
-    from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
+    from oa_groundrag.data.grounded.contracts import fail
+    from oa_groundrag.data.grounded.region import ledger_rows
+    from oa_groundrag.artifacts.identity import (
+        sha256_file,
+        sha256_text,
+    )
+    from oa_groundrag.data.rs_general.io import read_jsonl
+    from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 
     asset_root = Path(os.path.abspath(asset_root))
     output_root = Path(os.path.abspath(output_root))

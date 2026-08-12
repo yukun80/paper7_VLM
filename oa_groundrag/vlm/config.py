@@ -12,13 +12,13 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
     sha256_text,
 )
+from oa_groundrag.artifacts.io import first_symlink_component
 
-from .contracts import (
+from oa_groundrag.grounding.contracts import (
     CONFIG_SCHEMA_VERSION,
     DataMode,
     MaskMode,
@@ -162,7 +162,7 @@ class GenerationSection:
 
 
 @dataclass(frozen=True)
-class Phase4Config:
+class VLMConfig:
     schema_version: str
     run: RunSection
     data: DataSection
@@ -456,7 +456,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return _mapping(value, location="$")
 
 
-def load_config(path: Path | str) -> Phase4Config:
+def load_config(path: Path | str) -> VLMConfig:
     config_path = Path(os.path.abspath(Path(path)))
     linked = first_symlink_component(config_path)
     if linked is not None:
@@ -742,7 +742,7 @@ def load_config(path: Path | str) -> Phase4Config:
     if not adaptation.freeze_vision or not adaptation.freeze_merger:
         raise ConfigError(
             ReasonCode.MODEL_IDENTITY_MISMATCH,
-            "phase4 主线固定冻结 vision 与 merger",
+            "Shared VLM 主线固定冻结 vision 与 merger",
         )
     if adaptation.strategy == "prompt_only":
         if (
@@ -974,7 +974,7 @@ def load_config(path: Path | str) -> Phase4Config:
             "External mode roles 只能是 external_train/external_val",
         )
 
-    provisional = Phase4Config(
+    provisional = VLMConfig(
         schema_version=CONFIG_SCHEMA_VERSION,
         run=run,
         data=data,
@@ -987,7 +987,7 @@ def load_config(path: Path | str) -> Phase4Config:
         semantic_sha256="",
     )
     semantic_sha256 = sha256_text(canonical_json(provisional.semantic_dict()))
-    return Phase4Config(
+    return VLMConfig(
         **{
             field: getattr(provisional, field)
             for field in provisional.__dataclass_fields__
@@ -998,12 +998,12 @@ def load_config(path: Path | str) -> Phase4Config:
 
 
 def apply_runtime_overrides(
-    config: Phase4Config,
+    config: VLMConfig,
     *,
     output_root: Path | None = None,
     resume_checkpoint: Path | None = None,
     log_interval: int | None = None,
-) -> Phase4Config:
+) -> VLMConfig:
     """应用显式 CLI 覆盖并重新计算严格配置语义摘要。"""
 
     run = config.run

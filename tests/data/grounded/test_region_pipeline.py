@@ -7,18 +7,18 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.region_contracts import parent_identity
-from oa_groundrag.landslide_evidence.region_pipeline import RegionBenchmarkAccess
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.evidence import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.region_contracts import parent_identity
+from oa_groundrag.data.grounded.region import RegionBenchmarkAccess
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.evidence import (
     binary_mask_array,
     boundary_contrast_proxy,
     deterministic_shift_mask,
     render_binary_mask,
     render_context_crop,
 )
-from oa_groundrag.phase4.errors import ContractError
+from oa_groundrag.vlm.errors import ContractError
 
 
 class RegionPipelineTest(unittest.TestCase):

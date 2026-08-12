@@ -13,16 +13,16 @@ import torch
 from PIL import Image
 from torch import nn
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     atomic_write_jsonl,
     read_json,
     read_jsonl,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.checkpoint import CheckpointManager
-from oa_groundrag.phase4.config import load_config
-from oa_groundrag.phase4.contracts import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.checkpoint import CheckpointManager
+from oa_groundrag.vlm.config import load_config
+from oa_groundrag.grounding.contracts import (
     MODEL_OUTPUT_SCHEMA_VERSION,
     Claim,
     EvidenceSufficiency,
@@ -34,12 +34,12 @@ from oa_groundrag.phase4.contracts import (
     StructuredModelOutput,
     TargetStatus,
 )
-from oa_groundrag.phase4.data import (
+from oa_groundrag.vlm.data import (
     DescriptionSample,
 )
-from oa_groundrag.phase4.evaluation import evaluate_predictions
-from oa_groundrag.phase4.evidence import EvidenceBuilder
-from oa_groundrag.phase4.errors import (
+from oa_groundrag.evaluation.vlm import evaluate_predictions
+from oa_groundrag.grounding.evidence import EvidenceBuilder
+from oa_groundrag.vlm.errors import (
     CheckpointError,
     ContractError,
     EvaluationError,
@@ -47,29 +47,29 @@ from oa_groundrag.phase4.errors import (
     PredictionError,
     ReasonCode,
 )
-from oa_groundrag.phase4.inference import run_inference
-from oa_groundrag.phase4.messages import build_mask_grounded_messages
-from oa_groundrag.phase4.model import assistant_sample_mean_causal_loss
-from oa_groundrag.phase4.outputs import prediction_row, serialize_model_output
-from oa_groundrag.phase4.preflight import BenchmarkIdentity
-from oa_groundrag.phase4.processing import (
+from oa_groundrag.vlm.inference import run_inference
+from oa_groundrag.grounding.messages import build_mask_grounded_messages
+from oa_groundrag.vlm.model import assistant_sample_mean_causal_loss
+from oa_groundrag.vlm.outputs import prediction_row, serialize_model_output
+from oa_groundrag.vlm.preflight import BenchmarkIdentity
+from oa_groundrag.vlm.processing import (
     DescriptionCollator,
     EncodedSample,
     assistant_only_labels,
 )
-from oa_groundrag.phase4.progress import TrainingProgress
-from oa_groundrag.phase4.regions import RegionSelector
-from oa_groundrag.phase4.trainer import (
+from oa_groundrag.training.vlm.progress import TrainingProgress
+from oa_groundrag.grounding.regions import RegionSelector
+from oa_groundrag.training.vlm.trainer import (
     DescriptionTrainer,
     training_layout_identity,
 )
-from oa_groundrag.phase4.validation import (
+from oa_groundrag.training.vlm.validation import (
     select_bounded_external_validation,
 )
 
 
 REPO = Path(__file__).resolve().parents[2]
-CONFIG_ROOT = REPO / "configs/phase4_rs_vlm"
+CONFIG_ROOT = REPO / "configs/vlm/rs_general"
 
 
 class TinyProcessor:
@@ -365,7 +365,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 output_root=self.base / "generic-cache-policy",
             ),
         )
-        with patch("oa_groundrag.phase4.trainer.clear_cuda_cache") as cleanup:
+        with patch("oa_groundrag.training.vlm.trainer.clear_cuda_cache") as cleanup:
             self.trainer(generic_config, TinyAdapter()).fit(
                 TinyDataset(),
                 stop_after_steps=1,
@@ -383,7 +383,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 output_root=self.base / "stage5-cache-policy",
             ),
         )
-        with patch("oa_groundrag.phase4.trainer.clear_cuda_cache") as cleanup:
+        with patch("oa_groundrag.training.vlm.trainer.clear_cuda_cache") as cleanup:
             first = self.trainer(
                 stage5_config,
                 TinyAdapter(),
@@ -402,7 +402,7 @@ class TrainerCheckpointTests(unittest.TestCase):
                 TinyDataset(),
                 resume_checkpoint=first.checkpoint,
             )
-        with patch("oa_groundrag.phase4.trainer.clear_cuda_cache") as cleanup:
+        with patch("oa_groundrag.training.vlm.trainer.clear_cuda_cache") as cleanup:
             resumed = self.trainer(
                 stage5_config,
                 TinyAdapter(),

@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Iterator, Sequence
 
 import h5py
 import numpy as np
 import torch
 import torch.nn.functional as functional
 from torch.utils.data import Dataset
+
+from oa_groundrag.artifacts.identity import canonical_json, sha256_bytes, sha256_file
+from oa_groundrag.artifacts.io import atomic_write_json, atomic_write_jsonl
 
 
 SCHEMA_VERSION = "oa_auxseg_hdf5_v1"
@@ -50,59 +50,9 @@ def resolve_source_selection(
     return included, excluded
 
 
-def canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(chunk_size):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def stable_rank(seed: int, *parts: object) -> str:
     payload = "\0".join((str(seed), *(str(part) for part in parts)))
     return sha256_bytes(payload.encode("utf-8"))
-
-
-def _atomic_replace_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def atomic_write_json(path: Path, value: Any) -> None:
-    _atomic_replace_bytes(
-        path, (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    )
-
-
-def atomic_write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
-    payload = "".join(f"{canonical_json(dict(row))}\n" for row in rows)
-    _atomic_replace_bytes(path, payload.encode("utf-8"))
 
 
 def read_json(path: Path) -> Any:

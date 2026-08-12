@@ -11,7 +11,7 @@ from .contracts import RegionSelection, UnifiedRequest, reject_test_or_sealed_pa
 
 
 def _guard_regular(path: Path, *, label: str, directory: bool = False) -> None:
-    from oa_groundrag.phase3.common import first_symlink_component
+    from oa_groundrag.artifacts.io import first_symlink_component
 
     reject_test_or_sealed_path(path, label=label)
     exists = path.is_dir() if directory else path.is_file()
@@ -152,9 +152,9 @@ class OAAuxSegSpatialProvider:
 
     def _load(self) -> Any:
         if self._session is None:
-            from oa_groundrag.phase3.common import sha256_file
-            from oa_groundrag.phase2.engine import load_runtime_config
-            from oa_groundrag.phase2.inference_runtime import SpatialInferenceSession
+            from oa_groundrag.artifacts.identity import sha256_file
+            from oa_groundrag.segmentation.config import load_runtime_config
+            from oa_groundrag.segmentation.inference import SpatialInferenceSession
 
             _guard_regular(self.repo_root, label="OA-AuxSeg repository_root", directory=True)
             _guard_regular(self.config_path, label="OA-AuxSeg config")
@@ -179,7 +179,7 @@ class OAAuxSegSpatialProvider:
         import numpy as np
         from PIL import Image
 
-        from oa_groundrag.phase2.inference_runtime import BatchInferenceResult
+        from oa_groundrag.segmentation.inference import BatchInferenceResult
 
         from .contracts import BenchmarkSampleRef, InMemorySpatialInput
 
@@ -272,11 +272,11 @@ class OAAuxSegSpatialProvider:
         )
 
 
-class Stage5SharedMLLMProvider:
-    """Stage 5 best Qwen3-VL + LoRA 的 lazy shared semantic provider。"""
+class GroundedVLMProvider:
+    """Mask-grounded best Qwen3-VL + LoRA 的 lazy semantic provider。"""
 
-    def __init__(self, *, stage6_config_path: Path, device: str) -> None:
-        self.stage6_config_path = Path(stage6_config_path)
+    def __init__(self, *, binding: Any, device: str) -> None:
+        self.binding = binding
         self.device_name = device
         self._bundle: Any | None = None
         self._device: Any | None = None
@@ -285,24 +285,14 @@ class Stage5SharedMLLMProvider:
         if self._bundle is None:
             import torch
 
-            from oa_groundrag.phase4.stage5_runtime import load_stage5_best_generator
-            from oa_groundrag.phase4.stage5_config import load_stage5_config
-            from oa_groundrag.text_rag.contracts import load_stage6_config
+            from oa_groundrag.vlm.grounded_adapter import load_stage5_best_generator
+            from oa_groundrag.training.grounding.config import load_stage5_config
 
             if self.device_name == "cuda" and not torch.cuda.is_available():
                 raise RuntimeError("Shared MLLM 配置要求 CUDA，但当前不可见")
             self._device = torch.device(self.device_name)
-            _guard_regular(self.stage6_config_path, label="Stage 6 config")
-            stage6 = load_stage6_config(self.stage6_config_path)
-            for label, path in (
-                ("Stage 6 source registry", stage6.source_registry_path),
-                ("Stage 6 Bank", stage6.bank_root),
-                ("Stage 6 dense model", stage6.dense.model_root),
-                ("Stage 5 config", stage6.stage5.config_path),
-            ):
-                reject_test_or_sealed_path(path, label=label)
-            _guard_regular(stage6.stage5.config_path, label="Stage 5 config")
-            stage5 = load_stage5_config(stage6.stage5.config_path)
+            _guard_regular(self.binding.config_path, label="semantic core config")
+            stage5 = load_stage5_config(self.binding.config_path)
             for label, path in (
                 ("Stage 5 workflow", stage5.workflow_root),
                 ("Stage 5 checkpoint root", stage5.run.output_root),
@@ -312,7 +302,7 @@ class Stage5SharedMLLMProvider:
             ):
                 reject_test_or_sealed_path(path, label=label)
             self._bundle = load_stage5_best_generator(
-                stage6.stage5,
+                self.binding,
                 device=self._device,
             )
             self._bundle.model.eval()
@@ -320,7 +310,7 @@ class Stage5SharedMLLMProvider:
 
     def _generate_visual(self, messages: Sequence[Mapping[str, Any]]) -> str:
         import torch
-        from oa_groundrag.phase4.processing import single_inference_tensor_batch
+        from oa_groundrag.vlm.processing import single_inference_tensor_batch
 
         bundle = self._load()
         encoded = bundle.processor.encode_inference(messages)
@@ -342,7 +332,7 @@ class Stage5SharedMLLMProvider:
         return outputs[0]
 
     def describe(self, request: UnifiedRequest) -> str:
-        from oa_groundrag.phase3.common import first_symlink_component
+        from oa_groundrag.artifacts.io import first_symlink_component
 
         content: list[dict[str, Any]] = []
         for image in request.images:
@@ -370,12 +360,12 @@ class Stage5SharedMLLMProvider:
         import torch
         from transformers import LogitsProcessorList
 
-        from oa_groundrag.text_rag.contracts import RagMode
-        from oa_groundrag.text_rag.pass2 import (
+        from oa_groundrag.retrieval.contracts import RagMode
+        from oa_groundrag.retrieval.pass2 import (
             PASS2_ASSISTANT_PREFILL,
             build_pass2_logits_processor,
         )
-        from oa_groundrag.phase4.processing import single_inference_tensor_batch
+        from oa_groundrag.vlm.processing import single_inference_tensor_batch
 
         bundle = self._load()
         encoded = bundle.processor.encode_text_inference(messages)
@@ -419,11 +409,11 @@ class Stage5SharedMLLMProvider:
         return {} if self._bundle is None else dict(self._bundle.identity)
 
 
-class Phase4GroundedEvidenceProvider:
-    """EvidenceBuilder + Stage 5 messages/parser 的薄 adapter。"""
+class GroundedEvidenceInterface:
+    """EvidenceBuilder + grounded messages/parser 的薄 adapter。"""
 
     def __init__(self) -> None:
-        from oa_groundrag.phase4.evidence import EvidenceBuilder
+        from oa_groundrag.grounding.evidence import EvidenceBuilder
 
         self.builder = EvidenceBuilder(max_auxiliary_views=2)
 
@@ -440,7 +430,7 @@ class Phase4GroundedEvidenceProvider:
         split: str,
         no_target: bool,
     ) -> GroundedEvidenceResult:
-        from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
+        from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
 
         mask_source = {
             "USER_MASK": "user_mask",
@@ -499,7 +489,7 @@ class Phase4GroundedEvidenceProvider:
         *,
         evidence: GroundedEvidenceResult,
     ) -> Mapping[str, Any]:
-        from oa_groundrag.phase4.outputs import parse_region_model_output
+        from oa_groundrag.grounding.outputs import parse_region_model_output
 
         parsed = parse_region_model_output(raw_output)
         if parsed.target_status.value != evidence.target_status:
@@ -507,25 +497,24 @@ class Phase4GroundedEvidenceProvider:
         return parsed.to_dict()
 
 
-class Stage6TextRAGProvider:
+class EvidenceConstrainedRAGProvider:
     """公共 runtime retriever + 既有 Pass-2 prompt/parser adapter。"""
 
-    def __init__(self, *, stage6_config_path: Path) -> None:
-        self.stage6_config_path = Path(stage6_config_path)
+    def __init__(self, *, config_path: Path) -> None:
+        self.config_path = Path(config_path)
         self._retriever: Any | None = None
 
     def _load(self) -> Any:
         if self._retriever is None:
-            from oa_groundrag.text_rag.runtime import RuntimeTextRetriever
-            from oa_groundrag.text_rag.contracts import load_stage6_config
+            from oa_groundrag.retrieval.runtime import RuntimeTextRetriever
+            from oa_groundrag.retrieval.contracts import load_stage6_config
 
-            _guard_regular(self.stage6_config_path, label="Stage 6 config")
-            stage6 = load_stage6_config(self.stage6_config_path)
+            _guard_regular(self.config_path, label="retrieval config")
+            stage6 = load_stage6_config(self.config_path)
             for label, path in (
                 ("Stage 6 source registry", stage6.source_registry_path),
                 ("Stage 6 Bank", stage6.bank_root),
                 ("Stage 6 dense model", stage6.dense.model_root),
-                ("Stage 5 config", stage6.stage5.config_path),
             ):
                 reject_test_or_sealed_path(path, label=label)
             self._retriever = RuntimeTextRetriever(stage6)
@@ -541,9 +530,9 @@ class Stage6TextRAGProvider:
         available_modalities: Sequence[str],
         candidate_count: int,
     ) -> TextRAGResult:
-        from oa_groundrag.phase3.common import canonical_json
-        from oa_groundrag.text_rag.contracts import TextRagTask
-        from oa_groundrag.text_rag.pass2 import build_pass2_messages
+        from oa_groundrag.artifacts.identity import canonical_json
+        from oa_groundrag.retrieval.contracts import TextRagTask
+        from oa_groundrag.retrieval.pass2 import build_pass2_messages
 
         task = (
             TextRagTask.PROFESSIONAL_QA
@@ -596,8 +585,8 @@ class Stage6TextRAGProvider:
         *,
         result: TextRAGResult,
     ) -> Mapping[str, Any]:
-        from oa_groundrag.text_rag.contracts import RagMode
-        from oa_groundrag.text_rag.pass2 import parse_pass2_output
+        from oa_groundrag.retrieval.contracts import RagMode
+        from oa_groundrag.retrieval.pass2 import parse_pass2_output
 
         return parse_pass2_output(
             raw_output,

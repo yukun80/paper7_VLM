@@ -1,4 +1,4 @@
-"""Phase4 训练/验证的 TTY 进度和低噪声固定日志。"""
+"""Shared VLM 训练/验证的 TTY 进度和低噪声固定日志。"""
 
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ class TrainingProgress:
             self._train_bar = tqdm(
                 total=stop_step,
                 initial=start_step,
-                desc="phase4 train",
+                desc="vlm train",
                 unit="step",
                 dynamic_ncols=True,
                 mininterval=1.0,

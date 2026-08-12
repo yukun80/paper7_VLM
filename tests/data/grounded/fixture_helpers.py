@@ -8,13 +8,13 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.landslide_evidence.region_contracts import (
+from oa_groundrag.data.grounded.region_contracts import (
     REGION_RECORD_SCHEMA,
     annotation_state_template,
     empty_description_template,
 )
-from oa_groundrag.phase4.evidence import render_binary_mask, render_mask_overlay
-from oa_groundrag.phase4.outputs import REGION_OUTPUT_SCHEMA_VERSION
+from oa_groundrag.grounding.evidence import render_binary_mask, render_mask_overlay
+from oa_groundrag.grounding.outputs import REGION_OUTPUT_SCHEMA_VERSION
 
 
 def target_output() -> dict[str, Any]:

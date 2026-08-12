@@ -6,25 +6,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    portable_relative_path,
-    read_json,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.contracts import (
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    portable_relative_path,
+    read_json,
+)
+from oa_groundrag.data.rs_general.contracts import (
     BENCHMARK_SCOPE,
     BUILD_CONFIG_VERSION,
     STATISTICS_SCHEMA_VERSION,
     VALIDATION_VERSION,
 )
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase3.hash_ledger import HashLedgerVerifier
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.data.rs_general.hash_ledger import HashLedgerVerifier
 
-from .config import Phase4Config
-from .contracts import SUPPORTED_CANONICAL_SCHEMA, SUPPORTED_MANIFEST_SCHEMA
+from .config import VLMConfig
+from oa_groundrag.grounding.contracts import SUPPORTED_CANONICAL_SCHEMA, SUPPORTED_MANIFEST_SCHEMA
 from .errors import PreflightError, ReasonCode
 
 
@@ -241,7 +243,7 @@ def _layout_record_shards(
     return tuple(output)
 
 
-def open_benchmark_access(config: Phase4Config) -> BenchmarkAccess:
+def open_benchmark_access(config: VLMConfig) -> BenchmarkAccess:
     """打开并绑定 metadata identity；不读取任何 record/asset bytes。"""
 
     root = config.data.benchmark_root
@@ -482,7 +484,7 @@ def open_benchmark_access(config: Phase4Config) -> BenchmarkAccess:
 
 
 def inspect_benchmark_identity(
-    config: Phase4Config,
+    config: VLMConfig,
     *,
     access: BenchmarkAccess | None = None,
 ) -> BenchmarkIdentity:
@@ -495,7 +497,7 @@ def inspect_benchmark_identity(
 
 
 def run_preflight(
-    config: Phase4Config,
+    config: VLMConfig,
     *,
     require_new_output: bool = True,
     access: BenchmarkAccess | None = None,

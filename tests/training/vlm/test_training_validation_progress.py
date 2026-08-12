@@ -7,15 +7,15 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 
-from oa_groundrag.phase4.contracts import MaskMode
-from oa_groundrag.phase4.data import DescriptionSample
-from oa_groundrag.phase4.processing import (
+from oa_groundrag.grounding.contracts import MaskMode
+from oa_groundrag.vlm.data import DescriptionSample
+from oa_groundrag.vlm.processing import (
     DescriptionCollator,
     EncodedSample,
     assistant_only_labels,
 )
-from oa_groundrag.phase4.progress import TrainingProgress
-from oa_groundrag.phase4.validation import (
+from oa_groundrag.training.vlm.progress import TrainingProgress
+from oa_groundrag.training.vlm.validation import (
     ValidationResult,
     evaluate_teacher_forced_loss,
     select_bounded_external_validation,
@@ -276,7 +276,7 @@ class ValidationAndProgressTests(unittest.TestCase):
         )
         tty.close()
         tty_output = tty_stream.getvalue()
-        self.assertIn("phase4 train", tty_output)
+        self.assertIn("vlm train", tty_output)
         self.assertIn("img=16", tty_output)
         self.assertIn("tok=100", tty_output)
 

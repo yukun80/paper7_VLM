@@ -14,8 +14,14 @@ from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 import numpy as np
 
-from oa_groundrag.phase3.common import canonical_json, first_symlink_component, read_json, sha256_file, sha256_text
-from oa_groundrag.phase4.errors import ContractError, ModelError, ReasonCode
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import read_json
+from oa_groundrag.vlm.errors import ContractError, ModelError, ReasonCode
 
 from .contracts import (
     KnowledgeType,

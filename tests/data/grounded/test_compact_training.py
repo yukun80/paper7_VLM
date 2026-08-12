@@ -8,14 +8,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tests.stage4_landslide_evidence.fixture_helpers import target_output, target_record
+from tests.data.grounded.fixture_helpers import target_output, target_record
 
-from oa_groundrag.landslide_evidence.compact_training import (
+from oa_groundrag.data.grounded.supervision.compact_training import (
     CompactTrainingMessageDataset,
     load_compact_training_messages,
     publish_compact_training_messages,
 )
-from oa_groundrag.landslide_evidence.model_assisted import (
+from oa_groundrag.data.grounded.supervision.model_assisted import (
     EXPERT_AUTHORITY,
     MODEL_AUTHORITY,
     ModelAssistedCollectionContext,
@@ -24,9 +24,9 @@ from oa_groundrag.landslide_evidence.model_assisted import (
     TRAINING_MESSAGE_SCHEMA,
     TRAINING_MANIFEST_SCHEMA,
 )
-from oa_groundrag.landslide_evidence.region_pipeline import region_asset_identity
-from oa_groundrag.phase3.common import atomic_write_json, atomic_write_jsonl, canonical_json, sha256_text
-from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
+from oa_groundrag.data.grounded.region import region_asset_identity
+from oa_groundrag.data.rs_general.io import atomic_write_json, atomic_write_jsonl, canonical_json, sha256_text
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
 
 
 class CompactTrainingTests(unittest.TestCase):
@@ -109,17 +109,17 @@ class CompactTrainingTests(unittest.TestCase):
             source, collection, history = self._fixture(root)
             compact = root / "compact"
             with (
-                patch("oa_groundrag.landslide_evidence.compact_training.EXPECTED_COMPACT_COUNT", 2),
+                patch("oa_groundrag.data.grounded.supervision.compact_training.EXPECTED_COMPACT_COUNT", 2),
                 patch(
-                    "oa_groundrag.landslide_evidence.compact_training._load_v2_source_lightweight",
+                    "oa_groundrag.data.grounded.supervision.compact_training._load_v2_source_lightweight",
                     return_value=source,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.compact_training._load_collection_context",
+                    "oa_groundrag.data.grounded.supervision.compact_training._load_collection_context",
                     return_value=collection,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.compact_training._historical_source",
+                    "oa_groundrag.data.grounded.supervision.compact_training._historical_source",
                     return_value=history,
                 ),
             ):
@@ -144,13 +144,13 @@ class CompactTrainingTests(unittest.TestCase):
             source, collection, history = self._fixture(root)
             compact = root / "compact"
             with (
-                patch("oa_groundrag.landslide_evidence.compact_training.EXPECTED_COMPACT_COUNT", 2),
-                patch("oa_groundrag.landslide_evidence.compact_training._load_v2_source_lightweight", return_value=source),
-                patch("oa_groundrag.landslide_evidence.compact_training._load_collection_context", return_value=collection),
-                patch("oa_groundrag.landslide_evidence.compact_training._historical_source", return_value=history),
+                patch("oa_groundrag.data.grounded.supervision.compact_training.EXPECTED_COMPACT_COUNT", 2),
+                patch("oa_groundrag.data.grounded.supervision.compact_training._load_v2_source_lightweight", return_value=source),
+                patch("oa_groundrag.data.grounded.supervision.compact_training._load_collection_context", return_value=collection),
+                patch("oa_groundrag.data.grounded.supervision.compact_training._historical_source", return_value=history),
             ):
                 publish_compact_training_messages(source_training_root=source.root, output_root=compact)
-                rows = list(__import__("oa_groundrag.phase3.common", fromlist=["read_jsonl"]).read_jsonl(compact / "messages.jsonl"))
+                rows = list(__import__("oa_groundrag.data.rs_general.io", fromlist=["read_jsonl"]).read_jsonl(compact / "messages.jsonl"))
                 rows[0]["assistant_target_sha256"] = "0" * 64
                 atomic_write_jsonl(compact / "messages.jsonl", rows)
                 with self.assertRaises(Exception):

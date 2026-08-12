@@ -11,7 +11,7 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
-from .common import (
+from .io import (
     canonical_json,
     reject_nonfinite,
     require_bool,

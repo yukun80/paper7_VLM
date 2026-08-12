@@ -12,21 +12,21 @@ from typing import Any, Mapping
 import torch
 from torch import Tensor
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.dataset import RSGeneralDescDataset
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from .artifacts import AtomicArtifactDirectory
-from .checkpoint import CheckpointManager
-from .contracts import GATE_B_GENERATION_SCHEMA_VERSION
-from .data import ExternalDescriptionDataset
-from .errors import Phase4Error, PredictionError, ReasonCode
-from .gate_b_contracts import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.checkpoint import CheckpointManager
+from oa_groundrag.grounding.contracts import GATE_B_GENERATION_SCHEMA_VERSION
+from oa_groundrag.vlm.data import ExternalDescriptionDataset
+from oa_groundrag.vlm.errors import VLMError, PredictionError, ReasonCode
+from .contracts import (
     GATE_B_PROTOCOL_ID,
     GATE_B_SAMPLE_COUNT,
     GATE_B_SEED,
@@ -34,11 +34,11 @@ from .gate_b_contracts import (
     QWEN_TEMPLATE_VERSION,
     validate_frozen_training_root,
 )
-from .gate_b_selection import load_gate_b_selection, selection_locations
-from .model import Qwen3VLModelAdapter
-from .outputs import failure_row, generic_prediction_row
-from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
-from .trainer import set_global_seed, training_layout_identity
+from .selection import load_gate_b_selection, selection_locations
+from oa_groundrag.vlm.model import Qwen3VLModelAdapter
+from oa_groundrag.vlm.outputs import failure_row, generic_prediction_row
+from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from oa_groundrag.training.vlm.trainer import set_global_seed, training_layout_identity
 
 
 @dataclass(frozen=True)
@@ -302,7 +302,7 @@ def generate_gate_b(
                         provenance=provenance,
                     )
                 )
-            except (Phase4Error, RSGeneralDescError) as error:
+            except (VLMError, RSGeneralDescError) as error:
                 failures.append(
                     failure_row(
                         record_id=str(item["record_id"]),

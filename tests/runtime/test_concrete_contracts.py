@@ -14,21 +14,21 @@ import numpy as np
 from PIL import Image
 import torch
 
-from oa_groundrag.phase4.evidence import EvidenceBuilder
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.errors import EvidenceError
-from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
-from oa_groundrag.phase4.processing import EncodedSample, single_inference_tensor_batch
-from oa_groundrag.text_rag.contracts import TextRagTask
-from oa_groundrag.text_rag.pass2 import build_pass2_messages
-from oa_groundrag.text_rag.runtime import RuntimeTextRetriever
-from oa_groundrag.unified.config import build_unified_runtime, load_unified_config
-from oa_groundrag.unified.contracts import UnifiedInferenceError
-from scripts.unified.run_oa_groundrag import entrypoint
+from oa_groundrag.grounding.evidence import EvidenceBuilder
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.errors import EvidenceError
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
+from oa_groundrag.vlm.processing import EncodedSample, single_inference_tensor_batch
+from oa_groundrag.retrieval.contracts import TextRagTask
+from oa_groundrag.retrieval.pass2 import build_pass2_messages
+from oa_groundrag.retrieval.runtime import RuntimeTextRetriever
+from oa_groundrag.runtime.config import build_unified_runtime, load_unified_config
+from oa_groundrag.runtime.contracts import UnifiedInferenceError
+from oa_groundrag.runtime.cli import main as runtime_cli
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-UNIFIED_CONFIG = REPO_ROOT / "configs/unified/inference_v1.yaml"
+UNIFIED_CONFIG = REPO_ROOT / "configs/runtime/inference_v2.yaml"
 
 
 class RuntimeEvidenceContractTest(unittest.TestCase):
@@ -212,17 +212,17 @@ class RuntimeRetrieverContractTest(unittest.TestCase):
             "items": [],
         }
         with (
-            patch("oa_groundrag.text_rag.runtime.validate_bank", return_value={
+            patch("oa_groundrag.retrieval.runtime.validate_bank", return_value={
                 "bank_id": "bank",
                 "manifest_sha256": "a" * 64,
                 "ledger_sha256": "b" * 64,
             }),
-            patch("oa_groundrag.text_rag.runtime.BGEM3DenseEmbedder", FakeEmbedder),
-            patch("oa_groundrag.text_rag.runtime.HybridRetriever", FakeHybridRetriever),
-            patch("oa_groundrag.text_rag.runtime.load_runtime_bank_payload", return_value=(
+            patch("oa_groundrag.retrieval.runtime.BGEM3DenseEmbedder", FakeEmbedder),
+            patch("oa_groundrag.retrieval.runtime.HybridRetriever", FakeHybridRetriever),
+            patch("oa_groundrag.retrieval.runtime.load_runtime_bank_payload", return_value=(
                 {"bank_id": "bank"}, [], np.empty((0, 2), dtype=np.float32), [],
             )),
-            patch("oa_groundrag.text_rag.runtime.build_balanced_packet", return_value=packet),
+            patch("oa_groundrag.retrieval.runtime.build_balanced_packet", return_value=packet),
         ):
             result = retriever.retrieve(
                 task=TextRagTask.CANDIDATE_INTERPRETATION,
@@ -245,12 +245,12 @@ class RuntimeRetrieverContractTest(unittest.TestCase):
 class ConfigAndCliContractTest(unittest.TestCase):
     def test_existing_and_unified_cli_help_remain_independent(self) -> None:
         scripts = (
-            "scripts/phase2_oa_auxseg/run_oa_auxseg.py",
-            "scripts/phase4_rs_vlm/run_rs_vlm.py",
-            "scripts/phase4_rs_vlm/run_mask_grounded_adapter.py",
-            "scripts/stage6_text_rag/run_text_rag.py",
-            "scripts/stage6_text_rag/run_gate_d_dev.py",
-            "scripts/unified/run_oa_groundrag.py",
+            "scripts/train/oa_auxseg.py",
+            "scripts/train/rs_vlm.py",
+            "scripts/train/grounded_adapter.py",
+            "scripts/infer/text_rag.py",
+            "scripts/evaluate/gate_d.py",
+            "scripts/infer/oa_groundrag.py",
         )
         for relative in scripts:
             process = subprocess.run(
@@ -271,8 +271,9 @@ class ConfigAndCliContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
             path.write_text(
-                "schema_version: oa_groundrag.unified_inference.config.v1\n"
-                "repository_root: /tmp\nspatial: {}\nstage6: {}\nruntime: {}\n"
+                "schema_version: oa_groundrag.unified_inference.config.v2\n"
+                "repository_root: /tmp\nspatial: {}\nsemantic_core: {}\n"
+                "retrieval: {}\nruntime: {}\n"
                 "unknown: true\n",
                 encoding="utf-8",
             )
@@ -283,14 +284,20 @@ class ConfigAndCliContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
             path.write_text(
-                "schema_version: oa_groundrag.unified_inference.config.v1\n"
+                "schema_version: oa_groundrag.unified_inference.config.v2\n"
                 f"repository_root: {REPO_ROOT}\n"
                 "spatial:\n"
-                f"  config: {REPO_ROOT / 'configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json'}\n"
+                f"  config: {REPO_ROOT / 'configs/segmentation/full_proposed_dropout_b16_nockpt_e100.json'}\n"
                 "  checkpoint: /tmp/nonexistent-unified-checkpoint.pt\n"
                 f"  checkpoint_sha256: \"{'0' * 64}\"\n"
-                "stage6:\n"
-                f"  config: {REPO_ROOT / 'configs/stage6_text_rag/dev_v1.yaml'}\n"
+                "semantic_core:\n"
+                f"  config: {REPO_ROOT / 'configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml'}\n"
+                f"  best_pointer_sha256: \"{'0' * 64}\"\n"
+                f"  checkpoint_manifest_sha256: \"{'0' * 64}\"\n"
+                f"  adapter_sha256: \"{'0' * 64}\"\n"
+                f"  workflow_state_sha256: \"{'0' * 64}\"\n"
+                "retrieval:\n"
+                f"  config: {REPO_ROOT / 'configs/retrieval/dev_v1.yaml'}\n"
                 "runtime:\n"
                 "  device: cuda\n"
                 "  release_spatial_before_shared: true\n"
@@ -334,12 +341,12 @@ class ConfigAndCliContractTest(unittest.TestCase):
             output = io.StringIO()
             with (
                 patch(
-                    "scripts.unified.run_oa_groundrag.build_unified_runtime",
+                    "oa_groundrag.runtime.cli.build_unified_runtime",
                     side_effect=AssertionError("provider must not be constructed"),
                 ),
                 patch("sys.stdout", output),
             ):
-                code = entrypoint([
+                code = runtime_cli([
                     "--config", str(UNIFIED_CONFIG),
                     "--request", str(request_path),
                     "--dry-run",

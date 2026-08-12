@@ -13,9 +13,13 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     require_bool,
     require_exact_keys,
     require_int,
@@ -23,11 +27,9 @@ from oa_groundrag.phase3.common import (
     require_string,
     resolve_config_path,
     safe_join,
-    sha256_file,
-    sha256_text,
 )
-from oa_groundrag.phase4.config import _load_yaml
-from oa_groundrag.phase4.errors import ConfigError, ContractError, ReasonCode
+from oa_groundrag.vlm.config import _load_yaml
+from oa_groundrag.vlm.errors import ConfigError, ContractError, ReasonCode
 
 
 SOURCE_REGISTRY_SCHEMA = "oa_groundrag.text_rag.source_registry.v1"
@@ -369,11 +371,21 @@ class Stage6Config:
     stage5: Stage5Binding
     dev: DevBinding
     semantic_sha256: str
+    source_registry_identity_path: Path | None = None
+    stage5_config_identity_path: Path | None = None
 
     def semantic_dict(self) -> dict[str, Any]:
+        """返回 v1 scientific identity；运行路径迁移不改写已发布身份。"""
+
+        source_registry_identity = (
+            self.source_registry_identity_path or self.source_registry_path
+        )
+        stage5_config_identity = (
+            self.stage5_config_identity_path or self.stage5.config_path
+        )
         return {
             "schema_version": STAGE6_CONFIG_SCHEMA,
-            "source_registry": str(self.source_registry_path),
+            "source_registry": str(source_registry_identity),
             "outputs": {
                 "bank_root": str(self.bank_root),
                 "retrieval_root": str(self.retrieval_root),
@@ -382,7 +394,10 @@ class Stage6Config:
             "extraction": self.extraction.__dict__,
             "dense": {**self.dense.__dict__, "model_root": str(self.dense.model_root)},
             "retrieval": self.retrieval.__dict__,
-            "stage5": {**self.stage5.__dict__, "config_path": str(self.stage5.config_path)},
+            "stage5": {
+                **self.stage5.__dict__,
+                "config_path": str(stage5_config_identity),
+            },
             "dev": {
                 **self.dev.__dict__,
                 "eval_root": str(self.dev.eval_root),
@@ -490,9 +505,28 @@ def load_stage6_config(path: Path | str) -> Stage6Config:
     )
     if dev.smoke_limit > dev.expected_records:
         raise ConfigError(ReasonCode.TYPE_MISMATCH, "smoke_limit 不得超过 expected_records")
+    source_registry_path = resolve_config_path(
+        base,
+        row["source_registry"],
+        location="$.source_registry",
+    )
+    source_registry_identity_path: Path | None = None
+    stage5_config_identity_path: Path | None = None
+    if base.name == "retrieval" and base.parent.name == "configs":
+        repository_root = base.parent.parent
+        source_registry_identity_path = (
+            repository_root
+            / "configs/stage6_text_rag"
+            / source_registry_path.name
+        )
+        stage5_config_identity_path = (
+            repository_root
+            / "configs/phase4_rs_vlm"
+            / stage5.config_path.name
+        )
     provisional = Stage6Config(
         config_path=config_path,
-        source_registry_path=resolve_config_path(base, row["source_registry"], location="$.source_registry"),
+        source_registry_path=source_registry_path,
         bank_root=resolve_config_path(base, outputs["bank_root"], location="$.outputs.bank_root"),
         retrieval_root=resolve_config_path(base, outputs["retrieval_root"], location="$.outputs.retrieval_root"),
         generation_root=resolve_config_path(base, outputs["generation_root"], location="$.outputs.generation_root"),
@@ -502,6 +536,8 @@ def load_stage6_config(path: Path | str) -> Stage6Config:
         stage5=stage5,
         dev=dev,
         semantic_sha256="",
+        source_registry_identity_path=source_registry_identity_path,
+        stage5_config_identity_path=stage5_config_identity_path,
     )
     semantic = sha256_text(canonical_json(provisional.semantic_dict()))
     return Stage6Config(**{**provisional.__dict__, "semantic_sha256": semantic})

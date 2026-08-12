@@ -7,15 +7,15 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.artifacts.io import (
     atomic_write_json,
     atomic_write_text,
-    read_json,
-    sha256_file,
 )
+from oa_groundrag.data.rs_general.io import read_json
 
-from .contracts import fail
-from .single_expert import (
+from ..contracts import fail
+from .project import (
     AnnotationIntendedUse,
     CALIBRATION_COUNT,
     TRAIN_ANNOTATION_COUNT,
@@ -25,16 +25,16 @@ from .single_expert import (
     create_annotation_project,
     load_annotation_project,
 )
-from .single_expert_drafting import generate_annotation_drafts
-from .single_expert_package import (
+from .drafting import generate_annotation_drafts
+from .package import (
     export_verified_annotations,
     validate_verified_annotation_package,
 )
-from .single_expert_training import (
+from .training import (
     export_training_messages,
     load_training_message_artifact,
 )
-from .single_expert_workbench import (
+from .workbench import (
     annotation_partition_draft_quality,
     annotation_partition_status,
     serve_annotation_workbench,

@@ -1,4 +1,4 @@
-"""Unified Inference v1 严格配置与 lazy provider factory。"""
+"""Unified Inference v2 严格配置与 lazy provider factory。"""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ from pathlib import Path
 import re
 from typing import Any
 
-from oa_groundrag.phase3.common import (
-    first_symlink_component,
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     require_bool,
     require_exact_keys,
     require_mapping,
     require_string,
     resolve_config_path,
 )
-from oa_groundrag.phase4.config import _load_yaml
+from oa_groundrag.vlm.config import _load_yaml
 
 from .contracts import (
     UnifiedInferenceError,
@@ -25,7 +25,7 @@ from .contracts import (
 )
 
 
-UNIFIED_CONFIG_SCHEMA = "oa_groundrag.unified_inference.config.v1"
+UNIFIED_CONFIG_SCHEMA = "oa_groundrag.unified_inference.config.v2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -34,6 +34,20 @@ class SpatialRuntimeBinding:
     config_path: Path
     checkpoint_path: Path
     checkpoint_sha256: str
+
+
+@dataclass(frozen=True)
+class SemanticCoreRuntimeBinding:
+    config_path: Path
+    best_pointer_sha256: str
+    checkpoint_manifest_sha256: str
+    adapter_sha256: str
+    workflow_state_sha256: str
+
+
+@dataclass(frozen=True)
+class RetrievalRuntimeBinding:
+    config_path: Path
 
 
 @dataclass(frozen=True)
@@ -51,7 +65,8 @@ class UnifiedInferenceConfig:
     config_path: Path
     repository_root: Path
     spatial: SpatialRuntimeBinding
-    stage6_config_path: Path
+    semantic_core: SemanticCoreRuntimeBinding
+    retrieval: RetrievalRuntimeBinding
     runtime: UnifiedRuntimeOptions
 
 
@@ -85,7 +100,14 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
         row = _load_yaml(config_path)
         require_exact_keys(
             row,
-            required=("schema_version", "repository_root", "spatial", "stage6", "runtime"),
+            required=(
+                "schema_version",
+                "repository_root",
+                "spatial",
+                "semantic_core",
+                "retrieval",
+                "runtime",
+            ),
             location="$",
         )
         if row["schema_version"] != UNIFIED_CONFIG_SCHEMA:
@@ -105,8 +127,27 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
             required=("config", "checkpoint", "checkpoint_sha256"),
             location="$.spatial",
         )
-        stage6_row = require_mapping(row["stage6"], location="$.stage6")
-        require_exact_keys(stage6_row, required=("config",), location="$.stage6")
+        semantic_row = require_mapping(
+            row["semantic_core"], location="$.semantic_core"
+        )
+        semantic_fields = (
+            "config",
+            "best_pointer_sha256",
+            "checkpoint_manifest_sha256",
+            "adapter_sha256",
+            "workflow_state_sha256",
+        )
+        require_exact_keys(
+            semantic_row,
+            required=semantic_fields,
+            location="$.semantic_core",
+        )
+        retrieval_row = require_mapping(row["retrieval"], location="$.retrieval")
+        require_exact_keys(
+            retrieval_row,
+            required=("config",),
+            location="$.retrieval",
+        )
         runtime_row = require_mapping(row["runtime"], location="$.runtime")
         option_names = (
             "device",
@@ -141,7 +182,7 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
     if disabled:
         raise UnifiedInferenceError(
             UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
-            f"Unified v1 安全/释放开关必须为 true：{disabled}",
+            f"Unified v2 安全/释放开关必须为 true：{disabled}",
         )
     spatial_config = resolve_config_path(
         base,
@@ -153,16 +194,22 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
         spatial_row["checkpoint"],
         location="$.spatial.checkpoint",
     )
-    stage6_config = resolve_config_path(
+    semantic_config = resolve_config_path(
         base,
-        stage6_row["config"],
-        location="$.stage6.config",
+        semantic_row["config"],
+        location="$.semantic_core.config",
+    )
+    retrieval_config = resolve_config_path(
+        base,
+        retrieval_row["config"],
+        location="$.retrieval.config",
     )
     for label, value in (
         ("repository_root", repository_root),
         ("spatial.config", spatial_config),
         ("spatial.checkpoint", checkpoint),
-        ("stage6.config", stage6_config),
+        ("semantic_core.config", semantic_config),
+        ("retrieval.config", retrieval_config),
     ):
         reject_test_or_sealed_path(value, label=label)
     _regular_path(repository_root, label="repository_root", directory=True)
@@ -177,7 +224,26 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
                 label="$.spatial.checkpoint_sha256",
             ),
         ),
-        stage6_config_path=stage6_config,
+        semantic_core=SemanticCoreRuntimeBinding(
+            config_path=semantic_config,
+            best_pointer_sha256=_sha256(
+                semantic_row["best_pointer_sha256"],
+                label="$.semantic_core.best_pointer_sha256",
+            ),
+            checkpoint_manifest_sha256=_sha256(
+                semantic_row["checkpoint_manifest_sha256"],
+                label="$.semantic_core.checkpoint_manifest_sha256",
+            ),
+            adapter_sha256=_sha256(
+                semantic_row["adapter_sha256"],
+                label="$.semantic_core.adapter_sha256",
+            ),
+            workflow_state_sha256=_sha256(
+                semantic_row["workflow_state_sha256"],
+                label="$.semantic_core.workflow_state_sha256",
+            ),
+        ),
+        retrieval=RetrievalRuntimeBinding(config_path=retrieval_config),
         runtime=UnifiedRuntimeOptions(device=device, **booleans),
     )
 
@@ -185,41 +251,60 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
 def validate_provider_paths(config: UnifiedInferenceConfig) -> None:
     """provider 构造前检查其将读取的所有配置/资产根；不读取 payload。"""
 
-    from oa_groundrag.phase2.engine import load_runtime_config
-    from oa_groundrag.phase4.stage5_config import load_stage5_config
-    from oa_groundrag.text_rag.contracts import load_stage6_config
+    from oa_groundrag.segmentation.config import load_runtime_config
+    from oa_groundrag.training.grounding.config import load_stage5_config
+    from oa_groundrag.retrieval.contracts import load_stage6_config
 
     _regular_path(config.spatial.config_path, label="spatial.config")
     _regular_path(config.spatial.checkpoint_path, label="spatial.checkpoint")
-    _regular_path(config.stage6_config_path, label="stage6.config")
-    phase2 = load_runtime_config(config.spatial.config_path)
-    benchmark_root = phase2.resolve_path(phase2.benchmark_root, config.repository_root)
-    output_root = phase2.resolve_path(phase2.output_dir, config.repository_root)
-    backbone_weights = phase2.resolve_path(phase2.backbone_weights, config.repository_root)
-    stage6 = load_stage6_config(config.stage6_config_path)
+    _regular_path(config.semantic_core.config_path, label="semantic_core.config")
+    _regular_path(config.retrieval.config_path, label="retrieval.config")
+    spatial = load_runtime_config(config.spatial.config_path)
+    benchmark_root = spatial.resolve_path(spatial.benchmark_root, config.repository_root)
+    output_root = spatial.resolve_path(spatial.output_dir, config.repository_root)
+    backbone_weights = spatial.resolve_path(spatial.backbone_weights, config.repository_root)
+    semantic_core = load_stage5_config(config.semantic_core.config_path)
+    retrieval = load_stage6_config(config.retrieval.config_path)
     first_paths = {
-        "phase2.benchmark_root": benchmark_root,
-        "phase2.output_root": output_root,
-        "phase2.backbone_weights": backbone_weights,
-        "stage6.source_registry": stage6.source_registry_path,
-        "stage6.bank_root": stage6.bank_root,
-        "stage6.retrieval_root": stage6.retrieval_root,
-        "stage6.generation_root": stage6.generation_root,
-        "stage6.dense_model_root": stage6.dense.model_root,
-        "stage5.config": stage6.stage5.config_path,
+        "spatial.benchmark_root": benchmark_root,
+        "spatial.output_root": output_root,
+        "spatial.backbone_weights": backbone_weights,
+        "semantic_core.workflow_root": semantic_core.workflow_root,
+        "semantic_core.output_root": semantic_core.run.output_root,
+        "semantic_core.model": semantic_core.model.path,
+        "semantic_core.processor": semantic_core.model.processor_path,
+        "retrieval.source_registry": retrieval.source_registry_path,
+        "retrieval.bank_root": retrieval.bank_root,
+        "retrieval.retrieval_root": retrieval.retrieval_root,
+        "retrieval.generation_root": retrieval.generation_root,
+        "retrieval.dense_model_root": retrieval.dense.model_root,
     }
     for label, value in first_paths.items():
         reject_test_or_sealed_path(value, label=label)
-    stage5 = load_stage5_config(stage6.stage5.config_path)
-    stage5_paths = {
-        "stage5.workflow_root": stage5.workflow_root,
-        "stage5.output_root": stage5.run.output_root,
-        "stage5.model": stage5.model.path,
-        "stage5.processor": stage5.model.processor_path,
+    binding_parity = {
+        "config_path": retrieval.stage5.config_path == config.semantic_core.config_path,
+        "best_pointer_sha256": (
+            retrieval.stage5.best_pointer_sha256
+            == config.semantic_core.best_pointer_sha256
+        ),
+        "checkpoint_manifest_sha256": (
+            retrieval.stage5.checkpoint_manifest_sha256
+            == config.semantic_core.checkpoint_manifest_sha256
+        ),
+        "adapter_sha256": (
+            retrieval.stage5.adapter_sha256 == config.semantic_core.adapter_sha256
+        ),
+        "workflow_state_sha256": (
+            retrieval.stage5.workflow_state_sha256
+            == config.semantic_core.workflow_state_sha256
+        ),
     }
-    for label, value in stage5_paths.items():
-        reject_test_or_sealed_path(value, label=label)
-    if stage6.dense.device != config.runtime.device:
+    if not all(binding_parity.values()):
+        raise UnifiedInferenceError(
+            UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
+            f"semantic_core 与 retrieval 上游绑定不一致：{binding_parity}",
+        )
+    if retrieval.dense.device != config.runtime.device:
         raise UnifiedInferenceError(
             UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
             "Unified runtime device 与 Stage 6 dense.device 必须一致",
@@ -231,11 +316,11 @@ def build_unified_runtime(config: UnifiedInferenceConfig):
 
     from .providers import (
         OAAuxSegSpatialProvider,
-        Phase4GroundedEvidenceProvider,
-        Stage5SharedMLLMProvider,
-        Stage6TextRAGProvider,
+        EvidenceConstrainedRAGProvider,
+        GroundedEvidenceInterface,
+        GroundedVLMProvider,
     )
-    from .runtime import UnifiedInferenceRuntime
+    from .inference import UnifiedInferenceRuntime
 
     return UnifiedInferenceRuntime(
         spatial=OAAuxSegSpatialProvider(
@@ -244,12 +329,12 @@ def build_unified_runtime(config: UnifiedInferenceConfig):
             checkpoint_sha256=config.spatial.checkpoint_sha256,
             repo_root=config.repository_root,
         ),
-        shared_mllm=Stage5SharedMLLMProvider(
-            stage6_config_path=config.stage6_config_path,
+        shared_mllm=GroundedVLMProvider(
+            binding=config.semantic_core,
             device=config.runtime.device,
         ),
-        evidence=Phase4GroundedEvidenceProvider(),
-        text_rag=Stage6TextRAGProvider(
-            stage6_config_path=config.stage6_config_path,
+        evidence=GroundedEvidenceInterface(),
+        text_rag=EvidenceConstrainedRAGProvider(
+            config_path=config.retrieval.config_path,
         ),
     )

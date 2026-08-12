@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.phase4.contracts import (
+from oa_groundrag.grounding.contracts import (
     MODEL_OUTPUT_SCHEMA_VERSION,
     AlignmentStatus,
     AuxiliaryView,
@@ -19,19 +19,19 @@ from oa_groundrag.phase4.contracts import (
     SelectionRequest,
     TargetStatus,
 )
-from oa_groundrag.phase4.evidence import (
+from oa_groundrag.grounding.evidence import (
     EvidenceBuilder,
     deterministic_mask_facts,
 )
-from oa_groundrag.phase4.errors import (
+from oa_groundrag.vlm.errors import (
     ContractError,
     EvidenceError,
     ReasonCode,
     SelectionError,
 )
-from oa_groundrag.phase4.messages import build_mask_grounded_messages
-from oa_groundrag.phase4.outputs import parse_model_output
-from oa_groundrag.phase4.regions import RegionSelector
+from oa_groundrag.grounding.messages import build_mask_grounded_messages
+from oa_groundrag.vlm.outputs import parse_model_output
+from oa_groundrag.grounding.regions import RegionSelector
 
 
 def inventory() -> RegionInventory:

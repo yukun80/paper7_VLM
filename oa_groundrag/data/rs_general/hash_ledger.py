@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, TypeVar
 
-from .common import (
+from .io import (
     canonical_json,
     first_symlink_component,
     portable_relative_path,

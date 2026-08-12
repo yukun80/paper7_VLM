@@ -11,7 +11,7 @@ from typing import Any, Iterable, Mapping
 
 from PIL import Image, UnidentifiedImageError
 
-from .common import (
+from .io import (
     canonical_json,
     first_symlink_component,
     portable_relative_path,

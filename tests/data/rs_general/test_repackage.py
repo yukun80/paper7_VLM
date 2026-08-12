@@ -7,10 +7,10 @@ from collections import Counter
 from pathlib import Path
 from unittest import mock
 
-from fixture_helpers import make_all_sources, write_build_config
-from oa_groundrag.phase3.builder import _payload_hashes, build_benchmark
-from oa_groundrag.phase3.cli import main
-from oa_groundrag.phase3.common import (
+from tests.data.rs_general.fixture_helpers import make_all_sources, write_build_config
+from oa_groundrag.data.rs_general.builder import _payload_hashes, build_benchmark
+from oa_groundrag.data.rs_general.cli import main
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,
@@ -20,17 +20,17 @@ from oa_groundrag.phase3.common import (
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.config import load_build_config
-from oa_groundrag.phase3.contracts import (
+from oa_groundrag.data.rs_general.config import load_build_config
+from oa_groundrag.data.rs_general.contracts import (
     BENCHMARK_SCOPE,
     CANONICAL_SCHEMA_VERSION,
     MANIFEST_VERSION,
     RELEASE_EQUIVALENCE_SCHEMA_VERSION,
 )
-from oa_groundrag.phase3.dataset import RSGeneralDescDataset
-from oa_groundrag.phase3.errors import BuildError, RSGeneralDescError, ReasonCode
-from oa_groundrag.phase3.hash_ledger import HashLedgerVerifier
-from oa_groundrag.phase3.validator import validate_benchmark
+from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
+from oa_groundrag.data.rs_general.errors import BuildError, RSGeneralDescError, ReasonCode
+from oa_groundrag.data.rs_general.hash_ledger import HashLedgerVerifier
+from oa_groundrag.data.rs_general.validator import validate_benchmark
 
 
 class RepackageTests(unittest.TestCase):
@@ -179,7 +179,7 @@ class RepackageTests(unittest.TestCase):
     def test_repackage_validation_failure_never_publishes(self) -> None:
         target = self.base / "rejected"
         with mock.patch(
-            "oa_groundrag.phase3.validator.validate_benchmark",
+            "oa_groundrag.data.rs_general.validator.validate_benchmark",
             return_value={"errors": ["injected"]},
         ):
             with self.assertRaises(BuildError) as caught:
@@ -201,7 +201,7 @@ class RepackageTests(unittest.TestCase):
         atomic_write_jsonl(path, rows)
         target = self.base / "record-drift"
         with mock.patch(
-            "oa_groundrag.phase3.repackage.atomic_write_json",
+            "oa_groundrag.data.rs_general.repackage.atomic_write_json",
             wraps=atomic_write_json,
         ) as writer:
             with self.assertRaises(BuildError) as caught:

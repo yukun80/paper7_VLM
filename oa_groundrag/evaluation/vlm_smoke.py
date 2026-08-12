@@ -9,29 +9,29 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 
-from oa_groundrag.phase3.dataset import (
+from oa_groundrag.data.rs_general.dataset import (
     RSGeneralDescDataset,
     ParentBalancedSampler,
 )
 
-from .artifacts import AtomicArtifactDirectory
-from .config import Phase4Config
-from .contracts import RUN_MANIFEST_SCHEMA_VERSION, DataMode
-from .data import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.config import VLMConfig
+from oa_groundrag.grounding.contracts import RUN_MANIFEST_SCHEMA_VERSION, DataMode
+from oa_groundrag.vlm.data import (
     REQUIRED_EXTERNAL_ROLES,
     REQUIRED_EXTERNAL_SOURCES,
     REQUIRED_EXTERNAL_TASKS,
     ExternalDescriptionDataset,
     locate_bounded_external_records,
 )
-from .errors import PreflightError, ReasonCode
-from .preflight import open_benchmark_access
-from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
-from .reference import MAIN_REFERENCE
+from oa_groundrag.vlm.errors import PreflightError, ReasonCode
+from oa_groundrag.vlm.preflight import open_benchmark_access
+from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.reference import MAIN_REFERENCE
 
 
 def run_bounded_external_smoke(
-    config: Phase4Config,
+    config: VLMConfig,
     *,
     output_root: Path | None = None,
 ) -> Path:

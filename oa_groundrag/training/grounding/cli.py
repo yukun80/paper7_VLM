@@ -18,14 +18,14 @@ import sys
 from typing import Any, Sequence
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.phase3.errors import RSGeneralDescError
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.phase4.stage5_workflow import run_stage5_workflow
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.training.grounding.workflow import run_stage5_workflow
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -54,7 +54,7 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
         )
         _print(result)
         return 0
-    except (LandslideEvidenceError, RSGeneralDescError, Phase4Error) as error:
+    except (LandslideEvidenceError, RSGeneralDescError, VLMError) as error:
         code = getattr(error.code, "value", error.code)
         _print(
             {

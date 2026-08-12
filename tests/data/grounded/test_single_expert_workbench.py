@@ -9,10 +9,10 @@ import warnings
 from pathlib import Path
 from unittest.mock import patch
 
-from fixture_helpers import no_target_output, target_output
-from single_expert_fixture_helpers import build_annotation_asset, draft_run
+from tests.data.grounded.fixture_helpers import no_target_output, target_output
+from tests.data.grounded.single_expert_fixture_helpers import build_annotation_asset, draft_run
 
-from oa_groundrag.landslide_evidence.single_expert import (
+from oa_groundrag.data.grounded.annotation.project import (
     AnnotationIntendedUse,
     annotation_work_item,
     create_annotation_project,
@@ -20,7 +20,7 @@ from oa_groundrag.landslide_evidence.single_expert import (
     load_verified_work,
     write_draft_results,
 )
-from oa_groundrag.landslide_evidence.single_expert_workbench import (
+from oa_groundrag.data.grounded.annotation.workbench import (
     ANNOTATION_FORM_FIELDS,
     annotation_view_item,
     apply_advanced_json,
@@ -33,13 +33,13 @@ from oa_groundrag.landslide_evidence.single_expert_workbench import (
     preview_form_values,
     serve_annotation_workbench,
 )
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.phase3.common import canonical_json, sha256_text
-from oa_groundrag.phase4.outputs import region_output_template
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.rs_general.io import canonical_json, sha256_text
+from oa_groundrag.grounding.outputs import region_output_template
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-PROMPT = REPO_ROOT / "configs/stage4_landslide_evidence/single_expert_prompt_v1.txt"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PROMPT = REPO_ROOT / "configs/grounding/prompts/single_expert_prompt_v1.txt"
 
 
 class SingleExpertWorkbenchTest(unittest.TestCase):
@@ -412,7 +412,7 @@ class SingleExpertWorkbenchTest(unittest.TestCase):
             app = FailingApp()
             with (
                 patch(
-                    "oa_groundrag.landslide_evidence.single_expert_workbench.create_annotation_app",
+                    "oa_groundrag.data.grounded.annotation.workbench.create_annotation_app",
                     return_value=app,
                 ),
                 patch.dict(

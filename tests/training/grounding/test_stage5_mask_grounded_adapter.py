@@ -11,40 +11,40 @@ from unittest.mock import patch
 import torch
 from safetensors.torch import save_file
 
-from oa_groundrag.phase3.common import atomic_write_json, sha256_file
-from oa_groundrag.phase4.stage5_config import (
+from oa_groundrag.data.rs_general.io import atomic_write_json, sha256_file
+from oa_groundrag.training.grounding.config import (
     WarmStartContract,
     load_stage5_config,
     verify_warm_start_files,
 )
-from oa_groundrag.phase4.stage5_data import (
+from oa_groundrag.training.grounding.data import (
     REGION_TRAIN_ROLE,
     Stage5MixedDataset,
     Stage5MixedSampler,
     split_compact_by_parent,
 )
-from oa_groundrag.phase4.stage5_workflow import _load_warm_start
-from oa_groundrag.phase4.stage5_workflow import (
+from oa_groundrag.training.grounding.workflow import _load_warm_start
+from oa_groundrag.training.grounding.workflow import (
     STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS,
     _prepare_stage5_training_memory,
     _stage5_gate_b_protocol_path,
 )
-from oa_groundrag.phase4.gate_b_contracts import load_gate_b_protocol
-from oa_groundrag.phase4.gate_b_selection import (
+from oa_groundrag.evaluation.rs_general.contracts import load_gate_b_protocol
+from oa_groundrag.evaluation.rs_general.selection import (
     load_gate_b_selection,
     load_gate_b_selection_for_stage5_retention,
 )
-from oa_groundrag.phase4.stage5_evaluation import (
+from oa_groundrag.evaluation.grounding.adapter import (
     _counterfactual_kind,
     evaluate_stage5_dev,
 )
-from oa_groundrag.phase4.errors import ContractError, ModelError, PredictionError
-from oa_groundrag.phase4.trainer import training_layout_identity
-from oa_groundrag.phase4.validation import ValidationResult, validation_is_better
+from oa_groundrag.vlm.errors import ContractError, ModelError, PredictionError
+from oa_groundrag.training.vlm.trainer import training_layout_identity
+from oa_groundrag.training.vlm.validation import ValidationResult, validation_is_better
 
 
-REPO = Path(__file__).resolve().parents[2]
-CONFIG = REPO / "configs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml"
+REPO = Path(__file__).resolve().parents[3]
+CONFIG = REPO / "configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml"
 
 
 class FakeDataset:
@@ -153,10 +153,10 @@ class Stage5DataTests(unittest.TestCase):
     def test_stage5_pretraining_memory_cleanup_runs_gc_then_cuda_cleanup(self) -> None:
         calls = []
         with patch(
-            "oa_groundrag.phase4.stage5_workflow.gc.collect",
+            "oa_groundrag.training.grounding.workflow.gc.collect",
             side_effect=lambda: calls.append("gc"),
         ), patch(
-            "oa_groundrag.phase4.stage5_workflow.clear_cuda_cache",
+            "oa_groundrag.training.grounding.workflow.clear_cuda_cache",
             side_effect=lambda device: calls.append(f"cache:{device.type}"),
         ):
             _prepare_stage5_training_memory(torch.device("cuda"))
@@ -167,7 +167,7 @@ class Stage5DataTests(unittest.TestCase):
         protocol_path = _stage5_gate_b_protocol_path(config)
         self.assertEqual(
             protocol_path,
-            REPO / "configs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b.yaml",
+            REPO / "configs/vlm/rs_general/rs_generaldesc_gate_b_qwen3vl_2b.yaml",
         )
         self.assertEqual(protocol_path.suffix, ".yaml")
         self.assertEqual(
@@ -276,7 +276,7 @@ class Stage5ReportTests(unittest.TestCase):
                 return {"root": str(output)}
 
             with patch(
-                "oa_groundrag.phase4.stage5_evaluation.evaluate_dev",
+                "oa_groundrag.evaluation.grounding.adapter.evaluate_dev",
                 side_effect=fake_evaluate_dev,
             ):
                 result = evaluate_stage5_dev(
@@ -285,7 +285,7 @@ class Stage5ReportTests(unittest.TestCase):
                     output_root=root / "report",
                     model_role="fixture",
                 )
-            report = __import__("oa_groundrag.phase3.common", fromlist=["read_json"]).read_json(
+            report = __import__("oa_groundrag.data.rs_general.io", fromlist=["read_json"]).read_json(
                 Path(result["root"]) / "report.json"
             )
             self.assertEqual(report["reference_authority"], "automatic_contract_only")

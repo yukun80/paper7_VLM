@@ -1,8 +1,7 @@
-"""Phase 2 v6 的 ConvNeXt-Small 与完整 DELIVER 式四阶段 OA-AuxSeg。"""
+"""OA-AuxSeg v6 的 ConvNeXt-Small 与完整 DELIVER 式四阶段网络。"""
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 from collections import defaultdict
 from pathlib import Path
@@ -13,6 +12,8 @@ import torch.nn.functional as functional
 from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint as activation_checkpoint
 from torchvision.models import convnext_small
+
+from oa_groundrag.artifacts.identity import sha256_file
 
 from .contracts import (
     ModelRegistry,
@@ -77,14 +78,6 @@ AUXILIARY_STEM_CONTRACT = {
     "type": "modality_specific_conv7_stride4_padding3",
     "output_channels": 96,
 }
-
-
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(chunk_size):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def optical_rgb_indices(signature: Sequence[str]) -> tuple[int, int, int]:

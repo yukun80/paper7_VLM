@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..common import read_json, safe_join, sha256_file, sha256_text
+from ..io import read_json, safe_join, sha256_file, sha256_text
 from ..contracts import (
     AdapterResult,
     AnnotationLayer,

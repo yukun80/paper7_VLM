@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import torch
 
-from oa_groundrag.phase4.checkpoint import CheckpointManager, TrainingCursor
-from oa_groundrag.phase4.errors import ContractError
-from oa_groundrag.text_rag.workflow import _reject_sealed_path
+from oa_groundrag.vlm.checkpoint import CheckpointManager, TrainingCursor
+from oa_groundrag.vlm.errors import ContractError
+from oa_groundrag.retrieval.workflow import _reject_sealed_path
 
 
 class WorkflowSafetyTest(unittest.TestCase):

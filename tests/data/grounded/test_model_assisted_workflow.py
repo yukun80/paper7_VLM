@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.model_assisted_workflow import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.supervision.workflow import (
     MODEL_ASSISTED_RECORD_COUNT,
     ModelAssistedWorkflowPaths,
     prepare_expanded_corpus,
@@ -17,15 +17,15 @@ from oa_groundrag.landslide_evidence.model_assisted_workflow import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI_PATH = (
     REPO_ROOT
     / "scripts"
-    / "stage4_landslide_evidence"
-    / "run_model_assisted_supervision.py"
+    / "data"
+    / "grounded_supervision.py"
 )
-MODEL_MODULE = "oa_groundrag.landslide_evidence.model_assisted"
-EXPANDED_MODULE = "oa_groundrag.landslide_evidence.expanded_region"
+MODEL_MODULE = "oa_groundrag.data.grounded.supervision.model_assisted"
+EXPANDED_MODULE = "oa_groundrag.data.grounded.supervision.expanded_region"
 
 
 class ModelAssistedWorkflowTest(unittest.TestCase):
@@ -196,7 +196,7 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
             core.load_model_assisted_training_messages = load_messages  # type: ignore[attr-defined]
             events: list[str] = []
             with patch.dict(sys.modules, {MODEL_MODULE: core}), patch(
-                "oa_groundrag.landslide_evidence.model_assisted_workflow.prepare_expanded_corpus",
+                "oa_groundrag.data.grounded.supervision.workflow.prepare_expanded_corpus",
                 return_value={"ok": True},
             ):
                 result = run_model_assisted_train_workflow(
@@ -246,7 +246,7 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
             core.export_model_assisted_training_messages = forbidden  # type: ignore[attr-defined]
             core.load_model_assisted_training_messages = forbidden  # type: ignore[attr-defined]
             with patch.dict(sys.modules, {MODEL_MODULE: core}), patch(
-                "oa_groundrag.landslide_evidence.model_assisted_workflow.prepare_expanded_corpus",
+                "oa_groundrag.data.grounded.supervision.workflow.prepare_expanded_corpus",
                 return_value={"ok": True},
             ):
                 with self.assertRaises(LandslideEvidenceError):
@@ -286,7 +286,7 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
                 lambda _: SimpleNamespace(rows=range(MODEL_ASSISTED_RECORD_COUNT))
             )
             with patch.dict(sys.modules, {MODEL_MODULE: core}), patch(
-                "oa_groundrag.landslide_evidence.model_assisted_workflow.prepare_expanded_corpus",
+                "oa_groundrag.data.grounded.supervision.workflow.prepare_expanded_corpus",
                 return_value={"ok": True},
             ):
                 result = run_model_assisted_train_workflow(paths=paths)

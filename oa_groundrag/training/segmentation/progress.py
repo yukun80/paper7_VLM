@@ -1,4 +1,4 @@
-"""Phase 2 训练与评价的低噪声终端进度显示。"""
+"""OA-AuxSeg 训练与评价的低噪声终端进度显示。"""
 
 from __future__ import annotations
 

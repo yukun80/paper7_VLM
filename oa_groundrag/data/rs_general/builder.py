@@ -17,7 +17,7 @@ from .adapters import (
     RSGPTAdapter,
 )
 from .assets import AssetStore, normalize_bbox_target
-from .common import (
+from .io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,
@@ -18,7 +18,7 @@ from oa_groundrag.phase3.common import (
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.contracts import (
+from oa_groundrag.data.rs_general.contracts import (
     BENCHMARK_SCOPE,
     CANONICAL_SCHEMA_VERSION,
     HASH_SCHEMA_VERSION,
@@ -28,18 +28,18 @@ from oa_groundrag.phase3.contracts import (
     record_id,
     validate_canonical_record,
 )
-from oa_groundrag.phase3.errors import (
+from oa_groundrag.data.rs_general.errors import (
     RSGeneralDescError,
     ReasonCode as Phase3ReasonCode,
 )
-from oa_groundrag.phase4.cli import entrypoint
-from oa_groundrag.phase4.errors import PredictionError, ReasonCode
-from oa_groundrag.phase4.gate_b_contracts import (
+from oa_groundrag.vlm.cli import entrypoint
+from oa_groundrag.vlm.errors import PredictionError, ReasonCode
+from oa_groundrag.evaluation.rs_general.contracts import (
     GATE_B_PROTOCOL_ID,
     QWEN_TEMPLATE_VERSION,
 )
-from oa_groundrag.phase4.gate_b_media import locate_gate_b_media
-from oa_groundrag.phase4.outputs import generic_prediction_row
+from oa_groundrag.evaluation.rs_general.media import locate_gate_b_media
+from oa_groundrag.vlm.outputs import generic_prediction_row
 
 
 class _GateBMediaFixture:

@@ -5,10 +5,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from oa_groundrag.phase3.common import sha256_file, sha256_text
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.errors import ContractError
-from oa_groundrag.text_rag.bank import (
+from oa_groundrag.data.rs_general.io import sha256_file, sha256_text
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.errors import ContractError
+from oa_groundrag.retrieval.bank import (
     RapidOCRAdapter,
     audit_sources,
     build_evidence_units,
@@ -16,7 +16,7 @@ from oa_groundrag.text_rag.bank import (
     page_quality,
     split_page_units,
 )
-from oa_groundrag.text_rag.contracts import (
+from oa_groundrag.retrieval.contracts import (
     DevBinding,
     DenseConfig,
     ExtractionConfig,

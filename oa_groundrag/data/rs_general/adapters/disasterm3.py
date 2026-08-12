@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from ..common import (
+from ..io import (
     normalized_multiline_text,
     read_json,
     safe_join,

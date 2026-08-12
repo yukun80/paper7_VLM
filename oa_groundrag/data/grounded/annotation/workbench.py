@@ -9,9 +9,9 @@ from pathlib import Path
 import time
 from typing import Any, Mapping, MutableMapping, Sequence
 
-from oa_groundrag.phase4.contracts import TargetStatus
-from oa_groundrag.phase4.errors import ContractError
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.grounding.contracts import TargetStatus
+from oa_groundrag.vlm.errors import ContractError
+from oa_groundrag.grounding.outputs import (
     REGION_OUTPUT_SCHEMA_VERSION,
     RegionDraftQualityStatus,
     RegionEvidenceSufficiency,
@@ -19,8 +19,8 @@ from oa_groundrag.phase4.outputs import (
     parse_region_model_output,
 )
 
-from .contracts import LandslideEvidenceError, fail
-from .single_expert import (
+from ..contracts import LandslideEvidenceError, fail
+from .project import (
     annotation_work_item,
     default_region_description,
     load_annotation_project,

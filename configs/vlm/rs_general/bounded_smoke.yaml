@@ -36,8 +36,8 @@ limits:
   max_records_per_shard: 256
   max_probe_records: 4864
 model:
-  path: ../../models_zoo/Qwen3-VL-2B-Instruct
-  processor_path: ../../models_zoo/Qwen3-VL-2B-Instruct
+  path: ../../../models_zoo/Qwen3-VL-2B-Instruct
+  processor_path: ../../../models_zoo/Qwen3-VL-2B-Instruct
   local_files_only: true
   dtype: bfloat16
   attn_implementation: sdpa

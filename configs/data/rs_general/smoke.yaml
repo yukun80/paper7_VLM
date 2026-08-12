@@ -5,13 +5,13 @@ output_root: /tmp/rs_generaldesc_multitask_smoke_v1
 sources:
   rsgpt:
     enabled: true
-    root: ../../../datasets/describe_datasets/RSGPT/dataset
+    root: ../../../../datasets/describe_datasets/RSGPT/dataset
   mmrs1m:
     enabled: true
-    root: ../../../datasets/describe_datasets/MMRS-1M
+    root: ../../../../datasets/describe_datasets/MMRS-1M
   disasterm3:
     enabled: true
-    root: ../../../datasets/describe_datasets/DisasterM3
+    root: ../../../../datasets/describe_datasets/DisasterM3
 external_split:
   version: external_parent_split.v1
   validation_percent: 5

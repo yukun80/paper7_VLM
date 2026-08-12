@@ -1,4 +1,4 @@
-"""Phase 2 首版仅使用 BCE 与 Dice。"""
+"""OA-AuxSeg 当前损失合同：BCE 与 Dice。"""
 
 from __future__ import annotations
 

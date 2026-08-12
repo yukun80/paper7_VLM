@@ -15,23 +15,25 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.io import (
     atomic_write_json,
     atomic_write_jsonl,
     first_symlink_component,
+)
+from oa_groundrag.data.rs_general.io import (
     read_json,
     read_jsonl,
 )
-from oa_groundrag.phase3.dataset import ParentBalancedSampler
+from oa_groundrag.data.rs_general.dataset import ParentBalancedSampler
 
-from .checkpoint import CheckpointManager, TrainingCursor, restore_rng_state
-from .config import Phase4Config
-from .contracts import (
+from oa_groundrag.vlm.checkpoint import CheckpointManager, TrainingCursor, restore_rng_state
+from oa_groundrag.vlm.config import VLMConfig
+from oa_groundrag.grounding.contracts import (
     RUN_MANIFEST_SCHEMA_VERSION,
     SAMPLE_TRACE_SCHEMA_VERSION,
 )
-from .data import REQUIRED_EXTERNAL_TASKS, DescriptionSample
-from .errors import ModelError, ReasonCode
+from oa_groundrag.vlm.data import REQUIRED_EXTERNAL_TASKS, DescriptionSample
+from oa_groundrag.vlm.errors import ModelError, ReasonCode
 from .input_pipeline import (
     INPUT_PIPELINE_PREFETCH,
     INPUT_PIPELINE_SYNC,
@@ -39,8 +41,8 @@ from .input_pipeline import (
     OrderedBatchPrefetcher,
     sampler_state_at_epoch,
 )
-from .preflight import BenchmarkIdentity
-from .processing import DescriptionCollator
+from oa_groundrag.vlm.preflight import BenchmarkIdentity
+from oa_groundrag.vlm.processing import DescriptionCollator
 from .progress import TrainingProgress
 from .validation import (
     VALIDATION_RESULT_SCHEMA_VERSION,
@@ -145,7 +147,7 @@ def set_global_seed(seed: int) -> None:
 
 
 def training_layout_identity(
-    config: Phase4Config,
+    config: VLMConfig,
     *,
     cuda_cache_cleanup_interval_steps: int | None = None,
 ) -> dict[str, Any]:
@@ -809,7 +811,7 @@ class DescriptionTrainer:
     def __init__(
         self,
         *,
-        config: Phase4Config,
+        config: VLMConfig,
         model: TrainableAdapter,
         collator: DescriptionCollator,
         validation_dataset: DescriptionTrainingDataset,

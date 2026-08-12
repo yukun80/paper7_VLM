@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""新路线 Stage 1 / 仓库 phase2 OA-AuxSeg 统一入口。
+"""Spatial Perception / Stage 1 OA-AuxSeg 统一入口。
 
 用途：运行 train/evaluate/infer/smoke/overfit/finalize。
-命令：python scripts/phase2_oa_auxseg/run_oa_auxseg.py <子命令> --config <JSON>。
+命令：python scripts/train/oa_auxseg.py <子命令> --config <JSON>。
 输入：只读 oa_auxseg_hdf5_v1 Benchmark、本地 backbone 权重或当前 checkpoint。
 输出：训练 checkpoint/报告、人工定版报告，或原子 JSONL 与 NPZ 推理结果。
 写入：只写配置指定的仓库输出目录，finalize 和推理结果默认拒绝覆盖。
 阶段：OA-GroundRAG 新路线 Stage 1；不含 Region Grounding、VLM 或 RAG。
 
 
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py smoke \
-  --config configs/phase2_oa_auxseg/small_smoke.json
+python scripts/train/oa_auxseg.py smoke \
+  --config configs/segmentation/small_smoke.json
 
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py overfit \
-  --config configs/phase2_oa_auxseg/small_overfit.json
+python scripts/train/oa_auxseg.py overfit \
+  --config configs/segmentation/small_overfit.json
 
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/small_proposed_dropout.json
+python scripts/train/oa_auxseg.py train \
+  --config configs/segmentation/small_proposed_dropout.json
 
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/small_proposed_dropout_balanced.json
+python scripts/train/oa_auxseg.py train \
+  --config configs/segmentation/small_proposed_dropout_balanced.json
 
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/small_optical_only.json
+python scripts/train/oa_auxseg.py train \
+  --config configs/segmentation/small_optical_only.json
 
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py train \
-  --config configs/phase2_oa_auxseg/full_proposed_dropout.json
+python scripts/train/oa_auxseg.py train \
+  --config configs/segmentation/full_proposed_dropout.json
 
-python scripts/phase2_oa_auxseg/run_oa_auxseg.py finalize \
-  --config configs/phase2_oa_auxseg/full_proposed_dropout_b16_nockpt_e100.json \
+python scripts/train/oa_auxseg.py finalize \
+  --config configs/segmentation/full_proposed_dropout_b16_nockpt_e100.json \
   --checkpoint outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_best.pt \
   --termination-reason project_owner_manual_stop
 
@@ -47,7 +47,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.phase2.cli import main
+from oa_groundrag.training.segmentation.cli import main
 
 
 if __name__ == "__main__":

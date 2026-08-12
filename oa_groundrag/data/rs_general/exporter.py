@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from PIL import Image, ImageDraw
 
-from .common import (
+from .io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,

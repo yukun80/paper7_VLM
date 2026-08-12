@@ -1,4 +1,4 @@
-"""Phase 2 OA-AuxSeg 的公共类型和严格配置合同。"""
+"""OA-AuxSeg 的公共类型和严格配置合同。"""
 
 from __future__ import annotations
 

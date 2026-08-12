@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from fixture_helpers import no_target_output, target_output
-from single_expert_fixture_helpers import (
+from tests.data.grounded.fixture_helpers import no_target_output, target_output
+from tests.data.grounded.single_expert_fixture_helpers import (
     build_annotation_asset,
     draft_run,
 )
 
-from oa_groundrag.landslide_evidence.single_expert import (
+from oa_groundrag.data.grounded.annotation.project import (
     AnnotationIntendedUse,
     MODEL_DRAFT_SCHEMA,
     VERIFIED_ANNOTATION_SCHEMA,
@@ -23,25 +23,25 @@ from oa_groundrag.landslide_evidence.single_expert import (
     load_model_drafts,
     write_draft_results,
 )
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.single_expert_workflow import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.annotation.workflow import (
     TrainWorkflowPaths,
     run_train_annotation_workflow,
 )
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     canonical_json,
     read_json,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.outputs import region_output_template
+from oa_groundrag.grounding.outputs import region_output_template
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-PROMPT = REPO_ROOT / "configs/stage4_landslide_evidence/single_expert_prompt_v1.txt"
-DRAFT_CONFIG = REPO_ROOT / "configs/stage4_landslide_evidence/single_expert_qwen3vl_8b_v1.yaml"
-CLI_PATH = REPO_ROOT / "scripts/stage4_landslide_evidence/run_single_expert_annotation.py"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PROMPT = REPO_ROOT / "configs/grounding/prompts/single_expert_prompt_v1.txt"
+DRAFT_CONFIG = REPO_ROOT / "configs/grounding/single_expert_qwen3vl_8b_v1.yaml"
+CLI_PATH = REPO_ROOT / "scripts/data/grounded_annotation.py"
 
 
 class SingleExpertWorkflowTest(unittest.TestCase):
@@ -171,23 +171,23 @@ class SingleExpertWorkflowTest(unittest.TestCase):
             artifact = SimpleNamespace(rows=tuple(range(500)))
             patches = (
                 patch(
-                    "oa_groundrag.landslide_evidence.single_expert_workflow.generate_annotation_drafts",
+                    "oa_groundrag.data.grounded.annotation.workflow.generate_annotation_drafts",
                     side_effect=generate,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.single_expert_workflow.export_verified_annotations",
+                    "oa_groundrag.data.grounded.annotation.workflow.export_verified_annotations",
                     side_effect=publish_package,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.single_expert_workflow.validate_verified_annotation_package",
+                    "oa_groundrag.data.grounded.annotation.workflow.validate_verified_annotation_package",
                     return_value=package,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.single_expert_workflow.export_training_messages",
+                    "oa_groundrag.data.grounded.annotation.workflow.export_training_messages",
                     side_effect=publish_training,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.single_expert_workflow.load_training_message_artifact",
+                    "oa_groundrag.data.grounded.annotation.workflow.load_training_message_artifact",
                     return_value=artifact,
                 ),
             )
@@ -289,7 +289,7 @@ class SingleExpertWorkflowTest(unittest.TestCase):
                 served = True
 
             with patch(
-                "oa_groundrag.landslide_evidence.single_expert_workflow.generate_annotation_drafts",
+                "oa_groundrag.data.grounded.annotation.workflow.generate_annotation_drafts",
                 side_effect=template_generate,
             ):
                 with self.assertRaises(LandslideEvidenceError) as raised:
@@ -329,7 +329,7 @@ class SingleExpertWorkflowTest(unittest.TestCase):
             paths = self._paths(root, prompt_path=repo_prompt)
 
             with patch(
-                "oa_groundrag.landslide_evidence.single_expert_workflow.generate_annotation_drafts",
+                "oa_groundrag.data.grounded.annotation.workflow.generate_annotation_drafts",
                 side_effect=self._bulk_generate,
             ):
                 # 首次 UI 中断时仍在 calibration，repo prompt 后续变化不得

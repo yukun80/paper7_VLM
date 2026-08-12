@@ -1,4 +1,4 @@
-"""调用 phase4 库实现的薄 CLI。"""
+"""调用 Shared VLM 库实现的薄 CLI。"""
 
 from __future__ import annotations
 
@@ -12,43 +12,43 @@ from typing import Sequence
 
 import torch
 
-from oa_groundrag.phase3.dataset import RSGeneralDescDataset
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
 from .checkpoint import CheckpointManager
 from .config import apply_runtime_overrides, load_config
 from .data import ExternalDescriptionDataset
-from .evaluation import evaluate_predictions
+from oa_groundrag.evaluation.vlm import evaluate_predictions
 from .errors import (
     CheckpointError,
     ModelError,
-    Phase4Error,
+    VLMError,
     PredictionError,
     ReasonCode,
 )
 from .inference import run_inference
-from .gate_b_acceptance import verify_gate_b_acceptance
-from .gate_b_evaluation import evaluate_gate_b
-from .gate_b_generation import generate_gate_b
-from .gate_b_media import (
+from oa_groundrag.evaluation.rs_general.acceptance import verify_gate_b_acceptance
+from oa_groundrag.evaluation.rs_general.metrics import evaluate_gate_b
+from oa_groundrag.evaluation.rs_general.generation import generate_gate_b
+from oa_groundrag.evaluation.rs_general.media import (
     DEFAULT_GATE_B_BENCHMARK_ROOT,
     locate_gate_b_media,
 )
-from .gate_b_selection import prepare_gate_b
+from oa_groundrag.evaluation.rs_general.selection import prepare_gate_b
 from .model import Qwen3VLModelAdapter
 from .preflight import BenchmarkAccess, open_benchmark_access, run_preflight
 from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
-from .progress import compact_training_result
-from .smoke import run_bounded_external_smoke
-from .trainer import DescriptionTrainer, training_layout_identity
-from .validation import select_bounded_external_validation
+from oa_groundrag.training.vlm.progress import compact_training_result
+from oa_groundrag.evaluation.vlm_smoke import run_bounded_external_smoke
+from oa_groundrag.training.vlm.trainer import DescriptionTrainer, training_layout_identity
+from oa_groundrag.training.vlm.validation import select_bounded_external_validation
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rs-vlm",
         description=(
-            "算法 Phase 3 / 仓库 phase4：RS-VLM train/infer/evaluate"
+            "Shared RS-Geohazard MLLM train/infer/evaluate"
         ),
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -436,7 +436,7 @@ def _gate_b_infrastructure_runtime_error(
 def entrypoint(argv: Sequence[str] | None = None) -> int:
     try:
         return main(argv)
-    except (Phase4Error, RSGeneralDescError) as error:
+    except (VLMError, RSGeneralDescError) as error:
         print(
             json.dumps(
                 {

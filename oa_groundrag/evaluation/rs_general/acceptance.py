@@ -6,29 +6,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import (
-    first_symlink_component,
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     read_json,
     read_jsonl,
-    sha256_file,
 )
-from oa_groundrag.phase3.dataset import RSGeneralDescDataset
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from .contracts import GATE_B_REPORT_SCHEMA_VERSION
-from .errors import EvaluationError, ReasonCode
-from .gate_b_contracts import (
+from oa_groundrag.grounding.contracts import GATE_B_REPORT_SCHEMA_VERSION
+from oa_groundrag.vlm.errors import EvaluationError, ReasonCode
+from .contracts import (
     GATE_B_PROTOCOL_ID,
     GATE_B_SEED,
     GATE_B_TASK_ORDER,
     validate_frozen_training_root,
 )
-from .gate_b_evaluation import (
+from .metrics import (
     _completed_metrics,
     _load_generation_run,
     _validate_prediction_rows,
 )
-from .gate_b_selection import (
+from .selection import (
     _scan_candidates,
     _select_candidates,
     _selection_document,

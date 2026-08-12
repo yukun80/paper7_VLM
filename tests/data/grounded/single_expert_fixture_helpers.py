@@ -9,9 +9,9 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from PIL import Image
 
-from fixture_helpers import no_target_output, target_output
+from tests.data.grounded.fixture_helpers import no_target_output, target_output
 
-from oa_groundrag.landslide_evidence.region_contracts import (
+from oa_groundrag.data.grounded.region_contracts import (
     ANNOTATION_QUEUE_SCHEMA,
     EVAL_MANIFEST_SCHEMA,
     REGION_MANIFEST_SCHEMA,
@@ -19,8 +19,8 @@ from oa_groundrag.landslide_evidence.region_contracts import (
     annotation_state_template,
     empty_description_template,
 )
-from oa_groundrag.landslide_evidence.region_pipeline import ledger_rows, region_asset_identity
-from oa_groundrag.landslide_evidence.single_expert import (
+from oa_groundrag.data.grounded.region import ledger_rows, region_asset_identity
+from oa_groundrag.data.grounded.annotation.project import (
     DRAFT_MODEL_REVISION,
     MODEL_DRAFT_RUN_SCHEMA,
     MODEL_DRAFT_SCHEMA,
@@ -31,14 +31,14 @@ from oa_groundrag.landslide_evidence.single_expert import (
     load_annotation_project,
     write_draft_results,
 )
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.evidence import render_binary_mask, render_mask_overlay
+from oa_groundrag.grounding.evidence import render_binary_mask, render_mask_overlay
 
 
 SOURCES = (

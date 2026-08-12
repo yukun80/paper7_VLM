@@ -10,27 +10,29 @@ from typing import Any, Mapping, Sequence
 
 from torch import Tensor
 
-from oa_groundrag.landslide_evidence.region_pipeline import ledger_rows
-from oa_groundrag.landslide_evidence.region_validation import validate_eval_dev
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.grounded.region import ledger_rows
+from oa_groundrag.data.grounded.region_validation import validate_eval_dev
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
 )
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
 
-from .artifacts import AtomicArtifactDirectory
-from .contracts import MaskMode
-from .data import DescriptionSample
-from .errors import Phase4Error, PredictionError, ReasonCode
-from .grounded_evaluation import evaluate_dev
-from .gate_b_evaluation import score_gate_b_text
-from .gate_b_generation import _verify_selected_dataset
-from .gate_b_selection import load_gate_b_selection_for_stage5_retention
-from .messages import build_mask_grounded_region_messages
-from .outputs import (
-    generic_prediction_row,
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.contracts import MaskMode
+from oa_groundrag.vlm.data import DescriptionSample
+from oa_groundrag.vlm.errors import VLMError, PredictionError, ReasonCode
+from .observations import evaluate_dev
+from oa_groundrag.evaluation.rs_general.metrics import score_gate_b_text
+from oa_groundrag.evaluation.rs_general.generation import _verify_selected_dataset
+from oa_groundrag.evaluation.rs_general.selection import load_gate_b_selection_for_stage5_retention
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
+from oa_groundrag.vlm.outputs import generic_prediction_row
+from oa_groundrag.grounding.outputs import (
     parse_region_model_output,
     region_failure_row,
     region_prediction_row,
@@ -168,7 +170,7 @@ def run_stage5_region_inference(
                     else sample.counterfactual.get("group_id")
                 ),
             ))
-        except Phase4Error as error:
+        except VLMError as error:
             failures.append(region_failure_row(
                 record_id=sample.record_id,
                 parent_id=sample.parent_id,

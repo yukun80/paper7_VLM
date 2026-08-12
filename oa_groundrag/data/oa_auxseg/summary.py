@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Sequence
 
-from benchmark_common import read_json, read_jsonl
+from .dataset import read_json, read_jsonl
 
 
 def summarize(root: Path) -> dict[str, Any]:

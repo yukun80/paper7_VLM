@@ -5,14 +5,14 @@ import unittest
 
 import torch
 
-from oa_groundrag.phase4.contracts import MaskMode
-from oa_groundrag.phase4.data import DescriptionSample
-from oa_groundrag.phase4.input_pipeline import (
+from oa_groundrag.grounding.contracts import MaskMode
+from oa_groundrag.vlm.data import DescriptionSample
+from oa_groundrag.training.vlm.input_pipeline import (
     DeterministicBatchPlanner,
     OrderedBatchPrefetcher,
     sampler_state_at_epoch,
 )
-from oa_groundrag.phase4.processing import (
+from oa_groundrag.vlm.processing import (
     DescriptionCollator,
     EncodedSample,
     assistant_only_labels,

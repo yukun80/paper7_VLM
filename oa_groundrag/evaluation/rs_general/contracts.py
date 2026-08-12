@@ -8,37 +8,39 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    portable_relative_path,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    portable_relative_path,
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from .checkpoint import CheckpointManager
-from .config import Phase4Config, _load_yaml, load_config
-from .contracts import (
+from oa_groundrag.vlm.checkpoint import CheckpointManager
+from oa_groundrag.vlm.config import VLMConfig, _load_yaml, load_config
+from oa_groundrag.grounding.contracts import (
     GATE_B_PROTOCOL_SCHEMA_VERSION,
 )
-from .errors import ContractError, Phase4Error, ReasonCode
-from .model import (
+from oa_groundrag.vlm.errors import ContractError, VLMError, ReasonCode
+from oa_groundrag.vlm.model import (
     EXPECTED_ATTENTION_LORA_R8_PARAMETERS,
     local_model_identity,
 )
-from .preflight import BenchmarkAccess, open_benchmark_access
-from .processing import Qwen3VLProcessorAdapter
-from .trainer import (
+from oa_groundrag.vlm.preflight import BenchmarkAccess, open_benchmark_access
+from oa_groundrag.vlm.processing import Qwen3VLProcessorAdapter
+from oa_groundrag.training.vlm.trainer import (
     BEST_CHECKPOINT_SCHEMA_VERSION,
     TRAINING_REPORT_SCHEMA_VERSION,
     _validation_from_row,
     training_layout_identity,
     validation_is_better,
 )
-from .validation import VALIDATION_SELECTION_SCHEMA_VERSION
+from oa_groundrag.training.vlm.validation import VALIDATION_SELECTION_SCHEMA_VERSION
 
 
 GATE_B_PROTOCOL_ID = "rs_generaldesc_gate_b_qwen3vl_2b_v1"
@@ -257,8 +259,8 @@ _FROZEN_PROTOCOL_FIELDS = {
 class GateBProtocolSource:
     path: Path
     raw: Mapping[str, Any]
-    base_config: Phase4Config
-    adapter_config: Phase4Config
+    base_config: VLMConfig
+    adapter_config: VLMConfig
 
 
 def _fail(message: str, *, details: Mapping[str, Any] | None = None) -> None:
@@ -394,7 +396,7 @@ def _validated_config_section(
     *,
     base: Path,
     location: str,
-) -> tuple[dict[str, Any], Phase4Config]:
+) -> tuple[dict[str, Any], VLMConfig]:
     row = _mapping(value, location=location)
     _exact_fields(row, _CONFIG_FIELDS, location=location)
     path = _resolved_protocol_path(
@@ -600,7 +602,7 @@ def load_gate_b_protocol(path: Path | str) -> GateBProtocolSource:
     protocol_path = _regular_file(Path(path), location="protocol")
     try:
         row = _load_yaml(protocol_path)
-    except Phase4Error as error:
+    except VLMError as error:
         _fail("无法严格读取 Gate B protocol YAML", details={"error": str(error)})
     _exact_fields(row, _PROTOCOL_FIELDS, location="$")
     _validate_protocol_values(row)
@@ -698,18 +700,18 @@ def load_gate_b_protocol(path: Path | str) -> GateBProtocolSource:
 
 
 def _implementation_identity() -> dict[str, str]:
-    phase4_root = Path(__file__).resolve().parent
-    package_root = phase4_root.parent
+    package_root = Path(__file__).resolve().parents[2]
     paths = {
-        "phase3/exporter.py": package_root / "phase3" / "exporter.py",
-        "phase4/checkpoint.py": phase4_root / "checkpoint.py",
-        "phase4/data.py": phase4_root / "data.py",
-        "phase4/gate_b_contracts.py": phase4_root / "gate_b_contracts.py",
-        "phase4/gate_b_evaluation.py": phase4_root / "gate_b_evaluation.py",
-        "phase4/gate_b_generation.py": phase4_root / "gate_b_generation.py",
-        "phase4/gate_b_selection.py": phase4_root / "gate_b_selection.py",
-        "phase4/model.py": phase4_root / "model.py",
-        "phase4/processing.py": phase4_root / "processing.py",
+        # 键属于冻结 Gate B protocol；路径指向当前能力化实现，SHA 漂移必须如实失败。
+        "phase3/exporter.py": package_root / "data" / "rs_general" / "exporter.py",
+        "phase4/checkpoint.py": package_root / "vlm" / "checkpoint.py",
+        "phase4/data.py": package_root / "vlm" / "data.py",
+        "phase4/gate_b_contracts.py": Path(__file__),
+        "phase4/gate_b_evaluation.py": Path(__file__).with_name("metrics.py"),
+        "phase4/gate_b_generation.py": Path(__file__).with_name("generation.py"),
+        "phase4/gate_b_selection.py": Path(__file__).with_name("selection.py"),
+        "phase4/model.py": package_root / "vlm" / "model.py",
+        "phase4/processing.py": package_root / "vlm" / "processing.py",
     }
     return {
         name: sha256_file(_regular_file(path, location=f"implementation.{name}"))

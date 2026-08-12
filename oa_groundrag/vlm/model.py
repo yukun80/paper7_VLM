@@ -13,7 +13,8 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from oa_groundrag.phase3.common import first_symlink_component, sha256_file
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.artifacts.io import first_symlink_component
 
 from .config import AdaptationSection, ModelSection
 from .errors import ModelError, ReasonCode

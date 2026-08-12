@@ -6,24 +6,26 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 
-from .contracts import fail
-from .region_contracts import (
+from ..contracts import fail
+from ..region_contracts import (
     ANNOTATION_PACKAGE_SCHEMA,
     ANNOTATION_SCHEMA,
     AdjudicationStatus,
     AnnotationStatus,
 )
-from .region_pipeline import ledger_rows
+from ..region import ledger_rows
 
 
 SCORE_FIELDS = (
@@ -147,7 +149,7 @@ def validate_annotation_row(
             fail("ANNOTATION_INVALID", f"{location} 仲裁身份/状态非法")
     elif adjudicator is not None or adjudication is AdjudicationStatus.RESOLVED:
         fail("ANNOTATION_INVALID", f"{location} 非 adjudicated 不得提供 resolved 仲裁")
-    from oa_groundrag.phase4.outputs import parse_region_model_output
+    from oa_groundrag.grounding.outputs import parse_region_model_output
 
     parsed = parse_region_model_output(row["description"])
     if parsed.target_status.value != queue_row["target_status"]:

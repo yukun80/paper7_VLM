@@ -13,6 +13,7 @@ from .contracts import (
     UnifiedTask,
 )
 from .router import CapabilityRouter
+from .inference import UnifiedInferenceRuntime
 
 __all__ = [
     "BenchmarkSampleRef",
@@ -23,6 +24,7 @@ __all__ = [
     "RegionSource",
     "ResponseKind",
     "UnifiedInferenceError",
+    "UnifiedInferenceRuntime",
     "UnifiedRequest",
     "UnifiedResponse",
     "UnifiedTask",

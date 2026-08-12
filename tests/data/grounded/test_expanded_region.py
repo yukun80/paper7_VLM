@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.expanded_region import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.supervision.expanded_region import (
     COLLECTION_COUNT,
     EXTENSION_CONFIG_PATH,
     EXTENSION_COUNT,
@@ -24,7 +24,7 @@ from oa_groundrag.landslide_evidence.expanded_region import (
     load_expanded_region_config,
     select_extension_rows,
 )
-from oa_groundrag.phase3.common import atomic_write_jsonl, canonical_json, sha256_text
+from oa_groundrag.data.rs_general.io import atomic_write_jsonl, canonical_json, sha256_text
 
 
 def candidate(
@@ -235,18 +235,18 @@ class ExpandedRegionTest(unittest.TestCase):
         ]
         with (
             patch(
-                "oa_groundrag.landslide_evidence.region_validation.validate_region_corpus",
+                "oa_groundrag.data.grounded.region_validation.validate_region_corpus",
                 return_value={"valid": True},
             ) as validate_train,
             patch(
-                "oa_groundrag.landslide_evidence.region_validation.validate_eval_dev",
+                "oa_groundrag.data.grounded.region_validation.validate_eval_dev",
                 return_value={"valid": True},
             ) as validate_eval,
             patch(
-                "oa_groundrag.landslide_evidence.expanded_region._check_binding",
+                "oa_groundrag.data.grounded.supervision.expanded_region._check_binding",
             ),
             patch(
-                "oa_groundrag.landslide_evidence.expanded_region.read_json",
+                "oa_groundrag.data.grounded.supervision.expanded_region.read_json",
                 return_value={
                     "selection": {
                         "baseline_record_ids": [row["record_id"] for row in eval_records],
@@ -254,7 +254,7 @@ class ExpandedRegionTest(unittest.TestCase):
                 },
             ),
             patch(
-                "oa_groundrag.landslide_evidence.expanded_region.read_jsonl",
+                "oa_groundrag.data.grounded.supervision.expanded_region.read_jsonl",
                 side_effect=lambda path: eval_records if path.name == "records.jsonl"
                 and path.parent == config.eval_dev.root else [],
             ),

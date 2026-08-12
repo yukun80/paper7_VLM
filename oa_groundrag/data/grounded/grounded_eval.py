@@ -10,10 +10,18 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from oa_groundrag.phase3.common import canonical_json, read_json, read_jsonl, sha256_file, sha256_text
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.evidence import boundary_contrast_proxy, deterministic_shift_mask
-from oa_groundrag.phase4.errors import EvidenceError
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.evidence import boundary_contrast_proxy, deterministic_shift_mask
+from oa_groundrag.vlm.errors import EvidenceError
 
 from .contracts import fail
 from .region_contracts import (
@@ -30,7 +38,7 @@ from .region_contracts import (
     parent_identity,
     size_bin,
 )
-from .region_pipeline import (
+from .region import (
     RegionBenchmarkAccess,
     RegionBuildResult,
     RegionLoadedSample,
@@ -40,7 +48,7 @@ from .region_pipeline import (
     materialize_region_record,
 )
 from .region_validation import validate_region_corpus
-from .pipeline import render_optical
+from .pilot import render_optical
 
 
 EVAL_DEV_NAME = "oa_grounded_eval_dev_v1_100"
@@ -286,7 +294,7 @@ def _eligible_swap(
             continue
         donor = access.load(str(row["sample_id"]))
         if donor.mask.shape == baseline.mask.shape and not np.array_equal(donor.mask, baseline.mask):
-            from .pipeline import render_optical
+            from .pilot import render_optical
 
             if np.array_equal(np.asarray(render_optical(donor.sample)), np.asarray(render_optical(baseline.sample))):
                 return donor

@@ -13,28 +13,30 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    portable_relative_path,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.errors import (
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    portable_relative_path,
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.errors import (
     ContractError,
     ModelError,
     PredictionError,
     ReasonCode,
     SelectionError,
 )
-from oa_groundrag.phase4.outputs import parse_region_model_output
-from oa_groundrag.phase4.stage5_config import (
+from oa_groundrag.grounding.outputs import parse_region_model_output
+from oa_groundrag.training.grounding.config import (
     load_stage5_config,
 )
-from oa_groundrag.phase4.stage5_runtime import (
+from oa_groundrag.vlm.grounded_adapter import (
     load_stage5_best_generator,
     resolve_stage5_best,
 )
@@ -66,7 +68,7 @@ from .pass2 import (
     prompt_sha256,
     validate_prompt_fairness,
 )
-from .retrieval import (
+from .search import (
     BGEM3DenseEmbedder,
     HybridRetriever,
     build_balanced_packet,

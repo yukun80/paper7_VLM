@@ -1,4 +1,4 @@
-"""Phase 2：光学锚定任意辅助模态滑坡分割。"""
+"""Spatial Perception：光学锚定任意辅助模态滑坡分割。"""
 
 from .contracts import (
     CandidateRegion,
@@ -9,6 +9,7 @@ from .contracts import (
     PackedAuxiliary,
 )
 from .model import OAAuxSegModel
+from .inference import SpatialInferenceSession
 
 __all__ = [
     "CandidateRegion",
@@ -18,4 +19,5 @@ __all__ = [
     "OAAuxSegModel",
     "OAAuxSegOutput",
     "PackedAuxiliary",
+    "SpatialInferenceSession",
 ]

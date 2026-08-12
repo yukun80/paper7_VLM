@@ -5,32 +5,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fixture_helpers import no_target_output, target_output
+from tests.data.grounded.fixture_helpers import no_target_output, target_output
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError, load_config
-from oa_groundrag.landslide_evidence.region_contracts import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError, load_config
+from oa_groundrag.data.grounded.region_contracts import (
     RepresentationMode,
     load_grounded_eval_config,
     load_region_corpus_config,
 )
-from oa_groundrag.phase4.errors import ContractError, ReasonCode
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
+from oa_groundrag.grounding.outputs import (
     detect_forbidden_region_claims,
     parse_region_model_output,
     serialize_region_model_output,
 )
 
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 
 class RegionContractTest(unittest.TestCase):
     def test_live_configs_are_strict_and_frozen(self) -> None:
         corpus = load_region_corpus_config(
-            REPO / "configs/stage4_landslide_evidence/region_corpus_train_v1.yaml"
+            REPO / "configs/grounding/region_corpus_train_v1.yaml"
         )
         evaluation = load_grounded_eval_config(
-            REPO / "configs/stage4_landslide_evidence/oa_grounded_eval_dev_v1.yaml"
+            REPO / "configs/grounding/oa_grounded_eval_dev_v1.yaml"
         )
         self.assertEqual(corpus.stage4a_selection.sample_count, 500)
         self.assertEqual(evaluation.sample_count, 100)
@@ -49,7 +49,7 @@ class RegionContractTest(unittest.TestCase):
         self.assertEqual(RepresentationMode.FULL_PLUS_MASK_PLUS_CROP.value, "full_plus_mask_plus_crop")
 
     def test_test_split_is_rejected_at_config_parse(self) -> None:
-        source = (REPO / "configs/stage4_landslide_evidence/oa_grounded_eval_dev_v1.yaml").read_text()
+        source = (REPO / "configs/grounding/oa_grounded_eval_dev_v1.yaml").read_text()
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "bad.yaml"
             path.write_text(source.replace("split: val", "split: test"))
@@ -58,7 +58,7 @@ class RegionContractTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, "SPLIT_FORBIDDEN")
 
     def test_v1_config_contract_still_loads(self) -> None:
-        config = load_config(REPO / "configs/stage4_landslide_evidence/pilot_500.yaml")
+        config = load_config(REPO / "configs/grounding/pilot_500.yaml")
         self.assertEqual(config.sample_count, 500)
 
     def test_region_output_round_trip(self) -> None:

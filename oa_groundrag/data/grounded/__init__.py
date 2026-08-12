@@ -1,11 +1,11 @@
-"""Stage 4A Landslide Evidence Corpus 算法核心。"""
+"""Grounded Corpus、标注与监督数据生产。"""
 
 from .contracts import (
     CONFIG_SCHEMA, MANIFEST_SCHEMA, RECORD_SCHEMA, LandslideEvidenceError,
 )
-from .pipeline import BuildResult, build_auto
+from .pilot import BuildResult
 from .grounded_eval import build_eval_dev
-from .expanded_region import (
+from .supervision.expanded_region import (
     build_region_extension,
     build_train_collection,
     prepare_expanded_region_assets,
@@ -18,41 +18,42 @@ from .region_contracts import (
     REGION_RECORD_SCHEMA,
     RepresentationMode,
 )
-from .region_pipeline import RegionBuildResult, build_region_corpus
+from .region import RegionBuildResult
 from .region_validation import (
     validate_eval_dev,
     validate_region_asset_files,
     validate_region_corpus,
 )
-from .single_expert import (
+from .annotation.project import (
     DRAFT_CONFIG_SCHEMA,
     MODEL_DRAFT_FAILURE_SCHEMA,
     VERIFIED_ANNOTATION_SCHEMA,
     create_annotation_project,
 )
-from .single_expert_package import (
+from .annotation.package import (
     VERIFIED_PACKAGE_SCHEMA,
     export_verified_annotations,
     validate_verified_annotation_package,
 )
-from .single_expert_training import (
+from .annotation.training import (
     MaskGroundedTrainingMessageDataset,
     TRAINING_MESSAGE_SCHEMA,
     export_training_messages,
     load_training_message_artifact,
 )
-from .single_expert_workflow import (
+from .annotation.workflow import (
     TRAIN_WORKFLOW_SCHEMA,
     TRAIN_WORKFLOW_STATE_SCHEMA,
     TrainWorkflowPaths,
     run_train_annotation_workflow,
 )
-from .model_assisted_workflow import (
+from .supervision.workflow import (
     ModelAssistedWorkflowPaths,
     prepare_expanded_corpus,
     run_model_assisted_train_workflow,
 )
 from .validation import validate_corpus
+from .workflow import build_auto, build_region_corpus
 
 __all__ = [
     "BuildResult", "CONFIG_SCHEMA", "EVAL_MANIFEST_SCHEMA", "LandslideEvidenceError",

@@ -13,28 +13,30 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
-    atomic_write_json,
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    read_json,
-    read_jsonl,
-    safe_join,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.artifacts.io import atomic_write_json
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+    safe_join,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
+from oa_groundrag.grounding.outputs import (
     REGION_OUTPUT_SCHEMA_VERSION,
     RegionDraftQualityStatus,
     assess_region_draft_quality,
     parse_region_model_output,
 )
 
-from .contracts import fail
-from .region_pipeline import ledger_rows, region_asset_identity
-from .single_expert import (
+from ..contracts import fail
+from ..region import ledger_rows, region_asset_identity
+from ..annotation.project import (
     DRAFT_MODEL_REPOSITORY,
     DRAFT_MODEL_REVISION,
     MODEL_DRAFT_FAILURE_SCHEMA,
@@ -59,7 +61,7 @@ from .single_expert import (
     validate_model_draft_row,
     validate_verified_annotation_row,
 )
-from .single_expert_drafting import LocalQwenDraftRuntime, load_local_draft_config
+from ..annotation.drafting import LocalQwenDraftRuntime, load_local_draft_config
 
 
 EXPECTED_COLLECTION_COUNT = 8450
@@ -788,7 +790,7 @@ def generate_model_assisted_drafts(
             description = parsed.to_dict()
             quality_status = assess_region_draft_quality(parsed).status.value
             quality_counts[quality_status] = quality_counts.get(quality_status, 0) + 1
-        except Phase4Error as error:
+        except VLMError as error:
             parse_status = "invalid"
             invalid += 1
             code = getattr(error.code, "value", str(error.code))
@@ -1508,8 +1510,8 @@ class ModelAssistedTrainingMessageDataset:
             fail("ANNOTATION_INVALID", "training message epoch 必须是非负整数")
 
     def __getitem__(self, index: int) -> Any:
-        from oa_groundrag.phase4.contracts import MaskMode
-        from oa_groundrag.phase4.data import DescriptionSample
+        from oa_groundrag.grounding.contracts import MaskMode
+        from oa_groundrag.vlm.data import DescriptionSample
 
         if index < 0:
             index += len(self.records)

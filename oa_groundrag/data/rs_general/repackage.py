@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .builder import STAGING_SENTINEL
-from .common import (
+from .io import (
     atomic_write_json,
     canonical_json,
     first_symlink_component,

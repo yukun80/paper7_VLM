@@ -5,12 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fixture_helpers import target_record
+from tests.data.grounded.fixture_helpers import target_record
 
-from oa_groundrag.landslide_evidence.region_contracts import validate_region_record
-from oa_groundrag.phase4.errors import ContractError, ReasonCode
-from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.data.grounded.region_contracts import validate_region_record
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
+from oa_groundrag.grounding.outputs import (
     REGION_OUTPUT_SCHEMA_VERSION,
 )
 

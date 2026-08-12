@@ -19,7 +19,7 @@ from typing import Any, Sequence
 import h5py
 import numpy as np
 
-from benchmark_common import (
+from .dataset import (
     SCHEMA_VERSION,
     SOURCE_ORDER,
     canonical_json,

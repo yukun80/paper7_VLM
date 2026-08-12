@@ -13,7 +13,7 @@ from unittest import mock
 import torch
 import yaml
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,
@@ -22,14 +22,14 @@ from oa_groundrag.phase3.common import (
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.cli import _parser, entrypoint
-from oa_groundrag.phase4.errors import (
+from oa_groundrag.vlm.cli import _parser, entrypoint
+from oa_groundrag.vlm.errors import (
     ContractError,
     EvaluationError,
     PredictionError,
     ReasonCode,
 )
-from oa_groundrag.phase4.gate_b_contracts import (
+from oa_groundrag.evaluation.rs_general.contracts import (
     GATE_B_PROTOCOL_ID,
     GATE_B_SAMPLE_COUNT,
     GATE_B_TASK_ORDER,
@@ -38,12 +38,12 @@ from oa_groundrag.phase4.gate_b_contracts import (
     static_protocol_snapshot,
     validate_frozen_protocol,
 )
-from oa_groundrag.phase4.gate_b_acceptance import (
+from oa_groundrag.evaluation.rs_general.acceptance import (
     GateBAcceptanceVerification,
     _recompute_selection,
     verify_gate_b_acceptance,
 )
-from oa_groundrag.phase4.gate_b_evaluation import (
+from oa_groundrag.evaluation.rs_general.metrics import (
     GateBEvaluationOutcome,
     _load_generation_run,
     _validate_prediction_rows,
@@ -55,22 +55,22 @@ from oa_groundrag.phase4.gate_b_evaluation import (
     score_gate_b_text,
     task_stratified_paired_bootstrap,
 )
-from oa_groundrag.phase4.gate_b_generation import (
+from oa_groundrag.evaluation.rs_general.generation import (
     GateBGenerationOutcome,
     generate_gate_b,
 )
-from oa_groundrag.phase4.gate_b_selection import (
+from oa_groundrag.evaluation.rs_general.selection import (
     GateBCandidate,
     _select_candidates,
     _selection_document,
     _strict_selection,
 )
-from oa_groundrag.phase4.model import Qwen3VLModelAdapter
-from oa_groundrag.phase4.outputs import generic_prediction_row
+from oa_groundrag.vlm.model import Qwen3VLModelAdapter
+from oa_groundrag.vlm.outputs import generic_prediction_row
 
 
-REPO = Path(__file__).resolve().parents[2]
-CONFIG_ROOT = REPO / "configs/phase4_rs_vlm"
+REPO = Path(__file__).resolve().parents[3]
+CONFIG_ROOT = REPO / "configs/vlm/rs_general"
 PROTOCOL = CONFIG_ROOT / "rs_generaldesc_gate_b_qwen3vl_2b.yaml"
 TRAINING_ROOT = (
     REPO
@@ -299,11 +299,11 @@ class GateBProtocolTests(unittest.TestCase):
             access = SimpleNamespace()
             patches = (
                 mock.patch(
-                    "oa_groundrag.phase4.gate_b_contracts.load_gate_b_protocol",
+                    "oa_groundrag.evaluation.rs_general.contracts.load_gate_b_protocol",
                     return_value=source,
                 ),
                 mock.patch(
-                    "oa_groundrag.phase4.gate_b_contracts.open_benchmark_access",
+                    "oa_groundrag.evaluation.rs_general.contracts.open_benchmark_access",
                     return_value=access,
                 ),
             )
@@ -638,11 +638,11 @@ class GateBPairingTests(unittest.TestCase):
                             ]
                     with (
                         mock.patch(
-                            "oa_groundrag.phase4.gate_b_evaluation.load_gate_b_selection",
+                            "oa_groundrag.evaluation.rs_general.metrics.load_gate_b_selection",
                             return_value=context,
                         ),
                         mock.patch(
-                            "oa_groundrag.phase4.gate_b_evaluation._load_generation_run",
+                            "oa_groundrag.evaluation.rs_general.metrics._load_generation_run",
                             side_effect=(
                                 (base_manifest, base_rows, "1" * 64),
                                 (
@@ -653,7 +653,7 @@ class GateBPairingTests(unittest.TestCase):
                             ),
                         ),
                         mock.patch(
-                            "oa_groundrag.phase4.gate_b_evaluation.RSGeneralDescDataset.from_locations",
+                            "oa_groundrag.evaluation.rs_general.metrics.RSGeneralDescDataset.from_locations",
                             return_value=SimpleNamespace(records=records),
                         ),
                     ):
@@ -767,15 +767,15 @@ class GateBAcceptanceTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "oa_groundrag.phase4.gate_b_evaluation.load_gate_b_selection",
+                "oa_groundrag.evaluation.rs_general.metrics.load_gate_b_selection",
                 return_value=context,
             ),
             mock.patch(
-                "oa_groundrag.phase4.gate_b_evaluation._load_generation_run",
+                "oa_groundrag.evaluation.rs_general.metrics._load_generation_run",
                 side_effect=load_runs,
             ),
             mock.patch(
-                "oa_groundrag.phase4.gate_b_evaluation.RSGeneralDescDataset.from_locations",
+                "oa_groundrag.evaluation.rs_general.metrics.RSGeneralDescDataset.from_locations",
                 return_value=SimpleNamespace(records=records),
             ),
         ):
@@ -812,18 +812,18 @@ class GateBAcceptanceTests(unittest.TestCase):
     def _verify(fixture, *, training_error: Exception | None = None):
         with (
             mock.patch(
-                "oa_groundrag.phase4.gate_b_acceptance.load_gate_b_selection",
+                "oa_groundrag.evaluation.rs_general.acceptance.load_gate_b_selection",
                 return_value=fixture.context,
             ),
             mock.patch(
-                "oa_groundrag.phase4.gate_b_acceptance.validate_frozen_training_root",
+                "oa_groundrag.evaluation.rs_general.acceptance.validate_frozen_training_root",
                 side_effect=training_error,
             ),
             mock.patch(
-                "oa_groundrag.phase4.gate_b_acceptance._recompute_selection"
+                "oa_groundrag.evaluation.rs_general.acceptance._recompute_selection"
             ),
             mock.patch(
-                "oa_groundrag.phase4.gate_b_acceptance._load_generation_run",
+                "oa_groundrag.evaluation.rs_general.acceptance._load_generation_run",
                 side_effect=(
                     (
                         fixture.base_manifest,
@@ -838,7 +838,7 @@ class GateBAcceptanceTests(unittest.TestCase):
                 ),
             ),
             mock.patch(
-                "oa_groundrag.phase4.gate_b_acceptance.RSGeneralDescDataset.from_locations",
+                "oa_groundrag.evaluation.rs_general.acceptance.RSGeneralDescDataset.from_locations",
                 return_value=SimpleNamespace(records=fixture.records),
             ),
         ):
@@ -909,15 +909,15 @@ class GateBAcceptanceTests(unittest.TestCase):
             )
             with (
                 mock.patch(
-                    "oa_groundrag.phase4.gate_b_acceptance._scan_candidates",
+                    "oa_groundrag.evaluation.rs_general.acceptance._scan_candidates",
                     return_value=([], ("records/fixture.jsonl",)),
                 ),
                 mock.patch(
-                    "oa_groundrag.phase4.gate_b_acceptance._select_candidates",
+                    "oa_groundrag.evaluation.rs_general.acceptance._select_candidates",
                     return_value=([], {}, {}, ()),
                 ),
                 mock.patch(
-                    "oa_groundrag.phase4.gate_b_acceptance._selection_document",
+                    "oa_groundrag.evaluation.rs_general.acceptance._selection_document",
                     return_value={"items": [{"record_id": "registered"}]},
                 ),
             ):
@@ -932,7 +932,7 @@ class GateBGenerationAndCliTests(unittest.TestCase):
             existing = root / "existing"
             existing.mkdir()
             with mock.patch(
-                "oa_groundrag.phase4.gate_b_generation.load_gate_b_selection"
+                "oa_groundrag.evaluation.rs_general.generation.load_gate_b_selection"
             ) as load_selection:
                 with self.assertRaises(PredictionError) as caught:
                     generate_gate_b(
@@ -1018,7 +1018,7 @@ class GateBGenerationAndCliTests(unittest.TestCase):
 
     def test_cli_exit_codes_distinguish_pass_fail_and_invalid(self) -> None:
         with mock.patch(
-            "oa_groundrag.phase4.cli.prepare_gate_b",
+            "oa_groundrag.vlm.cli.prepare_gate_b",
             return_value=Path("/tmp/selection"),
         ) as prepare:
             with redirect_stdout(StringIO()):
@@ -1043,7 +1043,7 @@ class GateBGenerationAndCliTests(unittest.TestCase):
         for status, passed, expected in outcomes:
             with self.subTest(status=status, passed=passed):
                 with mock.patch(
-                    "oa_groundrag.phase4.cli.evaluate_gate_b",
+                    "oa_groundrag.vlm.cli.evaluate_gate_b",
                     return_value=GateBEvaluationOutcome(
                         root=Path("/tmp/evaluation"),
                         status=status,
@@ -1068,7 +1068,7 @@ class GateBGenerationAndCliTests(unittest.TestCase):
                         )
                 self.assertEqual(code, expected)
         with mock.patch(
-            "oa_groundrag.phase4.cli.generate_gate_b",
+            "oa_groundrag.vlm.cli.generate_gate_b",
             return_value=GateBGenerationOutcome(
                 root=Path("/tmp/base"),
                 prediction_count=255,
@@ -1131,7 +1131,7 @@ class GateBGenerationAndCliTests(unittest.TestCase):
             "8" * 64,
         ]
         with mock.patch(
-            "oa_groundrag.phase4.cli.verify_gate_b_acceptance",
+            "oa_groundrag.vlm.cli.verify_gate_b_acceptance",
             return_value=verification,
         ) as verify:
             with redirect_stdout(StringIO()):
@@ -1150,7 +1150,7 @@ class GateBGenerationAndCliTests(unittest.TestCase):
             "base",
         ]
         with mock.patch(
-            "oa_groundrag.phase4.cli.generate_gate_b",
+            "oa_groundrag.vlm.cli.generate_gate_b",
             side_effect=RuntimeError("CUDA error: driver unavailable"),
         ):
             stderr = StringIO()
@@ -1158,7 +1158,7 @@ class GateBGenerationAndCliTests(unittest.TestCase):
                 self.assertEqual(entrypoint(generate_argv), 2)
             self.assertIn("GATE_B_RUN_INVALID", stderr.getvalue())
         with mock.patch(
-            "oa_groundrag.phase4.cli.generate_gate_b",
+            "oa_groundrag.vlm.cli.generate_gate_b",
             side_effect=RuntimeError("programming bug"),
         ):
             with self.assertRaisesRegex(RuntimeError, "programming bug"):

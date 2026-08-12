@@ -8,31 +8,33 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
-    atomic_write_json,
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.config import (
+from oa_groundrag.artifacts.io import (
+    atomic_write_json,
+    first_symlink_component,
+)
+from oa_groundrag.data.rs_general.io import read_json
+from oa_groundrag.vlm.config import (
     AdaptationSection,
     ModelSection,
     _load_yaml,
 )
-from oa_groundrag.phase4.contracts import MaskMode
-from oa_groundrag.phase4.data import DescriptionSample
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.phase4.model import Qwen3VLModelAdapter
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.grounding.contracts import MaskMode
+from oa_groundrag.vlm.data import DescriptionSample
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.vlm.model import Qwen3VLModelAdapter
+from oa_groundrag.grounding.outputs import (
     assess_region_draft_quality,
     parse_region_model_output,
 )
-from oa_groundrag.phase4.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
 
-from .contracts import fail
-from .single_expert import (
+from ..contracts import fail
+from .project import (
     DRAFT_MODEL_REPOSITORY,
     DRAFT_MODEL_REVISION,
     DRAFT_CONFIG_SCHEMA,
@@ -481,7 +483,7 @@ def generate_annotation_drafts(
                 and quality.metrics["template_match"] is True
             ):
                 target_template_copies += 1
-        except Phase4Error as error:
+        except VLMError as error:
             parse_status = "invalid"
             description = None
             failure = {

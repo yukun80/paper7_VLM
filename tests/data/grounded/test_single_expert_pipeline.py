@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fixture_helpers import no_target_output, target_output
+from tests.data.grounded.fixture_helpers import no_target_output, target_output
 
-from single_expert_fixture_helpers import (
+from tests.data.grounded.single_expert_fixture_helpers import (
     FakeDraftRuntime,
     SOURCES,
     build_annotation_asset,
@@ -16,8 +16,8 @@ from single_expert_fixture_helpers import (
     populate_project,
 )
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.single_expert import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.annotation.project import (
     AnnotationIntendedUse,
     MODEL_DRAFT_SCHEMA,
     VERIFIED_ANNOTATION_SCHEMA,
@@ -28,20 +28,20 @@ from oa_groundrag.landslide_evidence.single_expert import (
     register_draft_run,
     write_draft_results,
 )
-from oa_groundrag.landslide_evidence.single_expert_package import (
+from oa_groundrag.data.grounded.annotation.package import (
     export_verified_annotations,
     validate_verified_annotation_package,
 )
-from oa_groundrag.landslide_evidence.single_expert_training import (
+from oa_groundrag.data.grounded.annotation.training import (
     MaskGroundedTrainingMessageDataset,
     export_training_messages,
     load_training_message_artifact,
 )
-from oa_groundrag.landslide_evidence.single_expert_drafting import (
+from oa_groundrag.data.grounded.annotation.drafting import (
     generate_annotation_drafts,
     load_local_draft_config,
 )
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     canonical_json,
     read_json,
@@ -49,13 +49,13 @@ from oa_groundrag.phase3.common import (
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.errors import ContractError
-from oa_groundrag.phase4.grounded_evaluation import _human_metrics
+from oa_groundrag.vlm.errors import ContractError
+from oa_groundrag.evaluation.grounding.observations import _human_metrics
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-PROMPT_CONFIG = REPO_ROOT / "configs/stage4_landslide_evidence/single_expert_prompt_v1.txt"
-DRAFT_CONFIG = REPO_ROOT / "configs/stage4_landslide_evidence/single_expert_qwen3vl_8b_v1.yaml"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PROMPT_CONFIG = REPO_ROOT / "configs/grounding/prompts/single_expert_prompt_v1.txt"
+DRAFT_CONFIG = REPO_ROOT / "configs/grounding/single_expert_qwen3vl_8b_v1.yaml"
 
 
 class SingleExpertPipelineTest(unittest.TestCase):
@@ -244,7 +244,7 @@ class SingleExpertPipelineTest(unittest.TestCase):
                 )
             _write_status(project_root)
             with patch(
-                "oa_groundrag.landslide_evidence.single_expert_drafting.LocalQwenDraftRuntime",
+                "oa_groundrag.data.grounded.annotation.drafting.LocalQwenDraftRuntime",
                 side_effect=RuntimeError("simulated model load failure"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "model load failure"):

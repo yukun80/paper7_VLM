@@ -7,13 +7,13 @@ import unittest
 
 import numpy as np
 
-from oa_groundrag.text_rag.contracts import (
+from oa_groundrag.retrieval.contracts import (
     KnowledgeType,
     QueryIntent,
     RetrievalConfig,
     packet_identity,
 )
-from oa_groundrag.text_rag.retrieval import (
+from oa_groundrag.retrieval.search import (
     HybridRetriever,
     RankedCandidate,
     build_balanced_packet,

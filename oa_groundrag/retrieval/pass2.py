@@ -7,9 +7,12 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import canonical_json, sha256_text
-from oa_groundrag.phase4.errors import ContractError, ReasonCode
-from oa_groundrag.phase4.outputs import detect_forbidden_region_claims
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_text,
+)
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
+from oa_groundrag.grounding.outputs import detect_forbidden_region_claims
 
 from .contracts import (
     PASS2_OUTPUT_SCHEMA,

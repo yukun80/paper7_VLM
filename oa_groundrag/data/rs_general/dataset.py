@@ -14,7 +14,7 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset, Sampler
 
-from .common import (
+from .io import (
     first_symlink_component,
     portable_relative_path,
     read_json,

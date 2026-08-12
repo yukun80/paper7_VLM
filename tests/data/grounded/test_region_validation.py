@@ -6,18 +6,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     atomic_write_jsonl,
     canonical_json,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.landslide_evidence.contracts import (
+from oa_groundrag.data.grounded.contracts import (
     EXPECTED_IDENTITY_FIELDS,
     LandslideEvidenceError,
 )
-from oa_groundrag.landslide_evidence.region_validation import (
+from oa_groundrag.data.grounded.region_validation import (
     _validate_files,
     validate_eval_dev,
     validate_region_corpus,
@@ -116,10 +116,10 @@ class RegionValidationTest(unittest.TestCase):
                 "selection": {"baseline_record_ids": [row["record_id"] for row in baselines]},
             }
             with patch(
-                "oa_groundrag.landslide_evidence.region_validation.validate_region_corpus",
+                "oa_groundrag.data.grounded.region_validation.validate_region_corpus",
                 return_value={"manifest_sha256": "a" * 64},
             ), patch(
-                "oa_groundrag.landslide_evidence.region_validation._validate_common",
+                "oa_groundrag.data.grounded.region_validation._validate_common",
                 return_value=(manifest, [{"path": "counterfactual_groups.jsonl"}], baselines, set(), None),
             ):
                 with self.assertRaises(LandslideEvidenceError):
@@ -144,7 +144,7 @@ class RegionValidationTest(unittest.TestCase):
             }
             records = [{"sample_id": sample_id} for sample_id in sample_ids]
             with patch(
-                "oa_groundrag.landslide_evidence.region_validation._validate_common",
+                "oa_groundrag.data.grounded.region_validation._validate_common",
                 return_value=(corpus_manifest, [], records, set(), None),
             ):
                 with self.assertRaises(LandslideEvidenceError) as raised:
@@ -189,10 +189,10 @@ class RegionValidationTest(unittest.TestCase):
                 },
             }
             with patch(
-                "oa_groundrag.landslide_evidence.region_validation.validate_region_corpus",
+                "oa_groundrag.data.grounded.region_validation.validate_region_corpus",
                 return_value=train_report,
             ), patch(
-                "oa_groundrag.landslide_evidence.region_validation._validate_common",
+                "oa_groundrag.data.grounded.region_validation._validate_common",
                 return_value=(eval_manifest, [], baselines, set(), None),
             ):
                 with self.assertRaises(LandslideEvidenceError) as raised:

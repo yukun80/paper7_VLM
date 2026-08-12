@@ -9,13 +9,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tests.stage4_landslide_evidence.fixture_helpers import (
+from tests.data.grounded.fixture_helpers import (
     no_target_output,
     target_output,
     target_record,
 )
 
-from oa_groundrag.landslide_evidence.model_assisted import (
+from oa_groundrag.data.grounded.supervision.model_assisted import (
     EXPERT_AUTHORITY,
     MODEL_AUTHORITY,
     MODEL_ASSISTED_ASSIGNMENT_SCHEMA,
@@ -32,21 +32,21 @@ from oa_groundrag.landslide_evidence.model_assisted import (
     load_model_assisted_training_messages,
     validate_model_assisted_supervision,
 )
-from oa_groundrag.landslide_evidence.region_pipeline import region_asset_identity
-from oa_groundrag.landslide_evidence.single_expert import (
+from oa_groundrag.data.grounded.region import region_asset_identity
+from oa_groundrag.data.grounded.annotation.project import (
     DRAFT_MODEL_REVISION,
     MODEL_DRAFT_FAILURE_SCHEMA,
     MODEL_DRAFT_RUN_SCHEMA,
     MODEL_DRAFT_SCHEMA,
     VERIFIED_ANNOTATION_SCHEMA,
 )
-from oa_groundrag.phase3.common import (
+from oa_groundrag.data.rs_general.io import (
     atomic_write_json,
     canonical_json,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.outputs import region_output_template
+from oa_groundrag.grounding.outputs import region_output_template
 
 
 class ModelAssistedTests(unittest.TestCase):
@@ -275,7 +275,7 @@ class ModelAssistedTests(unittest.TestCase):
             target_output(), target_output(), None, region_output_template("target_present")
         )
         for assignment, entry, description in zip(assignments, entries, descriptions, strict=True):
-            from oa_groundrag.landslide_evidence.single_expert import build_annotation_draft_messages
+            from oa_groundrag.data.grounded.annotation.project import build_annotation_draft_messages
 
             messages_sha = sha256_text(canonical_json(build_annotation_draft_messages(
                 entry.record,
@@ -357,19 +357,19 @@ class ModelAssistedTests(unittest.TestCase):
             messages_root = root / "messages"
             with (
                 patch(
-                    "oa_groundrag.landslide_evidence.model_assisted.EXPECTED_COLLECTION_COUNT",
+                    "oa_groundrag.data.grounded.supervision.model_assisted.EXPECTED_COLLECTION_COUNT",
                     4,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.model_assisted.load_model_assisted_project",
+                    "oa_groundrag.data.grounded.supervision.model_assisted.load_model_assisted_project",
                     return_value=project,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.model_assisted._load_collection_context",
+                    "oa_groundrag.data.grounded.supervision.model_assisted._load_collection_context",
                     return_value=project.collection,
                 ),
                 patch(
-                    "oa_groundrag.landslide_evidence.model_assisted._legacy_import_rows",
+                    "oa_groundrag.data.grounded.supervision.model_assisted._legacy_import_rows",
                     return_value=(
                         {"r_expert": project.drafts["r_expert"]},
                         {"r_expert": project.verified["r_expert"]},
@@ -448,7 +448,7 @@ class ModelAssistedTests(unittest.TestCase):
                 entries=(expanded_entry,),
             )
             with patch(
-                "oa_groundrag.landslide_evidence.expanded_region.load_expanded_collection_context",
+                "oa_groundrag.data.grounded.supervision.expanded_region.load_expanded_collection_context",
                 return_value=expanded,
             ):
                 with self.assertRaises(Exception):

@@ -6,14 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fixture_helpers import no_target_output, target_output
-from single_expert_fixture_helpers import (
+from tests.data.grounded.fixture_helpers import no_target_output, target_output
+from tests.data.grounded.single_expert_fixture_helpers import (
     build_annotation_asset,
     draft_run,
 )
 
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.single_expert import (
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.annotation.project import (
     AnnotationIntendedUse,
     VERIFIED_ANNOTATION_SCHEMA,
     create_annotation_project,
@@ -24,9 +24,9 @@ from oa_groundrag.landslide_evidence.single_expert import (
     verify_annotation_work,
     write_draft_results,
 )
-from oa_groundrag.phase3.common import canonical_json, sha256_text
-from oa_groundrag.phase4.errors import ContractError
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.data.rs_general.io import canonical_json, sha256_text
+from oa_groundrag.vlm.errors import ContractError
+from oa_groundrag.grounding.outputs import (
     RegionDraftQualityStatus,
     assess_region_draft_quality,
     parse_region_model_output,
@@ -38,8 +38,8 @@ from oa_groundrag.phase4.outputs import (
 class SingleExpertContractTest(unittest.TestCase):
     def test_prompt_excludes_answers_while_ui_template_matches_parser(self) -> None:
         prompt_path = (
-            Path(__file__).resolve().parents[2]
-            / "configs/stage4_landslide_evidence/single_expert_prompt_v1.txt"
+            Path(__file__).resolve().parents[3]
+            / "configs/grounding/prompts/single_expert_prompt_v1.txt"
         )
         prompt_text = prompt_path.read_text(encoding="utf-8")
         self.assertNotIn("TARGET_PRESENT_TEMPLATE_JSON", prompt_text)

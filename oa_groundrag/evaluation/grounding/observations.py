@@ -7,19 +7,27 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import canonical_json, read_json, read_jsonl, sha256_file, sha256_text
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 
-from oa_groundrag.landslide_evidence.annotation import SCORE_FIELDS
-from oa_groundrag.landslide_evidence.contracts import fail
-from oa_groundrag.landslide_evidence.region_pipeline import ledger_rows
-from oa_groundrag.landslide_evidence.region_validation import validate_eval_dev
-from oa_groundrag.landslide_evidence.single_expert_package import (
+from oa_groundrag.data.grounded.annotation.queue import SCORE_FIELDS
+from oa_groundrag.data.grounded.contracts import fail
+from oa_groundrag.data.grounded.region import ledger_rows
+from oa_groundrag.data.grounded.region_validation import validate_eval_dev
+from oa_groundrag.data.grounded.annotation.package import (
     VERIFIED_PACKAGE_SCHEMA,
     validate_verified_annotation_package,
 )
 
-from .outputs import (
+from oa_groundrag.grounding.outputs import (
     REGION_PREDICTION_SCHEMA_VERSION,
     REGION_PROVENANCE_SCHEMA_VERSION,
     detect_forbidden_region_claims,

@@ -1,4 +1,4 @@
-"""Phase 2 二值分割与 no-target 指标。"""
+"""OA-AuxSeg 二值分割与 no-target 指标。"""
 
 from __future__ import annotations
 

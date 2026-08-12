@@ -8,15 +8,15 @@ from unittest.mock import patch
 
 import torch
 
-from oa_groundrag.phase4.errors import ContractError, ProcessingError
-from oa_groundrag.phase4.processing import Qwen3VLProcessorAdapter
-from oa_groundrag.text_rag.contracts import (
+from oa_groundrag.vlm.errors import ContractError, ProcessingError
+from oa_groundrag.vlm.processing import Qwen3VLProcessorAdapter
+from oa_groundrag.retrieval.contracts import (
     PASS2_OUTPUT_SCHEMA,
     RagMode,
     TextRagTask,
     route_text_rag,
 )
-from oa_groundrag.text_rag.pass2 import (
+from oa_groundrag.retrieval.pass2 import (
     build_pass2_logits_processor,
     build_pass2_messages,
     parse_pass2_output,

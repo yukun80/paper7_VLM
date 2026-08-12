@@ -17,22 +17,24 @@ from safetensors.torch import load_file as load_safetensors
 from safetensors.torch import save_file as save_safetensors
 from torch import Tensor
 
-from oa_groundrag.phase3.common import (
-    atomic_write_json,
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.artifacts.io import (
+    atomic_write_json,
+    first_symlink_component,
+)
+from oa_groundrag.data.rs_general.io import read_json
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from .contracts import (
+from oa_groundrag.grounding.contracts import (
     CHECKPOINT_SCHEMA_VERSION,
     SAMPLE_TRACE_SCHEMA_VERSION,
 )
 from .errors import CheckpointError, ReasonCode
-from .input_pipeline import (
+from oa_groundrag.training.vlm.input_pipeline import (
     INPUT_PIPELINE_PREFETCH,
     INPUT_PIPELINE_SYNC,
 )

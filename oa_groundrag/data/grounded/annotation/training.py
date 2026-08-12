@@ -7,25 +7,27 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    read_json,
-    read_jsonl,
-    safe_join,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+    safe_join,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
+from oa_groundrag.grounding.outputs import (
     REGION_OUTPUT_SCHEMA_VERSION,
     parse_region_model_output,
 )
 
-from .contracts import fail
-from .region_pipeline import ledger_rows, region_asset_identity
-from .region_validation import validate_region_asset_files
-from .single_expert import (
+from ..contracts import fail
+from ..region import ledger_rows, region_asset_identity
+from ..region_validation import validate_region_asset_files
+from .project import (
     AnnotationIntendedUse,
     TRAIN_ANNOTATION_COUNT,
     _exact,
@@ -35,7 +37,7 @@ from .single_expert import (
     _text,
     load_annotation_asset,
 )
-from .single_expert_package import validate_verified_annotation_package
+from .package import validate_verified_annotation_package
 
 
 TRAINING_MESSAGE_SCHEMA = "oa_groundrag.mask_grounded_region.training_message.v1"
@@ -280,8 +282,8 @@ class MaskGroundedTrainingMessageDataset:
             fail("ANNOTATION_INVALID", "training message epoch 必须是非负整数")
 
     def __getitem__(self, index: int) -> Any:
-        from oa_groundrag.phase4.contracts import MaskMode
-        from oa_groundrag.phase4.data import DescriptionSample
+        from oa_groundrag.grounding.contracts import MaskMode
+        from oa_groundrag.vlm.data import DescriptionSample
 
         if index < 0:
             index += len(self.records)

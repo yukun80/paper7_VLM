@@ -8,18 +8,19 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import first_symlink_component, read_jsonl
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import read_jsonl
 
-from .artifacts import AtomicArtifactDirectory
-from .contracts import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.contracts import (
     PREDICTION_SCHEMA_VERSION,
     RUN_MANIFEST_SCHEMA_VERSION,
     EvidenceSufficiency,
     MaskMode,
     TargetStatus,
 )
-from .errors import EvaluationError, ReasonCode
-from .outputs import parse_model_output, serialize_model_output
+from oa_groundrag.vlm.errors import EvaluationError, ReasonCode
+from oa_groundrag.vlm.outputs import parse_model_output, serialize_model_output
 
 
 _PREDICTION_FIELDS = {
@@ -318,7 +319,7 @@ def evaluate_predictions(
     if formal:
         raise EvaluationError(
             ReasonCode.FORMAL_EVALUATION_FORBIDDEN,
-            "phase4 本轮不执行正式评价",
+            "Shared VLM 本轮不执行正式评价",
         )
     prediction_path = Path(prediction_path)
     linked = first_symlink_component(prediction_path)

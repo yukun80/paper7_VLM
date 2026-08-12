@@ -1,4 +1,4 @@
-"""Stage 6 Evidence-Constrained Text RAG。"""
+"""Knowledge Augmentation：Evidence-Constrained Text RAG。"""
 
 from .contracts import (
     KnowledgeType,

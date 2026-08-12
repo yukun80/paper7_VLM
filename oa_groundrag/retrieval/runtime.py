@@ -9,8 +9,15 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from oa_groundrag.phase3.common import canonical_json, read_json, read_jsonl, sha256_text
-from oa_groundrag.phase4.errors import ContractError, ReasonCode
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_text,
+)
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
 
 from .bank import validate_bank
 from .contracts import (
@@ -21,7 +28,7 @@ from .contracts import (
     load_stage6_config,
     route_text_rag,
 )
-from .retrieval import (
+from .search import (
     BGEM3DenseEmbedder,
     HybridRetriever,
     build_balanced_packet,

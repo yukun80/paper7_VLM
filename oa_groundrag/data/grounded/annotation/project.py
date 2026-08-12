@@ -10,37 +10,41 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
-    atomic_write_json,
-    atomic_write_jsonl,
-    atomic_write_text,
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
-    read_jsonl,
-    safe_join,
     sha256_file,
     sha256_text,
     stable_hash,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.errors import Phase4Error
-from oa_groundrag.phase4.messages import build_mask_grounded_region_messages
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.artifacts.io import (
+    atomic_write_json,
+    atomic_write_jsonl,
+    atomic_write_text,
+    first_symlink_component,
+)
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+    safe_join,
+)
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.errors import VLMError
+from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
+from oa_groundrag.grounding.outputs import (
     RegionDraftQualityStatus,
     assess_region_draft_quality,
     parse_region_model_output,
     region_output_template,
 )
 
-from .contracts import fail
-from .region_contracts import (
+from ..contracts import fail
+from ..region_contracts import (
     ANNOTATION_QUEUE_SCHEMA,
     EVAL_MANIFEST_SCHEMA,
     REGION_MANIFEST_SCHEMA,
     REGION_RECORD_SCHEMA,
 )
-from .region_pipeline import region_asset_identity
+from ..region import region_asset_identity
 
 
 ANNOTATION_PROJECT_SCHEMA = "oa_groundrag.mask_grounded_region.annotation_project.v1"
@@ -509,7 +513,7 @@ def create_annotation_project(
     if isinstance(seed, bool) or seed != CALIBRATION_SEED:
         fail("ANNOTATION_INVALID", f"v1 calibration seed 必须为 {CALIBRATION_SEED}")
     # annotation 入口先绑定发布 ledger，避免在被替换或遗漏的源资产上开始人工工作。
-    from .region_validation import validate_region_asset_files
+    from ..region_validation import validate_region_asset_files
 
     validate_region_asset_files(asset_root)
     context = load_annotation_asset(asset_root)
@@ -761,7 +765,7 @@ def validate_model_draft_row(
             fail("ANNOTATION_INVALID", f"{location}.failure.details 必须是对象")
         try:
             parsed_raw = parse_region_model_output(row["raw_output"])
-        except Phase4Error:
+        except VLMError:
             pass
         else:
             if parsed_raw.target_status.value == assignment["target_status"]:

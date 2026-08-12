@@ -6,35 +6,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from oa_groundrag.landslide_evidence.compact_training import (
+from oa_groundrag.data.grounded.supervision.compact_training import (
     CompactTrainingMessageDataset,
 )
-from oa_groundrag.phase3.common import (
-    first_symlink_component,
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     portable_relative_path,
     read_json,
-    sha256_file,
 )
 
 from .checkpoint import CheckpointManager
 from .errors import ContractError, ReasonCode
 from .model import Qwen3VLModelAdapter
 from .processing import Qwen3VLProcessorAdapter
-from .stage5_config import (
+from oa_groundrag.training.grounding.config import (
     load_stage5_config,
     with_monitor_parent_count,
 )
-from .stage5_data import (
+from oa_groundrag.training.grounding.data import (
     REGION_MONITOR_ROLE,
     RegionSubsetDataset,
     build_region_monitor_selection,
     split_compact_by_parent,
 )
-from .stage5_workflow import (
+from oa_groundrag.training.grounding.workflow import (
     STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS,
     _compact_benchmark_identity,
 )
-from .trainer import training_layout_identity
+from oa_groundrag.training.vlm.trainer import training_layout_identity
 
 
 class Stage5RuntimeBinding(Protocol):

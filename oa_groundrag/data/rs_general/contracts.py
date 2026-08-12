@@ -9,7 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping
 
-from .common import canonical_json, portable_relative_path, reject_nonfinite, sha256_text
+from .io import canonical_json, portable_relative_path, reject_nonfinite, sha256_text
 from .errors import ReasonCode, SchemaError
 
 

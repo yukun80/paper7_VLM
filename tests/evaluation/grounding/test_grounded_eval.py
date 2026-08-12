@@ -5,11 +5,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fixture_helpers import no_target_output, target_output
+from tests.data.grounded.fixture_helpers import no_target_output, target_output
 
-from oa_groundrag.phase3.common import atomic_write_json, atomic_write_jsonl, canonical_json, sha256_file
-from oa_groundrag.phase4.grounded_evaluation import evaluate_dev
-from oa_groundrag.phase4.outputs import (
+from oa_groundrag.data.rs_general.io import atomic_write_json, atomic_write_jsonl, canonical_json, sha256_file
+from oa_groundrag.evaluation.grounding.observations import evaluate_dev
+from oa_groundrag.grounding.outputs import (
     REGION_PREDICTION_SCHEMA_VERSION,
     REGION_PROVENANCE_SCHEMA_VERSION,
 )
@@ -79,7 +79,7 @@ class GroundedEvaluationTest(unittest.TestCase):
             predictions_path = root / "predictions.jsonl"
             atomic_write_jsonl(predictions_path, predictions)
             with patch(
-                "oa_groundrag.phase4.grounded_evaluation.validate_eval_dev",
+                "oa_groundrag.evaluation.grounding.observations.validate_eval_dev",
                 return_value={"valid": True, "formal_acceptance": False},
             ):
                 result = evaluate_dev(

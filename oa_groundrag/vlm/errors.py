@@ -60,8 +60,8 @@ class ErrorContext:
     details: Mapping[str, Any]
 
 
-class Phase4Error(RuntimeError):
-    """带稳定 reason code 的 phase4 基类异常。"""
+class VLMError(RuntimeError):
+    """带稳定 reason code 的 VLM 基类异常。"""
 
     def __init__(
         self,
@@ -82,41 +82,41 @@ class Phase4Error(RuntimeError):
         return self.context.details
 
 
-class ConfigError(Phase4Error):
+class ConfigError(VLMError):
     pass
 
 
-class ContractError(Phase4Error):
+class ContractError(VLMError):
     pass
 
 
-class PreflightError(Phase4Error):
+class PreflightError(VLMError):
     pass
 
 
-class SelectionError(Phase4Error):
+class SelectionError(VLMError):
     pass
 
 
-class EvidenceError(Phase4Error):
+class EvidenceError(VLMError):
     pass
 
 
-class ProcessingError(Phase4Error):
+class ProcessingError(VLMError):
     pass
 
 
-class ModelError(Phase4Error):
+class ModelError(VLMError):
     pass
 
 
-class CheckpointError(Phase4Error):
+class CheckpointError(VLMError):
     pass
 
 
-class PredictionError(Phase4Error):
+class PredictionError(VLMError):
     pass
 
 
-class EvaluationError(Phase4Error):
+class EvaluationError(VLMError):
     pass

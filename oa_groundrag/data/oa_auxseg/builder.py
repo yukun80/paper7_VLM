@@ -22,7 +22,7 @@ from typing import Any, Iterable, Sequence
 import h5py
 import numpy as np
 
-from benchmark_common import (
+from .dataset import (
     DEFAULT_PATCH_SIZE,
     DEFAULT_SEED,
     SCHEMA_VERSION,
@@ -40,7 +40,7 @@ from benchmark_common import (
     sha256_file,
     stable_rank,
 )
-from benchmark_sources import (
+from .sources import (
     SourceSample,
     discover_all_sources,
     load_source_sample,
@@ -646,7 +646,7 @@ def build_benchmark(
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("small", "full"), required=True)
     parser.add_argument(

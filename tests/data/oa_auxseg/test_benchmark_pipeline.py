@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,11 +13,7 @@ import h5py
 import numpy as np
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_ROOT = REPO_ROOT / "scripts/phase1_benchmark_build"
-sys.path.insert(0, str(SCRIPT_ROOT))
-
-from benchmark_common import (  # noqa: E402
+from oa_groundrag.data.oa_auxseg.dataset import (
     BenchmarkDataset,
     SOURCE_ORDER,
     collate_benchmark_samples,
@@ -28,20 +22,9 @@ from benchmark_common import (  # noqa: E402
     resize_binary_mask,
     resize_continuous_with_validity,
 )
-
-
-def _load_numbered(name: str, filename: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, SCRIPT_ROOT / filename)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"无法加载 {filename}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-BUILDER = _load_numbered("phase1_builder", "1_1_build_benchmark.py")
-VALIDATOR = _load_numbered("phase1_validator", "1_2_validate_benchmark.py")
-SMOKE = _load_numbered("phase1_smoke", "1_4_smoke_dataloader.py")
+from oa_groundrag.data.oa_auxseg import builder as BUILDER
+from oa_groundrag.data.oa_auxseg import smoke as SMOKE
+from oa_groundrag.data.oa_auxseg import validator as VALIDATOR
 
 
 def _write_json(path: Path, value: Any) -> None:

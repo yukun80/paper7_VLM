@@ -7,14 +7,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from oa_groundrag.phase3.common import (
+from .io import (
+    PortablePathError,
     atomic_write_json,
     atomic_write_jsonl,
     first_symlink_component,
     portable_relative_path,
 )
 
-from .errors import ContractError, ReasonCode
+from oa_groundrag.vlm.errors import ContractError, ReasonCode
 
 
 class AtomicArtifactDirectory:
@@ -50,7 +51,13 @@ class AtomicArtifactDirectory:
                 ReasonCode.TYPE_MISMATCH,
                 "ArtifactDirectory 尚未进入 context",
             )
-        pure = portable_relative_path(relative, location="artifact.relative_path")
+        try:
+            pure = portable_relative_path(relative)
+        except PortablePathError as error:
+            raise ContractError(
+                ReasonCode.PATH_ESCAPE,
+                f"artifact 非法相对路径：{relative}",
+            ) from error
         path = self.staging.joinpath(*pure.parts)
         try:
             path.resolve(strict=False).relative_to(self.staging.resolve())

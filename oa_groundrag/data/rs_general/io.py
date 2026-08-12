@@ -2,90 +2,30 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
-import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
+from oa_groundrag.artifacts.identity import (
+    canonical_json,
+    sha256_bytes,
+    sha256_file,
+    sha256_text,
+    stable_hash,
+)
+from oa_groundrag.artifacts.io import (
+    PortablePathError,
+    atomic_write_bytes,
+    atomic_write_json,
+    atomic_write_jsonl,
+    atomic_write_text,
+    first_symlink_component,
+    portable_relative_path as _portable_relative_path,
+)
+
 from .errors import ConfigError, ReasonCode, SchemaError
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def sha256_text(value: str) -> str:
-    return sha256_bytes(value.encode("utf-8"))
-
-
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(chunk_size):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def stable_hash(seed: int, *parts: object) -> str:
-    return sha256_text("\0".join((str(seed), *(str(part) for part in parts))))
-
-
-def first_symlink_component(path: Path) -> Path | None:
-    """返回词法绝对路径中第一个已存在的 symlink 组件。"""
-
-    absolute = Path(os.path.abspath(path))
-    current = Path(absolute.anchor)
-    for part in absolute.parts[1:]:
-        current /= part
-        if current.is_symlink():
-            return current
-        if not current.exists():
-            break
-    return None
-
-
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def atomic_write_json(path: Path, value: Any) -> None:
-    payload = (json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
-    _atomic_write_bytes(path, payload.encode("utf-8"))
-
-
-def atomic_write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
-    payload = "".join(f"{canonical_json(dict(row))}\n" for row in rows)
-    _atomic_write_bytes(path, payload.encode("utf-8"))
-
-
-def atomic_write_text(path: Path, value: str) -> None:
-    _atomic_write_bytes(path, value.encode("utf-8"))
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -318,24 +258,18 @@ def require_enum(
 
 
 def portable_relative_path(value: str, *, location: str) -> PurePosixPath:
-    if "\\" in value:
-        value = value.replace("\\", "/")
-    path = PurePosixPath(value)
-    if path.is_absolute():
-        raise SchemaError(
-            ReasonCode.PATH_ABSOLUTE,
-            f"{location}: 可移植合同不得使用绝对路径",
-        )
-    if (
-        not value
-        or value in {".", ".."}
-        or any(part in {"", ".", ".."} for part in path.parts)
-    ):
+    try:
+        return _portable_relative_path(value)
+    except PortablePathError as error:
+        if error.reason == "absolute":
+            raise SchemaError(
+                ReasonCode.PATH_ABSOLUTE,
+                f"{location}: 可移植合同不得使用绝对路径",
+            ) from error
         raise SchemaError(
             ReasonCode.PATH_ESCAPE,
-            f"{location}: 非法相对路径 {value!r}",
-        )
-    return path
+            f"{location}: 非法相对路径 {error.value!r}",
+        ) from error
 
 
 def resolve_config_path(base: Path, value: Any, *, location: str) -> Path:

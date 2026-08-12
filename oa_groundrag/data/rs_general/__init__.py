@@ -1,4 +1,4 @@
-"""Stage 2 RS-GeneralDesc Benchmark 公共 API（仓库路径 phase3）。"""
+"""RS-GeneralDesc Benchmark 构建、读取与验证公共 API。"""
 
 from .builder import audit_sources, build_benchmark
 from .config import load_build_config, load_export_config

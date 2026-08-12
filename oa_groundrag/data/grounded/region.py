@@ -7,36 +7,38 @@ import os
 from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import numpy as np
 from PIL import Image
 
-from oa_groundrag.phase2.data import registry_from_benchmark
-from oa_groundrag.phase3.common import (
+from oa_groundrag.segmentation.data import registry_from_benchmark
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     portable_relative_path,
     read_json,
     read_jsonl,
     safe_join,
-    sha256_file,
-    sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.contracts import MaskMode, RegionInventory, SelectionMode, SelectionRequest
-from oa_groundrag.phase4.evidence import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.contracts import MaskMode, RegionInventory, SelectionMode, SelectionRequest
+from oa_groundrag.grounding.evidence import (
     context_crop_window,
     deterministic_mask_facts,
     render_binary_mask,
     render_context_crop,
     render_mask_overlay,
 )
-from oa_groundrag.phase4.regions import RegionSelector
-from scripts.phase1_benchmark_build.benchmark_common import BenchmarkDataset
+from oa_groundrag.grounding.regions import RegionSelector
+from oa_groundrag.data.oa_auxseg.dataset import BenchmarkDataset
 
 from .contracts import EXPECTED_IDENTITY_FIELDS, fail, no_target_mask_facts
-from .pipeline import render_optical
+from .pilot import render_optical
 from .region_contracts import (
     ANNOTATION_QUEUE_SCHEMA,
     COORDINATE_BASIS,
@@ -477,7 +479,11 @@ def frozen_stage4a_ids(config: RegionCorpusConfig) -> tuple[list[str], dict[str,
     return ids, actual
 
 
-def build_region_corpus(config_path: Path | str) -> RegionBuildResult:
+def build_region_assets(
+    config_path: Path | str,
+    *,
+    validator: Callable[[Path], Any] | None = None,
+) -> RegionBuildResult:
     config = load_region_corpus_config(config_path)
     if config.output_root.exists() or config.output_root.is_symlink():
         fail("OUTPUT_EXISTS", f"Region Corpus output 已存在，拒绝覆盖：{config.output_root}")
@@ -582,9 +588,8 @@ def build_region_corpus(config_path: Path | str) -> RegionBuildResult:
             "formal_acceptance": False,
         }
         writer.write_json("manifest.json", manifest)
-        from .region_validation import validate_region_corpus
-
-        validate_region_corpus(writer.staging, verify_source=True)
+        if validator is not None:
+            validator(writer.staging)
         root = writer.publish()
     return RegionBuildResult(
         root=root,

@@ -31,7 +31,8 @@ Stage 9  统一推理与报告
 这些 Stage 包含两条可独立推进的依赖支线：OA-AuxSeg 工程定版 → Gate A →
 formal fixed masks；RS-GeneralDesc Stage 2 → Adapter 训练 → Gate B。两条支线在
 Mask-Grounded 阶段汇合。任何依赖 Gate 的下游产物都不得越过对应 Gate。
-工程目录无需随 Stage 重命名。
+Stage 只用于训练 curriculum、配置/产物 provenance 和历史进度；长期源码、配置、脚本
+与测试必须按算法能力和工程职责组织，不得再以 phase/stage 作为一级目录。
 
 ## 3. 动态状态与授权边界
 
@@ -40,9 +41,9 @@ AGENTS 不固定任何 Stage 完成状态、运行数字、checkpoint、产物 S
 冻结身份和下一任务为准。不得从算法方案或 README 推断实时进度。
 
 活动产品统一称为 **RS-GeneralDesc Benchmark**，训练系统统一称为 **RS-VLM**。
-phase3 只处理 External 通用遥感文本数据；mask-grounded 证据、OA-GroundedEval 和 RAG
-使用各自独立的后续合同。任何新产物都必须以版本化 manifest、ledger、schema
-和实际消费文件绑定身份。
+`oa_groundrag.data.rs_general` 只处理 External 通用遥感文本数据；mask-grounded 证据、
+OA-GroundedEval 和 RAG 使用各自独立合同。任何新产物都必须以版本化 manifest、ledger、
+schema 和实际消费文件绑定身份。
 
 进入后续任务前，必须重新核对 `REBUILD_PROGRESS.md` 并取得项目负责人对相应写入、
 正式评价或长训练的明确授权。未经新授权禁止：
@@ -103,8 +104,14 @@ HDF5 格式统一不代表字段、模态、配准、数值范围或科学语义
 
 - Python 3.11，四空格缩进，公共合同使用类型标注。
 - 优先使用 `pathlib`、严格 JSON/JSONL、原子写入和 SHA-256。
-- 新可执行脚本必须有简短中文头部，说明用途、命令、输入、输出、写入行为和所属阶段。
+- 稳定能力位置为 `segmentation`、`vlm`、`grounding`、`retrieval`、`runtime`；数据生产、
+  训练和评价分别进入 `data`、`training`、`evaluation`。
+- `configs/` 按能力组织；`scripts/` 按 `data/train/infer/evaluate` 组织；`tests/` 镜像能力
+  边界。历史 Stage 可保留在配置名、schema、输出根和 provenance 中。
+- 新可执行脚本必须有简短中文头部，说明用途、命令、输入、输出、写入行为和所属能力；
+  如 Stage 对 provenance 有意义，可同时说明 Stage。
 - 算法不得写在 CLI 中。
+- 生产 package 不得反向导入 `scripts`，不得创建 phase/stage compatibility alias。
 - 不从文件名猜测通道科学含义。
 - 不在模型 `forward` 中读取 HDF5。
 - 保留用户已有改动；禁止 `git reset --hard`、`git checkout --` 和广泛清理。

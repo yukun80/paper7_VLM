@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Any, Iterable
 
 from .assets import normalized_image_sha256
-from .common import canonical_json, sha256_bytes, sha256_text, stable_hash
+from .io import canonical_json, sha256_bytes, sha256_text, stable_hash
 from .config import BuildConfig
 from .contracts import (
     AdapterResult,

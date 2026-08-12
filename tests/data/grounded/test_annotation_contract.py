@@ -4,11 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fixture_helpers import target_output
+from tests.data.grounded.fixture_helpers import target_output
 
-from oa_groundrag.landslide_evidence.annotation import validate_annotation_row
-from oa_groundrag.landslide_evidence.contracts import LandslideEvidenceError
-from oa_groundrag.landslide_evidence.region_contracts import ANNOTATION_SCHEMA
+from oa_groundrag.data.grounded.annotation.queue import validate_annotation_row
+from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
+from oa_groundrag.data.grounded.region_contracts import ANNOTATION_SCHEMA
 
 
 def annotation_row() -> dict:

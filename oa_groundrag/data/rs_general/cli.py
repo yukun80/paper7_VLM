@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .builder import audit_sources, build_benchmark
-from .common import atomic_write_json
+from .io import atomic_write_json
 from .config import load_build_config, load_export_config
 from .errors import RSGeneralDescError, ReasonCode
 from .exporter import export_qwen

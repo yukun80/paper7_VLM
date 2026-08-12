@@ -20,13 +20,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from oa_groundrag.landslide_evidence.pipeline import render_optical
-from oa_groundrag.phase3.common import atomic_write_json, atomic_write_text, read_json
-from scripts.phase1_benchmark_build.benchmark_common import BenchmarkDataset
+from oa_groundrag.data.grounded.pilot import render_optical
+from oa_groundrag.data.rs_general.io import atomic_write_json, atomic_write_text, read_json
+from oa_groundrag.data.oa_auxseg.dataset import BenchmarkDataset
 
 
-CONFIG = REPO_ROOT / "configs/unified/inference_v1.yaml"
-CLI = REPO_ROOT / "scripts/unified/run_oa_groundrag.py"
+CONFIG = REPO_ROOT / "configs/runtime/inference_v2.yaml"
+CLI = REPO_ROOT / "scripts/infer/oa_groundrag.py"
 BENCHMARK = REPO_ROOT.parent / "benchmark/oa_auxseg_hdf5_v1/full"
 
 
@@ -304,7 +304,7 @@ def main() -> int:
         rows.append(row)
         print(json.dumps(row, ensure_ascii=False, sort_keys=True), flush=True)
     summary = {
-        "schema_version": "oa_groundrag.unified_cuda_smoke_summary.v1",
+        "schema_version": "oa_groundrag.runtime_cuda_smoke_summary.v1",
         "root": str(root),
         "python": sys.executable,
         "sample_id": sample_id,

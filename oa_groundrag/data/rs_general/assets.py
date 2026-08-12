@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from .common import portable_relative_path, sha256_bytes, sha256_file
+from .io import portable_relative_path, sha256_bytes, sha256_file
 from .config import AssetPolicyConfig, LimitsConfig
 from .contracts import MediaType, PendingAsset
 from .errors import AssetError, ReasonCode

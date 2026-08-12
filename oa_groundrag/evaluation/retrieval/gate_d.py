@@ -14,9 +14,13 @@ import re
 import statistics
 from typing import Any, Mapping, Sequence
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
+    sha256_file,
+    sha256_text,
+)
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
     read_json,
     read_jsonl,
     require_exact_keys,
@@ -24,24 +28,22 @@ from oa_groundrag.phase3.common import (
     require_mapping,
     require_string,
     resolve_config_path,
-    sha256_file,
-    sha256_text,
 )
-from oa_groundrag.phase4.artifacts import AtomicArtifactDirectory
-from oa_groundrag.phase4.config import _load_yaml
-from oa_groundrag.phase4.errors import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.vlm.config import _load_yaml
+from oa_groundrag.vlm.errors import (
     ConfigError,
     ContractError,
     ReasonCode,
     SelectionError,
 )
-from oa_groundrag.phase4.processing import Qwen3VLProcessorAdapter
-from oa_groundrag.phase4.stage5_config import load_stage5_config
+from oa_groundrag.vlm.processing import Qwen3VLProcessorAdapter
+from oa_groundrag.training.grounding.config import load_stage5_config
 
-from .bank import validate_bank
-from .contracts import RagMode, Stage6Config, load_stage6_config
-from .pass2 import build_pass2_messages, prompt_sha256, validate_prompt_fairness
-from .workflow import (
+from oa_groundrag.retrieval.bank import validate_bank
+from oa_groundrag.retrieval.contracts import RagMode, Stage6Config, load_stage6_config
+from oa_groundrag.retrieval.pass2 import build_pass2_messages, prompt_sha256, validate_prompt_fairness
+from oa_groundrag.retrieval.workflow import (
     _environment,
     _generate_selected_pairs,
     _ledger_rows,

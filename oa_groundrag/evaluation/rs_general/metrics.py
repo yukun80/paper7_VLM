@@ -11,25 +11,27 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from oa_groundrag.phase3.common import (
+from oa_groundrag.artifacts.identity import (
     canonical_json,
-    first_symlink_component,
-    read_json,
-    read_jsonl,
     sha256_file,
     sha256_text,
 )
-from oa_groundrag.phase3.dataset import RSGeneralDescDataset
-from oa_groundrag.phase3.errors import RSGeneralDescError
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import (
+    read_json,
+    read_jsonl,
+)
+from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
+from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from .artifacts import AtomicArtifactDirectory
-from .contracts import (
+from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.grounding.contracts import (
     GATE_B_GENERATION_SCHEMA_VERSION,
     GATE_B_REPORT_SCHEMA_VERSION,
     PREDICTION_SCHEMA_VERSION,
 )
-from .errors import EvaluationError, Phase4Error, ReasonCode
-from .gate_b_contracts import (
+from oa_groundrag.vlm.errors import EvaluationError, VLMError, ReasonCode
+from .contracts import (
     GATE_B_OPEN_TASKS,
     GATE_B_PROTOCOL_ID,
     GATE_B_SAMPLE_COUNT,
@@ -38,7 +40,7 @@ from .gate_b_contracts import (
     GATE_B_TASK_ORDER,
     QWEN_TEMPLATE_VERSION,
 )
-from .gate_b_selection import (
+from .selection import (
     GateBSelectionContext,
     load_gate_b_selection,
     selection_locations,
@@ -837,7 +839,7 @@ def evaluate_gate_b(
             )
             status = "completed"
             evaluated = True
-        except (Phase4Error, RSGeneralDescError) as error:
+        except (VLMError, RSGeneralDescError) as error:
             invalid_reasons.append(
                 {
                     "reason_code": error.code.value,
