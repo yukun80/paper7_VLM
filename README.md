@@ -10,7 +10,7 @@ Spatial Perception
 → Unified Inference
 ```
 
-本轮工程结构按算法能力和工程职责命名。Stage 仍用于训练 curriculum、checkpoint
+当前长期工程结构按算法能力和工程职责命名。Stage 仍用于训练 curriculum、checkpoint
 provenance、历史报告和正式产物身份，但不再决定长期源码、配置、脚本或测试的一级目录。
 
 ## 文档权威
@@ -54,6 +54,8 @@ oa_groundrag/
 │   ├── vlm/
 │   └── grounding/
 └── evaluation/
+    ├── segmentation.py        OA-AuxSeg 评价
+    ├── vlm.py                 Shared MLLM 评价
     ├── rs_general/            Gate B
     ├── grounding/
     └── retrieval/             Gate D
