@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 
 UNIFIED_REQUEST_SCHEMA = "oa_groundrag.unified_request.v1"
@@ -175,6 +175,17 @@ class InMemorySpatialInput:
 
 
 SpatialInput = BenchmarkSampleRef | InMemorySpatialInput
+
+
+class RuntimeAccessContext(Protocol):
+    """显式扩大单次 runtime 数据边界的执行上下文；普通调用不提供。"""
+
+    def validate_runtime_access(
+        self,
+        request: "UnifiedRequest",
+        *,
+        output_root: Path | None,
+    ) -> Mapping[str, Any]: ...
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,28 @@
+schema_version: oa_groundrag.unified_demo.config.v1
+unified_config: inference_v2.yaml
+benchmark:
+  root: ../../../benchmark/oa_auxseg_hdf5_v1/full
+  schema_version: oa_auxseg_hdf5_v1
+  manifest_sha256: 9a3b1478ed844f234e32b839fded67a937c49d202e3d8f5efd7db52596b5a00a
+  index_sha256: 389877226249d2477bdda62d937950339e9fa60df35558b945d02757e8d0da42
+frozen_evaluations:
+  - name: OA-GroundedEval-dev
+    root: ../../../benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100
+    manifest_sha256: fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492
+demo_root: ../../outputs/demo/unified_workbench_v1
+allow_test_demo: false
+defaults:
+  mode: Demo / Qualitative Exploration
+  split: val
+  suite_tasks:
+    - VLM_ONLY
+    - SEGMENT_ONLY
+    - SEGMENT_AND_UNDERSTAND
+    - REGION_INTERPRETATION
+  prompts:
+    VLM_ONLY: Describe the remote-sensing scene using only visible evidence.
+    SEGMENT_ONLY: Segment candidate landslide regions.
+    REGION_UNDERSTANDING: Describe only the visual evidence inside and around the uploaded mask.
+    SEGMENT_AND_UNDERSTAND: Locate candidate landslide regions and report a grounded visual observation.
+    KNOWLEDGE_QA: What evidence and limitations should be considered when interpreting a possible landslide in remote sensing data?
+    REGION_INTERPRETATION: Interpret this candidate region using the grounded observation and retrieved professional evidence, with explicit limitations.

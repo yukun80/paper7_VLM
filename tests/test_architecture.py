@@ -15,6 +15,7 @@ from oa_groundrag.data.grounded.annotation.cli import TRAIN_WORKFLOW_PATHS
 from oa_groundrag.data.grounded.supervision.cli import MODEL_ASSISTED_WORKFLOW_PATHS
 from oa_groundrag.retrieval.contracts import load_stage6_config
 from oa_groundrag.runtime.config import load_unified_config
+from oa_groundrag.runtime.demo.config import load_demo_config
 from oa_groundrag.segmentation.config import load_runtime_config
 from oa_groundrag.training.grounding.config import load_stage5_config
 from oa_groundrag.vlm.config import load_config
@@ -191,6 +192,7 @@ class ArchitectureTest(unittest.TestCase):
             / "vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml",
         )
         load_unified_config(configs / "runtime/inference_v2.yaml")
+        load_demo_config(configs / "runtime/demo_v1.yaml")
 
     def test_fixed_workflow_config_references_exist(self) -> None:
         for path in (

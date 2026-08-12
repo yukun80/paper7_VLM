@@ -146,6 +146,7 @@ python scripts/infer/oa_auxseg.py --help
 python scripts/infer/rs_vlm.py --help
 python scripts/infer/text_rag.py --help
 python scripts/infer/oa_groundrag.py --help
+python scripts/infer/demo.py --help
 
 python scripts/evaluate/oa_auxseg.py --help
 python scripts/evaluate/rs_vlm.py --help
@@ -191,6 +192,29 @@ python scripts/infer/oa_groundrag.py \
 `UnifiedRequest`、`UnifiedResponse` 和 `UnifiedTask` 的 wire schema 保持 v1。普通 runtime
 拒绝 `GT_MASK`、test/sealed 路径和已有输出根；candidate ID 缺失或无匹配时按现有合同回退
 到 OA-AuxSeg global mask，不自动选择 Top-1。
+
+### Unified Demo Workbench
+
+只读 Workbench 复用现有 Benchmark reader、六个 `UnifiedTask`、router、runtime 和 lazy
+providers，用于浏览 train/val Benchmark、人工维护 qualitative Demo Gallery、只读查看
+Frozen Evaluation，并展示空间结果、grounded observation、Evidence Packet、Pass-2 与执行轨迹。
+它不修改 Benchmark、Frozen selection、checkpoint、Adapter、Text Bank 或正式 outputs。
+
+安装可选 UI 依赖并从本地回环地址启动：
+
+```bash
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python -m pip install -e '.[demo]'
+
+/home/yukun80/miniconda3/envs/qwen3vl/bin/python \
+  scripts/infer/demo.py \
+  --config configs/runtime/demo_v1.yaml \
+  --port 7860
+```
+
+默认 `allow_test_demo: false`：test 只显示锁定的 index metadata，不打开 HDF5 payload，
+不能推理或加入 Gallery。只有负责人显式修改独立 Demo 授权后才能去盲化；届时每次访问先
+发布 test receipt，并永久标记其不再具有 blind/sealed evaluation 属性。Reference/GT mask
+始终只作 `Reference / Audit Only`，不会伪装成 `USER_MASK`。
 
 ## 稳定 Python 接口
 

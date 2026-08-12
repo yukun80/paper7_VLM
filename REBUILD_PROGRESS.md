@@ -15,17 +15,19 @@ provenance，不代表当前入口或状态。
 | --- | --- |
 | 更新时间 | `2026-08-12` |
 | program | `OA_GROUNDRAG_V3` |
-| 当前工程状态 | `P0 / INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE / engineering_complete` |
-| 当前文档任务 | `REBUILD_PROGRESS_SIMPLIFICATION / completed` |
+| 当前工程状态 | `P0 / INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE + UNIFIED_DEMO_WORKBENCH / engineering_complete` |
+| 当前文档任务 | `ALGORITHM_INTERVIEW_GUIDE / completed` |
 | 下一任务 | `P1 Multi-Source Grounded Evidence` |
-| Git 基线 | `main@ac94fc1107b524f37dfbcf529cf4dc09bde27405` |
+| Git 基线 | `main@041e6a40cc5bc7e6c4bc6416059b490334b4732b` |
 | upstream 基线 | 本地 `origin/main` 与上述 HEAD 一致，`ahead=0 / behind=0` |
 | 发行接口 | `oa-groundrag==0.2.0`；`oa-groundrag = oa_groundrag.runtime.cli:main` |
 | 总体科学状态 | P0 与能力驱动重构仅为工程完成；不升级 Gate A/C/D 或系统科学验收 |
 | Benchmark test / sealed test | 未评价 / 未访问 |
 
-本次文档简化没有运行训练、模型推理、GPU、正式评价或 artifact 重算，没有 commit 或
-push。开始 P1 或任何新写入前，必须重新核对现场 Git、进程、资产身份和负责人授权。
+本次算法与面试讲解文档编写没有运行训练、模型推理、GPU、正式评价或 artifact 重算，没有 commit 或
+push。随后完成的 Unified Demo Workbench 只运行一次 val bounded CUDA inference；没有训练、
+正式评价、Gate 或 test/sealed payload 访问。开始 P1 或任何新写入前，必须重新核对现场 Git、
+进程、资产身份和负责人授权。
 
 ## 权威与发布基线
 
@@ -38,6 +40,7 @@ push。开始 P1 或任何新写入前，必须重新核对现场 Git、进程�
 | 能力路径迁移提交 | `b784c746c7749783739f21e3e810012ac493bd6b` |
 | 能力重构发布提交 | `ac94fc1107b524f37dfbcf529cf4dc09bde27405` |
 | Unified runtime config | `configs/runtime/inference_v2.yaml`；SHA-256 `7811b6c8bfd217fd3f86f8c5edc6c1e897033036cf4df0844efbdb56d433a631` |
+| Unified Demo config | `configs/runtime/demo_v1.yaml`；SHA-256 `a060e69ccb625f55d789e3ff2455ad6c643394834217f89c008ea37ddb19b6f9` |
 | Retrieval config | `configs/retrieval/dev_v1.yaml`；SHA-256 `f175a99347184d75592ec9a1c61c88fc7a4b976dd7381cb9afafd209fb1f8b57` |
 | Grounded curriculum config | `configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml`；SHA-256 `2998cd8c36ad69a703507b8446f3767035819d91f96c964a20969d2f6f3a64e2` |
 
@@ -52,7 +55,7 @@ AGENTS 不保存动态运行结果。
 | Shared RS-Geohazard MLLM | `oa_groundrag/vlm`；`oa_groundrag/data/rs_general`；`oa_groundrag/training/vlm` | RS-GeneralDesc native v1、step-1000 Adapter 与 Gate B 冻结证据可用 | Gate B 只接受其冻结 RS-GeneralDesc 作用域 |
 | Grounded Multimodal Understanding | `oa_groundrag/grounding`；`oa_groundrag/data/grounded`；`oa_groundrag/training/grounding` | train-only Corpus、Eval-dev、compact supervision 与 step-900 Region Adapter 可用 | 64 条严格 no-target 输出失败未修复；Gate C、专家共识和正式 OA-GroundedEval 未完成 |
 | Knowledge Augmentation | `oa_groundrag/retrieval`；`oa_groundrag/evaluation/retrieval` | Text Bank、80-record retrieval、Pass-2 smoke 与 25-pair automatic-only 开发评价可用 | 无 retrieval Gold、专家盲评和正式阈值；Gate D 未科学通过 |
-| Unified Inference | `oa_groundrag/runtime` | 六类显式任务、确定性 router、lazy provider 与释放语义工程完成 | P1 多源 grounded evidence、统一科学评价均未开始 |
+| Unified Inference | `oa_groundrag/runtime` | 六类显式任务、确定性 router、lazy provider，以及只读 Benchmark Browser / Demo Gallery / Frozen Eval Workbench 工程完成 | Demo selection 仅作 qualitative 展示；test 默认锁定；P1 多源 grounded evidence 与统一科学评价均未开始 |
 
 Stage 只保留为 curriculum、schema、output root、checkpoint metadata 和历史 provenance；
 活动源码、配置、脚本和测试按能力与工程职责组织。
@@ -174,24 +177,32 @@ MRR、nDCG 和 `gate_d_pass` 均为 `null`。
 
 ## 最近一次有效工程验收
 
-能力驱动重构在 `2026-08-11` 完成，结果如下；本次文档简化没有重跑这些测试。
+能力驱动重构基线仍保留；Unified Demo Workbench 的当前有效工程证据如下。
 
 | 检查 | 最近结果 |
 | --- | --- |
-| 单次 unittest discovery | 收集 339 项；331 passed，4 项因缺少 `oa_auxseg_hdf5_v1/small` 显式 skip，4 项因包含本轮禁止的 backward/optimizer step 只收集未执行 |
-| 架构测试 | 8/8；能力根、公共 import、18 个 CLI help、禁止 package→scripts、禁止旧 import、零已知导入环 |
-| compile / metadata / diff | `compileall`、console target import、安装 metadata、`git diff --check` 均通过 |
-| CUDA bounded inference | 六任务 6/6；仅 inference，`training_performed=false`、`sealed_test_accessed=false` |
-| 等价性与保护资产 | 模型数学、checkpoint loader、Grounded facts、retrieval、UnifiedTask 与正式 artifact identity 未改变 |
+| 全量回归基线 | 能力重构时收集 339 项：331 passed，4 项因缺少 `oa_auxseg_hdf5_v1/small` skip，4 项含 backward/optimizer step 仅收集未执行；本轮未重跑训练相关全集 |
+| Runtime / Demo CPU | `tests/runtime` 49/49，其中既有 Unified Runtime 31/31、新 Demo 18/18 |
+| Annotation / architecture | annotation Workbench 10/10；architecture 8/8，包含 Demo config 与薄 CLI 检查 |
+| Grounding / retrieval / data | 相关只读合同与 pipeline 回归 69/69 |
+| Gradio smoke | Blocks 构建通过；最终代码在 `127.0.0.1:8801` 启动并关闭，`share=false`、private callbacks、queue concurrency=1、Demo/Frozen 白名单与 protected roots 黑名单已检查 |
+| compile / metadata / diff | `compileall`、Demo CLI help、本地 editable metadata `oa-groundrag==0.2.0`、`demo` extra、console target、`git diff --check` 均通过 |
+| CUDA bounded Demo | 单个 val `REGION_INTERPRETATION` 成功，覆盖 segmentation、Pass-1、6 条 evidence 与 Pass-2；peak allocated `4,677,430,784` bytes，provider release 完整；run 为 `outputs/demo/unified_workbench_v1/runs/demo_20260812T034449148419Z_b4bcfc86dfe04039a787e513a5b94b0f` |
+| 等价性与保护资产 | Benchmark manifest/index、OA-AuxSeg checkpoint、Region Adapter、Text Bank、Frozen Eval 与正式 prediction/evaluation/RAG output anchors 实施前后 SHA-256 一致；模型数学未修改 |
 | Ruff | 未安装；准确结果为 `No module named ruff` |
 
-本次 `2026-08-12` 文档简化仅执行 Markdown 链接、活动路径、Git identity、冻结设计 SHA
-和 `git diff --check` 等静态检查；没有运行 Python/CUDA 测试套件、模型 inference、训练、
-正式评价或 artifact validator。
+本次 `2026-08-12` 新增零基础算法与面试讲解：30 道题编号和六类固定栏目完整，115 个
+本地 Markdown 引用零缺失，29 个唯一小林题目/专题 URL 已通过页面或站内搜索解析；并复核
+活动路径、Git identity、冻结设计 SHA 和 `git diff --check`。没有运行 Python/CUDA 测试
+套件、模型 inference、训练、正式评价或 artifact validator；该句只描述面试讲解文档任务。
+
+Unified Demo 的上述 smoke 均为 engineering evidence，不构成 Gate A/C/D、正式 test
+evaluation 或 scientific acceptance。`allow_test_demo=false`，真实 test 未读取，Demo root
+中不存在 test access receipt；Frozen Evaluation selection 保持 100 条原身份且完全只读。
 
 ## 下一任务与授权
 
-下一任务仍为 `P1 Multi-Source Grounded Evidence`，本次文档简化没有开始 P1。
+下一任务仍为 `P1 Multi-Source Grounded Evidence`；教学文档与 Unified Demo Workbench 都没有开始 P1。
 
 开始前必须：
 

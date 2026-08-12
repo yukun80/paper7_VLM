@@ -25,6 +25,7 @@ from .contracts import (
     UnifiedRequest,
     UnifiedResponse,
     UnifiedTask,
+    RuntimeAccessContext,
     reject_test_or_sealed_path,
 )
 from .providers import (
@@ -82,8 +83,68 @@ class UnifiedInferenceRuntime:
         self.text_rag = text_rag
         self.router = router or CapabilityRouter()
 
-    def plan(self, request: UnifiedRequest) -> ExecutionPlan:
+    @staticmethod
+    def _access_fields(
+        request: UnifiedRequest,
+        *,
+        output_root: Path | None,
+        access_context: RuntimeAccessContext | None,
+    ) -> dict[str, Any]:
+        split = getattr(request.spatial_input, "split", None)
+        if access_context is None:
+            if split not in {None, "train", "val"}:
+                raise UnifiedInferenceError(
+                    UnifiedReasonCode.TEST_OR_SEALED_PATH_FORBIDDEN,
+                    "非 train/val in-memory spatial input 要求显式受审计访问上下文",
+                    task=request.task,
+                )
+            return {
+                "sealed_test_accessed": False,
+            }
+        fields = dict(
+            access_context.validate_runtime_access(
+                request,
+                output_root=output_root,
+            )
+        )
+        required = {
+            "access_type",
+            "access_receipt_id",
+            "sealed_test_accessed",
+            "blind_or_sealed_evaluation_property",
+            "formal_test_evaluation",
+        }
+        if not required.issubset(fields):
+            raise UnifiedInferenceError(
+                UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
+                f"runtime access context 缺少字段：{sorted(required - set(fields))}",
+                task=request.task,
+            )
+        if (
+            fields["access_type"] != "DEMO_TEST_ACCESS"
+            or fields["sealed_test_accessed"] is not True
+            or fields["blind_or_sealed_evaluation_property"] is not False
+            or fields["formal_test_evaluation"] is not False
+        ):
+            raise UnifiedInferenceError(
+                UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
+                "runtime access context 未满足 Demo test 去盲化合同",
+                task=request.task,
+            )
+        return fields
+
+    def plan(
+        self,
+        request: UnifiedRequest,
+        *,
+        access_context: RuntimeAccessContext | None = None,
+    ) -> ExecutionPlan:
         request.validate_paths()
+        self._access_fields(
+            request,
+            output_root=None,
+            access_context=access_context,
+        )
         return self.router.route(request)
 
     def _event(self, trace: list[dict[str, Any]], event: str, **details: Any) -> None:
@@ -544,6 +605,7 @@ class UnifiedInferenceRuntime:
         request: UnifiedRequest,
         output_root: Path,
         error: UnifiedInferenceError,
+        access_fields: Mapping[str, Any],
     ) -> None:
         if output_root.exists() or output_root.is_symlink():
             return
@@ -562,13 +624,24 @@ class UnifiedInferenceRuntime:
                 "engineering_runtime": True,
                 "formal_acceptance": False,
                 "scientific_acceptance": False,
-                "sealed_test_accessed": False,
+                **dict(access_fields),
             })
             writer.publish()
 
-    def infer(self, request: UnifiedRequest, *, output_root: Path) -> UnifiedResponse:
+    def infer(
+        self,
+        request: UnifiedRequest,
+        *,
+        output_root: Path,
+        access_context: RuntimeAccessContext | None = None,
+    ) -> UnifiedResponse:
         request.validate_paths()
         output_root = reject_test_or_sealed_path(output_root, label="output_root")
+        access_fields = self._access_fields(
+            request,
+            output_root=output_root,
+            access_context=access_context,
+        )
         plan = self.router.route(request)
         trace: list[dict[str, Any]] = []
         try:
@@ -592,7 +665,7 @@ class UnifiedInferenceRuntime:
                     "engineering_runtime": True,
                     "formal_acceptance": False,
                     "scientific_acceptance": False,
-                    "sealed_test_accessed": False,
+                    **access_fields,
                 })
                 writer.publish()
                 return response
@@ -603,6 +676,7 @@ class UnifiedInferenceRuntime:
                 request=request,
                 output_root=output_root,
                 error=enriched,
+                access_fields=access_fields,
             )
             raise enriched
         except Exception as error:
@@ -626,5 +700,6 @@ class UnifiedInferenceRuntime:
                     request=request,
                     output_root=output_root,
                     error=enriched,
+                    access_fields=access_fields,
                 )
             raise enriched from error
