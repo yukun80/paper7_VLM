@@ -14,16 +14,18 @@ from .catalog import (
     BenchmarkCatalog,
     BenchmarkFilter,
     BenchmarkRecord,
-    FrozenEvaluationCatalog,
-    FrozenEvaluationItem,
 )
 from .config import DemoConfig, load_demo_config
 from .gallery import DemoGalleryStore
-from .runner import DemoRunSummary, UnifiedDemoRunner
+from .runner import (
+    WAITING_FOR_CANDIDATE,
+    DemoCandidateSelection,
+    DemoRunSummary,
+    UnifiedDemoRunner,
+)
 
 
 DEMO_MODE = "Demo / Qualitative Exploration"
-FROZEN_MODE = "Frozen Evaluation / Read Only"
 _DEMO_CSS = """
 .scientific-boundary { border-left: 5px solid #b45309; padding-left: 12px; }
 .readonly-boundary { border-left: 5px solid #1d4ed8; padding-left: 12px; }
@@ -34,7 +36,6 @@ _DEMO_CSS = """
 class DemoWorkbenchServices:
     config: DemoConfig
     catalog: BenchmarkCatalog
-    frozen: Mapping[str, FrozenEvaluationCatalog]
     gallery: DemoGalleryStore
     runner: UnifiedDemoRunner
     test_access: DemoTestAccessController
@@ -44,7 +45,6 @@ def build_demo_services(
     config: DemoConfig | Path | str,
     *,
     runtime: Any | None = None,
-    verify_frozen_payloads: bool = True,
 ) -> DemoWorkbenchServices:
     resolved = config if isinstance(config, DemoConfig) else load_demo_config(config)
     access = DemoTestAccessController(
@@ -57,19 +57,11 @@ def build_demo_services(
         resolved.benchmark,
         access_controller=access,
     )
-    frozen = {
-        binding.name: FrozenEvaluationCatalog(
-            binding,
-            verify_payloads=verify_frozen_payloads,
-        )
-        for binding in resolved.frozen_evaluations
-    }
     gallery = DemoGalleryStore(resolved.demo_root)
     runner = UnifiedDemoRunner(resolved, catalog, runtime=runtime)
     return DemoWorkbenchServices(
         config=resolved,
         catalog=catalog,
-        frozen=frozen,
         gallery=gallery,
         runner=runner,
         test_access=access,
@@ -103,19 +95,6 @@ def _selection_for_record(record: BenchmarkRecord) -> dict[str, Any]:
         "sample_id": record.sample_id,
         "split": record.split,
         "source": record.source,
-        "frozen_name": None,
-        "frozen_ordinal": None,
-    }
-
-
-def _selection_for_frozen(item: FrozenEvaluationItem) -> dict[str, Any]:
-    return {
-        "mode": FROZEN_MODE,
-        "sample_id": item.sample_id,
-        "split": "val",
-        "source": item.baseline_record["source"],
-        "frozen_name": item.evaluation_name,
-        "frozen_ordinal": item.ordinal,
     }
 
 
@@ -171,7 +150,6 @@ def create_demo_app(
     cfg = service.config
     source_choices = ["All", *service.catalog.sources]
     modality_choices = list(service.catalog.modalities)
-    frozen_names = list(service.frozen)
     default_suite = [task.value for task in cfg.defaults.suite_tasks]
     default_record = service.catalog.filtered(
         BenchmarkFilter(split=cfg.defaults.split)
@@ -180,6 +158,7 @@ def create_demo_app(
     private_event = {"api_visibility": "private"}
 
     def record_values(record: BenchmarkRecord, *, message: str = "") -> tuple[Any, ...]:
+        service.runner.clear_spatial_snapshot()
         selection = _selection_for_record(record)
         lock = record.split == "test" and not cfg.allow_test_demo
         if lock:
@@ -188,11 +167,29 @@ def create_demo_app(
                 "or Gallery access occurred. Set `allow_test_demo: true` only with owner authorization."
             )
             optical = reference = None
+            optical_gallery: list[Any] = []
+            auxiliary_gallery: list[Any] = []
+            channel_metadata: dict[str, Any] = {"optical": [], "auxiliary": []}
             receipt = None
         else:
             loaded = service.catalog.load(record, action="BROWSE")
             optical = loaded.optical_image
             reference = loaded.reference_mask
+            optical_gallery = [
+                (loaded.optical_image, "Full Optical / deterministic RGB preview"),
+                *(value.gallery_value() for value in loaded.optical_channel_previews),
+            ]
+            auxiliary_gallery = [
+                value.gallery_value() for value in loaded.auxiliary_channel_previews
+            ]
+            channel_metadata = {
+                "optical": [
+                    value.to_dict() for value in loaded.optical_channel_previews
+                ],
+                "auxiliary": [
+                    value.to_dict() for value in loaded.auxiliary_channel_previews
+                ],
+            }
             receipt = None if loaded.test_receipt is None else loaded.test_receipt.receipt_id
             status = message or "✅ Benchmark payload loaded read-only."
             if record.split == "test":
@@ -212,7 +209,12 @@ def create_demo_app(
                 "role": "spatial boundary anchor",
             },
             "auxiliary_modalities": {
-                name: {"channel_names": list(channels), "role": "OA-AuxSeg optional evidence"}
+                name: {
+                    "channel_names": list(channels),
+                    "role": "OA-AuxSeg optional evidence",
+                    "preview_label": "Spatial Expert Input Preview",
+                    "p0_mllm_boundary": "Not formal MLLM grounded input in current P0",
+                }
                 for name, channels in record.auxiliary_channel_names.items()
             },
         }
@@ -232,6 +234,15 @@ def create_demo_app(
             formal_inputs,
             record.sample_id,
             gr.update(choices=[], value=None),
+            optical_gallery,
+            auxiliary_gallery,
+            channel_metadata,
+            [],
+            [],
+            None,
+            None,
+            None,
+            "Candidate selection cleared: sample selection changed.",
         )
 
     def current_filter(
@@ -284,45 +295,6 @@ def create_demo_app(
             list(record.available_modalities),
         )
 
-    def frozen_values(name: str, ordinal: int) -> tuple[Any, ...]:
-        item = service.frozen[name].item(int(ordinal))
-        variants = {
-            kind: {
-                "record_id": record.get("record_id"),
-                "representation_mode": record.get("representation_mode"),
-                "formal_model_input_roles": record.get("formal_model_input_roles"),
-                "target_status": record.get("target_status"),
-            }
-            for kind, record in item.counterfactual_records.items()
-        }
-        return (
-            _selection_for_frozen(item),
-            item.ordinal,
-            (
-                "🔒 **Frozen Evaluation / Read Only** — 100 baseline identity and ledger verified; "
-                "selection cannot be added, removed, replaced, or sent to Gallery."
-            ),
-            item.to_dict(),
-            None if item.asset_path("optical_full") is None else str(item.asset_path("optical_full")),
-            None if item.asset_path("binary_mask") is None else str(item.asset_path("binary_mask")),
-            None if item.asset_path("context_crop") is None else str(item.asset_path("context_crop")),
-            variants,
-            gr.update(
-                choices=list(item.counterfactual_records),
-                value="baseline_correct_mask",
-            ),
-            gr.update(choices=[], value=None),
-        )
-
-    def frozen_variant_values(name: str, ordinal: int, variant: str) -> tuple[Any, ...]:
-        item = service.frozen[name].item(int(ordinal))
-        if variant not in item.counterfactual_records:
-            raise gr.Error(f"当前 Frozen item 不含变体：{variant}")
-        paths = [item.asset_path(role, variant=variant) for role in (
-            "optical_full", "binary_mask", "context_crop"
-        )]
-        return tuple(None if path is None else str(path) for path in paths)
-
     def mutate_gallery(
         action: str,
         selection: Mapping[str, Any],
@@ -331,7 +303,7 @@ def create_demo_app(
         tasks: Sequence[str],
     ) -> tuple[Any, str]:
         if selection.get("mode") != DEMO_MODE:
-            raise gr.Error("Frozen Evaluation selection 不能进入 Demo Gallery")
+            raise gr.Error("Demo Gallery 只接受当前 Benchmark Browser selection")
         record = service.catalog.locate(
             str(selection.get("sample_id", "")),
             split=str(selection.get("split", "")),
@@ -372,52 +344,239 @@ def create_demo_app(
         instruction: str,
         knowledge_question: str,
         user_mask: str | None,
-        candidate_id: Any,
+        candidate_token: Any,
         interpretation_source: str,
     ) -> tuple[Any, ...]:
-        sample_id = str(selection.get("sample_id", ""))
-        split = str(selection.get("split", ""))
-        record = service.catalog.locate(sample_id, split=split)
         tasks = [single_task] if task_mode == "Single Task" else list(suite_tasks)
         selected = service.runner.canonical_tasks(tasks)
+        pure_knowledge = selected == (UnifiedTask.KNOWLEDGE_QA,)
+        sample_id = str(selection.get("sample_id", ""))
+        split = str(selection.get("split", ""))
+        record = None if pure_knowledge else service.catalog.locate(
+            sample_id,
+            split=split,
+        )
         overrides: dict[UnifiedTask, str] = {}
         if instruction.strip():
             overrides.update({task: instruction.strip() for task in selected if task is not UnifiedTask.KNOWLEDGE_QA})
         if knowledge_question.strip() and UnifiedTask.KNOWLEDGE_QA in selected:
             overrides[UnifiedTask.KNOWLEDGE_QA] = knowledge_question.strip()
         source = RegionSource(interpretation_source)
-        candidate = None if candidate_id in {None, ""} else int(candidate_id)
-        frozen_item = None
-        if selection.get("mode") == FROZEN_MODE:
-            frozen_name = str(selection["frozen_name"])
-            frozen_item = service.frozen[frozen_name].item(int(selection["frozen_ordinal"]))
+        candidate = (
+            None
+            if candidate_token in {None, ""}
+            or source is RegionSource.USER_MASK
+            or UnifiedTask.REGION_INTERPRETATION not in selected
+            else DemoCandidateSelection.from_token(str(candidate_token))
+        )
         summary = service.runner.run(
             record=record,
             tasks=selected,
             instructions=overrides,
             user_mask=user_mask,
-            candidate_region_id=candidate,
+            candidate_selection=candidate,
             region_interpretation_source=source,
             data_mode=str(selection.get("mode")),
-            frozen_item=frozen_item,
         )
+        return run_output_values(summary, selection)
+
+    def run_selected_candidate(
+        selection: Mapping[str, Any],
+        instruction: str,
+        candidate_token: Any,
+    ) -> tuple[Any, ...]:
+        if candidate_token in {None, ""}:
+            raise gr.Error(
+                "请先从 Candidate Preview 选择具体 candidate，或显式选择 global mask"
+            )
+        sample_id = str(selection.get("sample_id", ""))
+        split = str(selection.get("split", ""))
+        record = service.catalog.locate(sample_id, split=split)
+        overrides = (
+            {}
+            if not instruction.strip()
+            else {UnifiedTask.REGION_INTERPRETATION: instruction.strip()}
+        )
+        summary = service.runner.run(
+            record=record,
+            tasks=(UnifiedTask.REGION_INTERPRETATION,),
+            instructions=overrides,
+            candidate_selection=DemoCandidateSelection.from_token(
+                str(candidate_token)
+            ),
+            region_interpretation_source=RegionSource.OA_AUXSEG_CANDIDATE,
+            data_mode=str(selection.get("mode")),
+        )
+        return run_output_values(summary, selection)
+
+    def current_input_banner(
+        selection: Mapping[str, Any],
+        task_mode: str,
+        single_task: str,
+        suite_tasks: Sequence[str],
+    ) -> str:
+        tasks = [single_task] if task_mode == "Single Task" else list(suite_tasks)
+        try:
+            selected = service.runner.canonical_tasks(tasks)
+        except Exception:
+            return "⚠️ 请选择至少一个有效 UnifiedTask。"
+        if selected == (UnifiedTask.KNOWLEDGE_QA,):
+            return (
+                "### Current execution input\n"
+                "**KNOWLEDGE_ONLY — No Benchmark payload consumed.** 当前 Browser "
+                "selection 只是 UI metadata，不会打开 HDF5、构造 spatial input 或创建 test receipt。"
+            )
+        return (
+            "### Current execution input\n"
+            f"mode=`{selection.get('mode')}` · split=`{selection.get('split')}` · "
+            f"sample=`{selection.get('sample_id')}` · source=`{selection.get('source')}`"
+        )
+
+    def effective_prompt_preview(
+        task_mode: str,
+        single_task: str,
+        suite_tasks: Sequence[str],
+        instruction: str,
+        knowledge_question: str,
+    ) -> Mapping[str, Any]:
+        tasks = [single_task] if task_mode == "Single Task" else list(suite_tasks)
+        selected = service.runner.canonical_tasks(tasks)
+        values: list[dict[str, str]] = []
+        for task in selected:
+            if task is UnifiedTask.KNOWLEDGE_QA and knowledge_question.strip():
+                prompt = knowledge_question.strip()
+                source = "USER_OVERRIDE"
+            elif task is not UnifiedTask.KNOWLEDGE_QA and instruction.strip():
+                prompt = instruction.strip()
+                source = "USER_OVERRIDE"
+            else:
+                prompt = cfg.defaults.prompts[task]
+                source = "CONFIG_DEFAULT"
+            values.append({
+                "task": task.value,
+                "effective_prompt": prompt,
+                "prompt_source": source,
+            })
+        return {
+            "task_order": [task.value for task in selected],
+            "prompts": values,
+            "read_only_preview": True,
+        }
+
+    def candidate_component_values(
+        selection: Mapping[str, Any],
+    ) -> tuple[Any, ...]:
+        sample_id = str(selection.get("sample_id", ""))
+        split = str(selection.get("split", ""))
+        payload = service.runner.candidate_ui_payload(
+            sample_id=sample_id,
+            split=split,
+        )
+        if payload["snapshot"] is None:
+            return (
+                gr.update(choices=[], value=None),
+                [],
+                [],
+                None,
+                None,
+                None,
+                "No valid spatial result for the current sample.",
+            )
+        snapshot = payload["snapshot"]
+        return (
+            gr.update(choices=payload["choices"], value=None),
+            payload["gallery"],
+            payload["gallery_tokens"],
+            None,
+            None,
+            None,
+            (
+                f"Spatial snapshot `{snapshot['snapshot_id']}` from "
+                f"`{snapshot['source_task']}`; select a candidate or explicitly confirm global."
+            ),
+        )
+
+    def candidate_preview_values(
+        selection: Mapping[str, Any],
+        token: Any,
+    ) -> tuple[Any, ...]:
+        if token in {None, ""}:
+            return None, None, None, "No candidate selected."
+        sample_id = str(selection.get("sample_id", ""))
+        split = str(selection.get("split", ""))
+        selected = service.runner.resolve_candidate_selection(
+            str(token),
+            sample_id=sample_id,
+            split=split,
+        )
+        mask, overlay, metadata = service.runner.candidate_preview(
+            selected,
+            sample_id=sample_id,
+            split=split,
+        )
+        return mask, overlay, metadata, (
+            "Explicit global fallback confirmed."
+            if metadata.get("explicit_global_confirmed")
+            else f"Candidate `{metadata.get('candidate_id')}` selected for interpretation."
+        )
+
+    def candidate_gallery_selected(
+        selection: Mapping[str, Any],
+        tokens: Sequence[str],
+        event: gr.SelectData,
+    ) -> tuple[Any, ...]:
+        index = event.index
+        if isinstance(index, (tuple, list)):
+            index = index[0]
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(tokens):
+            raise gr.Error("Candidate Gallery selection index 非法")
+        token = str(tokens[index])
+        mask, overlay, metadata, status = candidate_preview_values(selection, token)
+        return gr.update(value=token), mask, overlay, metadata, status
+
+    # ``from __future__ import annotations`` 会把局部延迟导入的 Gradio 类型保存为字符串；
+    # 恢复真实事件类型，确保 Gallery.select 将 SelectData 作为 event arg 注入。
+    candidate_gallery_selected.__annotations__["event"] = gr.SelectData
+
+    def run_output_values(
+        summary: DemoRunSummary,
+        selection: Mapping[str, Any],
+    ) -> tuple[Any, ...]:
         task_choices = [item.task.value for item in summary.tasks]
-        candidate_choices = list(
-            service.runner.candidate_choices(sample_id, split=split)
+        successful = [item.task for item in summary.tasks if item.status == "SUCCESS"]
+        if (
+            summary.active_snapshot_id is not None
+            and service.runner.active_snapshot is not None
+            and service.runner.active_snapshot.source_task.value in task_choices
+        ):
+            result_value = service.runner.active_snapshot.source_task.value
+        elif successful:
+            result_value = successful[-1].value
+        else:
+            result_value = task_choices[0]
+        success_count = sum(item.status == "SUCCESS" for item in summary.tasks)
+        failure_count = sum(item.status == "FAILED" for item in summary.tasks)
+        pending_count = sum(
+            item.status == WAITING_FOR_CANDIDATE for item in summary.tasks
         )
         status = (
             f"✅ Demo run `{summary.run_id}` published: "
-            f"{sum(item.status == 'SUCCESS' for item in summary.tasks)}/{len(summary.tasks)} tasks succeeded. "
+            f"success={success_count}, failed={failure_count}, waiting={pending_count}. "
             "Engineering evidence only; not scientific acceptance."
         )
+        if summary.input_scope == "KNOWLEDGE_ONLY":
+            status += " KNOWLEDGE_ONLY: No Benchmark payload consumed."
+        if pending_count:
+            status += " REGION_INTERPRETATION is waiting for explicit candidate/global selection."
         if summary.sealed_test_accessed:
             status += " Test receipt recorded; blind/sealed property is false."
+        candidate_values = candidate_component_values(selection)
         return (
             summary.to_dict(),
             summary.to_dict(),
-            gr.update(choices=task_choices, value=task_choices[0]),
+            gr.update(choices=task_choices, value=result_value),
             status,
-            gr.update(choices=candidate_choices, value=None),
+            *candidate_values,
         )
 
     def viewer_values(run_state: Mapping[str, Any], task: str) -> tuple[Any, ...]:
@@ -440,8 +599,11 @@ def create_demo_app(
             item.get("text", item.get("content", "")),
         ] for item in packet.get("items", [])]
         response = viewer.get("response") or {}
+        original = preview["spatial_expert_inputs"].get("full_optical")
+        if original is None:
+            original = preview.get("direct_mllm_visual_inputs", {}).get("full_optical")
         return (
-            _resolve_viewer_asset(run_root, preview["spatial_expert_inputs"]["full_optical"]),
+            _resolve_viewer_asset(run_root, original),
             _resolve_viewer_asset(run_root, spatial.get("predicted_mask")),
             _resolve_viewer_asset(run_root, spatial.get("mask_probability")),
             _resolve_viewer_asset(run_root, spatial.get("overlay")),
@@ -457,15 +619,17 @@ def create_demo_app(
             knowledge.get("citations"),
             {
                 "final_text": response.get("text"),
+                "request_preview": viewer.get("request_preview"),
                 **viewer["execution_trace"],
                 "failure": viewer.get("failure"),
+                "pending": viewer.get("pending"),
             },
         )
 
     with gr.Blocks(title="OA-GroundRAG Unified Demo Workbench") as app:
         gr.Markdown(
             "# OA-GroundRAG Unified Demo Workbench\n"
-            "**Read-only inference workbench.** Benchmark/Frozen assets、checkpoint、Adapter、Text Bank "
+            "**Read-only inference workbench.** Benchmark、checkpoint、Adapter、Text Bank "
             "和正式 outputs 均不修改；唯一持久写入为独立 Demo Gallery、test receipt 与 Demo run。",
             elem_classes="scientific-boundary",
         )
@@ -511,46 +675,36 @@ def create_demo_app(
                     browser_reference = gr.Image(
                         label="Reference / Audit Only", image_mode="L", interactive=False
                     )
+            optical_channel_gallery = gr.Gallery(
+                label="Optical / Multispectral channel previews — deterministic per-channel rendering",
+                type="pil",
+                columns=4,
+                rows=2,
+                height="auto",
+                object_fit="contain",
+                interactive=False,
+            )
+            auxiliary_channel_gallery = gr.Gallery(
+                label=(
+                    "Spatial Expert Input Preview — auxiliary modalities | "
+                    "Not formal MLLM grounded input in current P0"
+                ),
+                type="pil",
+                columns=4,
+                rows=2,
+                height="auto",
+                object_fit="contain",
+                interactive=False,
+            )
+            channel_preview_metadata = gr.JSON(
+                label="Channel values / validity / display transform",
+                open=False,
+            )
             with gr.Row():
                 spatial_inputs = gr.JSON(label="Spatial Expert Inputs", open=True)
                 formal_inputs = gr.JSON(label="MLLM Formal Grounded Inputs", open=True)
 
-        with gr.Tab("B. Frozen Evaluation / Read Only"):
-            gr.Markdown(
-                "### Frozen Evaluation / Read Only\n"
-                "Selection identity is immutable. Poor images or model failures are not replaceable. "
-                "Any new inference is a Demo run (`selection_unchanged=true`, `formal_evaluation=false`).",
-                elem_classes="readonly-boundary",
-            )
-            with gr.Row():
-                frozen_name = gr.Dropdown(frozen_names, value=frozen_names[0], label="Frozen selection")
-                frozen_ordinal = gr.Number(value=0, precision=0, minimum=0, maximum=99, label="ordinal (0-99)")
-                frozen_variant = gr.Dropdown(
-                    ["baseline_correct_mask"],
-                    value="baseline_correct_mask",
-                    label="counterfactual variant (read only)",
-                )
-                frozen_previous = gr.Button("上一条")
-                frozen_next = gr.Button("下一条")
-                frozen_load = gr.Button("载入只读样本", variant="primary")
-            frozen_status = gr.Markdown()
-            frozen_meta = gr.JSON(label="Frozen identity / status", open=True)
-            with gr.Row():
-                frozen_optical = gr.Image(label="Frozen Full RGB", type="filepath", interactive=False)
-                frozen_reference = gr.Image(
-                    label="Reference / Counterfactual / Audit Only (never runtime input)",
-                    type="filepath",
-                    image_mode="L",
-                    interactive=False,
-                )
-                frozen_crop = gr.Image(
-                    label="Frozen Context Crop / Audit Preview",
-                    type="filepath",
-                    interactive=False,
-                )
-            frozen_variants = gr.JSON(label="Counterfactual variants (read only)", open=False)
-
-        with gr.Tab("C. Demo Gallery"):
+        with gr.Tab("B. Demo Gallery"):
             gr.Markdown(
                 "### Qualitative Demo Gallery\n"
                 "人工选择、独立 revision；不是 Gold、evaluation selection、benchmark score 或 scientific acceptance。"
@@ -576,10 +730,19 @@ def create_demo_app(
                 label="Current qualitative selection",
             )
 
-        with gr.Tab("D–F. Task Runner / Result Viewer / Trace"):
+        with gr.Tab("C. Task Runner / Result Viewer / Trace"):
             gr.Markdown(
                 "### Task Routing\n"
                 "Six explicit UnifiedTask only; Suite is preflighted in full and executed in a fixed capability order."
+            )
+            current_execution_input = gr.Markdown(
+                current_input_banner(
+                    initial_selection,
+                    "Task Suite",
+                    UnifiedTask.VLM_ONLY.value,
+                    default_suite,
+                ),
+                elem_classes="readonly-boundary",
             )
             with gr.Row():
                 task_mode = gr.Radio(["Single Task", "Task Suite"], value="Task Suite", label="run mode")
@@ -598,6 +761,17 @@ def create_demo_app(
             knowledge_question = gr.Textbox(
                 label="KNOWLEDGE_QA question (blank uses config prompt)", lines=2
             )
+            prompt_preview = gr.JSON(
+                value=effective_prompt_preview(
+                    "Task Suite",
+                    UnifiedTask.VLM_ONLY.value,
+                    default_suite,
+                    "",
+                    "",
+                ),
+                label="Effective prompts sent by Demo orchestration (read only)",
+                open=False,
+            )
             with gr.Row():
                 user_mask = gr.File(
                     label="Independent user/demo mask — strict PNG-L 0/255",
@@ -613,11 +787,46 @@ def create_demo_app(
                     choices=[],
                     value=None,
                     allow_custom_value=False,
-                    label="candidate ID (latest spatial result for same sample only)",
+                    label="Candidate selection (same sample + same spatial snapshot only)",
                 )
             run_button = gr.Button("运行只读 Demo inference", variant="primary")
             run_status = gr.Markdown()
             run_summary = gr.JSON(label="Suite summary", open=True)
+            candidate_gallery_tokens = gr.State([])
+            gr.Markdown(
+                "### Candidate Preview\n"
+                "Only real OA-AuxSeg candidates are shown. No GT/reference mask and no automatic Top-1 selection."
+            )
+            candidate_gallery = gr.Gallery(
+                label="OA-AuxSeg candidate overlays",
+                type="filepath",
+                columns=4,
+                rows=2,
+                height="auto",
+                object_fit="contain",
+                interactive=False,
+            )
+            with gr.Row():
+                candidate_mask = gr.Image(
+                    label="Selected candidate / explicit global mask",
+                    type="filepath",
+                    image_mode="L",
+                    interactive=False,
+                )
+                candidate_overlay = gr.Image(
+                    label="Selected candidate overlay",
+                    type="filepath",
+                    interactive=False,
+                )
+                candidate_metadata = gr.JSON(
+                    label="Candidate ID / bbox / area / confidence / binding",
+                    open=True,
+                )
+            candidate_status = gr.Markdown("No valid spatial result for the current sample.")
+            run_selected_candidate_button = gr.Button(
+                "运行所选 REGION_INTERPRETATION",
+                variant="primary",
+            )
             result_task = gr.Dropdown(choices=[], label="Result task")
             with gr.Row():
                 result_original = gr.Image(label="Original image", type="filepath", interactive=False)
@@ -657,6 +866,15 @@ def create_demo_app(
             formal_inputs,
             current_sample,
             candidate_selector,
+            optical_channel_gallery,
+            auxiliary_channel_gallery,
+            channel_preview_metadata,
+            candidate_gallery,
+            candidate_gallery_tokens,
+            candidate_mask,
+            candidate_overlay,
+            candidate_metadata,
+            candidate_status,
         ]
         filter_inputs = [split, source_filter, sample_query, target_filter, size_filter, modality_filter]
         app.load(
@@ -685,38 +903,6 @@ def create_demo_app(
             **private_event,
         )
 
-        frozen_outputs = [
-            selection_state,
-            frozen_ordinal,
-            frozen_status,
-            frozen_meta,
-            frozen_optical,
-            frozen_reference,
-            frozen_crop,
-            frozen_variants,
-            frozen_variant,
-            candidate_selector,
-        ]
-        frozen_load.click(fn=frozen_values, inputs=[frozen_name, frozen_ordinal], outputs=frozen_outputs, **private_event)
-        frozen_previous.click(
-            fn=lambda name, ordinal: frozen_values(name, int(ordinal) - 1),
-            inputs=[frozen_name, frozen_ordinal],
-            outputs=frozen_outputs,
-            **private_event,
-        )
-        frozen_next.click(
-            fn=lambda name, ordinal: frozen_values(name, int(ordinal) + 1),
-            inputs=[frozen_name, frozen_ordinal],
-            outputs=frozen_outputs,
-            **private_event,
-        )
-        frozen_variant.change(
-            fn=frozen_variant_values,
-            inputs=[frozen_name, frozen_ordinal, frozen_variant],
-            outputs=[frozen_optical, frozen_reference, frozen_crop],
-            show_progress="hidden",
-            **private_event,
-        )
         gallery_add.click(
             fn=lambda state, tags, note, tasks: mutate_gallery("upsert", state, tags, note, tasks),
             inputs=[selection_state, gallery_tags, gallery_note, gallery_tasks],
@@ -729,6 +915,74 @@ def create_demo_app(
             outputs=[gallery_table, gallery_status],
             **private_event,
         )
+        banner_inputs = [selection_state, task_mode, single_task, suite_tasks]
+        for component in (selection_state, task_mode, single_task, suite_tasks):
+            component.change(
+                fn=current_input_banner,
+                inputs=banner_inputs,
+                outputs=current_execution_input,
+                show_progress="hidden",
+                **private_event,
+            )
+        prompt_inputs = [
+            task_mode,
+            single_task,
+            suite_tasks,
+            instruction,
+            knowledge_question,
+        ]
+        for component in (
+            task_mode,
+            single_task,
+            suite_tasks,
+            instruction,
+            knowledge_question,
+        ):
+            component.change(
+                fn=effective_prompt_preview,
+                inputs=prompt_inputs,
+                outputs=prompt_preview,
+                show_progress="hidden",
+                **private_event,
+            )
+        candidate_selector.change(
+            fn=candidate_preview_values,
+            inputs=[selection_state, candidate_selector],
+            outputs=[
+                candidate_mask,
+                candidate_overlay,
+                candidate_metadata,
+                candidate_status,
+            ],
+            show_progress="hidden",
+            **private_event,
+        )
+        candidate_gallery.select(
+            fn=candidate_gallery_selected,
+            inputs=[selection_state, candidate_gallery_tokens],
+            outputs=[
+                candidate_selector,
+                candidate_mask,
+                candidate_overlay,
+                candidate_metadata,
+                candidate_status,
+            ],
+            show_progress="hidden",
+            **private_event,
+        )
+        run_outputs = [
+            run_state,
+            run_summary,
+            result_task,
+            run_status,
+            candidate_selector,
+            candidate_gallery,
+            candidate_gallery_tokens,
+            candidate_mask,
+            candidate_overlay,
+            candidate_metadata,
+            candidate_status,
+        ]
         run_event = run_button.click(
             fn=execute,
             inputs=[
@@ -742,7 +996,15 @@ def create_demo_app(
                 candidate_selector,
                 interpretation_source,
             ],
-            outputs=[run_state, run_summary, result_task, run_status, candidate_selector],
+            outputs=run_outputs,
+            concurrency_limit=1,
+            concurrency_id="oa_groundrag_demo_gpu",
+            **private_event,
+        )
+        candidate_run_event = run_selected_candidate_button.click(
+            fn=run_selected_candidate,
+            inputs=[selection_state, instruction, candidate_selector],
+            outputs=run_outputs,
             concurrency_limit=1,
             concurrency_id="oa_groundrag_demo_gpu",
             **private_event,
@@ -765,6 +1027,12 @@ def create_demo_app(
             execution_trace,
         ]
         run_event.then(
+            fn=viewer_values,
+            inputs=[run_state, result_task],
+            outputs=viewer_outputs,
+            **private_event,
+        )
+        candidate_run_event.then(
             fn=viewer_values,
             inputs=[run_state, result_task],
             outputs=viewer_outputs,
@@ -809,7 +1077,7 @@ def serve_demo(
     services = build_demo_services(resolved)
     app = create_demo_app(resolved, services=services)
     ensure_demo_loopback_proxy_bypass()
-    allowed = [str(resolved.demo_root), *(str(item.root) for item in resolved.frozen_evaluations)]
+    allowed = [str(resolved.demo_root)]
     try:
         app.launch(
             server_name="127.0.0.1",

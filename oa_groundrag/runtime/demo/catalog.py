@@ -20,6 +20,7 @@ from oa_groundrag.data.oa_auxseg.dataset import BenchmarkDataset, load_index
 
 from .access import DemoTestAccessController, DemoTestAccessReceipt
 from .config import BenchmarkBinding, FrozenEvaluationBinding
+from .previews import InputChannelPreview, build_input_channel_previews
 
 
 class DemoCatalogError(RuntimeError):
@@ -84,6 +85,8 @@ class LoadedBenchmarkSample:
     model_sample: Mapping[str, Any]
     optical_image: Image.Image
     reference_mask: Image.Image
+    optical_channel_previews: tuple[InputChannelPreview, ...]
+    auxiliary_channel_previews: tuple[InputChannelPreview, ...]
     test_receipt: DemoTestAccessReceipt | None = None
 
 
@@ -285,25 +288,43 @@ class BenchmarkCatalog:
                 action=action,
             )
         raw_dataset, raw_indices = self._dataset(split=canonical.split, normalization="none")
-        model_dataset, model_indices = self._dataset(
-            split=canonical.split,
-            normalization=model_normalization,
-        )
+        if model_normalization == "none":
+            model_dataset, model_indices = raw_dataset, raw_indices
+        else:
+            model_dataset, model_indices = self._dataset(
+                split=canonical.split,
+                normalization=model_normalization,
+            )
         if canonical.sample_id not in raw_indices or canonical.sample_id not in model_indices:
             raise DemoCatalogError(f"BenchmarkDataset 缺少样本：{canonical.sample_id}")
         raw_sample = raw_dataset[raw_indices[canonical.sample_id]]
-        model_sample = model_dataset[model_indices[canonical.sample_id]]
+        model_sample = (
+            raw_sample
+            if model_dataset is raw_dataset
+            else model_dataset[model_indices[canonical.sample_id]]
+        )
         if raw_sample["sample_id"] != model_sample["sample_id"]:
             raise DemoCatalogError("raw/model BenchmarkDataset 顺序或身份漂移")
         mask = np.asarray(raw_sample["mask"].cpu().numpy(), dtype=np.uint8)
         if mask.ndim != 3 or mask.shape[0] != 1 or not set(np.unique(mask)).issubset({0, 1}):
             raise DemoCatalogError("Reference mask 合同非法")
+        optical_previews, auxiliary_previews = build_input_channel_previews(
+            raw_sample,
+            expected_optical_channels=canonical.optical_channel_names,
+            expected_auxiliary_channels=canonical.auxiliary_channel_names,
+            modality_contracts={
+                str(name): dict(value)
+                for name, value in canonical.row["auxiliaries"].items()
+            },
+        )
         return LoadedBenchmarkSample(
             record=canonical,
             sample=raw_sample,
             model_sample=model_sample,
             optical_image=render_optical(raw_sample),
             reference_mask=Image.fromarray(mask[0] * 255),
+            optical_channel_previews=optical_previews,
+            auxiliary_channel_previews=auxiliary_previews,
             test_receipt=receipt,
         )
 

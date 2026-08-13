@@ -25,6 +25,26 @@ from oa_groundrag.runtime.contracts import UnifiedRequest, UnifiedTask
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+class DatasetReadCounter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def wrap(self, dataset_type: type):
+        counter = self
+
+        class CountingDataset(dataset_type):
+            def __getitem__(self, index: int):
+                row = self.rows[index]
+                counter.calls.append((
+                    str(row["split"]),
+                    str(row["sample_id"]),
+                    str(self.normalization),
+                ))
+                return super().__getitem__(index)
+
+        return CountingDataset
+
+
 def build_benchmark(root: Path) -> BenchmarkBinding:
     specs = (
         ("train-small", "train", "source_a", 0.005, ()),
@@ -53,9 +73,11 @@ def build_benchmark(root: Path) -> BenchmarkBinding:
             handle.create_dataset("optical_pixel_valid", data=np.ones_like(optical[None], dtype=np.uint8))
             handle.create_dataset("optical_channel_valid", data=np.ones((1, 3), dtype=np.uint8))
             handle.create_dataset("mask", data=mask[None])
-            for name in auxiliaries:
+            for aux_ordinal, name in enumerate(auxiliaries):
                 group = handle.create_group(f"auxiliary/{name}")
-                group.create_dataset("values", data=np.ones((1, 1, 16, 16), dtype=np.float32))
+                values = np.arange(256, dtype=np.float32).reshape(1, 1, 16, 16)
+                values += ordinal * 1000 + aux_ordinal * 100
+                group.create_dataset("values", data=values)
                 group.create_dataset("pixel_valid", data=np.ones((1, 1, 16, 16), dtype=np.uint8))
                 group.create_dataset("channel_valid", data=np.ones((1, 1), dtype=np.uint8))
         rows.append({
@@ -71,7 +93,12 @@ def build_benchmark(root: Path) -> BenchmarkBinding:
                 "channel_validity": True,
             },
             "auxiliaries": {
-                name: {"channel_names": [name], "shape": [1, 16, 16]}
+                name: {
+                    "channel_names": [name],
+                    "shape": [1, 16, 16],
+                    "unit": None,
+                    "sign_convention": None,
+                }
                 for name in auxiliaries
             },
             "mask": {"shape": [1, 16, 16], "values": [0, 1]},

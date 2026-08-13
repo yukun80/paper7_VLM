@@ -170,8 +170,8 @@ def load_demo_config(path: Path | str) -> DemoConfig:
         raise DemoConfigError("Benchmark index SHA-256 漂移")
 
     frozen_value = row["frozen_evaluations"]
-    if not isinstance(frozen_value, list) or not frozen_value:
-        raise DemoConfigError("$.frozen_evaluations 必须是非空列表")
+    if not isinstance(frozen_value, list):
+        raise DemoConfigError("$.frozen_evaluations 必须是列表")
     frozen: list[FrozenEvaluationBinding] = []
     for index, value in enumerate(frozen_value):
         location = f"$.frozen_evaluations[{index}]"

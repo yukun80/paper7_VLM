@@ -13,21 +13,42 @@ provenance，不代表当前入口或状态。
 
 | 字段 | 当前值 |
 | --- | --- |
-| 更新时间 | `2026-08-12` |
+| 更新时间 | `2026-08-13` |
 | program | `OA_GROUNDRAG_V3` |
 | 当前工程状态 | `P0 / INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE + UNIFIED_DEMO_WORKBENCH / engineering_complete` |
-| 当前文档任务 | `ALGORITHM_INTERVIEW_GUIDE / completed` |
+| 当前授权任务 | `UNIFIED_DEMO_FROZEN_RETIREMENT / engineering_complete` |
 | 下一任务 | `P1 Multi-Source Grounded Evidence` |
-| Git 基线 | `main@041e6a40cc5bc7e6c4bc6416059b490334b4732b` |
+| Git 基线 | 本轮开始于 `main@43b34cdaced7b9d989c9b906a685e661b2df5d0a`；当前为负责人授权的未提交工作树 |
 | upstream 基线 | 本地 `origin/main` 与上述 HEAD 一致，`ahead=0 / behind=0` |
 | 发行接口 | `oa-groundrag==0.2.0`；`oa-groundrag = oa_groundrag.runtime.cli:main` |
-| 总体科学状态 | P0 与能力驱动重构仅为工程完成；不升级 Gate A/C/D 或系统科学验收 |
+| 总体科学状态 | P0 与能力驱动重构仅为工程完成；Frozen Eval-dev 及其下游开发评价产物已退役，不升级 Gate A/C/D 或系统科学验收 |
 | Benchmark test / sealed test | 未评价 / 未访问 |
 
-本次算法与面试讲解文档编写没有运行训练、模型推理、GPU、正式评价或 artifact 重算，没有 commit 或
-push。随后完成的 Unified Demo Workbench 只运行一次 val bounded CUDA inference；没有训练、
-正式评价、Gate 或 test/sealed payload 访问。开始 P1 或任何新写入前，必须重新核对现场 Git、
-进程、资产身份和负责人授权。
+本轮按负责人明确授权从 Unified Demo 删除 Frozen 页面与数据模式，并精确删除可重建的
+OA-GroundedEval-dev、三套 Stage-5 prediction/evaluation、五套 Stage-6 development artifacts
+和唯一 Frozen Demo run。运行了 CPU 回归与回环 Gradio smoke；没有 GPU、训练、正式评价、Gate、
+test/sealed payload 访问、commit 或 push。开始 P1 或任何新写入前，必须重新核对现场 Git、进程、
+资产身份和负责人授权。
+
+## 负责人授权的评价链退役
+
+负责人已明确授权从 Unified Demo 退役 Frozen Evaluation，并删除可由保留代码、配置与上游数据
+重建的对应开发评价链。下表是删除前完成的精确路径、普通目录、无 symlink、大小与 manifest
+身份核验。所有列出的目录现均为 `DELETED / ABSENT_VERIFIED`；删除不可直接恢复，只能用保留的
+代码、配置与上游数据重建。该授权未扩张到未列出的 Benchmark、训练、模型、Text Bank 或正式代码资产。
+
+| 待退役目录 | 删除前大小 | 删除前 identity | 状态 |
+| --- | ---: | --- | --- |
+| `../benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100` | 28M | manifest `fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492` | `DELETED / ABSENT_VERIFIED` |
+| Region Adapter 根下 `base_gt_mask_baseline` | 148K | prediction manifest `6216332b3fef86b0dab751e5237d3524db7927cd5836e8f7c991080b003233af`；evaluation manifest `e4029d21372251766d616c512b3d06c75eb356df7b83e04e445a392493eb0c93` | `DELETED / ABSENT_VERIFIED` |
+| Region Adapter 根下 `rs_general_adapter_gt_mask_baseline` | 152K | prediction manifest `dfab33e7b53bb8e7039128cd971c3ee19cc072e211715b5ef2355a753616f7e1`；evaluation manifest `696b369fe1840eea2ec172d259ab7f85649fef65a921decc1c02c047b8ab31c0` | `DELETED / ABSENT_VERIFIED` |
+| Region Adapter 根下 `mask_grounded_region_adapter_gt_mask` | 1020K | prediction manifest `4b090b4392a906817379357d1a8295f8b5eea10339eeb610847bc9bd2ef26a6b`；evaluation manifest `8629114aa22fb8b39b9346943f6100b157428c903e295bb67dfb4dfb603e8448` | `DELETED / ABSENT_VERIFIED` |
+| `outputs/stage6_text_rag/dev_retrieval_v1` | 2.0M | manifest `da0e207b284bee81824b3542efb8a4b19138c92f07ba09e0afc3f11c4c0b9e7c` | `DELETED / ABSENT_VERIFIED` |
+| `outputs/stage6_text_rag/pass2_gpu_smoke_v1` | 56K | manifest `987b6f7601e4f16632f9c07d8901242717a6551ed3b6758819eb44d0b097a6eb` | `DELETED / ABSENT_VERIFIED` |
+| `outputs/stage6_text_rag/gate_d_dev_protocol_v1` | 56K | manifest `8ddf9829c38ae8ab7d583a47f7ba1e4bdf5be0b4dc200618df63669159fa3cd5` | `DELETED / ABSENT_VERIFIED` |
+| `outputs/stage6_text_rag/gate_d_dev_25pairs_v1` | 200K | manifest `170ad8acaadc626e224b3a93e9a7e1758f78d07438b9adcf9ad60027f49673b5` | `DELETED / ABSENT_VERIFIED` |
+| `outputs/stage6_text_rag/gate_d_dev_auto_eval_v1` | 136K | manifest `85a0efdda16e582b768128a16348bda22448639cf1c4694dbe37d64e53fc22f6` | `DELETED / ABSENT_VERIFIED` |
+| Demo run `demo_20260813T040242784502Z_0fcb1828fc9e488bb2098758da894bc2` | 1.9M | run manifest `9440abb176c6e0bbc7348525af85dd287e90433e4b9d811bc9e118ce19c3f049`；重新枚举确认唯一 Frozen run | `DELETED / ABSENT_VERIFIED` |
 
 ## 权威与发布基线
 
@@ -40,7 +61,7 @@ push。随后完成的 Unified Demo Workbench 只运行一次 val bounded CUDA i
 | 能力路径迁移提交 | `b784c746c7749783739f21e3e810012ac493bd6b` |
 | 能力重构发布提交 | `ac94fc1107b524f37dfbcf529cf4dc09bde27405` |
 | Unified runtime config | `configs/runtime/inference_v2.yaml`；SHA-256 `7811b6c8bfd217fd3f86f8c5edc6c1e897033036cf4df0844efbdb56d433a631` |
-| Unified Demo config | `configs/runtime/demo_v1.yaml`；SHA-256 `a060e69ccb625f55d789e3ff2455ad6c643394834217f89c008ea37ddb19b6f9` |
+| Unified Demo config | `configs/runtime/demo_v1.yaml`；SHA-256 `540ee12c38130ea20513af61da76cf33b9292f62a7c7ee272f261aab64b5e573`；`frozen_evaluations=[]` |
 | Retrieval config | `configs/retrieval/dev_v1.yaml`；SHA-256 `f175a99347184d75592ec9a1c61c88fc7a4b976dd7381cb9afafd209fb1f8b57` |
 | Grounded curriculum config | `configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml`；SHA-256 `2998cd8c36ad69a703507b8446f3767035819d91f96c964a20969d2f6f3a64e2` |
 
@@ -53,9 +74,9 @@ AGENTS 不保存动态运行结果。
 | --- | --- | --- | --- |
 | Spatial Perception / OA-AuxSeg | `oa_groundrag/segmentation`；`oa_groundrag/training/segmentation`；`oa_groundrag/evaluation/segmentation.py` | full Benchmark 与负责人定版 checkpoint 可用 | Gate A、正式 fixed predicted masks、sealed test 均未执行 |
 | Shared RS-Geohazard MLLM | `oa_groundrag/vlm`；`oa_groundrag/data/rs_general`；`oa_groundrag/training/vlm` | RS-GeneralDesc native v1、step-1000 Adapter 与 Gate B 冻结证据可用 | Gate B 只接受其冻结 RS-GeneralDesc 作用域 |
-| Grounded Multimodal Understanding | `oa_groundrag/grounding`；`oa_groundrag/data/grounded`；`oa_groundrag/training/grounding` | train-only Corpus、Eval-dev、compact supervision 与 step-900 Region Adapter 可用 | 64 条严格 no-target 输出失败未修复；Gate C、专家共识和正式 OA-GroundedEval 未完成 |
-| Knowledge Augmentation | `oa_groundrag/retrieval`；`oa_groundrag/evaluation/retrieval` | Text Bank、80-record retrieval、Pass-2 smoke 与 25-pair automatic-only 开发评价可用 | 无 retrieval Gold、专家盲评和正式阈值；Gate D 未科学通过 |
-| Unified Inference | `oa_groundrag/runtime` | 六类显式任务、确定性 router、lazy provider，以及只读 Benchmark Browser / Demo Gallery / Frozen Eval Workbench 工程完成 | Demo selection 仅作 qualitative 展示；test 默认锁定；P1 多源 grounded evidence 与统一科学评价均未开始 |
+| Grounded Multimodal Understanding | `oa_groundrag/grounding`；`oa_groundrag/data/grounded`；`oa_groundrag/training/grounding` | train-only Corpus、compact supervision、step-900 Region Adapter、评价 reader/代码/配置可用；Eval-dev 实例已按授权删除 | 当前无 materialized OA-GroundedEval-dev；Gate C、专家共识和正式 OA-GroundedEval 未完成 |
+| Knowledge Augmentation | `oa_groundrag/retrieval`；`oa_groundrag/evaluation/retrieval` | Text Bank、在线 retrieval/Pass-2 与评价代码/配置可用；旧 development retrieval/Pass-2/Gate-D artifacts 已按授权删除 | 当前无 materialized Gate-D development evaluation；无 retrieval Gold、专家盲评或正式阈值；Gate D 未科学通过 |
+| Unified Inference | `oa_groundrag/runtime` | 六类显式任务、确定性 router、lazy provider，以及只读 Benchmark Browser / Demo Gallery / Task Runner 工程完成；Frozen UI/data mode 已退役，旧调用 fail closed；纯 `KNOWLEDGE_QA` 不消费 Benchmark payload，candidate 解释需人工显式选择，真实逐通道/auxiliary preview 可见 | auxiliary preview 不进入当前 P0 MLLM formal grounded input；Demo selection 仅作 qualitative 展示；test 默认锁定；P1 多源 grounded evidence 与统一科学评价均未开始 |
 
 Stage 只保留为 curriculum、schema、output root、checkpoint metadata 和历史 provenance；
 活动源码、配置、脚本和测试按能力与工程职责组织。
@@ -112,7 +133,6 @@ Gate B 的 `formal_acceptance=true` 只绑定原协议、产物和验收提交�
 | --- | --- | --- |
 | deterministic Auto Pilot | `outputs/stage4_landslide_evidence/landslide_evidence_corpus_v1_pilot_500` | `37aebb9c5f8ceb720e0a1a3c8621212d44562fa6b6786d145c31e11ffa94f9bb`；500 train-only records |
 | Region Corpus base | `../benchmark/oa_grounded_stage4_v1/region_corpus/mask_grounded_region_corpus_train_v1_500` | `d18e6b4f3ab566447131ecd6fa45eb21b7675a582e85579ef8320289093ec32e` |
-| OA-GroundedEval-dev | `../benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100` | `fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492`；100 val baselines / 340 records |
 | Region Corpus extension | `../benchmark/oa_grounded_stage4_v2/region_corpus/mask_grounded_region_corpus_train_extension_v2_7950` | `a26f4267ba12fad8ac39481dcd16dd40a65dacdec7133453847cb2e2c71d43fe` |
 | Region collection | `../benchmark/oa_grounded_stage4_v2/region_collection/mask_grounded_region_train_collection_v2_8450` | `cd2b86f6244f4f5f42d846166f11a34efdb9edd636239039b42444c453e435d2` |
 | compact training messages | `../benchmark/oa_grounded_stage4_v2/training_messages/mask_grounded_region_compact_training_messages_train_v3_6974` | `746f641f1fbe48f4301ffc0c52b586437a1dc0b68a5add4be1e3db50d69a1184`；6,974 mixed-supervision records |
@@ -126,12 +146,10 @@ Region Adapter 正式根：
 | `training/best_checkpoint.json` | `368bc48fec6e5303c80e8b2c0d397f4d55eb8c6d51fe70d9da417833ac8a2c1b` |
 | step-900 checkpoint manifest | `c203823597c7b3ecf7f1bce9b3030efe7f5ef2dc5c1ae58bbc58e0982aae5c30` |
 | step-900 Adapter | `858e12ff7e902ce0a3fdfb1a3dfbc2e58ad0892dec870a73fa4fc0a3411f84d7` |
-| prediction manifest | `4b090b4392a906817379357d1a8295f8b5eea10339eeb610847bc9bd2ef26a6b` |
-| evaluation report | `362e9c0036403382627b677ffedd79125fbcd46ca6ac9d77492f7d9199c07ea1` |
 | `workflow_state.json` | `9c5a90743e26576f55a83157e8a1bd3fcf28c1005cc97ff098be1a3b02a62efa` |
 
-该 Adapter 在 OA-GroundedEval-dev 上为 `276 valid / 64 INVALID_MODEL_OUTPUT`；64 条均是
-严格 no-target 区域数组非空，未做自动修复。workflow 固定
+该 Adapter、训练状态和 retention 资产保持不变；旧 OA-GroundedEval-dev prediction/evaluation
+实例已在上方退役表记录身份后删除，不再作为当前可消费产物。workflow 固定
 `formal_acceptance=false / scientific_acceptance=false / sealed_test_evaluated=false`。
 
 ### Knowledge Augmentation
@@ -139,16 +157,11 @@ Region Adapter 正式根：
 | 资产 | 根 | Identity anchor |
 | --- | --- | --- |
 | Text Evidence Bank v1 | `outputs/stage6_text_rag/text_evidence_bank_v1` | Bank ID `9322a9139d04be7665feb154153b7dc1c2d35b0871fc32bbd6a6daa942fabb28`；manifest `9b891e191581746173a27b80356caa18ec9be5d3c36eaee67444b05a070f0bcc`；ledger `1c73fbd6135daaaf4767f8427e7c9e1ba69f09e0223aaad2c3e151a013c1e650` |
-| 80-record dev retrieval | `outputs/stage6_text_rag/dev_retrieval_v1` | Retrieval ID `e7edfb2ae05a5114c105ce82e7c9bcc87c089dd54d1bd68a5bc43ea860c2f1c2`；manifest `da0e207b284bee81824b3542efb8a4b19138c92f07ba09e0afc3f11c4c0b9e7c` |
-| 5-pair Pass-2 smoke | `outputs/stage6_text_rag/pass2_gpu_smoke_v1` | manifest `987b6f7601e4f16632f9c07d8901242717a6551ed3b6758819eb44d0b097a6eb` |
-| Gate D dev protocol | `outputs/stage6_text_rag/gate_d_dev_protocol_v1` | manifest `8ddf9829c38ae8ab7d583a47f7ba1e4bdf5be0b4dc200618df63669159fa3cd5`；protocol `70b13b12711b07b1b74b797e7f230f510cde35c5416a295670ddedc8019ce99d` |
-| Gate D 25-pair run | `outputs/stage6_text_rag/gate_d_dev_25pairs_v1` | manifest `170ad8acaadc626e224b3a93e9a7e1758f78d07438b9adcf9ad60027f49673b5` |
-| Gate D automatic evaluation | `outputs/stage6_text_rag/gate_d_dev_auto_eval_v1` | manifest `85a0efdda16e582b768128a16348bda22448639cf1c4694dbe37d64e53fc22f6` |
 
 Text Bank 固定消费 `docs/RAG_knowledge/` 的 12 个 PDF；正式索引 1,283 units
-（interpretation/confounder/limitation 为 `872/138/273`）。Gate D 结果仅是
-automatic-only development evidence；unsupported-claim 人工率、专家相关性、Recall@K、
-MRR、nDCG 和 `gate_d_pass` 均为 `null`。
+（interpretation/confounder/limitation 为 `872/138/273`）。在线 Text RAG 能力和 Bank 身份保留，
+旧 development retrieval、Pass-2 smoke 和 Gate-D artifacts 已删除；当前没有 Gate-D 科学结果，
+unsupported-claim 人工率、专家相关性、Recall@K、MRR、nDCG 和 `gate_d_pass` 均未建立。
 
 ## 科学验收与不可扩张边界
 
@@ -156,15 +169,15 @@ MRR、nDCG 和 `gate_d_pass` 均为 `null`。
 | --- | --- | --- |
 | Gate A | 未执行 | OA-AuxSeg 只有工程定版 checkpoint；不得导出或宣称正式 fixed predicted masks |
 | Gate B | 原冻结作用域正式通过 | 只证明 RS-GeneralDesc native v1 固定协议下 Adapter 相对提升 |
-| Gate C | 未执行 | Region Adapter 的 automatic-only dev 结果不能证明模型正确依赖 mask |
-| Gate D | automatic-only 开发评价完成，科学未通过 | 只能报告工程合同和描述性差异；不能声称 RAG 有科学增益 |
+| Gate C | 未执行 | Region Adapter checkpoint 可用，但已无当前 Eval-dev artifact；不能证明模型正确依赖 mask |
+| Gate D | 未执行；旧 development artifacts 已退役 | 只能报告在线 RAG 工程合同；不能声称 RAG 有科学增益 |
 | Gate E / F | 条件未触发 | 不启动 Landslide-Evidence Adapter；不宣称 retention 通过 |
 | sealed test | 未访问 | 任何阈值、协议或实现均不得从 test 反推 |
 
 持续有效的数据与事实边界：
 
-- Corpus 和 supervision 只使用 train；OA-GroundedEval-dev 只使用 val；test/sealed test
-  不得进入 Corpus、开发阈值或当前报告。
+- Corpus 和 supervision 只使用 train；如按保留配方重建 OA-GroundedEval-dev，只能使用 val；
+  test/sealed test 不得进入 Corpus、开发阈值或当前报告。
 - 6,974 条 compact supervision 是 `mixed_model_and_single_expert`，不是 Gold 或专家共识。
 - OA-AuxSeg 当前辅助 registry 只接受 `dem / insar_velocity / slope`；SAR 尚未接入。
 - encoded InSAR 的物理单位与 sign convention 未确认时，只能作为 encoded evidence；不得
@@ -182,27 +195,27 @@ MRR、nDCG 和 `gate_d_pass` 均为 `null`。
 | 检查 | 最近结果 |
 | --- | --- |
 | 全量回归基线 | 能力重构时收集 339 项：331 passed，4 项因缺少 `oa_auxseg_hdf5_v1/small` skip，4 项含 backward/optimizer step 仅收集未执行；本轮未重跑训练相关全集 |
-| Runtime / Demo CPU | `tests/runtime` 49/49，其中既有 Unified Runtime 31/31、新 Demo 18/18 |
+| Runtime / Demo CPU | `tests/runtime` 55/55，其中既有 Unified Runtime 31/31、新 Demo 24/24；覆盖空 Frozen config、UI 无 Frozen、旧 data mode fail closed、knowledge-only 无 payload/receipt、candidate pending/token/replay/global、真实 auxiliary preview 与既有治理合同 |
 | Annotation / architecture | annotation Workbench 10/10；architecture 8/8，包含 Demo config 与薄 CLI 检查 |
-| Grounding / retrieval / data | 相关只读合同与 pipeline 回归 69/69 |
-| Gradio smoke | Blocks 构建通过；最终代码在 `127.0.0.1:8801` 启动并关闭，`share=false`、private callbacks、queue concurrency=1、Demo/Frozen 白名单与 protected roots 黑名单已检查 |
+| Grounding / retrieval / data | `tests/grounding` 15/15、`tests/retrieval` 24/24、`tests/data/grounded` 71/71；grounding/retrieval evaluation 实现 1/1 与 9/9；均为只读 CPU 回归 |
+| Gradio smoke | Blocks 构建通过；最终代码在 `127.0.0.1:8917` 启动并关闭，A/B/C 页签、仅 Demo root 的 allowed paths、`share=false`、private callbacks 与 queue concurrency=1 通过；沙箱内 bind 被环境拒绝后按授权在沙箱外完成回环 smoke |
 | compile / metadata / diff | `compileall`、Demo CLI help、本地 editable metadata `oa-groundrag==0.2.0`、`demo` extra、console target、`git diff --check` 均通过 |
-| CUDA bounded Demo | 单个 val `REGION_INTERPRETATION` 成功，覆盖 segmentation、Pass-1、6 条 evidence 与 Pass-2；peak allocated `4,677,430,784` bytes，provider release 完整；run 为 `outputs/demo/unified_workbench_v1/runs/demo_20260812T034449148419Z_b4bcfc86dfe04039a787e513a5b94b0f` |
-| 等价性与保护资产 | Benchmark manifest/index、OA-AuxSeg checkpoint、Region Adapter、Text Bank、Frozen Eval 与正式 prediction/evaluation/RAG output anchors 实施前后 SHA-256 一致；模型数学未修改 |
+| 真实输入预览 | 固定 val `landslide4sense::landslide4sense_000002` 从同一 raw sample 展示 B01–B12、DEM 与 slope；逐通道 raw min/max、valid fraction 和 transform 可审计，且未进入 MLLM formal input |
+| CUDA bounded Demo | 本轮未运行 GPU；上一轮固定 val `gdcld::gdcld_val_original_00000` 的 segmentation/candidate replay engineering smoke 仍保留在两个非 Frozen Demo run 中，不作为本轮删除验收或科学评价 |
+| 删除与保护资产 | 精确清单 10/10 路径均不存在，剩余 Demo runs 不含 Frozen manifest；Benchmark manifest/index、OA-AuxSeg checkpoint、Region Adapter checkpoint manifest/Adapter/workflow、Text Bank manifest/ledger 与 retrieval config 实施前后 SHA-256 不变；模型数学未修改 |
 | Ruff | 未安装；准确结果为 `No module named ruff` |
 
-本次 `2026-08-12` 新增零基础算法与面试讲解：30 道题编号和六类固定栏目完整，115 个
-本地 Markdown 引用零缺失，29 个唯一小林题目/专题 URL 已通过页面或站内搜索解析；并复核
-活动路径、Git identity、冻结设计 SHA 和 `git diff --check`。没有运行 Python/CUDA 测试
-套件、模型 inference、训练、正式评价或 artifact validator；该句只描述面试讲解文档任务。
-
-Unified Demo 的上述 smoke 均为 engineering evidence，不构成 Gate A/C/D、正式 test
-evaluation 或 scientific acceptance。`allow_test_demo=false`，真实 test 未读取，Demo root
-中不存在 test access receipt；Frozen Evaluation selection 保持 100 条原身份且完全只读。
+Unified Demo 的上述 CPU、UI 与既有 CUDA smoke 均为 engineering validation，不构成 Gate A/C/D、
+正式 test evaluation、scientific evaluation 或 scientific acceptance。`allow_test_demo=false`，
+真实 test 未读取，Demo root 中不存在 test access receipt；Frozen Evaluation 页签、selection、
+推理入口和文件白名单均已移除，`frozen_evaluations=[]`。Demo run/viewer 使用 Demo-only v2
+sidecar，正式 `UnifiedRequest/UnifiedResponse v1` 与底层
+`candidate missing → global fallback` 合同未修改。
 
 ## 下一任务与授权
 
-下一任务仍为 `P1 Multi-Source Grounded Evidence`；教学文档与 Unified Demo Workbench 都没有开始 P1。
+下一任务仍为 `P1 Multi-Source Grounded Evidence`；本轮 auxiliary 可视化只展示现有 Spatial
+Expert input，没有让当前 MLLM 消费多源输入，也没有开始 P1。
 
 开始前必须：
 

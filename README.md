@@ -196,9 +196,37 @@ python scripts/infer/oa_groundrag.py \
 ### Unified Demo Workbench
 
 只读 Workbench 复用现有 Benchmark reader、六个 `UnifiedTask`、router、runtime 和 lazy
-providers，用于浏览 train/val Benchmark、人工维护 qualitative Demo Gallery、只读查看
-Frozen Evaluation，并展示空间结果、grounded observation、Evidence Packet、Pass-2 与执行轨迹。
-它不修改 Benchmark、Frozen selection、checkpoint、Adapter、Text Bank 或正式 outputs。
+providers，用于浏览 train/val Benchmark、人工维护 qualitative Demo Gallery，并展示空间结果、
+grounded observation、Evidence Packet、Pass-2 与执行轨迹。它不修改 Benchmark、checkpoint、
+Adapter、Text Bank 或正式 outputs。冻结评价不再是 Workbench 数据模式；评价 reader、代码和
+配置仍作为独立的可重建能力保留。
+
+Workbench 页签固定为 `A. Benchmark Browser`、`B. Demo Gallery` 和
+`C. Task Runner / Result Viewer / Trace`。
+
+推荐交互顺序是：
+
+```text
+Benchmark Browser 选择样本
+→ 查看 Full Optical、逐通道 Optical/Multispectral 与真实 auxiliary preview
+→ 运行 SEGMENT_ONLY 或包含 spatial task 的 Suite
+→ 查看同一次 OA-AuxSeg 结果的 Candidate Preview
+→ 明确选择 candidate，或人工确认 OA-AuxSeg global mask
+→ 点击“运行所选 REGION_INTERPRETATION”
+→ 查看 Pass-1、retrieval、citations、Pass-2 与 execution trace
+```
+
+首次运行默认 Suite 时，`REGION_INTERPRETATION` 会显示 `WAITING_FOR_CANDIDATE`，不会自动
+选择 Top-1，也不会把缺失 candidate 的 global fallback 伪装成具体区域解释。切换样本或产生
+新的 spatial run 后，旧 candidate 选择立即失效。逐通道与 auxiliary Gallery 只是
+`Spatial Expert Input Preview`；当前 P0 MLLM formal grounded input 仍只有 Full Optical、
+Binary Mask 和 Context Crop，preview 不会进入 `UnifiedRequest.auxiliary_views`。
+
+纯 `KNOWLEDGE_QA` 与当前 Browser selection 完全解耦：不会读取 Benchmark payload、
+构造 spatial input、运行 OA-AuxSeg 或产生 test receipt。问题留空时使用配置中的默认 prompt；
+界面顶部 banner 和只读 `Effective prompts` 区会显示本次实际输入及其来源。其他视觉任务则消费
+banner 中明确显示的当前样本；Benchmark Browser 初始化时已经定位一条记录，即使用户没有再次
+点击样本按钮，也不是“无输入运行”。
 
 安装可选 UI 依赖并从本地回环地址启动：
 

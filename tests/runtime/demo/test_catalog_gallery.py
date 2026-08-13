@@ -15,12 +15,10 @@ from oa_groundrag.runtime.demo.catalog import (
     BenchmarkCatalog,
     BenchmarkFilter,
     DemoCatalogError,
-    FrozenEvaluationCatalog,
 )
-from oa_groundrag.runtime.demo.config import load_demo_config
 from oa_groundrag.runtime.demo.gallery import DemoGalleryError, DemoGalleryStore
 
-from tests.runtime.demo.helpers import REPO_ROOT, build_benchmark
+from tests.runtime.demo.helpers import DatasetReadCounter, build_benchmark
 
 
 class BenchmarkCatalogTest(unittest.TestCase):
@@ -108,6 +106,42 @@ class BenchmarkCatalogTest(unittest.TestCase):
         self.assertIsNotNone(loaded.test_receipt)
         self.assertTrue((loaded.test_receipt.receipt_root / "receipt.json").is_file())
 
+    def test_raw_preview_uses_one_payload_read_and_current_sample_auxiliary_values(self) -> None:
+        counter = DatasetReadCounter()
+        catalog = BenchmarkCatalog(
+            self.binding,
+            dataset_factory=counter.wrap(BenchmarkDataset),
+        )
+        loaded = catalog.load(
+            catalog.locate("val-large"),
+            action="BROWSE",
+            model_normalization="none",
+        )
+        self.assertEqual(counter.calls, [("val", "val-large", "none")])
+        self.assertEqual(
+            [value.channel_name for value in loaded.optical_channel_previews],
+            ["Red", "Green", "Blue"],
+        )
+        self.assertEqual(
+            [value.modality for value in loaded.auxiliary_channel_previews],
+            ["dem", "slope"],
+        )
+        self.assertEqual(
+            loaded.auxiliary_channel_previews[0].raw_min,
+            3000.0,
+        )
+        self.assertEqual(
+            loaded.auxiliary_channel_previews[1].raw_min,
+            3100.0,
+        )
+        for preview in loaded.auxiliary_channel_previews:
+            self.assertIn("Spatial Expert Input Preview", preview.caption)
+            self.assertIn(
+                "Not formal MLLM grounded input in current P0",
+                preview.caption,
+            )
+            self.assertFalse(preview.to_dict()["formal_mllm_grounded_input"])
+
 
 class GalleryRevisionTest(unittest.TestCase):
     def test_revision_snapshots_update_and_logical_remove_preserve_history(self) -> None:
@@ -192,19 +226,6 @@ class GalleryRevisionTest(unittest.TestCase):
                 test_receipt=receipt,
             )
             self.assertEqual(store.list_current()[0].test_access_receipt_id, receipt.receipt_id)
-
-
-class FrozenEvaluationReadOnlyTest(unittest.TestCase):
-    def test_current_frozen_selection_has_exact_100_baselines_and_no_mutator(self) -> None:
-        config = load_demo_config(REPO_ROOT / "configs/runtime/demo_v1.yaml")
-        catalog = FrozenEvaluationCatalog(config.frozen_evaluations[0], verify_payloads=True)
-        self.assertEqual(len(catalog), 100)
-        first = catalog.item(0)
-        self.assertEqual(first.baseline_record["split"], "val")
-        self.assertTrue(first.asset_path("optical_full").is_file())
-        self.assertFalse(hasattr(catalog, "add"))
-        self.assertFalse(hasattr(catalog, "remove"))
-
 
 if __name__ == "__main__":
     unittest.main()

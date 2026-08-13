@@ -5,10 +5,7 @@ benchmark:
   schema_version: oa_auxseg_hdf5_v1
   manifest_sha256: 9a3b1478ed844f234e32b839fded67a937c49d202e3d8f5efd7db52596b5a00a
   index_sha256: 389877226249d2477bdda62d937950339e9fa60df35558b945d02757e8d0da42
-frozen_evaluations:
-  - name: OA-GroundedEval-dev
-    root: ../../../benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100
-    manifest_sha256: fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492
+frozen_evaluations: []
 demo_root: ../../outputs/demo/unified_workbench_v1
 allow_test_demo: false
 defaults:

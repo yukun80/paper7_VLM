@@ -16,7 +16,15 @@ from .catalog import (
 )
 from .config import DemoConfig, load_demo_config
 from .gallery import DemoGalleryEntry, DemoGalleryStore
-from .runner import DemoRunSummary, DemoTaskResult, UnifiedDemoRunner
+from .previews import InputChannelPreview
+from .runner import (
+    DemoCandidateKind,
+    DemoCandidateSelection,
+    DemoRunSummary,
+    DemoSpatialSnapshot,
+    DemoTaskResult,
+    UnifiedDemoRunner,
+)
 
 __all__ = [
     "BenchmarkCatalog",
@@ -24,15 +32,19 @@ __all__ = [
     "BenchmarkRecord",
     "DemoAuthorizedSpatialInput",
     "DemoConfig",
+    "DemoCandidateKind",
+    "DemoCandidateSelection",
     "DemoGalleryEntry",
     "DemoGalleryStore",
     "DemoInferenceAccess",
     "DemoRunSummary",
+    "DemoSpatialSnapshot",
     "DemoTaskResult",
     "DemoTestAccessController",
     "DemoTestAccessReceipt",
     "FrozenEvaluationCatalog",
     "FrozenEvaluationItem",
+    "InputChannelPreview",
     "UnifiedDemoRunner",
     "create_demo_app",
     "load_demo_config",
