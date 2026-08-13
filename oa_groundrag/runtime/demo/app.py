@@ -17,6 +17,28 @@ from .catalog import (
 )
 from .config import DemoConfig, load_demo_config
 from .gallery import DemoGalleryStore
+from .i18n import (
+    DEFAULT_LOCALE,
+    EVIDENCE_HEADERS,
+    GALLERY_HEADERS,
+    RUN_MODE_SINGLE,
+    RUN_MODE_SUITE,
+    SOURCE_FILTER_ALL,
+    MessageSpec,
+    candidate_choices,
+    candidate_gallery as localized_candidate_gallery,
+    modality_choices,
+    preview_gallery,
+    region_source_choices,
+    render_messages,
+    run_mode_choices,
+    size_choices,
+    source_choices,
+    split_choices,
+    target_choices,
+    task_choices,
+    tr,
+)
 from .runner import (
     WAITING_FOR_CANDIDATE,
     DemoCandidateSelection,
@@ -148,8 +170,8 @@ def create_demo_app(
         ) from error
 
     cfg = service.config
-    source_choices = ["All", *service.catalog.sources]
-    modality_choices = list(service.catalog.modalities)
+    catalog_sources = tuple(service.catalog.sources)
+    catalog_modalities = tuple(service.catalog.modalities)
     default_suite = [task.value for task in cfg.defaults.suite_tasks]
     default_record = service.catalog.filtered(
         BenchmarkFilter(split=cfg.defaults.split)
@@ -157,31 +179,42 @@ def create_demo_app(
     initial_selection = _selection_for_record(default_record)
     private_event = {"api_visibility": "private"}
 
-    def record_values(record: BenchmarkRecord, *, message: str = "") -> tuple[Any, ...]:
+    def selected_tasks(
+        task_mode: str,
+        single_task: str,
+        suite_tasks: Sequence[str],
+    ) -> tuple[UnifiedTask, ...]:
+        tasks = [single_task] if task_mode == RUN_MODE_SINGLE else list(suite_tasks)
+        return service.runner.canonical_tasks(tasks)
+
+    def record_values(
+        locale: str,
+        record: BenchmarkRecord,
+        *,
+        message: MessageSpec | None = None,
+    ) -> tuple[Any, ...]:
         service.runner.clear_spatial_snapshot()
         selection = _selection_for_record(record)
         lock = record.split == "test" and not cfg.allow_test_demo
         if lock:
-            status = (
-                "🔒 **test locked** — metadata-only entry. No HDF5 payload, inference, "
-                "or Gallery access occurred. Set `allow_test_demo: true` only with owner authorization."
-            )
+            browser_messages = (MessageSpec.create("status.browser.test_locked"),)
             optical = reference = None
-            optical_gallery: list[Any] = []
-            auxiliary_gallery: list[Any] = []
+            preview_state: dict[str, Any] = {
+                "full_optical": None,
+                "optical_channels": (),
+                "auxiliary_channels": (),
+            }
             channel_metadata: dict[str, Any] = {"optical": [], "auxiliary": []}
             receipt = None
         else:
             loaded = service.catalog.load(record, action="BROWSE")
             optical = loaded.optical_image
             reference = loaded.reference_mask
-            optical_gallery = [
-                (loaded.optical_image, "Full Optical / deterministic RGB preview"),
-                *(value.gallery_value() for value in loaded.optical_channel_previews),
-            ]
-            auxiliary_gallery = [
-                value.gallery_value() for value in loaded.auxiliary_channel_previews
-            ]
+            preview_state = {
+                "full_optical": loaded.optical_image,
+                "optical_channels": loaded.optical_channel_previews,
+                "auxiliary_channels": loaded.auxiliary_channel_previews,
+            }
             channel_metadata = {
                 "optical": [
                     value.to_dict() for value in loaded.optical_channel_previews
@@ -191,12 +224,19 @@ def create_demo_app(
                 ],
             }
             receipt = None if loaded.test_receipt is None else loaded.test_receipt.receipt_id
-            status = message or "✅ Benchmark payload loaded read-only."
+            browser_messages = (
+                message or MessageSpec.create("status.browser.loaded"),
+            )
             if record.split == "test":
-                status = (
-                    "⚠️ **test Demo access recorded** — blind/sealed evaluation property is permanently false; "
-                    "this is not formal test evaluation."
+                browser_messages = (
+                    MessageSpec.create("status.browser.test_access"),
                 )
+        optical_gallery, auxiliary_gallery = preview_gallery(
+            locale,
+            preview_state["full_optical"],
+            preview_state["optical_channels"],
+            preview_state["auxiliary_channels"],
+        )
         metadata = {
             **record.to_dict(),
             "test_access_receipt_id": receipt,
@@ -224,9 +264,16 @@ def create_demo_app(
             "auxiliary_modalities_formally_consumed_by_mllm": False,
             "reference_or_gt_mask_role": "Reference / Audit Only",
         }
+        candidate_messages = (MessageSpec.create("status.candidate.cleared"),)
+        candidate_payload = {
+            "snapshot": None,
+            "options": [],
+            "gallery_tokens": [],
+        }
         return (
             selection,
-            status,
+            render_messages(locale, browser_messages),
+            browser_messages,
             metadata,
             optical,
             reference,
@@ -236,13 +283,16 @@ def create_demo_app(
             gr.update(choices=[], value=None),
             optical_gallery,
             auxiliary_gallery,
+            preview_state,
             channel_metadata,
             [],
             [],
+            candidate_payload,
             None,
             None,
             None,
-            "Candidate selection cleared: sample selection changed.",
+            render_messages(locale, candidate_messages),
+            candidate_messages,
         )
 
     def current_filter(
@@ -255,88 +305,146 @@ def create_demo_app(
     ) -> BenchmarkFilter:
         return BenchmarkFilter(
             split=split,
-            source=None if source == "All" else source,
+            source=None if source == SOURCE_FILTER_ALL else source,
             sample_id_query=query.strip() or None,
             target_status=target,
             size=size,
             modalities=tuple(modalities or ()),
         )
 
-    def apply_filter(*values: Any) -> tuple[Any, ...]:
-        filters = current_filter(*values)
-        rows = service.catalog.filtered(filters)
-        if not rows:
-            raise gr.Error("当前人工筛选条件没有样本")
-        return record_values(rows[0], message=f"✅ 筛选结果 {len(rows)} 条；显示第 1 条。")
+    def load_default(locale: str) -> tuple[Any, ...]:
+        try:
+            return record_values(locale, default_record)
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.browser_operation")) from error
 
-    def navigate(selection: Mapping[str, Any], delta: int, *values: Any) -> tuple[Any, ...]:
-        filters = current_filter(*values)
-        record, position, total = service.catalog.navigate(
-            filters,
-            current_sample_id=selection.get("sample_id"),
-            delta=delta,
-        )
-        return record_values(record, message=f"✅ 筛选结果 {total} 条；当前第 {position + 1} 条。")
+    def apply_filter(locale: str, *values: Any) -> tuple[Any, ...]:
+        try:
+            filters = current_filter(*values)
+            rows = service.catalog.filtered(filters)
+            if not rows:
+                raise gr.Error(tr(locale, "error.no_samples"))
+            return record_values(
+                locale,
+                rows[0],
+                message=MessageSpec.create(
+                    "status.browser.filtered",
+                    total=len(rows),
+                    position=1,
+                ),
+            )
+        except gr.Error:
+            raise
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.browser_operation")) from error
 
-    def random_record(*values: Any) -> tuple[Any, ...]:
-        filters = current_filter(*values)
-        record = service.catalog.random_record(filters)
-        return record_values(record, message="✅ 按当前人工筛选条件随机选择；未读取模型分数。")
+    def navigate(
+        locale: str,
+        selection: Mapping[str, Any],
+        delta: int,
+        *values: Any,
+    ) -> tuple[Any, ...]:
+        try:
+            filters = current_filter(*values)
+            record, position, total = service.catalog.navigate(
+                filters,
+                current_sample_id=selection.get("sample_id"),
+                delta=delta,
+            )
+            return record_values(
+                locale,
+                record,
+                message=MessageSpec.create(
+                    "status.browser.filtered",
+                    total=total,
+                    position=position + 1,
+                ),
+            )
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.browser_operation")) from error
 
-    def locate_exact(sample_id: str) -> tuple[Any, ...]:
-        record = service.catalog.locate(sample_id.strip())
-        base = record_values(record, message="✅ 已按 exact sample_id 定位并同步筛选状态。")
-        return (
-            *base,
-            record.split,
-            record.source,
-            record.target_status,
-            record.size,
-            list(record.available_modalities),
-        )
+    def random_record(locale: str, *values: Any) -> tuple[Any, ...]:
+        try:
+            filters = current_filter(*values)
+            record = service.catalog.random_record(filters)
+            return record_values(
+                locale,
+                record,
+                message=MessageSpec.create("status.browser.random"),
+            )
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.browser_operation")) from error
+
+    def locate_exact(locale: str, sample_id: str) -> tuple[Any, ...]:
+        try:
+            record = service.catalog.locate(sample_id.strip())
+            base = record_values(
+                locale,
+                record,
+                message=MessageSpec.create("status.browser.located"),
+            )
+            return (
+                *base,
+                record.split,
+                record.source,
+                record.target_status,
+                record.size,
+                list(record.available_modalities),
+            )
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.browser_operation")) from error
 
     def mutate_gallery(
         action: str,
+        locale: str,
         selection: Mapping[str, Any],
         tags: str,
         note: str,
         tasks: Sequence[str],
-    ) -> tuple[Any, str]:
+    ) -> tuple[Any, str, tuple[MessageSpec, ...]]:
         if selection.get("mode") != DEMO_MODE:
-            raise gr.Error("Demo Gallery 只接受当前 Benchmark Browser selection")
-        record = service.catalog.locate(
-            str(selection.get("sample_id", "")),
-            split=str(selection.get("split", "")),
-        )
-        if action == "remove":
-            revision = service.gallery.remove(
-                benchmark_identity=service.catalog.identity,
-                split=record.split,
-                sample_id=record.sample_id,
+            raise gr.Error(tr(locale, "error.gallery_mode"))
+        try:
+            record = service.catalog.locate(
+                str(selection.get("sample_id", "")),
+                split=str(selection.get("split", "")),
             )
-        else:
-            receipt = None
-            if record.split == "test":
-                receipt = service.test_access.issue(
+            if action == "remove":
+                revision = service.gallery.remove(
+                    benchmark_identity=service.catalog.identity,
+                    split=record.split,
                     sample_id=record.sample_id,
-                    action="GALLERY",
                 )
-            revision = service.gallery.upsert(
-                benchmark_identity=service.catalog.identity,
-                sample_id=record.sample_id,
-                split=record.split,
-                source=record.source,
-                demo_tags=_split_tags(tags),
-                note=note,
-                selected_tasks=tasks,
-                test_receipt=receipt,
+            else:
+                receipt = None
+                if record.split == "test":
+                    receipt = service.test_access.issue(
+                        sample_id=record.sample_id,
+                        action="GALLERY",
+                    )
+                revision = service.gallery.upsert(
+                    benchmark_identity=service.catalog.identity,
+                    sample_id=record.sample_id,
+                    split=record.split,
+                    source=record.source,
+                    demo_tags=_split_tags(tags),
+                    note=note,
+                    selected_tasks=tasks,
+                    test_receipt=receipt,
+                )
+            messages = (
+                MessageSpec.create("status.gallery.published", revision=revision),
             )
-        return _gallery_rows(service.gallery), (
-            f"✅ Gallery revision `{revision}` published. Qualitative demo only; "
-            "formal/scientific acceptance remain false."
-        )
+            return (
+                _gallery_rows(service.gallery),
+                render_messages(locale, messages),
+                messages,
+            )
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.gallery_operation")) from error
 
     def execute(
+        locale: str,
         selection: Mapping[str, Any],
         task_mode: str,
         single_task: str,
@@ -347,100 +455,114 @@ def create_demo_app(
         candidate_token: Any,
         interpretation_source: str,
     ) -> tuple[Any, ...]:
-        tasks = [single_task] if task_mode == "Single Task" else list(suite_tasks)
-        selected = service.runner.canonical_tasks(tasks)
-        pure_knowledge = selected == (UnifiedTask.KNOWLEDGE_QA,)
-        sample_id = str(selection.get("sample_id", ""))
-        split = str(selection.get("split", ""))
-        record = None if pure_knowledge else service.catalog.locate(
-            sample_id,
-            split=split,
-        )
-        overrides: dict[UnifiedTask, str] = {}
-        if instruction.strip():
-            overrides.update({task: instruction.strip() for task in selected if task is not UnifiedTask.KNOWLEDGE_QA})
-        if knowledge_question.strip() and UnifiedTask.KNOWLEDGE_QA in selected:
-            overrides[UnifiedTask.KNOWLEDGE_QA] = knowledge_question.strip()
-        source = RegionSource(interpretation_source)
-        candidate = (
-            None
-            if candidate_token in {None, ""}
-            or source is RegionSource.USER_MASK
-            or UnifiedTask.REGION_INTERPRETATION not in selected
-            else DemoCandidateSelection.from_token(str(candidate_token))
-        )
-        summary = service.runner.run(
-            record=record,
-            tasks=selected,
-            instructions=overrides,
-            user_mask=user_mask,
-            candidate_selection=candidate,
-            region_interpretation_source=source,
-            data_mode=str(selection.get("mode")),
-        )
-        return run_output_values(summary, selection)
+        try:
+            selected = selected_tasks(task_mode, single_task, suite_tasks)
+            pure_knowledge = selected == (UnifiedTask.KNOWLEDGE_QA,)
+            sample_id = str(selection.get("sample_id", ""))
+            split = str(selection.get("split", ""))
+            record = None if pure_knowledge else service.catalog.locate(
+                sample_id,
+                split=split,
+            )
+            overrides: dict[UnifiedTask, str] = {}
+            if instruction.strip():
+                overrides.update({
+                    task: instruction.strip()
+                    for task in selected
+                    if task is not UnifiedTask.KNOWLEDGE_QA
+                })
+            if knowledge_question.strip() and UnifiedTask.KNOWLEDGE_QA in selected:
+                overrides[UnifiedTask.KNOWLEDGE_QA] = knowledge_question.strip()
+            source = RegionSource(interpretation_source)
+            candidate = (
+                None
+                if candidate_token in {None, ""}
+                or source is RegionSource.USER_MASK
+                or UnifiedTask.REGION_INTERPRETATION not in selected
+                else DemoCandidateSelection.from_token(str(candidate_token))
+            )
+            summary = service.runner.run(
+                record=record,
+                tasks=selected,
+                instructions=overrides,
+                user_mask=user_mask,
+                candidate_selection=candidate,
+                region_interpretation_source=source,
+                data_mode=str(selection.get("mode")),
+            )
+            return run_output_values(locale, summary, selection)
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.runner_operation")) from error
 
     def run_selected_candidate(
+        locale: str,
         selection: Mapping[str, Any],
         instruction: str,
         candidate_token: Any,
     ) -> tuple[Any, ...]:
         if candidate_token in {None, ""}:
-            raise gr.Error(
-                "请先从 Candidate Preview 选择具体 candidate，或显式选择 global mask"
+            raise gr.Error(tr(locale, "error.candidate_required"))
+        try:
+            sample_id = str(selection.get("sample_id", ""))
+            split = str(selection.get("split", ""))
+            record = service.catalog.locate(sample_id, split=split)
+            overrides = (
+                {}
+                if not instruction.strip()
+                else {UnifiedTask.REGION_INTERPRETATION: instruction.strip()}
             )
-        sample_id = str(selection.get("sample_id", ""))
-        split = str(selection.get("split", ""))
-        record = service.catalog.locate(sample_id, split=split)
-        overrides = (
-            {}
-            if not instruction.strip()
-            else {UnifiedTask.REGION_INTERPRETATION: instruction.strip()}
-        )
-        summary = service.runner.run(
-            record=record,
-            tasks=(UnifiedTask.REGION_INTERPRETATION,),
-            instructions=overrides,
-            candidate_selection=DemoCandidateSelection.from_token(
-                str(candidate_token)
-            ),
-            region_interpretation_source=RegionSource.OA_AUXSEG_CANDIDATE,
-            data_mode=str(selection.get("mode")),
-        )
-        return run_output_values(summary, selection)
+            summary = service.runner.run(
+                record=record,
+                tasks=(UnifiedTask.REGION_INTERPRETATION,),
+                instructions=overrides,
+                candidate_selection=DemoCandidateSelection.from_token(
+                    str(candidate_token)
+                ),
+                region_interpretation_source=RegionSource.OA_AUXSEG_CANDIDATE,
+                data_mode=str(selection.get("mode")),
+            )
+            return run_output_values(locale, summary, selection)
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.runner_operation")) from error
 
     def current_input_banner(
+        locale: str,
         selection: Mapping[str, Any],
         task_mode: str,
         single_task: str,
         suite_tasks: Sequence[str],
     ) -> str:
-        tasks = [single_task] if task_mode == "Single Task" else list(suite_tasks)
         try:
-            selected = service.runner.canonical_tasks(tasks)
+            selected = selected_tasks(task_mode, single_task, suite_tasks)
         except Exception:
-            return "⚠️ 请选择至少一个有效 UnifiedTask。"
+            return tr(locale, "status.banner.invalid_tasks")
         if selected == (UnifiedTask.KNOWLEDGE_QA,):
-            return (
-                "### Current execution input\n"
-                "**KNOWLEDGE_ONLY — No Benchmark payload consumed.** 当前 Browser "
-                "selection 只是 UI metadata，不会打开 HDF5、构造 spatial input 或创建 test receipt。"
-            )
-        return (
-            "### Current execution input\n"
-            f"mode=`{selection.get('mode')}` · split=`{selection.get('split')}` · "
-            f"sample=`{selection.get('sample_id')}` · source=`{selection.get('source')}`"
+            return tr(locale, "status.banner.knowledge")
+        return tr(
+            locale,
+            "status.banner.visual",
+            mode=(
+                tr(locale, "choice.mode.demo")
+                if selection.get("mode") == DEMO_MODE
+                else str(selection.get("mode"))
+            ),
+            split=str(selection.get("split")),
+            sample_id=str(selection.get("sample_id")),
+            source=str(selection.get("source")),
         )
 
     def effective_prompt_preview(
+        locale: str,
         task_mode: str,
         single_task: str,
         suite_tasks: Sequence[str],
         instruction: str,
         knowledge_question: str,
     ) -> Mapping[str, Any]:
-        tasks = [single_task] if task_mode == "Single Task" else list(suite_tasks)
-        selected = service.runner.canonical_tasks(tasks)
+        try:
+            selected = selected_tasks(task_mode, single_task, suite_tasks)
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.runner_operation")) from error
         values: list[dict[str, str]] = []
         for task in selected:
             if task is UnifiedTask.KNOWLEDGE_QA and knowledge_question.strip():
@@ -464,6 +586,7 @@ def create_demo_app(
         }
 
     def candidate_component_values(
+        locale: str,
         selection: Mapping[str, Any],
     ) -> tuple[Any, ...]:
         sample_id = str(selection.get("sample_id", ""))
@@ -473,54 +596,77 @@ def create_demo_app(
             split=split,
         )
         if payload["snapshot"] is None:
+            messages = (MessageSpec.create("status.candidate.none"),)
             return (
                 gr.update(choices=[], value=None),
                 [],
                 [],
+                payload,
                 None,
                 None,
                 None,
-                "No valid spatial result for the current sample.",
+                render_messages(locale, messages),
+                messages,
             )
         snapshot = payload["snapshot"]
+        messages = (MessageSpec.create(
+            "status.candidate.snapshot",
+            snapshot_id=snapshot["snapshot_id"],
+            source_task=snapshot["source_task"],
+        ),)
         return (
-            gr.update(choices=payload["choices"], value=None),
-            payload["gallery"],
+            gr.update(choices=candidate_choices(locale, payload), value=None),
+            localized_candidate_gallery(locale, payload),
             payload["gallery_tokens"],
+            payload,
             None,
             None,
             None,
-            (
-                f"Spatial snapshot `{snapshot['snapshot_id']}` from "
-                f"`{snapshot['source_task']}`; select a candidate or explicitly confirm global."
-            ),
+            render_messages(locale, messages),
+            messages,
         )
 
     def candidate_preview_values(
+        locale: str,
         selection: Mapping[str, Any],
         token: Any,
     ) -> tuple[Any, ...]:
         if token in {None, ""}:
-            return None, None, None, "No candidate selected."
-        sample_id = str(selection.get("sample_id", ""))
-        split = str(selection.get("split", ""))
-        selected = service.runner.resolve_candidate_selection(
-            str(token),
-            sample_id=sample_id,
-            split=split,
-        )
-        mask, overlay, metadata = service.runner.candidate_preview(
-            selected,
-            sample_id=sample_id,
-            split=split,
-        )
-        return mask, overlay, metadata, (
-            "Explicit global fallback confirmed."
-            if metadata.get("explicit_global_confirmed")
-            else f"Candidate `{metadata.get('candidate_id')}` selected for interpretation."
-        )
+            messages = (MessageSpec.create("status.candidate.unselected"),)
+            return None, None, None, render_messages(locale, messages), messages
+        try:
+            sample_id = str(selection.get("sample_id", ""))
+            split = str(selection.get("split", ""))
+            selected = service.runner.resolve_candidate_selection(
+                str(token),
+                sample_id=sample_id,
+                split=split,
+            )
+            mask, overlay, metadata = service.runner.candidate_preview(
+                selected,
+                sample_id=sample_id,
+                split=split,
+            )
+            messages = (
+                MessageSpec.create("status.candidate.global")
+                if metadata.get("explicit_global_confirmed")
+                else MessageSpec.create(
+                    "status.candidate.selected",
+                    candidate_id=metadata.get("candidate_id"),
+                ),
+            )
+            return (
+                mask,
+                overlay,
+                metadata,
+                render_messages(locale, messages),
+                messages,
+            )
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.candidate_operation")) from error
 
     def candidate_gallery_selected(
+        locale: str,
         selection: Mapping[str, Any],
         tokens: Sequence[str],
         event: gr.SelectData,
@@ -529,154 +675,220 @@ def create_demo_app(
         if isinstance(index, (tuple, list)):
             index = index[0]
         if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(tokens):
-            raise gr.Error("Candidate Gallery selection index 非法")
+            raise gr.Error(tr(locale, "error.candidate_index"))
         token = str(tokens[index])
-        mask, overlay, metadata, status = candidate_preview_values(selection, token)
-        return gr.update(value=token), mask, overlay, metadata, status
+        mask, overlay, metadata, status, messages = candidate_preview_values(
+            locale,
+            selection,
+            token,
+        )
+        return gr.update(value=token), mask, overlay, metadata, status, messages
 
     # ``from __future__ import annotations`` 会把局部延迟导入的 Gradio 类型保存为字符串；
     # 恢复真实事件类型，确保 Gallery.select 将 SelectData 作为 event arg 注入。
     candidate_gallery_selected.__annotations__["event"] = gr.SelectData
 
     def run_output_values(
+        locale: str,
         summary: DemoRunSummary,
         selection: Mapping[str, Any],
     ) -> tuple[Any, ...]:
-        task_choices = [item.task.value for item in summary.tasks]
+        task_values = [item.task.value for item in summary.tasks]
         successful = [item.task for item in summary.tasks if item.status == "SUCCESS"]
         if (
             summary.active_snapshot_id is not None
             and service.runner.active_snapshot is not None
-            and service.runner.active_snapshot.source_task.value in task_choices
+            and service.runner.active_snapshot.source_task.value in task_values
         ):
             result_value = service.runner.active_snapshot.source_task.value
         elif successful:
             result_value = successful[-1].value
         else:
-            result_value = task_choices[0]
+            result_value = task_values[0]
         success_count = sum(item.status == "SUCCESS" for item in summary.tasks)
         failure_count = sum(item.status == "FAILED" for item in summary.tasks)
         pending_count = sum(
             item.status == WAITING_FOR_CANDIDATE for item in summary.tasks
         )
-        status = (
-            f"✅ Demo run `{summary.run_id}` published: "
-            f"success={success_count}, failed={failure_count}, waiting={pending_count}. "
-            "Engineering evidence only; not scientific acceptance."
-        )
+        messages = [MessageSpec.create(
+            "status.run.published",
+            run_id=summary.run_id,
+            success=success_count,
+            failed=failure_count,
+            waiting=pending_count,
+        )]
         if summary.input_scope == "KNOWLEDGE_ONLY":
-            status += " KNOWLEDGE_ONLY: No Benchmark payload consumed."
+            messages.append(MessageSpec.create("status.run.knowledge"))
         if pending_count:
-            status += " REGION_INTERPRETATION is waiting for explicit candidate/global selection."
+            messages.append(MessageSpec.create("status.run.pending"))
         if summary.sealed_test_accessed:
-            status += " Test receipt recorded; blind/sealed property is false."
-        candidate_values = candidate_component_values(selection)
+            messages.append(MessageSpec.create("status.run.test"))
+        run_messages = tuple(messages)
+        candidate_values = candidate_component_values(locale, selection)
         return (
             summary.to_dict(),
             summary.to_dict(),
-            gr.update(choices=task_choices, value=result_value),
-            status,
+            gr.update(choices=task_choices(locale, task_values), value=result_value),
+            render_messages(locale, run_messages),
+            run_messages,
             *candidate_values,
         )
 
-    def viewer_values(run_state: Mapping[str, Any], task: str) -> tuple[Any, ...]:
+    def viewer_values(
+        locale: str,
+        run_state: Mapping[str, Any],
+        task: str,
+    ) -> tuple[Any, ...]:
         if not run_state or not task:
-            return (None,) * 15
-        run_root = Path(str(run_state["run_root"]))
-        viewer = service.runner.load_viewer(run_root, task)
-        preview = viewer["input_preview"]
-        spatial = viewer["spatial_result"]
-        grounded = viewer["grounded_understanding"]
-        knowledge = viewer["knowledge_augmentation"]
-        formal = preview["mllm_formal_grounded_inputs"]
-        packet = knowledge.get("evidence_packet") or {}
-        evidence_rows = [[
-            item.get("knowledge_type"),
-            item.get("source_title"),
-            item.get("pdf_page"),
-            item.get("section"),
-            item.get("evidence_id"),
-            item.get("text", item.get("content", "")),
-        ] for item in packet.get("items", [])]
-        response = viewer.get("response") or {}
-        original = preview["spatial_expert_inputs"].get("full_optical")
-        if original is None:
-            original = preview.get("direct_mllm_visual_inputs", {}).get("full_optical")
-        return (
-            _resolve_viewer_asset(run_root, original),
-            _resolve_viewer_asset(run_root, spatial.get("predicted_mask")),
-            _resolve_viewer_asset(run_root, spatial.get("mask_probability")),
-            _resolve_viewer_asset(run_root, spatial.get("overlay")),
-            spatial,
-            _resolve_viewer_asset(run_root, formal.get("full_optical")),
-            _resolve_viewer_asset(run_root, formal.get("binary_mask")),
-            _resolve_viewer_asset(run_root, formal.get("context_crop")),
-            grounded.get("programmatic_facts"),
-            grounded.get("pass1_structured_observation"),
-            grounded.get("limitations"),
-            evidence_rows,
-            knowledge.get("pass2_interpretation"),
-            knowledge.get("citations"),
-            {
-                "final_text": response.get("text"),
-                "request_preview": viewer.get("request_preview"),
-                **viewer["execution_trace"],
-                "failure": viewer.get("failure"),
-                "pending": viewer.get("pending"),
-            },
-        )
+            return (None,) * 16
+        try:
+            run_root = Path(str(run_state["run_root"]))
+            viewer = service.runner.load_viewer(run_root, task)
+            preview = viewer["input_preview"]
+            spatial = viewer["spatial_result"]
+            grounded = viewer["grounded_understanding"]
+            knowledge = viewer["knowledge_augmentation"]
+            formal = preview["mllm_formal_grounded_inputs"]
+            packet = knowledge.get("evidence_packet") or {}
+            evidence_rows = [[
+                item.get("knowledge_type"),
+                item.get("source_title"),
+                item.get("pdf_page"),
+                item.get("section"),
+                item.get("evidence_id"),
+                item.get("text", item.get("content", "")),
+            ] for item in packet.get("items", [])]
+            response = viewer.get("response") or {}
+            original = preview["spatial_expert_inputs"].get("full_optical")
+            if original is None:
+                original = preview.get("direct_mllm_visual_inputs", {}).get("full_optical")
+            return (
+                _resolve_viewer_asset(run_root, original),
+                _resolve_viewer_asset(run_root, spatial.get("predicted_mask")),
+                _resolve_viewer_asset(run_root, spatial.get("mask_probability")),
+                _resolve_viewer_asset(run_root, spatial.get("overlay")),
+                spatial,
+                _resolve_viewer_asset(run_root, formal.get("full_optical")),
+                _resolve_viewer_asset(run_root, formal.get("binary_mask")),
+                _resolve_viewer_asset(run_root, formal.get("context_crop")),
+                grounded.get("programmatic_facts"),
+                grounded.get("pass1_structured_observation"),
+                grounded.get("limitations"),
+                evidence_rows,
+                knowledge.get("pass2_interpretation"),
+                knowledge.get("citations"),
+                response.get("text"),
+                {
+                    "final_text": response.get("text"),
+                    "request_preview": viewer.get("request_preview"),
+                    **viewer["execution_trace"],
+                    "failure": viewer.get("failure"),
+                    "pending": viewer.get("pending"),
+                },
+            )
+        except Exception as error:
+            raise gr.Error(tr(locale, "error.runner_operation")) from error
 
-    with gr.Blocks(title="OA-GroundRAG Unified Demo Workbench") as app:
-        gr.Markdown(
-            "# OA-GroundRAG Unified Demo Workbench\n"
-            "**Read-only inference workbench.** Benchmark、checkpoint、Adapter、Text Bank "
-            "和正式 outputs 均不修改；唯一持久写入为独立 Demo Gallery、test receipt 与 Demo run。",
+    with gr.Blocks(title=tr(DEFAULT_LOCALE, "app.document_title")) as app:
+        app_header = gr.Markdown(
+            tr(DEFAULT_LOCALE, "app.header"),
             elem_classes="scientific-boundary",
+        )
+        language_selector = gr.Radio(
+            [("中文", "zh"), ("English", "en")],
+            value=DEFAULT_LOCALE,
+            label=tr(DEFAULT_LOCALE, "app.language.label"),
+        )
+        locale_state = gr.State(DEFAULT_LOCALE)
+        document_title_state = gr.Textbox(
+            value=tr(DEFAULT_LOCALE, "app.document_title"),
+            visible=False,
         )
         selection_state = gr.State(initial_selection)
         run_state = gr.State({})
+        browser_message_state = gr.State(())
+        gallery_message_state = gr.State(())
+        run_message_state = gr.State(())
+        candidate_message_state = gr.State((MessageSpec.create("status.candidate.none"),))
+        preview_state = gr.State({
+            "full_optical": None,
+            "optical_channels": (),
+            "auxiliary_channels": (),
+        })
+        candidate_payload_state = gr.State({
+            "snapshot": None,
+            "options": [],
+            "gallery_tokens": [],
+        })
 
-        with gr.Tab("A. Benchmark Browser"):
-            gr.Markdown(
-                "### Demo / Qualitative Exploration\n"
-                "筛选与随机选择只读取 canonical index 和人工条件，不读取模型得分、不做 Top-K。"
-            )
+        with gr.Tab(tr(DEFAULT_LOCALE, "tab.browser")) as browser_tab:
+            browser_intro = gr.Markdown(tr(DEFAULT_LOCALE, "browser.intro"))
             with gr.Row():
-                split = gr.Dropdown(["train", "val", "test"], value=cfg.defaults.split, label="split")
-                source_filter = gr.Dropdown(source_choices, value="All", label="source")
+                split = gr.Dropdown(
+                    split_choices(DEFAULT_LOCALE),
+                    value=cfg.defaults.split,
+                    label=tr(DEFAULT_LOCALE, "browser.split.label"),
+                )
+                source_filter = gr.Dropdown(
+                    source_choices(DEFAULT_LOCALE, catalog_sources),
+                    value=SOURCE_FILTER_ALL,
+                    label=tr(DEFAULT_LOCALE, "browser.source.label"),
+                )
                 target_filter = gr.Dropdown(
-                    ["all", "target", "no_target"], value="all", label="target / no-target"
+                    target_choices(DEFAULT_LOCALE),
+                    value="all",
+                    label=tr(DEFAULT_LOCALE, "browser.target.label"),
                 )
                 size_filter = gr.Dropdown(
-                    ["all", "empty", "small", "medium", "large"], value="all", label="size"
+                    size_choices(DEFAULT_LOCALE),
+                    value="all",
+                    label=tr(DEFAULT_LOCALE, "browser.size.label"),
                 )
             with gr.Row():
                 modality_filter = gr.Dropdown(
-                    modality_choices,
+                    modality_choices(DEFAULT_LOCALE, catalog_modalities),
                     value=[],
                     multiselect=True,
-                    label="available modalities (all selected must exist)",
+                    label=tr(DEFAULT_LOCALE, "browser.modalities.label"),
                 )
-                sample_query = gr.Textbox(label="sample_id filter / exact lookup")
-                current_sample = gr.Textbox(label="current sample_id", interactive=False)
+                sample_query = gr.Textbox(
+                    label=tr(DEFAULT_LOCALE, "browser.sample_query.label")
+                )
+                current_sample = gr.Textbox(
+                    label=tr(DEFAULT_LOCALE, "browser.current_sample.label"),
+                    interactive=False,
+                )
             with gr.Row():
-                apply_button = gr.Button("应用筛选")
-                previous_button = gr.Button("上一条")
-                next_button = gr.Button("下一条")
-                random_button = gr.Button("随机样本")
-                locate_button = gr.Button("指定 sample_id", variant="primary")
+                apply_button = gr.Button(tr(DEFAULT_LOCALE, "browser.apply"))
+                previous_button = gr.Button(tr(DEFAULT_LOCALE, "browser.previous"))
+                next_button = gr.Button(tr(DEFAULT_LOCALE, "browser.next"))
+                random_button = gr.Button(tr(DEFAULT_LOCALE, "browser.random"))
+                locate_button = gr.Button(
+                    tr(DEFAULT_LOCALE, "browser.locate"),
+                    variant="primary",
+                )
             browser_status = gr.Markdown()
-            browser_meta = gr.JSON(label="Sample metadata", open=False)
+            browser_meta = gr.JSON(
+                label=tr(DEFAULT_LOCALE, "browser.metadata.label"),
+                open=False,
+            )
             with gr.Row():
                 browser_optical = gr.Image(
-                    label="Full Optical / RGB preview", image_mode="RGB", interactive=False
+                    label=tr(DEFAULT_LOCALE, "browser.optical.label"),
+                    image_mode="RGB",
+                    interactive=False,
                 )
-                with gr.Accordion("Reference / Audit Only (never USER_MASK)", open=False):
+                with gr.Accordion(
+                    tr(DEFAULT_LOCALE, "browser.reference.accordion"),
+                    open=False,
+                ) as reference_accordion:
                     browser_reference = gr.Image(
-                        label="Reference / Audit Only", image_mode="L", interactive=False
+                        label=tr(DEFAULT_LOCALE, "browser.reference.label"),
+                        image_mode="L",
+                        interactive=False,
                     )
             optical_channel_gallery = gr.Gallery(
-                label="Optical / Multispectral channel previews — deterministic per-channel rendering",
+                label=tr(DEFAULT_LOCALE, "browser.optical_channels.label"),
                 type="pil",
                 columns=4,
                 rows=2,
@@ -685,10 +897,7 @@ def create_demo_app(
                 interactive=False,
             )
             auxiliary_channel_gallery = gr.Gallery(
-                label=(
-                    "Spatial Expert Input Preview — auxiliary modalities | "
-                    "Not formal MLLM grounded input in current P0"
-                ),
+                label=tr(DEFAULT_LOCALE, "browser.auxiliary.label"),
                 type="pil",
                 columns=4,
                 rows=2,
@@ -697,108 +906,129 @@ def create_demo_app(
                 interactive=False,
             )
             channel_preview_metadata = gr.JSON(
-                label="Channel values / validity / display transform",
+                label=tr(DEFAULT_LOCALE, "browser.channel_metadata.label"),
                 open=False,
             )
             with gr.Row():
-                spatial_inputs = gr.JSON(label="Spatial Expert Inputs", open=True)
-                formal_inputs = gr.JSON(label="MLLM Formal Grounded Inputs", open=True)
+                spatial_inputs = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "browser.spatial_inputs.label"),
+                    open=True,
+                )
+                formal_inputs = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "browser.formal_inputs.label"),
+                    open=True,
+                )
 
-        with gr.Tab("B. Demo Gallery"):
-            gr.Markdown(
-                "### Qualitative Demo Gallery\n"
-                "人工选择、独立 revision；不是 Gold、evaluation selection、benchmark score 或 scientific acceptance。"
-            )
+        with gr.Tab(tr(DEFAULT_LOCALE, "tab.gallery")) as gallery_tab:
+            gallery_intro = gr.Markdown(tr(DEFAULT_LOCALE, "gallery.intro"))
             with gr.Row():
-                gallery_tags = gr.Textbox(label="demo_tags (comma/newline separated)")
+                gallery_tags = gr.Textbox(
+                    label=tr(DEFAULT_LOCALE, "gallery.tags.label")
+                )
                 gallery_tasks = gr.Dropdown(
-                    [task.value for task in UnifiedTask],
+                    task_choices(DEFAULT_LOCALE),
                     value=default_suite,
                     multiselect=True,
-                    label="selected tasks",
+                    label=tr(DEFAULT_LOCALE, "gallery.tasks.label"),
                 )
-            gallery_note = gr.Textbox(label="note", lines=3)
+            gallery_note = gr.Textbox(
+                label=tr(DEFAULT_LOCALE, "gallery.note.label"),
+                lines=3,
+            )
             with gr.Row():
-                gallery_add = gr.Button("加入 / 更新 Gallery", variant="primary")
-                gallery_remove = gr.Button("从当前视图移除（保留 tombstone）")
+                gallery_add = gr.Button(
+                    tr(DEFAULT_LOCALE, "gallery.add"),
+                    variant="primary",
+                )
+                gallery_remove = gr.Button(tr(DEFAULT_LOCALE, "gallery.remove"))
             gallery_status = gr.Markdown()
             gallery_table = gr.Dataframe(
-                headers=["sample_id", "split", "source", "demo_tags", "note", "selected_tasks", "updated_at"],
+                headers=GALLERY_HEADERS[DEFAULT_LOCALE],
                 value=_gallery_rows(service.gallery),
                 interactive=False,
                 type="array",
-                label="Current qualitative selection",
+                label=tr(DEFAULT_LOCALE, "gallery.table.label"),
             )
 
-        with gr.Tab("C. Task Runner / Result Viewer / Trace"):
-            gr.Markdown(
-                "### Task Routing\n"
-                "Six explicit UnifiedTask only; Suite is preflighted in full and executed in a fixed capability order."
-            )
+        with gr.Tab(tr(DEFAULT_LOCALE, "tab.runner")) as runner_tab:
+            runner_intro = gr.Markdown(tr(DEFAULT_LOCALE, "runner.intro"))
             current_execution_input = gr.Markdown(
                 current_input_banner(
+                    DEFAULT_LOCALE,
                     initial_selection,
-                    "Task Suite",
+                    RUN_MODE_SUITE,
                     UnifiedTask.VLM_ONLY.value,
                     default_suite,
                 ),
                 elem_classes="readonly-boundary",
             )
             with gr.Row():
-                task_mode = gr.Radio(["Single Task", "Task Suite"], value="Task Suite", label="run mode")
+                task_mode = gr.Radio(
+                    run_mode_choices(DEFAULT_LOCALE),
+                    value=RUN_MODE_SUITE,
+                    label=tr(DEFAULT_LOCALE, "runner.mode.label"),
+                )
                 single_task = gr.Dropdown(
-                    [task.value for task in UnifiedTask], value=UnifiedTask.VLM_ONLY.value, label="single task"
+                    task_choices(DEFAULT_LOCALE),
+                    value=UnifiedTask.VLM_ONLY.value,
+                    label=tr(DEFAULT_LOCALE, "runner.single_task.label"),
                 )
                 suite_tasks = gr.Dropdown(
-                    [task.value for task in UnifiedTask],
+                    task_choices(DEFAULT_LOCALE),
                     value=default_suite,
                     multiselect=True,
-                    label="suite tasks (canonical order enforced)",
+                    label=tr(DEFAULT_LOCALE, "runner.suite_tasks.label"),
                 )
             instruction = gr.Textbox(
-                label="visual / region instruction (blank uses task-specific config prompt)", lines=2
+                label=tr(DEFAULT_LOCALE, "runner.instruction.label"),
+                lines=2,
             )
             knowledge_question = gr.Textbox(
-                label="KNOWLEDGE_QA question (blank uses config prompt)", lines=2
+                label=tr(DEFAULT_LOCALE, "runner.question.label"),
+                lines=2,
             )
             prompt_preview = gr.JSON(
                 value=effective_prompt_preview(
-                    "Task Suite",
+                    DEFAULT_LOCALE,
+                    RUN_MODE_SUITE,
                     UnifiedTask.VLM_ONLY.value,
                     default_suite,
                     "",
                     "",
                 ),
-                label="Effective prompts sent by Demo orchestration (read only)",
+                label=tr(DEFAULT_LOCALE, "runner.prompts.label"),
                 open=False,
             )
             with gr.Row():
                 user_mask = gr.File(
-                    label="Independent user/demo mask — strict PNG-L 0/255",
+                    label=tr(DEFAULT_LOCALE, "runner.user_mask.label"),
                     file_types=[".png"],
                     type="filepath",
                 )
                 interpretation_source = gr.Dropdown(
-                    [RegionSource.OA_AUXSEG_CANDIDATE.value, RegionSource.USER_MASK.value],
+                    region_source_choices(DEFAULT_LOCALE),
                     value=RegionSource.OA_AUXSEG_CANDIDATE.value,
-                    label="REGION_INTERPRETATION region source",
+                    label=tr(DEFAULT_LOCALE, "runner.region_source.label"),
                 )
                 candidate_selector = gr.Dropdown(
                     choices=[],
                     value=None,
                     allow_custom_value=False,
-                    label="Candidate selection (same sample + same spatial snapshot only)",
+                    label=tr(DEFAULT_LOCALE, "runner.candidate_selector.label"),
                 )
-            run_button = gr.Button("运行只读 Demo inference", variant="primary")
-            run_status = gr.Markdown()
-            run_summary = gr.JSON(label="Suite summary", open=True)
-            candidate_gallery_tokens = gr.State([])
-            gr.Markdown(
-                "### Candidate Preview\n"
-                "Only real OA-AuxSeg candidates are shown. No GT/reference mask and no automatic Top-1 selection."
+            run_button = gr.Button(
+                tr(DEFAULT_LOCALE, "runner.run"),
+                variant="primary",
             )
+            run_status = gr.Markdown()
+            run_summary = gr.JSON(
+                label=tr(DEFAULT_LOCALE, "runner.summary.label"),
+                open=True,
+            )
+            candidate_gallery_tokens = gr.State([])
+            candidate_intro = gr.Markdown(tr(DEFAULT_LOCALE, "candidate.intro"))
             candidate_gallery = gr.Gallery(
-                label="OA-AuxSeg candidate overlays",
+                label=tr(DEFAULT_LOCALE, "candidate.gallery.label"),
                 type="filepath",
                 columns=4,
                 rows=2,
@@ -808,57 +1038,344 @@ def create_demo_app(
             )
             with gr.Row():
                 candidate_mask = gr.Image(
-                    label="Selected candidate / explicit global mask",
+                    label=tr(DEFAULT_LOCALE, "candidate.mask.label"),
                     type="filepath",
                     image_mode="L",
                     interactive=False,
                 )
                 candidate_overlay = gr.Image(
-                    label="Selected candidate overlay",
+                    label=tr(DEFAULT_LOCALE, "candidate.overlay.label"),
                     type="filepath",
                     interactive=False,
                 )
                 candidate_metadata = gr.JSON(
-                    label="Candidate ID / bbox / area / confidence / binding",
+                    label=tr(DEFAULT_LOCALE, "candidate.metadata.label"),
                     open=True,
                 )
-            candidate_status = gr.Markdown("No valid spatial result for the current sample.")
+            candidate_status = gr.Markdown(
+                render_messages(
+                    DEFAULT_LOCALE,
+                    (MessageSpec.create("status.candidate.none"),),
+                )
+            )
             run_selected_candidate_button = gr.Button(
-                "运行所选 REGION_INTERPRETATION",
+                tr(DEFAULT_LOCALE, "candidate.run"),
                 variant="primary",
             )
-            result_task = gr.Dropdown(choices=[], label="Result task")
-            with gr.Row():
-                result_original = gr.Image(label="Original image", type="filepath", interactive=False)
-                result_mask = gr.Image(label="Predicted / User Mask", type="filepath", image_mode="L", interactive=False)
-                result_probability = gr.Image(label="Mask probability", type="filepath", image_mode="L", interactive=False)
-                result_overlay = gr.Image(label="Predicted overlay", type="filepath", interactive=False)
-            spatial_result = gr.JSON(label="Spatial Result / candidates", open=True)
-            gr.Markdown("### Grounded Understanding")
-            with gr.Row():
-                grounded_full = gr.Image(label="Full RGB", type="filepath", interactive=False)
-                grounded_mask = gr.Image(label="Binary Mask", type="filepath", image_mode="L", interactive=False)
-                grounded_crop = gr.Image(label="Context Crop", type="filepath", interactive=False)
-            with gr.Row():
-                program_facts = gr.JSON(label="Programmatic Facts", open=True)
-                pass1 = gr.JSON(label="Pass-1 structured observation", open=True)
-                grounded_limitations = gr.JSON(label="limitations", open=False)
-            gr.Markdown("### Knowledge Augmentation")
-            evidence_table = gr.Dataframe(
-                headers=["knowledge_type", "source_title", "page", "section", "Evidence ID", "content"],
-                interactive=False,
-                type="array",
-                label="Retrieved evidence",
+            result_task = gr.Dropdown(
+                choices=[],
+                label=tr(DEFAULT_LOCALE, "result.task.label"),
             )
             with gr.Row():
-                pass2 = gr.JSON(label="Pass-2 interpretation", open=True)
-                citations = gr.JSON(label="citations", open=True)
-            with gr.Accordion("Execution Trace", open=False):
-                execution_trace = gr.JSON(label="ExecutionPlan / provider order / fallback / CUDA peak", open=True)
+                result_original = gr.Image(
+                    label=tr(DEFAULT_LOCALE, "result.original.label"),
+                    type="filepath",
+                    interactive=False,
+                )
+                result_mask = gr.Image(
+                    label=tr(DEFAULT_LOCALE, "result.mask.label"),
+                    type="filepath",
+                    image_mode="L",
+                    interactive=False,
+                )
+                result_probability = gr.Image(
+                    label=tr(DEFAULT_LOCALE, "result.probability.label"),
+                    type="filepath",
+                    image_mode="L",
+                    interactive=False,
+                )
+                result_overlay = gr.Image(
+                    label=tr(DEFAULT_LOCALE, "result.overlay.label"),
+                    type="filepath",
+                    interactive=False,
+                )
+            spatial_result = gr.JSON(
+                label=tr(DEFAULT_LOCALE, "result.spatial.label"),
+                open=True,
+            )
+            raw_model_output = gr.Textbox(
+                label=tr(DEFAULT_LOCALE, "result.raw_output.label"),
+                lines=4,
+                interactive=False,
+            )
+            grounded_heading = gr.Markdown(tr(DEFAULT_LOCALE, "grounded.heading"))
+            with gr.Row():
+                grounded_full = gr.Image(
+                    label=tr(DEFAULT_LOCALE, "grounded.full.label"),
+                    type="filepath",
+                    interactive=False,
+                )
+                grounded_mask = gr.Image(
+                    label=tr(DEFAULT_LOCALE, "grounded.mask.label"),
+                    type="filepath",
+                    image_mode="L",
+                    interactive=False,
+                )
+                grounded_crop = gr.Image(
+                    label=tr(DEFAULT_LOCALE, "grounded.crop.label"),
+                    type="filepath",
+                    interactive=False,
+                )
+            with gr.Row():
+                program_facts = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "grounded.facts.label"),
+                    open=True,
+                )
+                pass1 = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "grounded.pass1.label"),
+                    open=True,
+                )
+                grounded_limitations = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "grounded.limitations.label"),
+                    open=False,
+                )
+            knowledge_heading = gr.Markdown(tr(DEFAULT_LOCALE, "knowledge.heading"))
+            evidence_table = gr.Dataframe(
+                headers=EVIDENCE_HEADERS[DEFAULT_LOCALE],
+                interactive=False,
+                type="array",
+                label=tr(DEFAULT_LOCALE, "knowledge.evidence.label"),
+            )
+            with gr.Row():
+                pass2 = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "knowledge.pass2.label"),
+                    open=True,
+                )
+                citations = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "knowledge.citations.label"),
+                    open=True,
+                )
+            with gr.Accordion(
+                tr(DEFAULT_LOCALE, "trace.accordion"),
+                open=False,
+            ) as trace_accordion:
+                execution_trace = gr.JSON(
+                    label=tr(DEFAULT_LOCALE, "trace.label"),
+                    open=True,
+                )
+
+        static_i18n_bindings = [
+            (app_header, "value", "app.header"),
+            (language_selector, "label", "app.language.label"),
+            (browser_tab, "label", "tab.browser"),
+            (browser_intro, "value", "browser.intro"),
+            (sample_query, "label", "browser.sample_query.label"),
+            (current_sample, "label", "browser.current_sample.label"),
+            (apply_button, "value", "browser.apply"),
+            (previous_button, "value", "browser.previous"),
+            (next_button, "value", "browser.next"),
+            (random_button, "value", "browser.random"),
+            (locate_button, "value", "browser.locate"),
+            (browser_meta, "label", "browser.metadata.label"),
+            (browser_optical, "label", "browser.optical.label"),
+            (reference_accordion, "label", "browser.reference.accordion"),
+            (browser_reference, "label", "browser.reference.label"),
+            (channel_preview_metadata, "label", "browser.channel_metadata.label"),
+            (spatial_inputs, "label", "browser.spatial_inputs.label"),
+            (formal_inputs, "label", "browser.formal_inputs.label"),
+            (gallery_tab, "label", "tab.gallery"),
+            (gallery_intro, "value", "gallery.intro"),
+            (gallery_tags, "label", "gallery.tags.label"),
+            (gallery_note, "label", "gallery.note.label"),
+            (gallery_add, "value", "gallery.add"),
+            (gallery_remove, "value", "gallery.remove"),
+            (runner_tab, "label", "tab.runner"),
+            (runner_intro, "value", "runner.intro"),
+            (instruction, "label", "runner.instruction.label"),
+            (knowledge_question, "label", "runner.question.label"),
+            (prompt_preview, "label", "runner.prompts.label"),
+            (user_mask, "label", "runner.user_mask.label"),
+            (run_button, "value", "runner.run"),
+            (run_summary, "label", "runner.summary.label"),
+            (candidate_intro, "value", "candidate.intro"),
+            (candidate_mask, "label", "candidate.mask.label"),
+            (candidate_overlay, "label", "candidate.overlay.label"),
+            (candidate_metadata, "label", "candidate.metadata.label"),
+            (run_selected_candidate_button, "value", "candidate.run"),
+            (result_original, "label", "result.original.label"),
+            (result_mask, "label", "result.mask.label"),
+            (result_probability, "label", "result.probability.label"),
+            (result_overlay, "label", "result.overlay.label"),
+            (spatial_result, "label", "result.spatial.label"),
+            (raw_model_output, "label", "result.raw_output.label"),
+            (grounded_heading, "value", "grounded.heading"),
+            (grounded_full, "label", "grounded.full.label"),
+            (grounded_mask, "label", "grounded.mask.label"),
+            (grounded_crop, "label", "grounded.crop.label"),
+            (program_facts, "label", "grounded.facts.label"),
+            (pass1, "label", "grounded.pass1.label"),
+            (grounded_limitations, "label", "grounded.limitations.label"),
+            (knowledge_heading, "value", "knowledge.heading"),
+            (pass2, "label", "knowledge.pass2.label"),
+            (citations, "label", "knowledge.citations.label"),
+            (trace_accordion, "label", "trace.accordion"),
+            (execution_trace, "label", "trace.label"),
+        ]
+
+        def switch_language(
+            locale: str,
+            current_preview_state: Mapping[str, Any],
+            current_candidate_payload: Mapping[str, Any],
+            current_candidate_token: Any,
+            current_run_state: Mapping[str, Any],
+            current_result_task: Any,
+            current_selection: Mapping[str, Any],
+            current_task_mode: str,
+            current_single_task: str,
+            current_suite_tasks: Sequence[str],
+            current_split: str,
+            current_source: str,
+            current_target: str,
+            current_size: str,
+            current_modalities: Sequence[str],
+            current_gallery_tasks: Sequence[str],
+            current_region_source: str,
+            browser_messages: Sequence[MessageSpec],
+            gallery_messages: Sequence[MessageSpec],
+            run_messages: Sequence[MessageSpec],
+            candidate_messages: Sequence[MessageSpec],
+        ) -> tuple[Any, ...]:
+            static_updates = [
+                gr.update(**{field: tr(locale, key)})
+                for _, field, key in static_i18n_bindings
+            ]
+            optical_gallery, auxiliary_gallery = preview_gallery(
+                locale,
+                current_preview_state.get("full_optical"),
+                current_preview_state.get("optical_channels", ()),
+                current_preview_state.get("auxiliary_channels", ()),
+            )
+            options = current_candidate_payload.get("options", ())
+            valid_tokens = {str(option["token"]) for option in options}
+            if (
+                current_candidate_token not in {None, ""}
+                and str(current_candidate_token) not in valid_tokens
+            ):
+                raise gr.Error(tr(locale, "error.i18n_state"))
+            candidate_value = (
+                None
+                if current_candidate_token in {None, ""}
+                else str(current_candidate_token)
+            )
+            run_task_values = [
+                str(item["task"])
+                for item in current_run_state.get("tasks", ())
+                if isinstance(item, Mapping) and item.get("task")
+            ]
+            if (
+                current_result_task not in {None, ""}
+                and str(current_result_task) not in run_task_values
+            ):
+                raise gr.Error(tr(locale, "error.i18n_state"))
+            result_value = (
+                None
+                if current_result_task in {None, ""}
+                else str(current_result_task)
+            )
+            special_updates = [
+                gr.update(
+                    choices=split_choices(locale),
+                    value=current_split,
+                    label=tr(locale, "browser.split.label"),
+                ),
+                gr.update(
+                    choices=source_choices(locale, catalog_sources),
+                    value=current_source,
+                    label=tr(locale, "browser.source.label"),
+                ),
+                gr.update(
+                    choices=target_choices(locale),
+                    value=current_target,
+                    label=tr(locale, "browser.target.label"),
+                ),
+                gr.update(
+                    choices=size_choices(locale),
+                    value=current_size,
+                    label=tr(locale, "browser.size.label"),
+                ),
+                gr.update(
+                    choices=modality_choices(locale, catalog_modalities),
+                    value=list(current_modalities or ()),
+                    label=tr(locale, "browser.modalities.label"),
+                ),
+                gr.update(
+                    choices=task_choices(locale),
+                    value=list(current_gallery_tasks or ()),
+                    label=tr(locale, "gallery.tasks.label"),
+                ),
+                gr.update(
+                    choices=run_mode_choices(locale),
+                    value=current_task_mode,
+                    label=tr(locale, "runner.mode.label"),
+                ),
+                gr.update(
+                    choices=task_choices(locale),
+                    value=current_single_task,
+                    label=tr(locale, "runner.single_task.label"),
+                ),
+                gr.update(
+                    choices=task_choices(locale),
+                    value=list(current_suite_tasks or ()),
+                    label=tr(locale, "runner.suite_tasks.label"),
+                ),
+                gr.update(
+                    choices=region_source_choices(locale),
+                    value=current_region_source,
+                    label=tr(locale, "runner.region_source.label"),
+                ),
+                gr.update(
+                    choices=candidate_choices(locale, current_candidate_payload),
+                    value=candidate_value,
+                    label=tr(locale, "runner.candidate_selector.label"),
+                ),
+                gr.update(
+                    value=localized_candidate_gallery(locale, current_candidate_payload),
+                    label=tr(locale, "candidate.gallery.label"),
+                ),
+                gr.update(
+                    choices=task_choices(locale, run_task_values),
+                    value=result_value,
+                    label=tr(locale, "result.task.label"),
+                ),
+                gr.update(
+                    headers=GALLERY_HEADERS[locale],
+                    label=tr(locale, "gallery.table.label"),
+                ),
+                gr.update(
+                    headers=EVIDENCE_HEADERS[locale],
+                    label=tr(locale, "knowledge.evidence.label"),
+                ),
+                gr.update(
+                    value=optical_gallery,
+                    label=tr(locale, "browser.optical_channels.label"),
+                ),
+                gr.update(
+                    value=auxiliary_gallery,
+                    label=tr(locale, "browser.auxiliary.label"),
+                ),
+                render_messages(locale, browser_messages),
+                render_messages(locale, gallery_messages),
+                render_messages(locale, run_messages),
+                render_messages(locale, candidate_messages),
+                current_input_banner(
+                    locale,
+                    current_selection,
+                    current_task_mode,
+                    current_single_task,
+                    current_suite_tasks,
+                ),
+            ]
+            return (
+                locale,
+                tr(locale, "app.document_title"),
+                *static_updates,
+                *special_updates,
+            )
 
         browser_outputs = [
             selection_state,
             browser_status,
+            browser_message_state,
             browser_meta,
             browser_optical,
             browser_reference,
@@ -868,56 +1385,81 @@ def create_demo_app(
             candidate_selector,
             optical_channel_gallery,
             auxiliary_channel_gallery,
+            preview_state,
             channel_preview_metadata,
             candidate_gallery,
             candidate_gallery_tokens,
+            candidate_payload_state,
             candidate_mask,
             candidate_overlay,
             candidate_metadata,
             candidate_status,
+            candidate_message_state,
         ]
         filter_inputs = [split, source_filter, sample_query, target_filter, size_filter, modality_filter]
         app.load(
-            fn=lambda: record_values(default_record),
+            fn=load_default,
+            inputs=locale_state,
             outputs=browser_outputs,
             api_visibility="private",
         )
-        apply_button.click(fn=apply_filter, inputs=filter_inputs, outputs=browser_outputs, **private_event)
+        apply_button.click(
+            fn=apply_filter,
+            inputs=[locale_state, *filter_inputs],
+            outputs=browser_outputs,
+            **private_event,
+        )
         previous_button.click(
-            fn=lambda state, *values: navigate(state, -1, *values),
-            inputs=[selection_state, *filter_inputs],
+            fn=lambda locale, state, *values: navigate(locale, state, -1, *values),
+            inputs=[locale_state, selection_state, *filter_inputs],
             outputs=browser_outputs,
             **private_event,
         )
         next_button.click(
-            fn=lambda state, *values: navigate(state, 1, *values),
-            inputs=[selection_state, *filter_inputs],
+            fn=lambda locale, state, *values: navigate(locale, state, 1, *values),
+            inputs=[locale_state, selection_state, *filter_inputs],
             outputs=browser_outputs,
             **private_event,
         )
-        random_button.click(fn=random_record, inputs=filter_inputs, outputs=browser_outputs, **private_event)
+        random_button.click(
+            fn=random_record,
+            inputs=[locale_state, *filter_inputs],
+            outputs=browser_outputs,
+            **private_event,
+        )
         locate_button.click(
             fn=locate_exact,
-            inputs=sample_query,
+            inputs=[locale_state, sample_query],
             outputs=[*browser_outputs, split, source_filter, target_filter, size_filter, modality_filter],
             **private_event,
         )
 
         gallery_add.click(
-            fn=lambda state, tags, note, tasks: mutate_gallery("upsert", state, tags, note, tasks),
-            inputs=[selection_state, gallery_tags, gallery_note, gallery_tasks],
-            outputs=[gallery_table, gallery_status],
+            fn=lambda locale, state, tags, note, tasks: mutate_gallery(
+                "upsert", locale, state, tags, note, tasks
+            ),
+            inputs=[locale_state, selection_state, gallery_tags, gallery_note, gallery_tasks],
+            outputs=[gallery_table, gallery_status, gallery_message_state],
             **private_event,
         )
         gallery_remove.click(
-            fn=lambda state, tags, note, tasks: mutate_gallery("remove", state, tags, note, tasks),
-            inputs=[selection_state, gallery_tags, gallery_note, gallery_tasks],
-            outputs=[gallery_table, gallery_status],
+            fn=lambda locale, state, tags, note, tasks: mutate_gallery(
+                "remove", locale, state, tags, note, tasks
+            ),
+            inputs=[locale_state, selection_state, gallery_tags, gallery_note, gallery_tasks],
+            outputs=[gallery_table, gallery_status, gallery_message_state],
             **private_event,
         )
-        banner_inputs = [selection_state, task_mode, single_task, suite_tasks]
-        for component in (selection_state, task_mode, single_task, suite_tasks):
-            component.change(
+        banner_inputs = [locale_state, selection_state, task_mode, single_task, suite_tasks]
+        selection_state.change(
+            fn=current_input_banner,
+            inputs=banner_inputs,
+            outputs=current_execution_input,
+            show_progress="hidden",
+            **private_event,
+        )
+        for component in (task_mode, single_task, suite_tasks):
+            component.input(
                 fn=current_input_banner,
                 inputs=banner_inputs,
                 outputs=current_execution_input,
@@ -925,6 +1467,7 @@ def create_demo_app(
                 **private_event,
             )
         prompt_inputs = [
+            locale_state,
             task_mode,
             single_task,
             suite_tasks,
@@ -938,34 +1481,36 @@ def create_demo_app(
             instruction,
             knowledge_question,
         ):
-            component.change(
+            component.input(
                 fn=effective_prompt_preview,
                 inputs=prompt_inputs,
                 outputs=prompt_preview,
                 show_progress="hidden",
                 **private_event,
             )
-        candidate_selector.change(
+        candidate_selector.input(
             fn=candidate_preview_values,
-            inputs=[selection_state, candidate_selector],
+            inputs=[locale_state, selection_state, candidate_selector],
             outputs=[
                 candidate_mask,
                 candidate_overlay,
                 candidate_metadata,
                 candidate_status,
+                candidate_message_state,
             ],
             show_progress="hidden",
             **private_event,
         )
         candidate_gallery.select(
             fn=candidate_gallery_selected,
-            inputs=[selection_state, candidate_gallery_tokens],
+            inputs=[locale_state, selection_state, candidate_gallery_tokens],
             outputs=[
                 candidate_selector,
                 candidate_mask,
                 candidate_overlay,
                 candidate_metadata,
                 candidate_status,
+                candidate_message_state,
             ],
             show_progress="hidden",
             **private_event,
@@ -975,17 +1520,21 @@ def create_demo_app(
             run_summary,
             result_task,
             run_status,
+            run_message_state,
             candidate_selector,
             candidate_gallery,
             candidate_gallery_tokens,
+            candidate_payload_state,
             candidate_mask,
             candidate_overlay,
             candidate_metadata,
             candidate_status,
+            candidate_message_state,
         ]
         run_event = run_button.click(
             fn=execute,
             inputs=[
+                locale_state,
                 selection_state,
                 task_mode,
                 single_task,
@@ -1003,7 +1552,7 @@ def create_demo_app(
         )
         candidate_run_event = run_selected_candidate_button.click(
             fn=run_selected_candidate,
-            inputs=[selection_state, instruction, candidate_selector],
+            inputs=[locale_state, selection_state, instruction, candidate_selector],
             outputs=run_outputs,
             concurrency_limit=1,
             concurrency_id="oa_groundrag_demo_gpu",
@@ -1024,24 +1573,94 @@ def create_demo_app(
             evidence_table,
             pass2,
             citations,
+            raw_model_output,
             execution_trace,
         ]
         run_event.then(
             fn=viewer_values,
-            inputs=[run_state, result_task],
+            inputs=[locale_state, run_state, result_task],
             outputs=viewer_outputs,
             **private_event,
         )
         candidate_run_event.then(
             fn=viewer_values,
-            inputs=[run_state, result_task],
+            inputs=[locale_state, run_state, result_task],
             outputs=viewer_outputs,
             **private_event,
         )
-        result_task.change(
+        result_task.input(
             fn=viewer_values,
-            inputs=[run_state, result_task],
+            inputs=[locale_state, run_state, result_task],
             outputs=viewer_outputs,
+            show_progress="hidden",
+            **private_event,
+        )
+
+        switch_inputs = [
+            language_selector,
+            preview_state,
+            candidate_payload_state,
+            candidate_selector,
+            run_state,
+            result_task,
+            selection_state,
+            task_mode,
+            single_task,
+            suite_tasks,
+            split,
+            source_filter,
+            target_filter,
+            size_filter,
+            modality_filter,
+            gallery_tasks,
+            interpretation_source,
+            browser_message_state,
+            gallery_message_state,
+            run_message_state,
+            candidate_message_state,
+        ]
+        switch_outputs = [
+            locale_state,
+            document_title_state,
+            *(component for component, _, _ in static_i18n_bindings),
+            split,
+            source_filter,
+            target_filter,
+            size_filter,
+            modality_filter,
+            gallery_tasks,
+            task_mode,
+            single_task,
+            suite_tasks,
+            interpretation_source,
+            candidate_selector,
+            candidate_gallery,
+            result_task,
+            gallery_table,
+            evidence_table,
+            optical_channel_gallery,
+            auxiliary_channel_gallery,
+            browser_status,
+            gallery_status,
+            run_status,
+            candidate_status,
+            current_execution_input,
+        ]
+        language_event = language_selector.input(
+            fn=switch_language,
+            inputs=switch_inputs,
+            outputs=switch_outputs,
+            queue=False,
+            show_progress="hidden",
+            concurrency_limit=None,
+            **private_event,
+        )
+        language_event.then(
+            fn=None,
+            inputs=document_title_state,
+            outputs=None,
+            js="(title) => { document.title = title; }",
+            queue=False,
             show_progress="hidden",
             **private_event,
         )

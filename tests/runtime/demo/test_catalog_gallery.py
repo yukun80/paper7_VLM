@@ -136,9 +136,10 @@ class BenchmarkCatalogTest(unittest.TestCase):
         )
         for preview in loaded.auxiliary_channel_previews:
             self.assertIn("Spatial Expert Input Preview", preview.caption)
+            self.assertIn("空间专家输入预览", preview.gallery_value("zh")[1])
             self.assertIn(
-                "Not formal MLLM grounded input in current P0",
-                preview.caption,
+                "Not a formal MLLM grounded input in current P0",
+                preview.gallery_value("en")[1],
             )
             self.assertFalse(preview.to_dict()["formal_mllm_grounded_input"])
 

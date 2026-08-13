@@ -494,16 +494,14 @@ class UnifiedDemoRunner:
         if snapshot is None or (snapshot.split, snapshot.sample_id) != (split, sample_id):
             return {
                 "snapshot": None,
-                "choices": [],
-                "gallery": [],
+                "options": [],
                 "gallery_tokens": [],
             }
         previews = sorted(
             (dict(value) for value in snapshot.candidate_previews),
             key=lambda value: int(value["candidate_id"]),
         )
-        choices: list[tuple[str, str]] = []
-        gallery: list[tuple[str, str]] = []
+        options: list[dict[str, Any]] = []
         gallery_tokens: list[str] = []
         for preview in previews:
             selection = DemoCandidateSelection(
@@ -511,25 +509,38 @@ class UnifiedDemoRunner:
                 DemoCandidateKind.CANDIDATE,
                 int(preview["candidate_id"]),
             )
-            label = (
-                f"Candidate {preview['candidate_id']} | area={preview['area_pixels']} | "
-                f"confidence={float(preview['confidence']):.4f}"
-            )
-            choices.append((label, selection.token))
-            gallery.append((str(preview["overlay_path"]), label))
+            options.append({
+                "kind": DemoCandidateKind.CANDIDATE.value,
+                "token": selection.token,
+                "candidate_id": int(preview["candidate_id"]),
+                "bbox_xyxy": list(preview["bbox_xyxy"]),
+                "area_pixels": int(preview["area_pixels"]),
+                "confidence": float(preview["confidence"]),
+                "mask_path": str(preview["mask_path"]),
+                "overlay_path": str(preview["overlay_path"]),
+            })
             gallery_tokens.append(selection.token)
         global_selection = DemoCandidateSelection(
             snapshot.snapshot_id,
             DemoCandidateKind.EXPLICIT_GLOBAL,
         )
-        choices.append((
-            "Use OA-AuxSeg global mask (explicit fallback)",
-            global_selection.token,
-        ))
+        options.append({
+            "kind": DemoCandidateKind.EXPLICIT_GLOBAL.value,
+            "token": global_selection.token,
+            "candidate_id": None,
+            "bbox_xyxy": None,
+            "area_pixels": None,
+            "confidence": None,
+            "mask_path": str(snapshot.global_mask_path),
+            "overlay_path": (
+                None
+                if snapshot.global_overlay_path is None
+                else str(snapshot.global_overlay_path)
+            ),
+        })
         return {
             "snapshot": snapshot.to_dict(),
-            "choices": choices,
-            "gallery": gallery,
+            "options": options,
             "gallery_tokens": gallery_tokens,
         }
 

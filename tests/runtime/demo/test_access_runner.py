@@ -327,6 +327,18 @@ class UnifiedDemoRunnerTest(unittest.TestCase):
             self.assertEqual(preview["confidence"], 0.9)
             self.assertTrue(Path(str(preview["mask_path"])).is_file())
             self.assertTrue(Path(str(preview["overlay_path"])).is_file())
+            ui_payload = runner.candidate_ui_payload(
+                sample_id=record.sample_id,
+                split=record.split,
+            )
+            self.assertNotIn("choices", ui_payload)
+            self.assertNotIn("gallery", ui_payload)
+            self.assertEqual(
+                [value["kind"] for value in ui_payload["options"]],
+                ["CANDIDATE", "EXPLICIT_GLOBAL"],
+            )
+            self.assertEqual(ui_payload["options"][0]["candidate_id"], 5)
+            self.assertEqual(ui_payload["options"][0]["area_pixels"], preview["area_pixels"])
             selected = DemoCandidateSelection(
                 snapshot.snapshot_id,
                 DemoCandidateKind.CANDIDATE,

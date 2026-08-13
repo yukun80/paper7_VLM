@@ -16,6 +16,7 @@ from .catalog import (
 )
 from .config import DemoConfig, load_demo_config
 from .gallery import DemoGalleryEntry, DemoGalleryStore
+from .i18n import DEFAULT_LOCALE, DemoI18nError, MessageSpec, tr
 from .previews import InputChannelPreview
 from .runner import (
     DemoCandidateKind,
@@ -36,6 +37,7 @@ __all__ = [
     "DemoCandidateSelection",
     "DemoGalleryEntry",
     "DemoGalleryStore",
+    "DemoI18nError",
     "DemoInferenceAccess",
     "DemoRunSummary",
     "DemoSpatialSnapshot",
@@ -45,8 +47,11 @@ __all__ = [
     "FrozenEvaluationCatalog",
     "FrozenEvaluationItem",
     "InputChannelPreview",
+    "MessageSpec",
     "UnifiedDemoRunner",
     "create_demo_app",
+    "DEFAULT_LOCALE",
     "load_demo_config",
     "serve_demo",
+    "tr",
 ]

@@ -10,6 +10,8 @@ from PIL import Image
 
 from oa_groundrag.grounding.evidence import render_evidence_image
 
+from .i18n import DEFAULT_LOCALE, preview_caption
+
 
 DISPLAY_TRANSFORM = "finite_valid_linear_minmax_to_uint8_grayscale"
 
@@ -54,6 +56,8 @@ class InputChannelPreview:
 
     @property
     def caption(self) -> str:
+        """Viewer artifact 的稳定原始 caption；不随 UI locale 改写。"""
+
         role = "Spatial Expert Input Preview"
         if self.is_auxiliary:
             boundary = "Not formal MLLM grounded input in current P0"
@@ -64,8 +68,8 @@ class InputChannelPreview:
             f"valid={self.valid_fraction:.3f}\n{boundary}"
         )
 
-    def gallery_value(self) -> tuple[Image.Image, str]:
-        return self.image, self.caption
+    def gallery_value(self, locale: str = DEFAULT_LOCALE) -> tuple[Image.Image, str]:
+        return self.image, preview_caption(locale, self)
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -15,20 +15,21 @@ provenance，不代表当前入口或状态。
 | --- | --- |
 | 更新时间 | `2026-08-13` |
 | program | `OA_GROUNDRAG_V3` |
-| 当前工程状态 | `P0 / INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE + UNIFIED_DEMO_WORKBENCH / engineering_complete` |
-| 当前授权任务 | `UNIFIED_DEMO_FROZEN_RETIREMENT / engineering_complete` |
+| 当前工程状态 | `P0 / INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE + BILINGUAL_UNIFIED_DEMO_WORKBENCH / engineering_complete` |
+| 当前授权任务 | `UNIFIED_DEMO_ZH_EN_I18N / engineering_complete` |
 | 下一任务 | `P1 Multi-Source Grounded Evidence` |
-| Git 基线 | 本轮开始于 `main@43b34cdaced7b9d989c9b906a685e661b2df5d0a`；当前为负责人授权的未提交工作树 |
+| Git 基线 | 本轮开始于 `main@513b42a83fa681468e08eec51fc2728d6f32267b`；当前为负责人授权的未提交工作树 |
 | upstream 基线 | 本地 `origin/main` 与上述 HEAD 一致，`ahead=0 / behind=0` |
 | 发行接口 | `oa-groundrag==0.2.0`；`oa-groundrag = oa_groundrag.runtime.cli:main` |
 | 总体科学状态 | P0 与能力驱动重构仅为工程完成；Frozen Eval-dev 及其下游开发评价产物已退役，不升级 Gate A/C/D 或系统科学验收 |
 | Benchmark test / sealed test | 未评价 / 未访问 |
 
-本轮按负责人明确授权从 Unified Demo 删除 Frozen 页面与数据模式，并精确删除可重建的
-OA-GroundedEval-dev、三套 Stage-5 prediction/evaluation、五套 Stage-6 development artifacts
-和唯一 Frozen Demo run。运行了 CPU 回归与回环 Gradio smoke；没有 GPU、训练、正式评价、Gate、
-test/sealed payload 访问、commit 或 push。开始 P1 或任何新写入前，必须重新核对现场 Git、进程、
-资产身份和负责人授权。
+本轮按负责人明确授权为 Unified Demo 增加中文 / English 运行时切换。国际化只位于 Gradio
+表示层；稳定枚举、模型 prompt、模型输出、Evidence、科学 JSON、schema 和 artifacts 不翻译。
+切换不读取 Benchmark/HDF5、不调用模型、分割、检索或 viewer，也不改变当前 sample、Gallery、
+run 或 candidate state。Frozen 页面与数据模式保持退役。本轮运行了 CPU 回归、回环 Gradio 及
+synthetic HTTP language-event smoke；没有 GPU、训练、正式评价、Gate、test/sealed payload 访问、
+commit 或 push。开始 P1 或任何新写入前，必须重新核对现场 Git、进程、资产身份和负责人授权。
 
 ## 负责人授权的评价链退役
 
@@ -195,17 +196,17 @@ unsupported-claim 人工率、专家相关性、Recall@K、MRR、nDCG 和 `gate_
 | 检查 | 最近结果 |
 | --- | --- |
 | 全量回归基线 | 能力重构时收集 339 项：331 passed，4 项因缺少 `oa_auxseg_hdf5_v1/small` skip，4 项含 backward/optimizer step 仅收集未执行；本轮未重跑训练相关全集 |
-| Runtime / Demo CPU | `tests/runtime` 55/55，其中既有 Unified Runtime 31/31、新 Demo 24/24；覆盖空 Frozen config、UI 无 Frozen、旧 data mode fail closed、knowledge-only 无 payload/receipt、candidate pending/token/replay/global、真实 auxiliary preview 与既有治理合同 |
+| Runtime / Demo CPU | `tests/runtime` 60/60，其中既有 Unified Runtime 31/31、Demo 29/29；新增覆盖中英文 key/placeholder 一致、中文/English 组件、动态消息重绘、稳定 task/region/candidate 映射、preview caption 与语言切换无 payload/runtime/viewer/Gallery/receipt 调用，并继续覆盖 Frozen 退役、knowledge-only、candidate、test lock 与 user-mask 合同 |
 | Annotation / architecture | annotation Workbench 10/10；architecture 8/8，包含 Demo config 与薄 CLI 检查 |
 | Grounding / retrieval / data | `tests/grounding` 15/15、`tests/retrieval` 24/24、`tests/data/grounded` 71/71；grounding/retrieval evaluation 实现 1/1 与 9/9；均为只读 CPU 回归 |
-| Gradio smoke | Blocks 构建通过；最终代码在 `127.0.0.1:8917` 启动并关闭，A/B/C 页签、仅 Demo root 的 allowed paths、`share=false`、private callbacks 与 queue concurrency=1 通过；沙箱内 bind 被环境拒绝后按授权在沙箱外完成回环 smoke |
-| compile / metadata / diff | `compileall`、Demo CLI help、本地 editable metadata `oa-groundrag==0.2.0`、`demo` extra、console target、`git diff --check` 均通过 |
+| Gradio smoke | Blocks 构建通过；最终代码在 `127.0.0.1:8918` 启动并关闭；synthetic app 在 `127.0.0.1:8920` 通过真实 HTTP language event 序列化。A/B/C 页签、中文默认、English 切换、浏览器标题回调、仅 Demo root 的 allowed paths、`share=false`、private callbacks、切换 `queue=false` 与 GPU queue concurrency=1 均通过 |
+| compile / metadata / diff | `compileall`、Demo CLI help、architecture 8/8、annotation Workbench 10/10、`git diff --check` 均通过；配置 schema、CLI 参数与模型资产未修改 |
 | 真实输入预览 | 固定 val `landslide4sense::landslide4sense_000002` 从同一 raw sample 展示 B01–B12、DEM 与 slope；逐通道 raw min/max、valid fraction 和 transform 可审计，且未进入 MLLM formal input |
 | CUDA bounded Demo | 本轮未运行 GPU；上一轮固定 val `gdcld::gdcld_val_original_00000` 的 segmentation/candidate replay engineering smoke 仍保留在两个非 Frozen Demo run 中，不作为本轮删除验收或科学评价 |
 | 删除与保护资产 | 精确清单 10/10 路径均不存在，剩余 Demo runs 不含 Frozen manifest；Benchmark manifest/index、OA-AuxSeg checkpoint、Region Adapter checkpoint manifest/Adapter/workflow、Text Bank manifest/ledger 与 retrieval config 实施前后 SHA-256 不变；模型数学未修改 |
 | Ruff | 未安装；准确结果为 `No module named ruff` |
 
-Unified Demo 的上述 CPU、UI 与既有 CUDA smoke 均为 engineering validation，不构成 Gate A/C/D、
+Unified Demo 的上述 CPU、i18n UI 与既有 CUDA smoke 均为 engineering validation，不构成 Gate A/C/D、
 正式 test evaluation、scientific evaluation 或 scientific acceptance。`allow_test_demo=false`，
 真实 test 未读取，Demo root 中不存在 test access receipt；Frozen Evaluation 页签、selection、
 推理入口和文件白名单均已移除，`frozen_evaluations=[]`。Demo run/viewer 使用 Demo-only v2

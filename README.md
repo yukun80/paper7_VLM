@@ -201,8 +201,16 @@ grounded observation、Evidence Packet、Pass-2 与执行轨迹。它不修改 B
 Adapter、Text Bank 或正式 outputs。冻结评价不再是 Workbench 数据模式；评价 reader、代码和
 配置仍作为独立的可重建能力保留。
 
-Workbench 页签固定为 `A. Benchmark Browser`、`B. Demo Gallery` 和
-`C. Task Runner / Result Viewer / Trace`。
+Workbench 的三个逻辑页签固定为 Benchmark Browser、Demo Gallery 和
+Task Runner / Result Viewer / Trace；中文界面分别显示为“基准数据浏览”、
+“Demo Gallery”和“任务运行 / 结果查看 / 执行轨迹”。
+
+页面顶部提供 `界面语言 / Interface Language`，默认中文，可在 `中文` 与 `English` 间即时
+切换三个页签的标题、字段、按钮、说明、状态消息、Dataframe 表头及 candidate/输入预览说明。
+语言切换只更新 Gradio 表示层，不重新读取 Benchmark/HDF5，不加载模型、不执行推理或检索，
+也不改变当前 sample、Gallery、Demo run、result task 或 candidate snapshot/token。模型 prompt、
+用户输入、模型原始输出、Evidence 内容、科学 JSON、schema、枚举、ID、路径和 reason code 始终
+保持原值，不做自动翻译。
 
 推荐交互顺序是：
 
