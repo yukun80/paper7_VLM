@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import unittest
 from pathlib import Path
 
 from tests.data.grounded.fixture_helpers import no_target_output, target_output
 
-from oa_groundrag.data.grounded.contracts import LandslideEvidenceError, load_config
-from oa_groundrag.data.grounded.region_contracts import (
-    RepresentationMode,
-    load_grounded_eval_config,
-    load_region_corpus_config,
-)
+from oa_groundrag.data.grounded.contracts import load_config
+from oa_groundrag.data.grounded.region_contracts import RepresentationMode, load_region_corpus_config
 from oa_groundrag.vlm.errors import ContractError, ReasonCode
 from oa_groundrag.grounding.outputs import (
     detect_forbidden_region_claims,
@@ -29,33 +24,19 @@ class RegionContractTest(unittest.TestCase):
         corpus = load_region_corpus_config(
             REPO / "configs/grounding/region_corpus_train_v1.yaml"
         )
-        evaluation = load_grounded_eval_config(
-            REPO / "configs/grounding/oa_grounded_eval_dev_v1.yaml"
-        )
         self.assertEqual(corpus.stage4a_selection.sample_count, 500)
-        self.assertEqual(evaluation.sample_count, 100)
-        self.assertEqual(evaluation.per_source.target, 16)
         benchmark_stage4 = REPO.parent / "benchmark/oa_grounded_stage4_v1"
         self.assertEqual(
             corpus.output_root,
             benchmark_stage4
             / "region_corpus/mask_grounded_region_corpus_train_v1_500",
         )
-        self.assertEqual(evaluation.train_corpus_root, corpus.output_root)
-        self.assertEqual(
-            evaluation.output_root,
-            benchmark_stage4 / "eval_dev/oa_grounded_eval_dev_v1_100",
-        )
         self.assertEqual(RepresentationMode.FULL_PLUS_MASK_PLUS_CROP.value, "full_plus_mask_plus_crop")
 
-    def test_test_split_is_rejected_at_config_parse(self) -> None:
-        source = (REPO / "configs/grounding/oa_grounded_eval_dev_v1.yaml").read_text()
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "bad.yaml"
-            path.write_text(source.replace("split: val", "split: test"))
-            with self.assertRaises(LandslideEvidenceError) as raised:
-                load_grounded_eval_config(path)
-        self.assertEqual(raised.exception.code, "SPLIT_FORBIDDEN")
+    def test_retired_eval_config_is_not_shipped(self) -> None:
+        self.assertFalse(
+            (REPO / "configs/grounding/oa_grounded_eval_dev_v1.yaml").exists()
+        )
 
     def test_v1_config_contract_still_loads(self) -> None:
         config = load_config(REPO / "configs/grounding/pilot_500.yaml")

@@ -12,13 +12,13 @@ import unittest
 
 from oa_groundrag.data.rs_general.config import load_build_config, load_export_config
 from oa_groundrag.data.grounded.annotation.cli import TRAIN_WORKFLOW_PATHS
-from oa_groundrag.data.grounded.supervision.cli import MODEL_ASSISTED_WORKFLOW_PATHS
-from oa_groundrag.retrieval.contracts import load_stage6_config
+from oa_groundrag.retrieval.runtime_config import load_text_rag_runtime_config
 from oa_groundrag.runtime.config import load_unified_config
 from oa_groundrag.runtime.demo.config import load_demo_config
 from oa_groundrag.segmentation.config import load_runtime_config
 from oa_groundrag.training.grounding.config import load_stage5_config
 from oa_groundrag.vlm.config import load_config
+from oa_groundrag.vlm.grounded_runtime import load_grounded_runtime_config
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -170,8 +170,9 @@ class ArchitectureTest(unittest.TestCase):
         load_build_config(configs / "data/rs_general/full.yaml")
         load_export_config(configs / "data/rs_general/qwen_train.yaml")
         load_config(configs / "vlm/rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml")
-        load_stage5_config(configs / "vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml")
-        retrieval = load_stage6_config(configs / "retrieval/dev_v1.yaml")
+        load_stage5_config(configs / "vlm/grounded/train_v2.yaml")
+        grounded = load_grounded_runtime_config(configs / "vlm/grounded/runtime_v1.yaml")
+        retrieval = load_text_rag_runtime_config(configs / "retrieval/runtime_v1.yaml")
         bank_manifest = json.loads(
             (
                 REPOSITORY_ROOT
@@ -179,7 +180,7 @@ class ArchitectureTest(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
-            retrieval.semantic_sha256,
+            retrieval.bank.build_config_semantic_sha256,
             bank_manifest["config_semantic_sha256"],
         )
         self.assertEqual(
@@ -187,9 +188,8 @@ class ArchitectureTest(unittest.TestCase):
             configs / "retrieval/sources_v1.yaml",
         )
         self.assertEqual(
-            retrieval.stage5.config_path,
-            configs
-            / "vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml",
+            grounded.published_training_config_semantic_sha256,
+            "8ea33e0e058a75a9d27ce248684bd6734fc10e3d09ffe22db16cb5b904ca943d",
         )
         load_unified_config(configs / "runtime/inference_v2.yaml")
         load_demo_config(configs / "runtime/demo_v1.yaml")
@@ -198,9 +198,9 @@ class ArchitectureTest(unittest.TestCase):
         for path in (
             TRAIN_WORKFLOW_PATHS.prompt_path,
             TRAIN_WORKFLOW_PATHS.draft_config_path,
-            MODEL_ASSISTED_WORKFLOW_PATHS.extension_config_path,
-            MODEL_ASSISTED_WORKFLOW_PATHS.prompt_path,
-            MODEL_ASSISTED_WORKFLOW_PATHS.draft_config_path,
+            REPOSITORY_ROOT / "configs/vlm/grounded/train_v2.yaml",
+            REPOSITORY_ROOT / "configs/vlm/grounded/runtime_v1.yaml",
+            REPOSITORY_ROOT / "configs/retrieval/runtime_v1.yaml",
         ):
             self.assertTrue(path.is_file(), msg=str(path))
 

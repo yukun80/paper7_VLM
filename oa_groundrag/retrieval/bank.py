@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+from types import SimpleNamespace
 import unicodedata
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -806,4 +807,100 @@ def validate_bank(
         "indexed_unit_count": len(expected_ids),
         "knowledge_type_counts": manifest["knowledge_type_counts"],
         "sealed_test_accessed": False,
+    }
+
+
+def validate_runtime_bank(
+    root: Path | str,
+    *,
+    config: "TextRAGRuntimeConfig",
+    verify_sources: bool = False,
+) -> dict[str, Any]:
+    """按已发布 Bank manifest 身份验证 runtime payload。
+
+    Bank 的 scientific/build identity 继续使用发布时写入 manifest 的 Stage 6
+    config semantic SHA；runtime 配置自身不伪造或改写该身份，也不需要任何已退役
+    dev retrieval、prediction 或 evaluation 路径。
+    """
+
+    from .runtime_config import TextRAGRuntimeConfig
+
+    if not isinstance(config, TextRAGRuntimeConfig):
+        raise ContractError(ReasonCode.TYPE_MISMATCH, "runtime Bank 配置类型非法")
+    resolved = Path(os.path.abspath(Path(root)))
+    if resolved != config.bank.root:
+        raise ContractError(
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            "runtime Bank root 与配置发布绑定不一致",
+        )
+    manifest_path = resolved / "manifest.json"
+    ledger_path = resolved / "SHA256SUMS.jsonl"
+    for path, expected, label in (
+        (manifest_path, config.bank.manifest_sha256, "Bank manifest"),
+        (ledger_path, config.bank.ledger_sha256, "Bank ledger"),
+    ):
+        if (
+            first_symlink_component(path) is not None
+            or not path.is_file()
+            or path.is_symlink()
+            or path.stat().st_nlink != 1
+        ):
+            raise ContractError(ReasonCode.OUTPUT_LINK, f"{label} 必须是普通单链接文件：{path}")
+        if sha256_file(path) != expected:
+            raise ContractError(
+                ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+                f"{label} SHA-256 与发布绑定不一致",
+            )
+    manifest = read_json(manifest_path)
+    expected_manifest_values = {
+        "bank_id": config.bank.bank_id,
+        "config_semantic_sha256": config.bank.build_config_semantic_sha256,
+        "registry_semantic_sha256": config.bank.registry_semantic_sha256,
+        "ledger_sha256": config.bank.ledger_sha256,
+        "sealed_test_accessed": False,
+    }
+    drift = {
+        key: {"expected": value, "actual": manifest.get(key)}
+        for key, value in expected_manifest_values.items()
+        if manifest.get(key) != value
+    }
+    if drift:
+        raise ContractError(
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            "runtime Bank manifest 发布身份漂移",
+            details=drift,
+        )
+    registry = load_source_registry(
+        config.source_registry_path,
+        verify_files=verify_sources,
+    )
+    if registry.semantic_sha256 != config.bank.registry_semantic_sha256:
+        raise ContractError(
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            "runtime source registry 与已发布 Bank 身份不一致",
+        )
+    published_config = SimpleNamespace(
+        source_registry_path=config.source_registry_path,
+        semantic_sha256=config.bank.build_config_semantic_sha256,
+    )
+    result = validate_bank(
+        resolved,
+        config=published_config,
+        verify_sources=verify_sources,
+    )
+    if (
+        result["bank_id"] != config.bank.bank_id
+        or result["manifest_sha256"] != config.bank.manifest_sha256
+        or result["ledger_sha256"] != config.bank.ledger_sha256
+    ):
+        raise ContractError(
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            "runtime Bank 严格验证结果与发布绑定不一致",
+        )
+    return {
+        **result,
+        "runtime_config_semantic_sha256": config.semantic_sha256,
+        "published_build_config_semantic_sha256": (
+            config.bank.build_config_semantic_sha256
+        ),
     }

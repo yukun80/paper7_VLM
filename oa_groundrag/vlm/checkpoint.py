@@ -804,6 +804,161 @@ class CheckpointManager:
             )
         return manifest, trainable
 
+    def load_trainable_for_inference(
+        self,
+        root: Path,
+        *,
+        expected_manifest_sha256: str,
+        expected_adapter_sha256: str,
+        expected_config_semantic_sha256: str,
+        expected_model_identity: Mapping[str, Any],
+        expected_processor_identity: Mapping[str, Any],
+        expected_trainable_names: tuple[str, ...],
+        expected_trainable_parameter_count: int,
+    ) -> tuple[Mapping[str, Any], Mapping[str, Tensor]]:
+        """按发布 manifest 身份只加载 LoRA，不重放训练数据合同。
+
+        benchmark、monitor selection 与 training layout 已包含在精确 SHA 锚定的
+        checkpoint manifest 中。推理重新核验当前模型、processor、LoRA 参数名、
+        Adapter hash/size 和参数量；optimizer、scheduler、RNG、sampler、Benchmark、
+        compact supervision 与评价资产均不会被打开。
+        """
+
+        root = Path(root)
+        linked = first_symlink_component(root)
+        if linked is not None or root.is_symlink() or not root.is_dir():
+            raise CheckpointError(
+                ReasonCode.OUTPUT_LINK,
+                f"checkpoint root 不存在或含链接：{root}",
+            )
+        manifest_path = self._file(root, "manifest.json")
+        if sha256_file(manifest_path) != expected_manifest_sha256:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "checkpoint manifest SHA-256 与发布绑定不一致",
+            )
+        manifest = _read_checkpoint_json(manifest_path)
+        if not isinstance(manifest, dict) or set(manifest) != _CHECKPOINT_MANIFEST_FIELDS:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint manifest 字段不匹配",
+            )
+        if manifest.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "checkpoint schema 不兼容",
+            )
+        benchmark_identity = manifest.get("benchmark_identity")
+        validation_identity = manifest.get("validation_selection_identity")
+        training_layout = manifest.get("training_layout")
+        if (
+            not isinstance(benchmark_identity, dict)
+            or not benchmark_identity
+            or not isinstance(validation_identity, dict)
+            or not validation_identity
+            or not isinstance(training_layout, dict)
+            or not training_layout
+        ):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint 发布 manifest 缺少训练数据/selection/layout 身份",
+            )
+        saved_layout = _validated_training_layout(training_layout, label="checkpoint")
+        if (
+            isinstance(expected_trainable_parameter_count, bool)
+            or not isinstance(expected_trainable_parameter_count, int)
+            or expected_trainable_parameter_count <= 0
+        ):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "当前模型可训练参数量必须是正整数",
+            )
+        files = manifest.get("files")
+        adapter_relative = "adapter/adapter_model.safetensors"
+        inference_excluded_files = {
+            "optimizer.pt",
+            "scheduler.pt",
+            "rng.pt",
+            "config_snapshot.json",
+            "training_state.json",
+        }
+        if (
+            not isinstance(files, dict)
+            or set(files) != {adapter_relative, *inference_excluded_files}
+        ):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint manifest payload 清单与已发布合同不一致",
+            )
+        expected = {
+            "config_semantic_sha256": expected_config_semantic_sha256,
+            "model_identity": dict(expected_model_identity),
+            "processor_identity": dict(expected_processor_identity),
+            "training_layout": saved_layout,
+            "trainable_parameter_names": list(expected_trainable_names),
+        }
+        mismatches = {
+            key: {"expected": value, "actual": manifest.get(key)}
+            for key, value in expected.items()
+            if manifest.get(key) != value
+        }
+        if mismatches:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "checkpoint inference identity 不兼容",
+                details=mismatches,
+            )
+        adapter_contract = files.get(adapter_relative)
+        if (
+            not isinstance(adapter_contract, dict)
+            or set(adapter_contract) != {"size_bytes", "sha256"}
+            or adapter_contract.get("sha256") != expected_adapter_sha256
+        ):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint manifest 的 Adapter 发布合同非法",
+            )
+        adapter_path = self._file(root, adapter_relative)
+        if (
+            adapter_path.stat().st_size != adapter_contract.get("size_bytes")
+            or sha256_file(adapter_path) != expected_adapter_sha256
+        ):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "Adapter hash/size 与发布合同不一致",
+            )
+        try:
+            trainable = load_safetensors(str(adapter_path), device="cpu")
+        except (OSError, RuntimeError, SafetensorError, ValueError) as error:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "adapter safetensors 无法读取",
+                details={"error": str(error)},
+            ) from error
+        if set(trainable) != set(expected_trainable_names):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "adapter safetensors 参数名不兼容",
+            )
+        parameter_count = sum(value.numel() for value in trainable.values())
+        manifest_parameter_count = manifest.get("trainable_parameter_count")
+        if (
+            isinstance(manifest_parameter_count, bool)
+            or not isinstance(manifest_parameter_count, int)
+            or parameter_count != manifest_parameter_count
+            or parameter_count != expected_trainable_parameter_count
+        ):
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "Adapter、checkpoint manifest 与当前模型的可训练参数量不一致",
+                details={
+                    "adapter": parameter_count,
+                    "manifest": manifest_parameter_count,
+                    "current_model": expected_trainable_parameter_count,
+                },
+            )
+        return manifest, trainable
+
     @staticmethod
     def _file(root: Path, relative: str) -> Path:
         path = root / relative

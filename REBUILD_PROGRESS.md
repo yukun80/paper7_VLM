@@ -15,21 +15,23 @@ provenance，不代表当前入口或状态。
 | --- | --- |
 | 更新时间 | `2026-08-13` |
 | program | `OA_GROUNDRAG_V3` |
-| 当前工程状态 | `P0 / INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE + BILINGUAL_UNIFIED_DEMO_WORKBENCH / engineering_complete` |
-| 当前授权任务 | `UNIFIED_DEMO_ZH_EN_I18N / engineering_complete` |
+| 当前工程状态 | `P0 / INSTRUCTION_ROUTED_UNIFIED_INFERENCE_CORE + BILINGUAL_UNIFIED_DEMO_WORKBENCH + INFERENCE_ONLY_PROVIDER_LOADING / engineering_complete` |
+| 当前授权任务 | `FROZEN_EVAL_RUNTIME_DECOUPLING / engineering_complete` |
 | 下一任务 | `P1 Multi-Source Grounded Evidence` |
-| Git 基线 | 本轮开始于 `main@513b42a83fa681468e08eec51fc2728d6f32267b`；当前为负责人授权的未提交工作树 |
+| Git 基线 | 本轮开始于 `main@594ee334a4d73149c555fa9ce9d097ccc7f393d4`；当前为负责人授权的未提交工作树 |
 | upstream 基线 | 本地 `origin/main` 与上述 HEAD 一致，`ahead=0 / behind=0` |
 | 发行接口 | `oa-groundrag==0.2.0`；`oa-groundrag = oa_groundrag.runtime.cli:main` |
 | 总体科学状态 | P0 与能力驱动重构仅为工程完成；Frozen Eval-dev 及其下游开发评价产物已退役，不升级 Gate A/C/D 或系统科学验收 |
 | Benchmark test / sealed test | 未评价 / 未访问 |
 
-本轮按负责人明确授权为 Unified Demo 增加中文 / English 运行时切换。国际化只位于 Gradio
-表示层；稳定枚举、模型 prompt、模型输出、Evidence、科学 JSON、schema 和 artifacts 不翻译。
-切换不读取 Benchmark/HDF5、不调用模型、分割、检索或 viewer，也不改变当前 sample、Gallery、
-run 或 candidate state。Frozen 页面与数据模式保持退役。本轮运行了 CPU 回归、回环 Gradio 及
-synthetic HTTP language-event smoke；没有 GPU、训练、正式评价、Gate、test/sealed payload 访问、
-commit 或 push。开始 P1 或任何新写入前，必须重新核对现场 Git、进程、资产身份和负责人授权。
+本轮按负责人明确授权修复 Frozen Eval-dev 退役后的运行时间接依赖。Shared MLLM
+现在只按 workflow state、best pointer、checkpoint manifest、Adapter 与当前
+model/processor/LoRA topology 加载已发布权重，不再构造 compact training dataset、读 Eval
+selection/HDF5 或恢复优化器状态。Text RAG 改用 Bank-only runtime 配置，不再绑定已删
+development prediction/evaluation 根。Stage-5 后续配方改为 train-only；现有 compact/
+collection 允许按退役 identity 浅验，要求重算历史 parent exclusion 时 fail closed。本轮
+不恢复 Frozen 产物，不改模型数学、checkpoint、Adapter、Bank 或 Unified wire schema；未运行训练、
+Gate、正式评价或 test/sealed 访问，未 commit/push。
 
 ## 负责人授权的评价链退役
 
@@ -61,10 +63,11 @@ commit 或 push。开始 P1 或任何新写入前，必须重新核对现场 Git
 | P0 unified runtime 提交 | `6d9cd816495f79bf9b13263d9725d6e159fe448b` |
 | 能力路径迁移提交 | `b784c746c7749783739f21e3e810012ac493bd6b` |
 | 能力重构发布提交 | `ac94fc1107b524f37dfbcf529cf4dc09bde27405` |
-| Unified runtime config | `configs/runtime/inference_v2.yaml`；SHA-256 `7811b6c8bfd217fd3f86f8c5edc6c1e897033036cf4df0844efbdb56d433a631` |
+| Unified runtime config | `configs/runtime/inference_v2.yaml`；SHA-256 `2cca2a111249be033385348d7e2faf6278e0d39f0ac497e185bbcd3097215979` |
 | Unified Demo config | `configs/runtime/demo_v1.yaml`；SHA-256 `540ee12c38130ea20513af61da76cf33b9292f62a7c7ee272f261aab64b5e573`；`frozen_evaluations=[]` |
-| Retrieval config | `configs/retrieval/dev_v1.yaml`；SHA-256 `f175a99347184d75592ec9a1c61c88fc7a4b976dd7381cb9afafd209fb1f8b57` |
-| Grounded curriculum config | `configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml`；SHA-256 `2998cd8c36ad69a703507b8446f3767035819d91f96c964a20969d2f6f3a64e2` |
+| Grounded runtime config | `configs/vlm/grounded/runtime_v1.yaml`；SHA-256 `329d1cc57443174dc989a63d58c9613ab79532704c9e73ec0457309a022ab48e` |
+| Grounded train-only config | `configs/vlm/grounded/train_v2.yaml`；SHA-256 `16fcfff8ba8ebd8becca48fa57d5711e58a20de25a83f04d1cb92aa6920a52d4` |
+| Text RAG runtime config | `configs/retrieval/runtime_v1.yaml`；SHA-256 `7e732f24d4eb9061465e4ad9ed866ef88869a30943001df9499aea4c65367f33` |
 
 冻结设计和 `docs/archive/` 只读。README 不保存动态 SHA、checkpoint 或完成状态；
 AGENTS 不保存动态运行结果。
@@ -75,9 +78,9 @@ AGENTS 不保存动态运行结果。
 | --- | --- | --- | --- |
 | Spatial Perception / OA-AuxSeg | `oa_groundrag/segmentation`；`oa_groundrag/training/segmentation`；`oa_groundrag/evaluation/segmentation.py` | full Benchmark 与负责人定版 checkpoint 可用 | Gate A、正式 fixed predicted masks、sealed test 均未执行 |
 | Shared RS-Geohazard MLLM | `oa_groundrag/vlm`；`oa_groundrag/data/rs_general`；`oa_groundrag/training/vlm` | RS-GeneralDesc native v1、step-1000 Adapter 与 Gate B 冻结证据可用 | Gate B 只接受其冻结 RS-GeneralDesc 作用域 |
-| Grounded Multimodal Understanding | `oa_groundrag/grounding`；`oa_groundrag/data/grounded`；`oa_groundrag/training/grounding` | train-only Corpus、compact supervision、step-900 Region Adapter、评价 reader/代码/配置可用；Eval-dev 实例已按授权删除 | 当前无 materialized OA-GroundedEval-dev；Gate C、专家共识和正式 OA-GroundedEval 未完成 |
-| Knowledge Augmentation | `oa_groundrag/retrieval`；`oa_groundrag/evaluation/retrieval` | Text Bank、在线 retrieval/Pass-2 与评价代码/配置可用；旧 development retrieval/Pass-2/Gate-D artifacts 已按授权删除 | 当前无 materialized Gate-D development evaluation；无 retrieval Gold、专家盲评或正式阈值；Gate D 未科学通过 |
-| Unified Inference | `oa_groundrag/runtime` | 六类显式任务、确定性 router、lazy provider，以及只读 Benchmark Browser / Demo Gallery / Task Runner 工程完成；Frozen UI/data mode 已退役，旧调用 fail closed；纯 `KNOWLEDGE_QA` 不消费 Benchmark payload，candidate 解释需人工显式选择，真实逐通道/auxiliary preview 可见 | auxiliary preview 不进入当前 P0 MLLM formal grounded input；Demo selection 仅作 qualitative 展示；test 默认锁定；P1 多源 grounded evidence 与统一科学评价均未开始 |
+| Grounded Multimodal Understanding | `oa_groundrag/grounding`；`oa_groundrag/data/grounded`；`oa_groundrag/training/grounding` | train-only Corpus、compact supervision、step-900 Region Adapter 及评价 reader/实现保留；推理只验证已发布 checkpoint/Adapter 身份；Eval-dev 实例与默认重建配方已退役 | 当前无 materialized OA-GroundedEval-dev；Gate C、专家共识和正式 OA-GroundedEval 未完成 |
+| Knowledge Augmentation | `oa_groundrag/retrieval`；`oa_groundrag/evaluation/retrieval` | Text Bank、Bank-only runtime retrieval/Pass-2 与评价实现保留；旧 development retrieval/Pass-2/Gate-D artifacts 与默认 dev 配置已退役 | 当前无 materialized Gate-D development evaluation；无 retrieval Gold、专家盲评或正式阈值；Gate D 未科学通过 |
+| Unified Inference | `oa_groundrag/runtime` | 六类显式任务、确定性 router、lazy provider 与双语只读 Demo 工程完成；Shared MLLM/Text RAG provider 已与退役 Eval/dev outputs 解耦；纯 `KNOWLEDGE_QA` 不消费 Benchmark payload，candidate 解释需人工显式选择 | auxiliary preview 不进入当前 P0 MLLM formal grounded input；Demo selection 仅作 qualitative 展示；test 默认锁定；P1 多源 grounded evidence 与统一科学评价均未开始 |
 
 Stage 只保留为 curriculum、schema、output root、checkpoint metadata 和历史 provenance；
 活动源码、配置、脚本和测试按能力与工程职责组织。
@@ -196,17 +199,17 @@ unsupported-claim 人工率、专家相关性、Recall@K、MRR、nDCG 和 `gate_
 | 检查 | 最近结果 |
 | --- | --- |
 | 全量回归基线 | 能力重构时收集 339 项：331 passed，4 项因缺少 `oa_auxseg_hdf5_v1/small` skip，4 项含 backward/optimizer step 仅收集未执行；本轮未重跑训练相关全集 |
-| Runtime / Demo CPU | `tests/runtime` 60/60，其中既有 Unified Runtime 31/31、Demo 29/29；新增覆盖中英文 key/placeholder 一致、中文/English 组件、动态消息重绘、稳定 task/region/candidate 映射、preview caption 与语言切换无 payload/runtime/viewer/Gallery/receipt 调用，并继续覆盖 Frozen 退役、knowledge-only、candidate、test lock 与 user-mask 合同 |
-| Annotation / architecture | annotation Workbench 10/10；architecture 8/8，包含 Demo config 与薄 CLI 检查 |
-| Grounding / retrieval / data | `tests/grounding` 15/15、`tests/retrieval` 24/24、`tests/data/grounded` 71/71；grounding/retrieval evaluation 实现 1/1 与 9/9；均为只读 CPU 回归 |
-| Gradio smoke | Blocks 构建通过；最终代码在 `127.0.0.1:8918` 启动并关闭；synthetic app 在 `127.0.0.1:8920` 通过真实 HTTP language event 序列化。A/B/C 页签、中文默认、English 切换、浏览器标题回调、仅 Demo root 的 allowed paths、`share=false`、private callbacks、切换 `queue=false` 与 GPU queue concurrency=1 均通过 |
-| compile / metadata / diff | `compileall`、Demo CLI help、architecture 8/8、annotation Workbench 10/10、`git diff --check` 均通过；配置 schema、CLI 参数与模型资产未修改 |
+| Runtime / Demo CPU | `tests/runtime` 63/63；新增实测 inference-only Shared MLLM loader 不调用 compact/Eval reader/Benchmark `__getitem__`/HDF5，checkpoint/Adapter/Bank SHA 漂移 fail closed，六任务配置在 Eval-dev 缺失时仍可预检；既有 Demo、i18n、candidate、test lock 和 user-mask 合同继续通过 |
+| Stage-5 / retrieval / data | `tests/training/grounding` 11/11、`tests/retrieval` 24/24、`tests/data/grounded` 71/71；train-only config/workflow 无 Eval 阶段，compact/collection 退役 identity 浅验成功，要求重算历史 exclusion 时明确失败 |
+| Architecture | 8/8；活动配置可解析，已删 Eval/dev 路径不再出现于活动 YAML/JSON，package import graph 与薄 CLI 保持稳定 |
+| Gradio smoke | Blocks 构建由 Runtime/Demo tests 覆盖；最终代码在 `127.0.0.1:8977` 成功启动并关闭，`share=false`，allowed path 仅 `outputs/demo/unified_workbench_v1` |
+| compile / CLI / diff | `compileall`、Demo/Unified/Text-RAG/Grounded/Gate-D CLI help、`git diff --check` 通过；development retrieval/Gate-D CLI 要求显式 `--config`，不再带退役默认值 |
 | 真实输入预览 | 固定 val `landslide4sense::landslide4sense_000002` 从同一 raw sample 展示 B01–B12、DEM 与 slope；逐通道 raw min/max、valid fraction 和 transform 可审计，且未进入 MLLM formal input |
-| CUDA bounded Demo | 本轮未运行 GPU；上一轮固定 val `gdcld::gdcld_val_original_00000` 的 segmentation/candidate replay engineering smoke 仍保留在两个非 Frozen Demo run 中，不作为本轮删除验收或科学评价 |
-| 删除与保护资产 | 精确清单 10/10 路径均不存在，剩余 Demo runs 不含 Frozen manifest；Benchmark manifest/index、OA-AuxSeg checkpoint、Region Adapter checkpoint manifest/Adapter/workflow、Text Bank manifest/ledger 与 retrieval config 实施前后 SHA-256 不变；模型数学未修改 |
+| CUDA bounded Demo | 固定 val `gdcld::gdcld_val_original_00002`：`VLM_ONLY=SUCCESS`、`SEGMENT_AND_UNDERSTAND=SUCCESS`、首次 RI=`WAITING_FOR_CANDIDATE`；本次真实 candidates `[0,1,2,3]`，candidate 0 replay 未重跑 OA-AuxSeg，Pass-1、6-item retrieval、Pass-2 与 6 citations 全部成功；CUDA peak `4,684,341,760` bytes，`sealed_test_accessed=false` |
+| 删除与保护资产 | 退役配置 5 份已删，新增 Grounded runtime/train-only 与 Text RAG runtime 配置；Benchmark manifest/index、OA-AuxSeg checkpoint、Region Adapter checkpoint manifest/Adapter/workflow、Text Bank manifest/ledger 实施前后 SHA-256 不变；不修改历史 output provenance |
 | Ruff | 未安装；准确结果为 `No module named ruff` |
 
-Unified Demo 的上述 CPU、i18n UI 与既有 CUDA smoke 均为 engineering validation，不构成 Gate A/C/D、
+Unified Demo 的上述 CPU、UI 与 CUDA smoke 均为 engineering validation，不构成 Gate A/C/D、
 正式 test evaluation、scientific evaluation 或 scientific acceptance。`allow_test_demo=false`，
 真实 test 未读取，Demo root 中不存在 test access receipt；Frozen Evaluation 页签、selection、
 推理入口和文件白名单均已移除，`frozen_evaluations=[]`。Demo run/viewer 使用 Demo-only v2

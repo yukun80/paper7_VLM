@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""用途：准备 Stage 4 v2 扩展 Region、模型辅助监督及 Stage 5 compact 训练资产。
+"""用途：管理保留的 Grounded train supervision 与 compact 训练资产。
 
-命令：提供扩展准备、生成工作流、compact 发布与 compact 严格验证四个固定子命令。
-输入：冻结 v1 train Region、既有 500 条单专家工作根、仓库 prompt 与本地 Qwen 配置。
-输出：../benchmark/oa_grounded_stage4_v2 下的 7,950 扩展、8,450 集合、工作与发布根。
-写入：只创建固定新根；合法既有根复用，非法既有根失败，正式 package/messages 不覆盖。
-阶段：Stage 4 监督准备与 Stage 5 compact 发布；不是 Gold、人工共识或正式科学评价。
-运行：草稿只由本地模型一次 runtime 补齐；不查询 GPU，不调用外部 API，不启动 UI。
+命令：既有工作流命令保留；扩展重建必须显式提供已审核配置，仓库不再内置退役配方。
+输入：train-only Region collection、监督资产、prompt、本地 VLM 配置及可选重建配置。
+输出：模型辅助监督或 6,974 条 compact identity/record 统计。
+写入：仅在显式调用生产命令时写新根；验证命令只读，不访问 test。
 """
 
 from __future__ import annotations
@@ -41,12 +39,8 @@ BENCHMARK_ROOT = REPO_ROOT.parent / "benchmark"
 STAGE4_V1_ROOT = BENCHMARK_ROOT / "oa_grounded_stage4_v1"
 STAGE4_V2_ROOT = BENCHMARK_ROOT / "oa_grounded_stage4_v2"
 MODEL_ASSISTED_WORKFLOW_PATHS = ModelAssistedWorkflowPaths(
-    extension_config_path=(
-        REPO_ROOT
-        / "configs"
-        / "grounding"
-        / "region_corpus_train_extension_v2_7950.yaml"
-    ),
+    # 退役配方不再随仓库发布。生产命令必须通过 --extension-config 显式替换。
+    extension_config_path=Path("/RETIRED_CONFIG_MUST_BE_EXPLICIT"),
     extension_root=(
         STAGE4_V2_ROOT
         / "region_corpus"
@@ -96,20 +90,23 @@ COMPACT_TRAINING_ROOT = (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Stage 4 v2 模型辅助 train supervision 固定入口",
+        description="Grounded train-only supervision 与 compact 入口",
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser(
-        "prepare-expanded-corpus",
-        help="准备或严格复用 7,950 扩展与 8,450 Region 集合",
-    )
-    commands.add_parser(
-        "run-train-workflow",
-        help="一次 runtime 补齐缺失草稿，并在 8,450/8,450 后发布训练资产",
-    )
+    for name, help_text in (
+        ("prepare-expanded-corpus", "用显式配置准备或验证扩展 Region collection"),
+        ("run-train-workflow", "用显式配置运行模型辅助 train-only workflow"),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument(
+            "--extension-config",
+            type=Path,
+            default=None,
+            help="负责人审核的显式 extension 配置；仓库不提供退役 Eval-dev 配方",
+        )
     commands.add_parser(
         "publish-compact-training",
-        help="从已验证 v2 messages 原子发布独立 6,974 条 compact 训练资产",
+        help="从现有 train-only messages 发布 compact 资产",
     )
     commands.add_parser(
         "validate-compact-training",
@@ -122,17 +119,42 @@ def _print(value: Any, *, stream: Any = sys.stdout) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True), file=stream)
 
 
+def _explicit_workflow_paths(value: Path | None) -> ModelAssistedWorkflowPaths:
+    if value is None:
+        raise LandslideEvidenceError(
+            "RETIRED_UPSTREAM_UNAVAILABLE",
+            "扩展重建配置已退役；必须显式提供 --extension-config",
+        )
+    path = Path(value)
+    if not path.is_file() or path.is_symlink():
+        raise LandslideEvidenceError(
+            "CONFIG_INVALID",
+            f"--extension-config 必须是普通文件：{path}",
+        )
+    return ModelAssistedWorkflowPaths(
+        path,
+        MODEL_ASSISTED_WORKFLOW_PATHS.extension_root,
+        MODEL_ASSISTED_WORKFLOW_PATHS.collection_root,
+        MODEL_ASSISTED_WORKFLOW_PATHS.legacy_project_root,
+        MODEL_ASSISTED_WORKFLOW_PATHS.project_root,
+        MODEL_ASSISTED_WORKFLOW_PATHS.annotation_package_root,
+        MODEL_ASSISTED_WORKFLOW_PATHS.training_messages_root,
+        MODEL_ASSISTED_WORKFLOW_PATHS.prompt_path,
+        MODEL_ASSISTED_WORKFLOW_PATHS.draft_config_path,
+    )
+
+
 def entrypoint(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "prepare-expanded-corpus":
             result = prepare_expanded_corpus(
-                paths=MODEL_ASSISTED_WORKFLOW_PATHS,
+                paths=_explicit_workflow_paths(args.extension_config),
                 progress_callback=lambda value: _print(value, stream=sys.stderr),
             )
         elif args.command == "run-train-workflow":
             result = run_model_assisted_train_workflow(
-                paths=MODEL_ASSISTED_WORKFLOW_PATHS,
+                paths=_explicit_workflow_paths(args.extension_config),
                 progress_callback=lambda value: _print(value, stream=sys.stderr),
             )
         elif args.command == "publish-compact-training":

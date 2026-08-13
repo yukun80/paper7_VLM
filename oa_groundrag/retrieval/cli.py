@@ -40,8 +40,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/retrieval/dev_v1.yaml",
-        help="Stage 6 严格配置",
+        required=True,
+        help="显式 Stage 6 构建/开发配置；仓库不再提供已退役 Eval-dev 默认值",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("preflight", help="只读核验来源、dev、Stage 5 best 与 BGE 权重")

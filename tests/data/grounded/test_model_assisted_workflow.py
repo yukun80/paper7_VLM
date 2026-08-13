@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
@@ -302,11 +303,11 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
         spec.loader.exec_module(module)
         self.assertEqual(
             vars(module._parser().parse_args(["prepare-expanded-corpus"])),
-            {"command": "prepare-expanded-corpus"},
+            {"command": "prepare-expanded-corpus", "extension_config": None},
         )
         self.assertEqual(
             vars(module._parser().parse_args(["run-train-workflow"])),
-            {"command": "run-train-workflow"},
+            {"command": "run-train-workflow", "extension_config": None},
         )
         self.assertEqual(
             vars(module._parser().parse_args(["publish-compact-training"])),
@@ -317,6 +318,13 @@ class ModelAssistedWorkflowTest(unittest.TestCase):
             {"command": "validate-compact-training"},
         )
         paths = module.MODEL_ASSISTED_WORKFLOW_PATHS
+        self.assertFalse(paths.extension_config_path.exists())
+        with patch("sys.stderr", new_callable=io.StringIO) as error:
+            self.assertEqual(
+                module.entrypoint(["prepare-expanded-corpus"]),
+                1,
+            )
+        self.assertIn("RETIRED_UPSTREAM_UNAVAILABLE", error.getvalue())
         expected = REPO_ROOT.parent / "benchmark" / "oa_grounded_stage4_v2"
         self.assertEqual(
             paths.extension_root,

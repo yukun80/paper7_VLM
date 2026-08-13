@@ -44,7 +44,7 @@ from oa_groundrag.training.vlm.validation import ValidationResult, validation_is
 
 
 REPO = Path(__file__).resolve().parents[3]
-CONFIG = REPO / "configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml"
+CONFIG = REPO / "configs/vlm/grounded/train_v2.yaml"
 
 
 class FakeDataset:

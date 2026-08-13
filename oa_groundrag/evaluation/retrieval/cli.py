@@ -36,8 +36,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/retrieval/gate_d_dev_v1.yaml",
-        help="Gate D 严格配置",
+        required=True,
+        help="显式 Gate D 开发配置；仓库不再提供已退役产物默认值",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("prepare", help="冻结排除 smoke 后的 25-record protocol 与 prompt audit")

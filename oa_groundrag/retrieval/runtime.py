@@ -19,15 +19,15 @@ from oa_groundrag.data.rs_general.io import (
 )
 from oa_groundrag.vlm.errors import ContractError, ReasonCode
 
-from .bank import validate_bank
+from .bank import validate_bank, validate_runtime_bank
 from .contracts import (
     KnowledgeType,
     QueryIntent,
     Stage6Config,
     TextRagTask,
-    load_stage6_config,
     route_text_rag,
 )
+from .runtime_config import TextRAGRuntimeConfig, load_text_rag_runtime_config
 from .search import (
     BGEM3DenseEmbedder,
     HybridRetriever,
@@ -62,22 +62,29 @@ def load_runtime_bank_payload(
 class RuntimeTextRetriever:
     """一次请求惰性加载 BGE-M3，查询后可显式释放。"""
 
-    def __init__(self, config: Stage6Config) -> None:
+    def __init__(self, config: Stage6Config | TextRAGRuntimeConfig) -> None:
         self.config = config
         self._embedder: BGEM3DenseEmbedder | None = None
         self._bank_validation: Mapping[str, Any] | None = None
 
     @classmethod
     def from_config_path(cls, path: Path | str) -> "RuntimeTextRetriever":
-        return cls(load_stage6_config(path))
+        return cls(load_text_rag_runtime_config(path))
 
     def _load(self) -> BGEM3DenseEmbedder:
         if self._bank_validation is None:
-            self._bank_validation = validate_bank(
-                self.config.bank_root,
-                config=self.config,
-                verify_sources=False,
-            )
+            if isinstance(self.config, TextRAGRuntimeConfig):
+                self._bank_validation = validate_runtime_bank(
+                    self.config.bank_root,
+                    config=self.config,
+                    verify_sources=False,
+                )
+            else:
+                self._bank_validation = validate_bank(
+                    self.config.bank_root,
+                    config=self.config,
+                    verify_sources=False,
+                )
         if self._embedder is None:
             self._embedder = BGEM3DenseEmbedder(
                 self.config.dense.model_root,

@@ -184,12 +184,17 @@ def _load_collection_context(
     value: Path | str,
     *,
     verify_members: bool = True,
+    eval_exclusion_policy: str = "strict_source",
 ) -> ModelAssistedCollectionContext:
     """经 expanded-region validator 装载 collection，不猜成员路径或资产语义。"""
 
     from .expanded_region import load_expanded_collection_context
 
-    expanded = load_expanded_collection_context(value, verify_members=verify_members)
+    expanded = load_expanded_collection_context(
+        value,
+        verify_members=verify_members,
+        eval_exclusion_policy=eval_exclusion_policy,
+    )
     entries: list[ModelAssistedCollectionEntry] = []
     seen: set[str] = set()
     for expected_ordinal, item in enumerate(expanded.entries):
@@ -611,7 +616,11 @@ def load_model_assisted_project(
         or project["formal_acceptance"] is not False
     ):
         fail("SPLIT_FORBIDDEN", "model-assisted project 必须为 8450 条 train-only v2")
-    collection = _load_collection_context(project["collection_root"])
+    collection = _load_collection_context(
+        project["collection_root"],
+        verify_members=False,
+        eval_exclusion_policy="retired_identity_only",
+    )
     if (
         project["collection_root"] != str(collection.root)
         or project["collection_manifest_sha256"] != collection.manifest_sha256
@@ -1151,7 +1160,11 @@ def validate_model_assisted_supervision(
 ) -> ModelAssistedSupervisionPackage:
     """严格重算混合监督选择；通过不代表 Gold、共识或科学验收。"""
 
-    collection = _load_collection_context(collection_root)
+    collection = _load_collection_context(
+        collection_root,
+        verify_members=False,
+        eval_exclusion_policy="retired_identity_only",
+    )
     root = _ordinary_root(package_root, location="model_assisted_package_root")
     manifest_path = root / "manifest.json"
     _ordinary_file(manifest_path, location="package manifest")
@@ -1430,7 +1443,11 @@ def load_model_assisted_training_messages(
         or manifest["scientific_acceptance"] is not False
     ):
         fail("SPLIT_FORBIDDEN", "training manifest 不是 train-only mixed v2 artifact")
-    collection = _load_collection_context(manifest["source_collection_root"])
+    collection = _load_collection_context(
+        manifest["source_collection_root"],
+        verify_members=False,
+        eval_exclusion_policy="retired_identity_only",
+    )
     if manifest["source_collection_manifest_sha256"] != collection.manifest_sha256:
         fail("ANNOTATION_INVALID", "training collection identity 漂移")
     package_root = _ordinary_root(

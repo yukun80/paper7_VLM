@@ -80,6 +80,10 @@ from oa_groundrag.vlm.model import (
 )
 from oa_groundrag.vlm.reference import MAIN_REFERENCE
 from oa_groundrag.training.grounding.config import STAGE5_CONFIG_SCHEMA, load_stage5_config
+from oa_groundrag.vlm.grounded_runtime import (
+    GROUNDED_RUNTIME_CONFIG_SCHEMA,
+    load_grounded_runtime_config,
+)
 from tests.data.rs_general.fixture_helpers import (
     make_all_sources,
     write_build_config,
@@ -103,6 +107,7 @@ def vlm_yaml_contracts() -> dict[str, tuple[Path, ...]]:
         CONFIG_SCHEMA_VERSION: [],
         GATE_B_PROTOCOL_SCHEMA_VERSION: [],
         STAGE5_CONFIG_SCHEMA: [],
+        GROUNDED_RUNTIME_CONFIG_SCHEMA: [],
     }
     for path in sorted((*CONFIG_ROOT.glob("*.yaml"), *GROUNDED_CONFIG_ROOT.glob("*.yaml"))):
         row = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -245,6 +250,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
         config_paths = contracts[CONFIG_SCHEMA_VERSION]
         protocol_paths = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION]
         stage5_paths = contracts[STAGE5_CONFIG_SCHEMA]
+        grounded_runtime_paths = contracts[GROUNDED_RUNTIME_CONFIG_SCHEMA]
         configs = {
             path.name: load_config(path)
             for path in config_paths
@@ -259,7 +265,16 @@ class ConfigAndPreflightTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(path.name for path in stage5_paths),
-            ("mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml",),
+            ("train_v2.yaml",),
+        )
+        self.assertEqual(
+            tuple(path.name for path in grounded_runtime_paths),
+            ("runtime_v1.yaml",),
+        )
+        runtime = load_grounded_runtime_config(grounded_runtime_paths[0])
+        self.assertEqual(
+            runtime.published_training_config_semantic_sha256,
+            "8ea33e0e058a75a9d27ce248684bd6734fc10e3d09ffe22db16cb5b904ca943d",
         )
         stage5 = load_stage5_config(stage5_paths[0])
         self.assertEqual(stage5.schema_version, STAGE5_CONFIG_SCHEMA)

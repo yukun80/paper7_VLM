@@ -61,6 +61,8 @@ EXTENSION_MANIFEST_SCHEMA = "oa_groundrag.mask_grounded_region.extension_manifes
 TRAIN_COLLECTION_SCHEMA = "oa_groundrag.mask_grounded_region.train_collection.v2"
 TRAIN_COLLECTION_MEMBER_SCHEMA = "oa_groundrag.mask_grounded_region.train_collection_member.v2"
 EXTENSION_SELECTION_ALGORITHM = "mask_grounded_region_extension_stratified_hash.v2"
+EVAL_EXCLUSION_STRICT_SOURCE = "strict_source"
+EVAL_EXCLUSION_RETIRED_IDENTITY_ONLY = "retired_identity_only"
 
 EXTENSION_CORPUS_NAME = "mask_grounded_region_corpus_train_extension_v2_7950"
 TRAIN_COLLECTION_NAME = "mask_grounded_region_train_collection_v2_8450"
@@ -88,17 +90,21 @@ EVAL_DEV_ROOT = Path(os.path.abspath(
     REPOSITORY_ROOT.parent
     / "benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100"
 ))
+RETIRED_EVAL_EXCLUSION_IDENTITY = {
+    "root": str(EVAL_DEV_ROOT),
+    "schema_version": EVAL_MANIFEST_SCHEMA,
+    "manifest_sha256": "fed7d8b99e4482da1a9e8553c2779cd64007a710fa10404bf2985e96f1ce7492",
+    "records_sha256": "ca01e944b69fcdc5eb69a8685091044927a984874a36fab67f2b0a2e7ee8ce9d",
+    "ledger_sha256": "26ce0913510547cb0ca3e4f5967063078b9b8044c83d959d990086c1bb2e7f2a",
+    "record_count": 340,
+    "baseline_parent_count": 100,
+    "ordered_parent_ids_sha256": "1786786fdf6d002dfdd1675360ddd1125308eace1f2b53c22222d72a516669c9",
+}
 EXPANDED_STAGE4_ROOT = Path(os.path.abspath(
     REPOSITORY_ROOT.parent / "benchmark/oa_grounded_stage4_v2"
 ))
 EXTENSION_ROOT = EXPANDED_STAGE4_ROOT / "region_corpus" / EXTENSION_CORPUS_NAME
 COLLECTION_ROOT = EXPANDED_STAGE4_ROOT / "region_collection" / TRAIN_COLLECTION_NAME
-EXTENSION_CONFIG_PATH = (
-    REPOSITORY_ROOT
-    / "configs/grounding/region_corpus_train_extension_v2_7950.yaml"
-)
-
-
 @dataclass(frozen=True)
 class ArtifactBinding:
     root: Path
@@ -244,7 +250,7 @@ def _artifact_binding(
 
 
 def load_expanded_region_config(
-    path: Path | str = EXTENSION_CONFIG_PATH,
+    path: Path | str,
 ) -> ExpandedRegionConfig:
     """严格装载固定 7,950+500 配置；test split 在配置层即被拒绝。"""
 
@@ -639,7 +645,7 @@ def _artifact_contract(root: Path, schema_version: str, report: Mapping[str, Any
 
 
 def build_region_extension(
-    config_path: Path | str = EXTENSION_CONFIG_PATH,
+    config_path: Path | str,
 ) -> RegionBuildResult:
     """从 train GT 构建 7,950 条独立资产；从不读取 val/test shard。"""
 
@@ -815,10 +821,17 @@ def validate_region_extension(
     *,
     config_path: Path | str | None = None,
     verify_source: bool = True,
+    eval_exclusion_policy: str = EVAL_EXCLUSION_STRICT_SOURCE,
 ) -> dict[str, Any]:
     """重算扩展选择、GT 几何、资产和 base/Eval 排除身份。"""
 
     from ..region_validation import _validate_common, validate_eval_dev, validate_region_corpus
+
+    if eval_exclusion_policy not in {
+        EVAL_EXCLUSION_STRICT_SOURCE,
+        EVAL_EXCLUSION_RETIRED_IDENTITY_ONLY,
+    }:
+        fail("INVALID_ENUM", "eval_exclusion_policy 非法")
 
     resolved = _ordinary_root(Path(root), location="extension root")
     manifest, ledger, records, assets, access = _validate_common(
@@ -850,13 +863,29 @@ def validate_region_extension(
         fail("SCHEMA_MISMATCH", "扩展 Corpus base/eval schema 非法")
     base_report = validate_region_corpus(base_binding.root, verify_source=verify_source)
     _check_binding(base_binding, base_report, location="manifest.base_corpus")
-    eval_report = validate_eval_dev(
-        eval_binding.root,
-        train_corpus_root=base_binding.root,
-        # 扩展 Corpus 的深验只重放 train GT；Eval-dev 在这里始终作为冻结排除合同读取。
-        verify_source=False,
-    )
-    _check_binding(eval_binding, eval_report, location="manifest.eval_dev")
+    if eval_exclusion_policy == EVAL_EXCLUSION_STRICT_SOURCE:
+        eval_report = validate_eval_dev(
+            eval_binding.root,
+            train_corpus_root=base_binding.root,
+            # 扩展 Corpus 的深验只重放 train GT；Eval-dev 作为冻结排除合同读取。
+            verify_source=False,
+        )
+        _check_binding(eval_binding, eval_report, location="manifest.eval_dev")
+    elif canonical_json(eval_binding.to_dict()) != canonical_json({
+        key: RETIRED_EVAL_EXCLUSION_IDENTITY[key]
+        for key in (
+            "root",
+            "schema_version",
+            "manifest_sha256",
+            "records_sha256",
+            "ledger_sha256",
+            "record_count",
+        )
+    }):
+        fail(
+            "SELECTION_IDENTITY_MISMATCH",
+            "extension 历史 Eval identity 与退役发布锚点不一致",
+        )
     selection = _mapping(manifest["selection"], "manifest.selection")
     _exact(
         selection,
@@ -887,22 +916,62 @@ def validate_region_extension(
         fail("SELECTION_QUOTA_UNMET", "扩展 Corpus 每来源必须精确 1,590 条")
     base_records = read_jsonl(base_binding.root / "records.jsonl")
     base_samples = {record["sample_id"] for record in base_records}
-    eval_manifest = read_json(eval_binding.root / "manifest.json")
-    eval_records = read_jsonl(eval_binding.root / "records.jsonl")
-    baseline_ids = set(eval_manifest["selection"]["baseline_record_ids"])
-    eval_parents = {record["parent_id"] for record in eval_records if record["record_id"] in baseline_ids}
     exclusion = _mapping(manifest["eval_exclusion"], "manifest.eval_exclusion")
     _exact(exclusion, ("baseline_parent_count", "ordered_parent_ids_sha256"), "manifest.eval_exclusion")
-    if exclusion != {
-        "baseline_parent_count": len(eval_parents),
-        "ordered_parent_ids_sha256": sha256_text(canonical_json(sorted(eval_parents))),
-    }:
-        fail("SELECTION_IDENTITY_MISMATCH", "Eval parent exclusion 身份漂移")
+    if eval_exclusion_policy == EVAL_EXCLUSION_STRICT_SOURCE:
+        eval_manifest = read_json(eval_binding.root / "manifest.json")
+        eval_records = read_jsonl(eval_binding.root / "records.jsonl")
+        baseline_ids = set(eval_manifest["selection"]["baseline_record_ids"])
+        eval_parents = {
+            record["parent_id"]
+            for record in eval_records
+            if record["record_id"] in baseline_ids
+        }
+        if exclusion != {
+            "baseline_parent_count": len(eval_parents),
+            "ordered_parent_ids_sha256": sha256_text(canonical_json(sorted(eval_parents))),
+        }:
+            fail("SELECTION_IDENTITY_MISMATCH", "Eval parent exclusion 身份漂移")
+    else:
+        eval_parents = set()
+        if exclusion != {
+            "baseline_parent_count": RETIRED_EVAL_EXCLUSION_IDENTITY["baseline_parent_count"],
+            "ordered_parent_ids_sha256": RETIRED_EVAL_EXCLUSION_IDENTITY["ordered_parent_ids_sha256"],
+        }:
+            fail(
+                "SELECTION_IDENTITY_MISMATCH",
+                "extension 历史 Eval exclusion 与退役发布锚点不一致",
+            )
     if base_samples & set(ids):
         fail("SELECTION_IDENTITY_MISMATCH", "extension 与 base sample 重复")
     if eval_parents & {record["parent_id"] for record in records}:
         fail("PARENT_OVERLAP", "extension 与 Eval baseline parent 相交")
-    config = load_expanded_region_config(config_path or EXTENSION_CONFIG_PATH)
+    if config_path is None:
+        return {
+            "valid": True,
+            "root": str(resolved),
+            "manifest_sha256": sha256_file(resolved / "manifest.json"),
+            "records_sha256": sha256_file(resolved / "records.jsonl"),
+            "ledger_sha256": sha256_file(resolved / "SHA256SUMS.jsonl"),
+            "record_count": len(records),
+            "asset_count": len(assets),
+            "asset_bytes": sum(
+                (resolved / relative).stat().st_size for relative in assets
+            ),
+            "source_verified": verify_source,
+            "config_verification": (
+                "retired_identity_only"
+                if eval_exclusion_policy == EVAL_EXCLUSION_RETIRED_IDENTITY_ONLY
+                else "explicit_source"
+            ),
+            "formal_acceptance": False,
+        }
+    if eval_exclusion_policy == EVAL_EXCLUSION_RETIRED_IDENTITY_ONLY:
+        fail(
+            "RETIRED_UPSTREAM_UNAVAILABLE",
+            "退役 Eval-dev 仅支持冻结 identity 浅验证；显式配置校验需要重算 parent exclusion，已 fail closed",
+        )
+    config = load_expanded_region_config(config_path)
     # staging root 与最终 root 不同，因此只比较 manifest 中冻结的配置语义与成员身份。
     if (
         selection["config_file_sha256"] != config.config_file_sha256
@@ -1065,7 +1134,7 @@ def _collection_member_rows(
 
 
 def build_train_collection(
-    config_path: Path | str = EXTENSION_CONFIG_PATH,
+    config_path: Path | str,
 ) -> dict[str, Any]:
     """发布只读 base+extension 组合索引；不复制任一成员资产。"""
 
@@ -1219,11 +1288,17 @@ def validate_expanded_region_collection(
     *,
     verify_members: bool = True,
     verify_source: bool = False,
+    eval_exclusion_policy: str = EVAL_EXCLUSION_STRICT_SOURCE,
 ) -> dict[str, Any]:
     """验证组合索引及两个成员根；collection 自身不拥有或复制图像资产。"""
 
     from ..region_validation import _validate_files, validate_eval_dev, validate_region_corpus
 
+    if eval_exclusion_policy not in {
+        EVAL_EXCLUSION_STRICT_SOURCE,
+        EVAL_EXCLUSION_RETIRED_IDENTITY_ONLY,
+    }:
+        fail("INVALID_ENUM", "eval_exclusion_policy 非法")
     resolved = _ordinary_root(Path(root), location="collection root")
     manifest, ledger, ledger_files = _validate_files(resolved)
     _exact(
@@ -1264,7 +1339,11 @@ def validate_expanded_region_collection(
         fail("SELECTION_IDENTITY_MISMATCH", "collection member root 不是冻结 v1 base/v2 extension")
     if verify_members:
         base_report = validate_region_corpus(base_binding.root, verify_source=verify_source)
-        extension_report = validate_region_extension(extension_binding.root, verify_source=verify_source)
+        extension_report = validate_region_extension(
+            extension_binding.root,
+            verify_source=verify_source,
+            eval_exclusion_policy=eval_exclusion_policy,
+        )
         _check_binding(base_binding, base_report, location="collection.members.base")
         _check_binding(extension_binding, extension_report, location="collection.members.extension")
     entries = _resolve_collection_entries(resolved, manifest, member_rows)
@@ -1332,7 +1411,7 @@ def validate_expanded_region_collection(
         fail("SCHEMA_MISMATCH", "collection eval exclusion schema 非法")
     if eval_binding.root != EVAL_DEV_ROOT:
         fail("SELECTION_IDENTITY_MISMATCH", "collection Eval exclusion root 非冻结 Eval-dev")
-    if verify_members:
+    if verify_members and eval_exclusion_policy == EVAL_EXCLUSION_STRICT_SOURCE:
         eval_report = validate_eval_dev(
             eval_binding.root,
             train_corpus_root=base_binding.root,
@@ -1340,16 +1419,33 @@ def validate_expanded_region_collection(
             verify_source=False,
         )
         _check_binding(eval_binding, eval_report, location="collection.eval_exclusion")
-    eval_manifest = read_json(eval_binding.root / "manifest.json")
-    eval_records = read_jsonl(eval_binding.root / "records.jsonl")
-    baseline_ids = set(eval_manifest["selection"]["baseline_record_ids"])
-    eval_parents = {record["parent_id"] for record in eval_records if record["record_id"] in baseline_ids}
-    if eval_binding_row["baseline_parent_count"] != len(eval_parents) or eval_binding_row[
-        "ordered_parent_ids_sha256"
-    ] != sha256_text(canonical_json(sorted(eval_parents))):
-        fail("SELECTION_IDENTITY_MISMATCH", "collection Eval exclusion 身份不一致")
-    if eval_parents & {entry.index["parent_id"] for entry in entries}:
-        fail("PARENT_OVERLAP", "collection 与 Eval baseline parent 相交")
+    if eval_exclusion_policy == EVAL_EXCLUSION_STRICT_SOURCE:
+        eval_manifest = read_json(eval_binding.root / "manifest.json")
+        eval_records = read_jsonl(eval_binding.root / "records.jsonl")
+        baseline_ids = set(eval_manifest["selection"]["baseline_record_ids"])
+        eval_parents = {
+            record["parent_id"]
+            for record in eval_records
+            if record["record_id"] in baseline_ids
+        }
+        if eval_binding_row["baseline_parent_count"] != len(eval_parents) or eval_binding_row[
+            "ordered_parent_ids_sha256"
+        ] != sha256_text(canonical_json(sorted(eval_parents))):
+            fail("SELECTION_IDENTITY_MISMATCH", "collection Eval exclusion 身份不一致")
+        if eval_parents & {entry.index["parent_id"] for entry in entries}:
+            fail("PARENT_OVERLAP", "collection 与 Eval baseline parent 相交")
+    elif canonical_json(eval_binding_row) != canonical_json(
+        RETIRED_EVAL_EXCLUSION_IDENTITY
+    ):
+        fail(
+            "SELECTION_IDENTITY_MISMATCH",
+            "collection 历史 Eval exclusion identity 与退役发布锚点不一致",
+        )
+    elif verify_members:
+        fail(
+            "RETIRED_UPSTREAM_UNAVAILABLE",
+            "历史 Eval exclusion 只能按发布 identity 浅验；退役 parent overlap 无法重算",
+        )
     expected_collection_id = sha256_text(canonical_json({
         "members": {"base": base_binding.to_dict(), "extension": extension_binding.to_dict()},
         "eval_manifest": eval_binding.manifest_sha256,
@@ -1367,6 +1463,7 @@ def validate_expanded_region_collection(
         "member_counts": expected_selection["member_counts"],
         "formal_acceptance": False,
         "source_verified": verify_source,
+        "eval_exclusion_verification": eval_exclusion_policy,
     }
 
 
@@ -1374,6 +1471,7 @@ def load_expanded_collection_context(
     root: Path | str = COLLECTION_ROOT,
     *,
     verify_members: bool = True,
+    eval_exclusion_policy: str = EVAL_EXCLUSION_STRICT_SOURCE,
 ) -> ExpandedCollectionContext:
     """返回每条完整 Region record、queue 与其真实资产根，供逐条 VLM 消费。"""
 
@@ -1382,6 +1480,7 @@ def load_expanded_collection_context(
         resolved,
         verify_members=verify_members,
         verify_source=False,
+        eval_exclusion_policy=eval_exclusion_policy,
     )
     manifest = _mapping(read_json(resolved / "manifest.json"), "collection.manifest")
     entries = _resolve_collection_entries(resolved, manifest, read_jsonl(resolved / "members.jsonl"))
@@ -1402,7 +1501,7 @@ def iter_expanded_collection_records(
 
 
 def prepare_expanded_region_assets(
-    config_path: Path | str = EXTENSION_CONFIG_PATH,
+    config_path: Path | str,
     *,
     verify_source: bool = True,
 ) -> ExpandedRegionResult:

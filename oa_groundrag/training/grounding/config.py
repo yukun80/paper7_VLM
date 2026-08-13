@@ -1,4 +1,4 @@
-"""Stage 5 Mask-Grounded Adapter 的冻结配置合同。"""
+"""Mask-Grounded Adapter 的 train-only 配置合同。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from oa_groundrag.grounding.contracts import MaskMode
 from oa_groundrag.vlm.errors import ConfigError, ReasonCode
 
 
-STAGE5_CONFIG_SCHEMA = "rs_vlm.mask_grounded_stage5_config.v1"
+STAGE5_CONFIG_SCHEMA = "rs_vlm.mask_grounded_train_config.v2"
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,6 @@ class WarmStartContract:
 @dataclass(frozen=True)
 class Stage5DataContract:
     compact_training_root: Path
-    eval_dev_root: Path
     split_seed: int
     train_ratio: float
     region_micro_ratio: float
@@ -88,7 +87,6 @@ class Stage5Config:
             "trainer": self.base.semantic_dict(),
             "data_contract": {
                 "compact_training_root": str(self.data_contract.compact_training_root),
-                "eval_dev_root": str(self.data_contract.eval_dev_root),
                 "split_seed": self.data_contract.split_seed,
                 "train_ratio": self.data_contract.train_ratio,
                 "region_micro_ratio": self.data_contract.region_micro_ratio,
@@ -186,14 +184,13 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
     _exact(
         data,
         (
-            "compact_training_root", "eval_dev_root", "split_seed", "train_ratio",
+            "compact_training_root", "split_seed", "train_ratio",
             "region_micro_ratio", "replay_micro_ratio", "replay_validation_parents",
         ),
         "$.data",
     )
     data_contract = Stage5DataContract(
         compact_training_root=_path(config_path.parent, data["compact_training_root"], "$.data.compact_training_root"),
-        eval_dev_root=_path(config_path.parent, data["eval_dev_root"], "$.data.eval_dev_root"),
         split_seed=_integer(data["split_seed"], "$.data.split_seed"),
         train_ratio=_ratio(data["train_ratio"], "$.data.train_ratio"),
         region_micro_ratio=_ratio(data["region_micro_ratio"], "$.data.region_micro_ratio"),
@@ -261,7 +258,7 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
     workflow_root = _path(config_path.parent, row["workflow_root"], "$.workflow_root")
     trainer_run = replace(
         base.run,
-        name="mask_grounded_region_lora_qwen3vl_2b_rsinit_v1",
+        name="mask_grounded_region_lora_qwen3vl_2b_trainonly_v2",
         seed=data_contract.split_seed,
         mask_mode=MaskMode.GT_MASK,
         output_root=workflow_root / "training",

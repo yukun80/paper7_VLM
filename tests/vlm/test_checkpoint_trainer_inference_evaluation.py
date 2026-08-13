@@ -20,7 +20,8 @@ from oa_groundrag.data.rs_general.io import (
     read_jsonl,
 )
 from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
-from oa_groundrag.vlm.checkpoint import CheckpointManager
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.vlm.checkpoint import CheckpointManager, TrainingCursor
 from oa_groundrag.vlm.config import load_config
 from oa_groundrag.grounding.contracts import (
     MODEL_OUTPUT_SCHEMA_VERSION,
@@ -844,6 +845,83 @@ class TrainerCheckpointTests(unittest.TestCase):
                 expected_trainable_names=model.trainable_names,
             )
         self.assertEqual(caught.exception.code, ReasonCode.CHECKPOINT_CORRUPT)
+
+    def test_inference_loader_reads_only_manifest_and_adapter(self) -> None:
+        model = TinyAdapter()
+        checkpoint = self.base / "inference-only-checkpoint"
+        training_layout = training_layout_identity(self.config)
+        CheckpointManager().save(
+            checkpoint,
+            trainable_state=model.trainable_state_dict(),
+            optimizer_state={"not_loaded_by_inference": True},
+            scheduler_state={"not_loaded_by_inference": True},
+            cursor=TrainingCursor(
+                epoch=0,
+                sample_offset=0,
+                global_step=1,
+                micro_step=0,
+            ),
+            sampler_state={"not_loaded_by_inference": True},
+            multireference_epoch=0,
+            config_snapshot=self.config.snapshot_dict(),
+            config_semantic_sha256=self.config.semantic_sha256,
+            benchmark_identity=benchmark_identity(
+                self.base
+            ).training_identity_dict(),
+            validation_selection_identity=(
+                self.validation_selection.identity_dict()
+            ),
+            model_identity=model.identity.to_dict(),
+            processor_identity=self.processor_identity,
+            training_layout=training_layout,
+            trainable_names=model.trainable_names,
+            rng_state={
+                "python": (),
+                "numpy": (),
+                "torch_cpu": torch.zeros(1),
+                "torch_cuda": [],
+            },
+        )
+        manifest_path = checkpoint / "manifest.json"
+        adapter_path = checkpoint / "adapter/adapter_model.safetensors"
+        manager = CheckpointManager()
+        original_file = manager._file
+
+        def only_runtime_files(root, relative):
+            self.assertIn(
+                relative,
+                {"manifest.json", "adapter/adapter_model.safetensors"},
+            )
+            return original_file(root, relative)
+
+        with (
+            patch.object(manager, "_file", side_effect=only_runtime_files),
+            patch.object(
+                manager,
+                "load_trainable",
+                side_effect=AssertionError("training checkpoint loader must not run"),
+            ),
+            patch.object(
+                manager,
+                "inspect_trainable",
+                side_effect=AssertionError("training payload inspection must not run"),
+            ),
+        ):
+            manifest, trainable = manager.load_trainable_for_inference(
+                checkpoint,
+                expected_manifest_sha256=sha256_file(manifest_path),
+                expected_adapter_sha256=sha256_file(adapter_path),
+                expected_config_semantic_sha256=self.config.semantic_sha256,
+                expected_model_identity=model.identity.to_dict(),
+                expected_processor_identity=self.processor_identity,
+                expected_trainable_names=model.trainable_names,
+                expected_trainable_parameter_count=model.trainable_parameter_count,
+            )
+        self.assertEqual(set(trainable), set(model.trainable_names))
+        self.assertEqual(
+            manifest["trainable_parameter_count"],
+            model.trainable_parameter_count,
+        )
 
     def test_artifact_output_rejects_symlink_ancestor(self) -> None:
         real = self.base / "real"

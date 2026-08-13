@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -16,15 +17,29 @@ import torch
 
 from oa_groundrag.grounding.evidence import EvidenceBuilder
 from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
+from oa_groundrag.artifacts.identity import sha256_file
+from oa_groundrag.data.rs_general.io import atomic_write_json
 from oa_groundrag.vlm.errors import EvidenceError
 from oa_groundrag.grounding.messages import build_mask_grounded_region_messages
 from oa_groundrag.vlm.processing import EncodedSample, single_inference_tensor_batch
 from oa_groundrag.retrieval.contracts import TextRagTask
 from oa_groundrag.retrieval.pass2 import build_pass2_messages
 from oa_groundrag.retrieval.runtime import RuntimeTextRetriever
-from oa_groundrag.runtime.config import build_unified_runtime, load_unified_config
+from oa_groundrag.runtime.config import (
+    build_unified_runtime,
+    load_unified_config,
+    validate_provider_paths,
+)
 from oa_groundrag.runtime.contracts import UnifiedInferenceError
 from oa_groundrag.runtime.cli import main as runtime_cli
+from oa_groundrag.vlm.grounded_runtime import (
+    load_grounded_runtime_config,
+    resolve_grounded_runtime_checkpoint,
+)
+from oa_groundrag.vlm.errors import ContractError
+from oa_groundrag.vlm.checkpoint import CheckpointManager, TrainingCursor
+from oa_groundrag.retrieval.bank import validate_runtime_bank
+from oa_groundrag.retrieval.runtime_config import load_text_rag_runtime_config
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -242,6 +257,147 @@ class RuntimeRetrieverContractTest(unittest.TestCase):
         self.assertEqual(facts, {"mask": {"area_pixels": 0}})
 
 
+class RuntimeInferenceOnlyLoaderTest(unittest.TestCase):
+    def test_shared_mllm_load_does_not_touch_training_eval_or_hdf5(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / "workflow"
+            training = workflow / "training"
+            checkpoint = training / "checkpoints/step-00000001"
+            config_sha = "1" * 64
+            model_identity = {"model_type": "fixture", "revision": "v1"}
+            processor_identity = {"processor": "fixture-v1"}
+            names = ("lora.fixture.weight",)
+            CheckpointManager().save(
+                checkpoint,
+                trainable_state={names[0]: torch.ones(2, 2)},
+                optimizer_state={"unused": True},
+                scheduler_state={"unused": True},
+                cursor=TrainingCursor(0, 0, 1, 0),
+                sampler_state={"unused": True},
+                multireference_epoch=0,
+                config_snapshot={"fixture": True},
+                config_semantic_sha256=config_sha,
+                benchmark_identity={"published": "fixture"},
+                validation_selection_identity={"published": "fixture"},
+                model_identity=model_identity,
+                processor_identity=processor_identity,
+                training_layout={
+                    "physical_batch_size": 1,
+                    "gradient_accumulation_steps": 16,
+                    "effective_batch_size": 16,
+                    "input_pipeline_backend": "ordered_thread_prefetch.v1",
+                    "num_workers": 1,
+                    "prefetch_factor": 1,
+                    "pin_memory": True,
+                    "sample_trace_schema_version": "rs_vlm.sample_trace.v1",
+                },
+                trainable_names=names,
+                rng_state={
+                    "python": (),
+                    "numpy": (),
+                    "torch_cpu": torch.zeros(1),
+                    "torch_cuda": [],
+                },
+            )
+            pointer = training / "best_checkpoint.json"
+            atomic_write_json(pointer, {
+                "schema_version": "rs_vlm.best_checkpoint.v1",
+                "selection_metric": "region_monitor_loss",
+                "step": 1,
+                "macro_task_loss": 1.0,
+                "overall_loss": 1.0,
+                "checkpoint": "checkpoints/step-00000001",
+                "formal_acceptance": False,
+            })
+            state = workflow / "workflow_state.json"
+            atomic_write_json(state, {
+                "schema_version": "fixture",
+                "stage": "complete",
+                "config_semantic_sha256": config_sha,
+                "formal_acceptance": False,
+                "scientific_acceptance": False,
+                "sealed_test_evaluated": False,
+            })
+            runtime_config = root / "runtime.yaml"
+            runtime_config.write_text(
+                "schema_version: oa_groundrag.grounded_runtime.config.v1\n"
+                f"base_config: {REPO_ROOT / 'configs/vlm/rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml'}\n"
+                f"workflow_root: {workflow}\n"
+                f"published_training_config_semantic_sha256: '{config_sha}'\n"
+                "generation:\n  max_new_tokens: 768\n",
+                encoding="utf-8",
+            )
+            manifest = checkpoint / "manifest.json"
+            adapter = checkpoint / "adapter/adapter_model.safetensors"
+            binding = SimpleNamespace(
+                config_path=runtime_config,
+                best_pointer_sha256=sha256_file(pointer),
+                checkpoint_manifest_sha256=sha256_file(manifest),
+                adapter_sha256=sha256_file(adapter),
+                workflow_state_sha256=sha256_file(state),
+            )
+
+            class Identity:
+                def to_dict(self):
+                    return dict(model_identity)
+
+            class FakeModel:
+                identity = Identity()
+                trainable_names = names
+                trainable_parameter_count = 4
+                loaded = None
+                eval_called = False
+
+                def load_trainable_state_dict(self, values):
+                    self.loaded = dict(values)
+
+                def eval(self):
+                    self.eval_called = True
+
+            class FakeProcessor:
+                def __init__(self, **kwargs):
+                    self.kwargs = kwargs
+
+                def identity(self):
+                    return dict(processor_identity)
+
+            model = FakeModel()
+            from oa_groundrag.runtime.providers import GroundedVLMProvider
+
+            forbidden = AssertionError("inference-only loader touched retired/training data")
+            with (
+                patch(
+                    "oa_groundrag.vlm.grounded_runtime.Qwen3VLProcessorAdapter",
+                    FakeProcessor,
+                ),
+                patch(
+                    "oa_groundrag.vlm.grounded_runtime.Qwen3VLModelAdapter.load",
+                    return_value=model,
+                ),
+                patch.object(CheckpointManager, "load_trainable", side_effect=forbidden),
+                patch.object(CheckpointManager, "inspect_trainable", side_effect=forbidden),
+                patch(
+                    "oa_groundrag.data.grounded.supervision.compact_training.CompactTrainingMessageDataset",
+                    side_effect=forbidden,
+                ),
+                patch(
+                    "oa_groundrag.evaluation.grounding.adapter.load_stage5_eval_samples",
+                    side_effect=forbidden,
+                ),
+                patch(
+                    "oa_groundrag.data.oa_auxseg.dataset.BenchmarkDataset.__getitem__",
+                    side_effect=forbidden,
+                ),
+                patch("h5py.File", side_effect=forbidden),
+            ):
+                bundle = GroundedVLMProvider(binding=binding, device="cpu")._load()
+            self.assertEqual(set(model.loaded), set(names))
+            self.assertTrue(model.eval_called)
+            self.assertIn("compact_training", bundle.identity["excluded_components"])
+            self.assertIn("evaluation_selection", bundle.identity["excluded_components"])
+
+
 class ConfigAndCliContractTest(unittest.TestCase):
     def test_existing_and_unified_cli_help_remain_independent(self) -> None:
         scripts = (
@@ -266,6 +422,69 @@ class ConfigAndCliContractTest(unittest.TestCase):
         config = load_unified_config(UNIFIED_CONFIG)
         self.assertEqual(config.repository_root, REPO_ROOT)
         self.assertEqual(config.runtime.device, "cuda")
+        validate_provider_paths(config)
+
+    def test_published_grounded_and_bank_hash_drift_fail_closed(self) -> None:
+        unified = load_unified_config(UNIFIED_CONFIG)
+        grounded = load_grounded_runtime_config(unified.semantic_core.config_path)
+        with self.assertRaises(ContractError):
+            resolve_grounded_runtime_checkpoint(
+                grounded,
+                replace(
+                    unified.semantic_core,
+                    checkpoint_manifest_sha256="0" * 64,
+                ),
+            )
+        with self.assertRaises(ContractError):
+            resolve_grounded_runtime_checkpoint(
+                grounded,
+                replace(
+                    unified.semantic_core,
+                    adapter_sha256="0" * 64,
+                ),
+            )
+        retrieval = load_text_rag_runtime_config(unified.retrieval.config_path)
+        with self.assertRaises(ContractError):
+            validate_runtime_bank(
+                retrieval.bank_root,
+                config=replace(
+                    retrieval,
+                    bank=replace(retrieval.bank, manifest_sha256="0" * 64),
+                ),
+                verify_sources=False,
+            )
+        with self.assertRaises(ContractError):
+            validate_runtime_bank(
+                retrieval.bank_root,
+                config=replace(
+                    retrieval,
+                    bank=replace(retrieval.bank, ledger_sha256="0" * 64),
+                ),
+                verify_sources=False,
+            )
+
+    def test_active_configs_contain_no_retired_eval_or_dev_outputs(self) -> None:
+        forbidden = (
+            "oa_grounded_eval_dev_v1_100",
+            "oa_grounded_eval_dev_v1.yaml",
+            "region_corpus_train_extension_v2_7950.yaml",
+            "configs/retrieval/dev_v1.yaml",
+            "configs/retrieval/gate_d_dev_v1.yaml",
+            "base_gt_mask_baseline",
+            "rs_general_adapter_gt_mask_baseline",
+            "mask_grounded_region_adapter_gt_mask",
+            "dev_retrieval_v1",
+            "pass2_gpu_smoke_v1",
+            "gate_d_dev",
+        )
+        for path in sorted((REPO_ROOT / "configs").rglob("*")):
+            if path.suffix not in {".yaml", ".yml", ".json"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertFalse(
+                any(value in text for value in forbidden),
+                msg=str(path),
+            )
 
     def test_unknown_config_field_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -291,13 +510,13 @@ class ConfigAndCliContractTest(unittest.TestCase):
                 "  checkpoint: /tmp/nonexistent-unified-checkpoint.pt\n"
                 f"  checkpoint_sha256: \"{'0' * 64}\"\n"
                 "semantic_core:\n"
-                f"  config: {REPO_ROOT / 'configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml'}\n"
+                f"  config: {REPO_ROOT / 'configs/vlm/grounded/runtime_v1.yaml'}\n"
                 f"  best_pointer_sha256: \"{'0' * 64}\"\n"
                 f"  checkpoint_manifest_sha256: \"{'0' * 64}\"\n"
                 f"  adapter_sha256: \"{'0' * 64}\"\n"
                 f"  workflow_state_sha256: \"{'0' * 64}\"\n"
                 "retrieval:\n"
-                f"  config: {REPO_ROOT / 'configs/retrieval/dev_v1.yaml'}\n"
+                f"  config: {REPO_ROOT / 'configs/retrieval/runtime_v1.yaml'}\n"
                 "runtime:\n"
                 "  device: cuda\n"
                 "  release_spatial_before_shared: true\n"

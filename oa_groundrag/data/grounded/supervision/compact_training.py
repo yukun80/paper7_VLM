@@ -208,6 +208,7 @@ def _load_v2_source_lightweight(source_training_root: Path | str) -> ModelAssist
     collection = _load_collection_context(
         manifest["source_collection_root"],
         verify_members=False,
+        eval_exclusion_policy="retired_identity_only",
     )
     if manifest["source_collection_manifest_sha256"] != collection.manifest_sha256:
         fail("ANNOTATION_INVALID", "source v2 collection identity 漂移")
@@ -272,6 +273,7 @@ def publish_compact_training_messages(
     collection = _load_collection_context(
         source.manifest["source_collection_root"],
         verify_members=False,
+        eval_exclusion_policy="retired_identity_only",
     )
     history = _historical_source(source.root, source.manifest)
     entries = {str(entry.record["record_id"]): entry for entry in collection.entries}
@@ -391,7 +393,11 @@ def load_compact_training_messages(training_root: Path | str) -> CompactTraining
         fail("SPLIT_FORBIDDEN", "compact manifest 身份或科学边界非法")
     source_collection = _mapping(manifest["source_collection"], "manifest.source_collection")
     _exact(source_collection, ("root", "manifest_sha256"), "manifest.source_collection")
-    collection = _load_collection_context(source_collection["root"], verify_members=False)
+    collection = _load_collection_context(
+        source_collection["root"],
+        verify_members=False,
+        eval_exclusion_policy="retired_identity_only",
+    )
     if source_collection["manifest_sha256"] != collection.manifest_sha256:
         fail("ANNOTATION_INVALID", "compact collection identity 漂移")
     historical = _mapping(manifest["historical_source"], "manifest.historical_source")

@@ -1,4 +1,4 @@
-"""Stage 5 Base→RS warm-start→训练→自动评价的可恢复状态机。"""
+"""Mask-Grounded train/monitor/replay/retention 的可恢复状态机。"""
 
 from __future__ import annotations
 
@@ -48,16 +48,13 @@ from .data import (
     split_compact_by_parent,
 )
 from oa_groundrag.evaluation.grounding.adapter import (
-    evaluate_stage5_dev,
-    load_stage5_eval_samples,
     run_rs_general_retention_report,
-    run_stage5_region_inference,
 )
 from oa_groundrag.training.vlm.trainer import DescriptionTrainer, clear_cuda_cache, training_layout_identity
 from oa_groundrag.training.vlm.validation import evaluate_teacher_forced_loss, select_bounded_external_validation
 
 
-STAGE5_WORKFLOW_SCHEMA = "rs_vlm.mask_grounded_stage5_workflow.v1"
+STAGE5_WORKFLOW_SCHEMA = "rs_vlm.mask_grounded_train_workflow.v2"
 STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS = 1
 _GATE_B_STATIC_PROTOCOL_FILENAME = "rs_generaldesc_gate_b_qwen3vl_2b.yaml"
 
@@ -72,7 +69,7 @@ def _emit(
 
 
 def _prepare_stage5_training_memory(device: torch.device) -> None:
-    """清理 baseline 遗留的无用 Python/CUDA 缓存，保留活跃模型权重。"""
+    """清理 retention probe 遗留的无用缓存，保留活跃模型权重。"""
 
     gc.collect()
     clear_cuda_cache(device)
@@ -159,57 +156,6 @@ def _load_warm_start(
     }
 
 
-def _phase_complete(root: Path, *, model_role: str) -> bool:
-    prediction = root / "predictions"
-    evaluation = root / "evaluation"
-    existing = [path.exists() or path.is_symlink() for path in (prediction, evaluation)]
-    if not any(existing):
-        return False
-    if not all(existing):
-        raise ModelError(ReasonCode.OUTPUT_EXISTS, f"{model_role} baseline 部分发布，拒绝覆盖")
-    prediction_manifest = read_json(prediction / "manifest.json")
-    report = read_json(evaluation / "report.json")
-    if (
-        prediction_manifest.get("model_role") != model_role
-        or prediction_manifest.get("input_count") != 340
-        or report.get("model_role") != model_role
-        or report.get("reference_authority") != "automatic_contract_only"
-        or report.get("formal_acceptance") is not False
-    ):
-        raise ModelError(ReasonCode.PREDICTION_IDENTITY_MISMATCH, f"{model_role} baseline 已存在但无效")
-    return True
-
-
-def _run_dev_phase(
-    *,
-    root: Path,
-    model_role: str,
-    config: Stage5Config,
-    samples: tuple[Any, ...],
-    processor: Qwen3VLProcessorAdapter,
-    model: Qwen3VLModelAdapter,
-    device: torch.device,
-) -> None:
-    if _phase_complete(root, model_role=model_role):
-        return
-    prediction = run_stage5_region_inference(
-        config=config,
-        samples=samples,
-        collator=DescriptionCollator(processor, training=False),
-        model=model,
-        processor=processor.processor,
-        output_root=root / "predictions",
-        model_role=model_role,
-        device=device,
-    )
-    evaluate_stage5_dev(
-        eval_root=config.data_contract.eval_dev_root,
-        prediction_root=prediction,
-        output_root=root / "evaluation",
-        model_role=model_role,
-    )
-
-
 def _latest_checkpoint(training_root: Path) -> Path | None:
     checkpoints = training_root / "checkpoints"
     if not checkpoints.is_dir() or checkpoints.is_symlink():
@@ -276,7 +222,6 @@ def run_stage5_workflow(
     identity = _compact_benchmark_identity(compact)
     access = open_benchmark_access(config.base)
     warm_identity = verify_warm_start_files(config)
-    samples = load_stage5_eval_samples(config.data_contract.eval_dev_root)
     workflow_root = config.workflow_root
     if workflow_root.exists() and (not workflow_root.is_dir() or workflow_root.is_symlink()):
         raise ModelError(ReasonCode.OUTPUT_LINK, "Stage 5 workflow root 必须是普通目录")
@@ -309,7 +254,7 @@ def run_stage5_workflow(
         monitor_parents=len(split.monitor_parents),
     )
     if not torch.cuda.is_available():
-        raise ModelError(ReasonCode.CUDA_REQUIRED, "run-stage5-workflow 的 baseline/training 要求 CUDA")
+        raise ModelError(ReasonCode.CUDA_REQUIRED, "Mask-Grounded training/retention 要求 CUDA")
     device = torch.device("cuda")
     processor = _processor(config)
     processor_identity = processor.identity()
@@ -355,7 +300,7 @@ def run_stage5_workflow(
         )
         loss_path = workflow_root / "retention_losses.json"
         losses = read_json(loss_path) if loss_path.exists() else {
-            "schema_version": "rs_vlm.mask_grounded_stage5_retention_losses.v1",
+            "schema_version": "rs_vlm.mask_grounded_train_retention_losses.v2",
             "selection": retention_selection.to_dict(),
             "base": None,
             "rs_general_adapter": None,
@@ -363,38 +308,27 @@ def run_stage5_workflow(
             "retention_gate_frozen": False,
             "formal_acceptance": False,
         }
-        base_root = workflow_root / "base_gt_mask_baseline"
-        if not _phase_complete(base_root, model_role="base") or losses["base"] is None:
-            _emit(progress_callback, "base_baseline_starting")
+        if losses["base"] is None:
+            _emit(progress_callback, "base_retention_probe_starting")
             base_model = Qwen3VLModelAdapter.load(
                 config.model,
                 _prompt_only_adaptation(config),
                 device=device,
                 gradient_checkpointing=False,
             )
-            _run_dev_phase(
-                root=base_root,
-                model_role="base",
-                config=config,
-                samples=samples,
-                processor=processor,
+            losses["base"] = evaluate_teacher_forced_loss(
                 model=base_model,
+                collator=DescriptionCollator(processor, training=True),
+                dataset=retention,
+                selection=retention_selection,
                 device=device,
-            )
-            if losses["base"] is None:
-                losses["base"] = evaluate_teacher_forced_loss(
-                    model=base_model,
-                    collator=DescriptionCollator(processor, training=True),
-                    dataset=retention,
-                    selection=retention_selection,
-                    device=device,
-                    step=0,
-                ).to_dict()
-                atomic_write_json(loss_path, losses)
+                step=0,
+            ).to_dict()
+            atomic_write_json(loss_path, losses)
             del base_model
             gc.collect()
             torch.cuda.empty_cache()
-            _emit(progress_callback, "base_baseline_complete")
+            _emit(progress_callback, "base_retention_probe_complete")
         model = Qwen3VLModelAdapter.load(
             config.model,
             config.adaptation,
@@ -402,29 +336,18 @@ def run_stage5_workflow(
             gradient_checkpointing=True,
         )
         warm = _load_warm_start(model, processor_identity, config)
-        rs_root = workflow_root / "rs_general_adapter_gt_mask_baseline"
-        if not _phase_complete(rs_root, model_role="rs_general_adapter") or losses["rs_general_adapter"] is None:
-            _emit(progress_callback, "rs_general_baseline_starting")
-            _run_dev_phase(
-                root=rs_root,
-                model_role="rs_general_adapter",
-                config=config,
-                samples=samples,
-                processor=processor,
+        if losses["rs_general_adapter"] is None:
+            _emit(progress_callback, "rs_general_retention_probe_starting")
+            losses["rs_general_adapter"] = evaluate_teacher_forced_loss(
                 model=model,
+                collator=DescriptionCollator(processor, training=True),
+                dataset=retention,
+                selection=retention_selection,
                 device=device,
-            )
-            if losses["rs_general_adapter"] is None:
-                losses["rs_general_adapter"] = evaluate_teacher_forced_loss(
-                    model=model,
-                    collator=DescriptionCollator(processor, training=True),
-                    dataset=retention,
-                    selection=retention_selection,
-                    device=device,
-                    step=0,
-                ).to_dict()
-                atomic_write_json(loss_path, losses)
-            _emit(progress_callback, "rs_general_baseline_complete")
+                step=0,
+            ).to_dict()
+            atomic_write_json(loss_path, losses)
+            _emit(progress_callback, "rs_general_retention_probe_complete")
         region_train = RegionSubsetDataset(
             compact,
             split.train_indices,
@@ -458,7 +381,7 @@ def run_stage5_workflow(
                 resume_checkpoint=None if resume is None else str(resume),
                 warm_start=warm,
             )
-            # 两套 baseline 产生了大量可变长度 generation cache；正式训练前只清理
+            # retention probe 产生了可变长度 forward cache；正式训练前只清理
             # Python 无用对象与 allocator 空闲块，不触碰模型权重或训练超参数。
             _prepare_stage5_training_memory(device)
             trainer.fit(mixed, resume_checkpoint=resume)
@@ -470,18 +393,12 @@ def run_stage5_workflow(
             benchmark_identity=identity,
             selection=selection,
         )
-        region_root = workflow_root / "mask_grounded_region_adapter_gt_mask"
-        _emit(progress_callback, "region_adapter_evaluation_starting", checkpoint=str(best))
-        _run_dev_phase(
-            root=region_root,
-            model_role="mask_grounded_region_adapter",
-            config=config,
-            samples=samples,
-            processor=processor,
-            model=model,
-            device=device,
-        )
         if losses["mask_grounded_region_adapter"] is None:
+            _emit(
+                progress_callback,
+                "region_adapter_retention_probe_starting",
+                checkpoint=str(best),
+            )
             losses["mask_grounded_region_adapter"] = evaluate_teacher_forced_loss(
                 model=model,
                 collator=DescriptionCollator(processor, training=True),
@@ -491,6 +408,7 @@ def run_stage5_workflow(
                 step=int(read_json(config.run.output_root / "best_checkpoint.json")["step"]),
             ).to_dict()
             atomic_write_json(loss_path, losses)
+            _emit(progress_callback, "region_adapter_retention_probe_complete")
         retention_root = workflow_root / "rs_general_retention"
         if not retention_root.exists():
             _emit(progress_callback, "retention_report_starting")
@@ -525,6 +443,7 @@ def run_stage5_workflow(
             "reference_authority": "automatic_contract_only",
             "expert_metrics_available": False,
             "retention_gate_frozen": False,
+            "oa_grounded_eval_consumed": False,
             "formal_acceptance": False,
             "scientific_acceptance": False,
             "sealed_test_evaluated": False,

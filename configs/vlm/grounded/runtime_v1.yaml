@@ -1,0 +1,6 @@
+schema_version: oa_groundrag.grounded_runtime.config.v1
+base_config: ../rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml
+workflow_root: ../../../outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1
+published_training_config_semantic_sha256: 8ea33e0e058a75a9d27ce248684bd6734fc10e3d09ffe22db16cb5b904ca943d
+generation:
+  max_new_tokens: 768

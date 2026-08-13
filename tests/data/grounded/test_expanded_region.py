@@ -4,25 +4,21 @@ import tempfile
 import unittest
 from collections import OrderedDict
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 
 from oa_groundrag.data.grounded.contracts import LandslideEvidenceError
 from oa_groundrag.data.grounded.supervision.expanded_region import (
     COLLECTION_COUNT,
-    EXTENSION_CONFIG_PATH,
+    EVAL_EXCLUSION_RETIRED_IDENTITY_ONLY,
     EXTENSION_COUNT,
-    FINAL_PER_SOURCE,
-    SELECTION_SEED,
     TRAIN_COLLECTION_MEMBER_SCHEMA,
     ArtifactBinding,
     RegionBenchmarkAccess,
-    _validate_inputs,
     _ordinary_root,
     _resolve_collection_entries,
-    load_expanded_region_config,
     select_extension_rows,
+    validate_expanded_region_collection,
 )
 from oa_groundrag.data.rs_general.io import atomic_write_jsonl, canonical_json, sha256_text
 
@@ -76,13 +72,22 @@ class FakeDataset:
 
 
 class ExpandedRegionTest(unittest.TestCase):
-    def test_frozen_config_contract(self) -> None:
-        config = load_expanded_region_config(EXTENSION_CONFIG_PATH)
-        self.assertEqual(config.seed, SELECTION_SEED)
-        self.assertEqual(config.extension_per_source * len(config.source_order), EXTENSION_COUNT)
-        self.assertEqual(config.final_per_source, FINAL_PER_SOURCE)
-        self.assertEqual(config.final_per_source * len(config.source_order), COLLECTION_COUNT)
-        self.assertEqual(config.no_target_max_ratio, 0.20)
+    def test_retired_extension_rebuild_config_is_not_shipped(self) -> None:
+        repo = Path(__file__).resolve().parents[3]
+        self.assertFalse(
+            (repo / "configs/grounding/region_corpus_train_extension_v2_7950.yaml").exists()
+        )
+
+    def test_retired_eval_identity_mode_refuses_deep_recomputation(self) -> None:
+        with self.assertRaises(LandslideEvidenceError) as raised:
+            validate_expanded_region_collection(
+                Path(__file__).resolve().parents[3].parent
+                / "benchmark/oa_grounded_stage4_v2/region_collection"
+                / "mask_grounded_region_train_collection_v2_8450",
+                verify_members=True,
+                eval_exclusion_policy=EVAL_EXCLUSION_RETIRED_IDENTITY_ONLY,
+            )
+        self.assertEqual(raised.exception.code, "RETIRED_UPSTREAM_UNAVAILABLE")
 
     def test_selection_is_deterministic_stratified_and_excludes_identities(self) -> None:
         rows: list[dict[str, object]] = []
@@ -226,47 +231,6 @@ class ExpandedRegionTest(unittest.TestCase):
         self.assertEqual(list(access._cache), ["sample-1", "sample-2"])
         access.load("sample-1")
         self.assertEqual(list(access._cache), ["sample-2", "sample-1"])
-
-    def test_train_extension_validation_never_opens_val_source(self) -> None:
-        config = load_expanded_region_config(EXTENSION_CONFIG_PATH)
-        eval_records = [
-            {"record_id": f"eval-{index}", "parent_id": f"eval-parent-{index}"}
-            for index in range(config.eval_baseline_parent_count)
-        ]
-        with (
-            patch(
-                "oa_groundrag.data.grounded.region_validation.validate_region_corpus",
-                return_value={"valid": True},
-            ) as validate_train,
-            patch(
-                "oa_groundrag.data.grounded.region_validation.validate_eval_dev",
-                return_value={"valid": True},
-            ) as validate_eval,
-            patch(
-                "oa_groundrag.data.grounded.supervision.expanded_region._check_binding",
-            ),
-            patch(
-                "oa_groundrag.data.grounded.supervision.expanded_region.read_json",
-                return_value={
-                    "selection": {
-                        "baseline_record_ids": [row["record_id"] for row in eval_records],
-                    },
-                },
-            ),
-            patch(
-                "oa_groundrag.data.grounded.supervision.expanded_region.read_jsonl",
-                side_effect=lambda path: eval_records if path.name == "records.jsonl"
-                and path.parent == config.eval_dev.root else [],
-            ),
-        ):
-            _, _, _, parents = _validate_inputs(config, verify_source=True)
-        validate_train.assert_called_once_with(config.base_corpus.root, verify_source=True)
-        validate_eval.assert_called_once_with(
-            config.eval_dev.root,
-            train_corpus_root=config.base_corpus.root,
-            verify_source=False,
-        )
-        self.assertEqual(parents, {row["parent_id"] for row in eval_records})
 
     def test_collection_index_resolves_member_root_and_detects_tamper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

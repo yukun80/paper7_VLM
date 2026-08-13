@@ -320,9 +320,9 @@ no-target 时不得虚构 bbox、crop、区域数组或目标存在性。严格�
    warm start，并通过 replay 维持通用能力。
 
 Grounded curriculum 的 region/replay 比例、warm start 和生成限制见
-[Grounded 配置](../configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml)。
+[Grounded train-only 配置](../configs/vlm/grounded/train_v2.yaml)。
 运行 loader 只读取最终 trainable LoRA state，见
-[grounded_adapter.py](../oa_groundrag/vlm/grounded_adapter.py)。
+[grounded_runtime.py](../oa_groundrag/vlm/grounded_runtime.py)。
 
 ### 6.3 Grounding：把“哪里”变成可审计输入
 
@@ -370,7 +370,7 @@ text-only Pass-2
 
 当前规模下使用 SQLite FTS5 和本地 NumPy dense matrix 足够透明、可复现，也没有证据表明
 必须引入独立向量数据库或 learned reranker。配置中的召回深度、RRF 常数和配额见
-[dev_v1.yaml](../configs/retrieval/dev_v1.yaml)，实现见
+[runtime_v1.yaml](../configs/retrieval/runtime_v1.yaml)，实现见
 [search.py](../oa_groundrag/retrieval/search.py)。
 
 Pass-2 不是“搜到什么就自由发挥”。解析器检查严格 JSON、Evidence ID、证据类型、禁止重写
@@ -675,8 +675,8 @@ bbox、centroid、area、components、compactness、elongation 和 crop window�
 - warm start 是权重初始化关系，不是线上 provider 调用关系。
 
 **项目落地：** curriculum 见
-[Grounded 配置](../configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml)；
-最终 Adapter 加载见 [grounded_adapter.py](../oa_groundrag/vlm/grounded_adapter.py)；
+[Grounded train-only 配置](../configs/vlm/grounded/train_v2.yaml)；
+最终 Adapter 加载见 [grounded_runtime.py](../oa_groundrag/vlm/grounded_runtime.py)；
 runtime 绑定见 [inference_v2.yaml](../configs/runtime/inference_v2.yaml)。
 
 **常见追问：**
@@ -786,7 +786,7 @@ vision/merger 没有可训练参数。
 [vlm/processing.py](../oa_groundrag/vlm/processing.py)；BGE-M3 的
 <code>token_count</code>、截断与最大长度在
 [retrieval/search.py](../oa_groundrag/retrieval/search.py) 和
-[retrieval 配置](../configs/retrieval/dev_v1.yaml)。
+[retrieval runtime 配置](../configs/retrieval/runtime_v1.yaml)。
 
 **常见追问：**
 
@@ -888,7 +888,7 @@ assistant-only labels；[training/vlm/trainer.py](../oa_groundrag/training/vlm/t
 **项目落地：** RS-General task families 在
 [RS-General 配置](../configs/vlm/rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml)；
 Grounded 配置明确 warm start、90% region micro 与 10% replay，见
-[mask_grounded 配置](../configs/vlm/grounded/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1.yaml)。
+[mask_grounded train-only 配置](../configs/vlm/grounded/train_v2.yaml)。
 
 **常见追问：**
 
@@ -1052,7 +1052,7 @@ observation，也禁止把 candidate 升级为 confirmed landslide。
 
 **项目落地：** 提取、OCR、unit 生成、去重和 ledger 在
 [retrieval/bank.py](../oa_groundrag/retrieval/bank.py)；最小字符数和最大 token 数在
-[retrieval 配置](../configs/retrieval/dev_v1.yaml)。
+[retrieval runtime 配置](../configs/retrieval/runtime_v1.yaml)。
 
 **常见追问：**
 
@@ -1085,7 +1085,7 @@ observation，也禁止把 candidate 升级为 confirmed landslide。
 
 **项目落地：** [retrieval/search.py](../oa_groundrag/retrieval/search.py) 固定 model identity、
 1024 维 dense 表示、归一化与点积；模型路径和 revision 在
-[dev_v1.yaml](../configs/retrieval/dev_v1.yaml)。
+[runtime_v1.yaml](../configs/retrieval/runtime_v1.yaml)。
 
 **常见追问：**
 
@@ -1146,7 +1146,7 @@ observation，也禁止把 candidate 升级为 confirmed landslide。
 
 **项目落地：** rank 融合与确定性 tie-break 在
 [search.py](../oa_groundrag/retrieval/search.py)，召回深度、RRF 和 quota 在
-[dev_v1.yaml](../configs/retrieval/dev_v1.yaml)。
+[runtime_v1.yaml](../configs/retrieval/runtime_v1.yaml)。
 
 **常见追问：**
 

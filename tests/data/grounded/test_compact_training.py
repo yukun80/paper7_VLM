@@ -117,7 +117,7 @@ class CompactTrainingTests(unittest.TestCase):
                 patch(
                     "oa_groundrag.data.grounded.supervision.compact_training._load_collection_context",
                     return_value=collection,
-                ),
+                ) as load_collection,
                 patch(
                     "oa_groundrag.data.grounded.supervision.compact_training._historical_source",
                     return_value=history,
@@ -137,6 +137,13 @@ class CompactTrainingTests(unittest.TestCase):
                 dataset = CompactTrainingMessageDataset(compact)
                 self.assertEqual(dataset[0].logical_role, "mask_grounded_train")
                 self.assertEqual(dataset[0].reference_responses[0], canonical_json(target_output()))
+                self.assertTrue(load_collection.call_args_list)
+                for call in load_collection.call_args_list:
+                    self.assertFalse(call.kwargs["verify_members"])
+                    self.assertEqual(
+                        call.kwargs["eval_exclusion_policy"],
+                        "retired_identity_only",
+                    )
 
     def test_compact_rejects_assistant_and_asset_tamper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

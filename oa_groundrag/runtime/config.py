@@ -252,8 +252,8 @@ def validate_provider_paths(config: UnifiedInferenceConfig) -> None:
     """provider 构造前检查其将读取的所有配置/资产根；不读取 payload。"""
 
     from oa_groundrag.segmentation.config import load_runtime_config
-    from oa_groundrag.training.grounding.config import load_stage5_config
-    from oa_groundrag.retrieval.contracts import load_stage6_config
+    from oa_groundrag.vlm.grounded_runtime import load_grounded_runtime_config
+    from oa_groundrag.retrieval.runtime_config import load_text_rag_runtime_config
 
     _regular_path(config.spatial.config_path, label="spatial.config")
     _regular_path(config.spatial.checkpoint_path, label="spatial.checkpoint")
@@ -263,47 +263,22 @@ def validate_provider_paths(config: UnifiedInferenceConfig) -> None:
     benchmark_root = spatial.resolve_path(spatial.benchmark_root, config.repository_root)
     output_root = spatial.resolve_path(spatial.output_dir, config.repository_root)
     backbone_weights = spatial.resolve_path(spatial.backbone_weights, config.repository_root)
-    semantic_core = load_stage5_config(config.semantic_core.config_path)
-    retrieval = load_stage6_config(config.retrieval.config_path)
+    semantic_core = load_grounded_runtime_config(config.semantic_core.config_path)
+    retrieval = load_text_rag_runtime_config(config.retrieval.config_path)
     first_paths = {
         "spatial.benchmark_root": benchmark_root,
         "spatial.output_root": output_root,
         "spatial.backbone_weights": backbone_weights,
         "semantic_core.workflow_root": semantic_core.workflow_root,
-        "semantic_core.output_root": semantic_core.run.output_root,
+        "semantic_core.output_root": semantic_core.training_root,
         "semantic_core.model": semantic_core.model.path,
         "semantic_core.processor": semantic_core.model.processor_path,
         "retrieval.source_registry": retrieval.source_registry_path,
         "retrieval.bank_root": retrieval.bank_root,
-        "retrieval.retrieval_root": retrieval.retrieval_root,
-        "retrieval.generation_root": retrieval.generation_root,
         "retrieval.dense_model_root": retrieval.dense.model_root,
     }
     for label, value in first_paths.items():
         reject_test_or_sealed_path(value, label=label)
-    binding_parity = {
-        "config_path": retrieval.stage5.config_path == config.semantic_core.config_path,
-        "best_pointer_sha256": (
-            retrieval.stage5.best_pointer_sha256
-            == config.semantic_core.best_pointer_sha256
-        ),
-        "checkpoint_manifest_sha256": (
-            retrieval.stage5.checkpoint_manifest_sha256
-            == config.semantic_core.checkpoint_manifest_sha256
-        ),
-        "adapter_sha256": (
-            retrieval.stage5.adapter_sha256 == config.semantic_core.adapter_sha256
-        ),
-        "workflow_state_sha256": (
-            retrieval.stage5.workflow_state_sha256
-            == config.semantic_core.workflow_state_sha256
-        ),
-    }
-    if not all(binding_parity.values()):
-        raise UnifiedInferenceError(
-            UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
-            f"semantic_core 与 retrieval 上游绑定不一致：{binding_parity}",
-        )
     if retrieval.dense.device != config.runtime.device:
         raise UnifiedInferenceError(
             UnifiedReasonCode.REQUEST_CONTRACT_INVALID,

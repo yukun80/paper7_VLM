@@ -1,9 +1,8 @@
-schema_version: rs_vlm.mask_grounded_stage5_config.v1
+schema_version: rs_vlm.mask_grounded_train_config.v2
 base_config: ../rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml
-workflow_root: ../../../outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1
+workflow_root: ../../../outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_trainonly_v2
 data:
   compact_training_root: ../../../../benchmark/oa_grounded_stage4_v2/training_messages/mask_grounded_region_compact_training_messages_train_v3_6974
-  eval_dev_root: ../../../../benchmark/oa_grounded_stage4_v1/eval_dev/oa_grounded_eval_dev_v1_100
   split_seed: 20260808
   train_ratio: 0.9
   region_micro_ratio: 0.9

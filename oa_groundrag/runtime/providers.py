@@ -285,23 +285,25 @@ class GroundedVLMProvider:
         if self._bundle is None:
             import torch
 
-            from oa_groundrag.vlm.grounded_adapter import load_stage5_best_generator
-            from oa_groundrag.training.grounding.config import load_stage5_config
+            from oa_groundrag.vlm.grounded_runtime import (
+                load_grounded_runtime_config,
+                load_grounded_runtime_generator,
+            )
 
             if self.device_name == "cuda" and not torch.cuda.is_available():
                 raise RuntimeError("Shared MLLM 配置要求 CUDA，但当前不可见")
             self._device = torch.device(self.device_name)
             _guard_regular(self.binding.config_path, label="semantic core config")
-            stage5 = load_stage5_config(self.binding.config_path)
+            grounded = load_grounded_runtime_config(self.binding.config_path)
             for label, path in (
-                ("Stage 5 workflow", stage5.workflow_root),
-                ("Stage 5 checkpoint root", stage5.run.output_root),
-                ("Stage 5 compact training", stage5.data_contract.compact_training_root),
-                ("Stage 5 model", stage5.model.path),
-                ("Stage 5 processor", stage5.model.processor_path),
+                ("Grounded workflow", grounded.workflow_root),
+                ("Grounded checkpoint root", grounded.training_root),
+                ("Grounded model", grounded.model.path),
+                ("Grounded processor", grounded.model.processor_path),
             ):
                 reject_test_or_sealed_path(path, label=label)
-            self._bundle = load_stage5_best_generator(
+            self._bundle = load_grounded_runtime_generator(
+                grounded,
                 self.binding,
                 device=self._device,
             )
@@ -507,17 +509,19 @@ class EvidenceConstrainedRAGProvider:
     def _load(self) -> Any:
         if self._retriever is None:
             from oa_groundrag.retrieval.runtime import RuntimeTextRetriever
-            from oa_groundrag.retrieval.contracts import load_stage6_config
+            from oa_groundrag.retrieval.runtime_config import (
+                load_text_rag_runtime_config,
+            )
 
             _guard_regular(self.config_path, label="retrieval config")
-            stage6 = load_stage6_config(self.config_path)
+            retrieval = load_text_rag_runtime_config(self.config_path)
             for label, path in (
-                ("Stage 6 source registry", stage6.source_registry_path),
-                ("Stage 6 Bank", stage6.bank_root),
-                ("Stage 6 dense model", stage6.dense.model_root),
+                ("Text RAG source registry", retrieval.source_registry_path),
+                ("Text Evidence Bank", retrieval.bank_root),
+                ("Text RAG dense model", retrieval.dense.model_root),
             ):
                 reject_test_or_sealed_path(path, label=label)
-            self._retriever = RuntimeTextRetriever(stage6)
+            self._retriever = RuntimeTextRetriever(retrieval)
         return self._retriever
 
     def retrieve(
