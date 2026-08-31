@@ -9,7 +9,9 @@ from unittest.mock import patch
 import torch
 
 from oa_groundrag.vlm.errors import ContractError, ProcessingError
-from oa_groundrag.vlm.processing import Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.backends.qwen3_vl.processing import (
+    Qwen3VLProcessorAdapter,
+)
 from oa_groundrag.retrieval.contracts import (
     PASS2_OUTPUT_SCHEMA,
     RagMode,

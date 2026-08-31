@@ -15,7 +15,7 @@ provenance、历史报告和正式产物身份，但不再决定长期源码、�
 
 ## 文档权威
 
-- [`docs/OA-GroundRAG_算法构建方案_0811.md`](docs/OA-GroundRAG_算法构建方案_0811.md)
+- [`docs/OA-GroundRAG_算法构建方案_0829.md`](docs/OA-GroundRAG_算法构建方案_0829.md)
   是冻结的详细算法设计；其中的状态文字只是冻结快照。
 - [`REBUILD_PROGRESS.md`](REBUILD_PROGRESS.md) 是唯一实时进度文件，记录当前授权、运行
   结果、冻结产物身份、验收证据和下一任务。

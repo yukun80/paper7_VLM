@@ -368,11 +368,11 @@ class RuntimeInferenceOnlyLoaderTest(unittest.TestCase):
             forbidden = AssertionError("inference-only loader touched retired/training data")
             with (
                 patch(
-                    "oa_groundrag.vlm.grounded_runtime.Qwen3VLProcessorAdapter",
-                    FakeProcessor,
+                    "oa_groundrag.vlm.grounded_runtime.build_processor_adapter",
+                    return_value=FakeProcessor(),
                 ),
                 patch(
-                    "oa_groundrag.vlm.grounded_runtime.Qwen3VLModelAdapter.load",
+                    "oa_groundrag.vlm.grounded_runtime.build_model_adapter",
                     return_value=model,
                 ),
                 patch.object(CheckpointManager, "load_trainable", side_effect=forbidden),

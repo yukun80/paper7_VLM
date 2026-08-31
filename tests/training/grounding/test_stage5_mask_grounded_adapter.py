@@ -13,8 +13,10 @@ from safetensors.torch import save_file
 
 from oa_groundrag.data.rs_general.io import atomic_write_json, sha256_file
 from oa_groundrag.training.grounding.config import (
+    STAGE5_CONFIG_SCHEMA_V3,
     WarmStartContract,
     load_stage5_config,
+    verify_retention_reference_files,
     verify_warm_start_files,
 )
 from oa_groundrag.training.grounding.data import (
@@ -28,6 +30,9 @@ from oa_groundrag.training.grounding.workflow import (
     STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS,
     _prepare_stage5_training_memory,
     _stage5_gate_b_protocol_path,
+    _stage5_gate_b_selection_path,
+    _stage5_rs_general_predictions_path,
+    run_stage5_workflow,
 )
 from oa_groundrag.evaluation.rs_general.contracts import load_gate_b_protocol
 from oa_groundrag.evaluation.rs_general.selection import (
@@ -38,13 +43,22 @@ from oa_groundrag.evaluation.grounding.adapter import (
     _counterfactual_kind,
     evaluate_stage5_dev,
 )
-from oa_groundrag.vlm.errors import ContractError, ModelError, PredictionError
+from oa_groundrag.vlm.errors import (
+    ConfigError,
+    ContractError,
+    ModelError,
+    PredictionError,
+)
 from oa_groundrag.training.vlm.trainer import training_layout_identity
 from oa_groundrag.training.vlm.validation import ValidationResult, validation_is_better
 
 
 REPO = Path(__file__).resolve().parents[3]
 CONFIG = REPO / "configs/vlm/grounded/train_v2.yaml"
+QWEN35_CONFIG = REPO / "configs/vlm/grounded/train_qwen35_4b_v3.yaml"
+QWEN35_SMOKE_CONFIG = (
+    REPO / "configs/vlm/grounded/qwen35_4b_bounded_train_smoke_v3.yaml"
+)
 
 
 class FakeDataset:
@@ -133,6 +147,49 @@ class Stage5DataTests(unittest.TestCase):
         identity = verify_warm_start_files(config)
         self.assertEqual(identity["checkpoint_step"], 1000)
 
+    def test_v3_binds_qwen35_gate_b_and_preserves_v2_semantic_identity(self) -> None:
+        legacy = load_stage5_config(CONFIG)
+        self.assertEqual(
+            legacy.semantic_sha256,
+            "0d334601208a60af28ab32922c6684673bb9687504e6d028e517cf14441afcf5",
+        )
+        formal = load_stage5_config(QWEN35_CONFIG)
+        smoke = load_stage5_config(QWEN35_SMOKE_CONFIG)
+        self.assertEqual(formal.schema_version, STAGE5_CONFIG_SCHEMA_V3)
+        self.assertEqual(formal.model.backend, "qwen3_5")
+        self.assertEqual(formal.training.learning_rate, 5e-5)
+        self.assertEqual(formal.training.max_steps, 1000)
+        self.assertEqual(formal.adaptation.rank, 8)
+        self.assertEqual(formal.adaptation.target_modules, (
+            "q_proj", "k_proj", "v_proj", "o_proj",
+        ))
+        self.assertNotEqual(formal.workflow_root, smoke.workflow_root)
+        self.assertNotEqual(formal.run.name, smoke.run.name)
+        self.assertNotEqual(formal.semantic_sha256, smoke.semantic_sha256)
+        warm = verify_warm_start_files(formal)
+        self.assertEqual(warm["checkpoint_step"], 1000)
+        retention = verify_retention_reference_files(formal)
+        self.assertTrue(retention["explicit_identity_binding"])
+        self.assertEqual(retention["max_new_tokens"], 768)
+
+    def test_v3_retention_identity_tamper_fails_closed(self) -> None:
+        config = load_stage5_config(QWEN35_CONFIG)
+        assert config.retention_contract is not None
+        tampered = replace(
+            config,
+            retention_contract=replace(
+                config.retention_contract,
+                gate_b_report_file_sha256="0" * 64,
+            ),
+        )
+        with self.assertRaises(ConfigError):
+            verify_retention_reference_files(tampered)
+
+    def test_bounded_smoke_accepts_only_one_or_twenty_steps(self) -> None:
+        for value in (True, 0, 2, 19, 21, 1000):
+            with self.subTest(value=value), self.assertRaises(ModelError):
+                run_stage5_workflow(QWEN35_CONFIG, stop_after_steps=value)
+
     def test_stage5_cache_policy_extends_only_stage5_checkpoint_layout(self) -> None:
         config = load_stage5_config(CONFIG)
         generic = training_layout_identity(config)
@@ -173,6 +230,28 @@ class Stage5DataTests(unittest.TestCase):
         self.assertEqual(
             load_gate_b_protocol(protocol_path).raw["protocol_id"],
             "rs_generaldesc_gate_b_qwen3vl_2b_v1",
+        )
+        self.assertEqual(
+            _stage5_gate_b_selection_path(config),
+            REPO
+            / "outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/selection/gate_b_selection.json",
+        )
+
+    def test_qwen35_retention_paths_are_config_driven(self) -> None:
+        config = load_stage5_config(QWEN35_CONFIG)
+        self.assertEqual(
+            _stage5_gate_b_protocol_path(config),
+            REPO / "configs/vlm/rs_general/rs_generaldesc_gate_b_qwen35_4b_v2.yaml",
+        )
+        self.assertEqual(
+            _stage5_gate_b_selection_path(config),
+            REPO
+            / "outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen35_4b_r851bf6e8_v1/selection/gate_b_selection.json",
+        )
+        self.assertEqual(
+            _stage5_rs_general_predictions_path(config),
+            REPO
+            / "outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen35_4b_r851bf6e8_v1/adapter/predictions.jsonl",
         )
 
     def test_retention_loader_preserves_frozen_selection_with_code_drift(self) -> None:
@@ -246,6 +325,22 @@ class WarmStartTests(unittest.TestCase):
                 ["optimizer", "scheduler", "rng", "sampler"],
             )
             self.assertNotIn("optimizer", result["loaded_components"])
+
+    def test_qwen35_rejects_qwen3_vl_warm_start_before_tensor_load(self) -> None:
+        qwen35 = load_stage5_config(QWEN35_CONFIG)
+        qwen3_vl = load_stage5_config(CONFIG)
+        cross_family = replace(qwen35, warm_start=qwen3_vl.warm_start)
+
+        class Identity:
+            def to_dict(self):
+                return {"backend": "qwen3_5"}
+
+        class Model:
+            identity = Identity()
+            trainable_names = ()
+
+        with self.assertRaises(ModelError):
+            _load_warm_start(Model(), {"backend": "qwen3_5"}, cross_family)
 
 
 class Stage5ReportTests(unittest.TestCase):

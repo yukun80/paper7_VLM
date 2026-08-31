@@ -1,4 +1,4 @@
-"""Qwen3-VL processor 封装与无硬编码 token 的 assistant-only loss mask。"""
+"""模型无关的多模态 processor 核心与 assistant-only loss mask。"""
 
 from __future__ import annotations
 
@@ -164,8 +164,8 @@ class ProcessorAdapter(Protocol):
         ...
 
 
-class Qwen3VLProcessorAdapter:
-    """本地 AutoProcessor + qwen-vl-utils 的薄适配层。"""
+class _LocalMultimodalProcessorAdapter:
+    """供物理分离 backend 继承的本地多模态 processor 核心。"""
 
     def __init__(
         self,
@@ -177,6 +177,12 @@ class Qwen3VLProcessorAdapter:
         max_pixels: int,
         max_images: int,
         max_input_tokens: int,
+        identity_file_names: Sequence[str] = (
+            "preprocessor_config.json",
+            "tokenizer_config.json",
+            "chat_template.json",
+        ),
+        chat_template_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         if not local_files_only or trust_remote_code:
             raise ProcessingError(
@@ -205,6 +211,27 @@ class Qwen3VLProcessorAdapter:
                 ReasonCode.TYPE_MISMATCH,
                 "processor image/token limits 非法",
             )
+        identity_names = tuple(identity_file_names)
+        if (
+            not identity_names
+            or len(identity_names) != len(set(identity_names))
+            or any(
+                not isinstance(name, str)
+                or not name
+                or Path(name).name != name
+                for name in identity_names
+            )
+        ):
+            raise ProcessingError(
+                ReasonCode.TYPE_MISMATCH,
+                "processor identity 文件名必须是非空、无重复 basename",
+            )
+        template_kwargs = dict(chat_template_kwargs or {})
+        if any(not isinstance(key, str) or not key for key in template_kwargs):
+            raise ProcessingError(
+                ReasonCode.TYPE_MISMATCH,
+                "chat_template_kwargs 必须是字符串键对象",
+            )
         try:
             from transformers import AutoProcessor
         except ImportError as error:
@@ -229,6 +256,8 @@ class Qwen3VLProcessorAdapter:
         self.max_images = max_images
         self.max_input_tokens = max_input_tokens
         self.processor_path = path.resolve()
+        self._identity_file_names = identity_names
+        self._chat_template_kwargs = template_kwargs
         self._worker_clone_kwargs = {
             "processor_path": self.processor_path,
             "local_files_only": True,
@@ -237,20 +266,18 @@ class Qwen3VLProcessorAdapter:
             "max_pixels": max_pixels,
             "max_images": max_images,
             "max_input_tokens": max_input_tokens,
+            "identity_file_names": identity_names,
+            "chat_template_kwargs": template_kwargs,
         }
 
-    def clone_for_worker(self) -> "Qwen3VLProcessorAdapter":
+    def clone_for_worker(self) -> "_LocalMultimodalProcessorAdapter":
         """为一个 CPU 预取 worker 创建独立 processor，避免共享可变状态。"""
 
-        return Qwen3VLProcessorAdapter(**self._worker_clone_kwargs)
+        return type(self)(**self._worker_clone_kwargs)
 
     def identity(self) -> dict[str, Any]:
         files: dict[str, str] = {}
-        for name in (
-            "preprocessor_config.json",
-            "tokenizer_config.json",
-            "chat_template.json",
-        ):
+        for name in self._identity_file_names:
             path = self.processor_path / name
             if not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
                 raise ProcessingError(
@@ -361,6 +388,7 @@ class Qwen3VLProcessorAdapter:
             tokenize=False,
             add_generation_prompt=not continue_final_message,
             continue_final_message=continue_final_message,
+            **self._chat_template_kwargs,
         )
         encoded = self.processor(
             text=[text],
@@ -434,6 +462,7 @@ class Qwen3VLProcessorAdapter:
             messages,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **self._chat_template_kwargs,
         )
         image_inputs, video_inputs = process_vision_info(messages)
         if video_inputs:

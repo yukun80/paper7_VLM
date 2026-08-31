@@ -25,14 +25,26 @@ from oa_groundrag.vlm.checkpoint import CheckpointManager
 from oa_groundrag.vlm.config import VLMConfig, _load_yaml, load_config
 from oa_groundrag.grounding.contracts import (
     GATE_B_PROTOCOL_SCHEMA_VERSION,
+    GATE_B_PROTOCOL_SCHEMA_VERSION_V2,
+    GATE_B_SELECTION_SCHEMA_VERSION,
+    GATE_B_SELECTION_SCHEMA_VERSION_V2,
+    GATE_B_GENERATION_SCHEMA_VERSION,
+    GATE_B_GENERATION_SCHEMA_VERSION_V2,
+    GATE_B_REPORT_SCHEMA_VERSION,
+    GATE_B_REPORT_SCHEMA_VERSION_V2,
 )
 from oa_groundrag.vlm.errors import ContractError, VLMError, ReasonCode
-from oa_groundrag.vlm.model import (
+from oa_groundrag.vlm.backends import build_processor_adapter
+from oa_groundrag.vlm.backends.assets import verify_model_asset_ledger
+from oa_groundrag.vlm.backends.qwen3_vl.model import (
     EXPECTED_ATTENTION_LORA_R8_PARAMETERS,
-    local_model_identity,
+    local_model_identity as qwen3_vl_local_model_identity,
+)
+from oa_groundrag.vlm.backends.qwen3_5.model import (
+    EXPECTED_QWEN35_FULL_ATTENTION_LORA_R8_PARAMETERS,
+    local_model_identity as qwen3_5_local_model_identity,
 )
 from oa_groundrag.vlm.preflight import BenchmarkAccess, open_benchmark_access
-from oa_groundrag.vlm.processing import Qwen3VLProcessorAdapter
 from oa_groundrag.training.vlm.trainer import (
     BEST_CHECKPOINT_SCHEMA_VERSION,
     TRAINING_REPORT_SCHEMA_VERSION,
@@ -44,6 +56,7 @@ from oa_groundrag.training.vlm.validation import VALIDATION_SELECTION_SCHEMA_VER
 
 
 GATE_B_PROTOCOL_ID = "rs_generaldesc_gate_b_qwen3vl_2b_v1"
+GATE_B_QWEN35_PROTOCOL_ID = "rs_generaldesc_gate_b_qwen35_4b_r851bf6e8_v1"
 GATE_B_SELECTION_ALGORITHM = (
     "external_val_parent_source_task_waterfill.v1"
 )
@@ -70,6 +83,7 @@ GATE_B_SHORT_TASKS = (
     "spatial_relation",
 )
 QWEN_TEMPLATE_VERSION = "qwen3vl_messages.v2"
+QWEN35_TEMPLATE_VERSION = "qwen3_5_jinja_non_thinking.v1"
 
 
 _PROTOCOL_FIELDS = {
@@ -85,6 +99,7 @@ _PROTOCOL_FIELDS = {
     "generation",
     "evaluation",
 }
+_PROTOCOL_FIELDS_V2 = _PROTOCOL_FIELDS | {"reference_selection"}
 _BENCHMARK_FIELDS = {
     "root",
     "manifest_schema",
@@ -121,12 +136,47 @@ _MODEL_IDENTITY_FIELDS = {
     "processor_config_sha256",
     "base_parameter_count",
 }
+_MODEL_IDENTITY_FIELDS_V2 = {
+    "backend",
+    "model_path",
+    "hub_repo_id",
+    "hub_revision",
+    "asset_ledger_path",
+    "asset_ledger_file_sha256",
+    "asset_ledger_payload_sha256",
+    "model_type",
+    "architecture",
+    "config_sha256",
+    "weights_index_sha256",
+    "checkpoint_parameter_count",
+    "unused_mtp_parameter_count",
+    "base_parameter_count",
+    "full_attention_layers",
+}
 _PROCESSOR_IDENTITY_FIELDS = {
     "processor_path",
     "files",
     "processor_class",
     "tokenizer_class",
     "pad_token_id",
+}
+_PROCESSOR_IDENTITY_FIELDS_V2 = _PROCESSOR_IDENTITY_FIELDS | {
+    "backend",
+    "chat_template_format",
+    "thinking_supported",
+    "asset_identity",
+}
+_PROCESSOR_ASSET_IDENTITY_FIELDS = {
+    "backend",
+    "hub_repo_id",
+    "hub_revision",
+    "model_root",
+    "asset_ledger_path",
+    "asset_ledger_file_sha256",
+    "asset_ledger_payload_sha256",
+    "asset_total_size_bytes",
+    "asset_file_count",
+    "weight_shards",
 }
 _SELECTION_FIELDS = {
     "algorithm",
@@ -142,6 +192,14 @@ _GENERATION_FIELDS = {
     "temperature",
     "top_p",
     "template_version",
+}
+_GENERATION_FIELDS_V2 = _GENERATION_FIELDS | {"enable_thinking"}
+_REFERENCE_SELECTION_FIELDS = {
+    "path",
+    "file_sha256",
+    "selection_sha256",
+    "ordered_record_ids_sha256",
+    "sample_count",
 }
 _EVALUATION_FIELDS = {
     "open_tasks",
@@ -256,11 +314,75 @@ _FROZEN_PROTOCOL_FIELDS = {
 
 
 @dataclass(frozen=True)
+class GateBProtocolProfile:
+    protocol_schema: str
+    protocol_id: str
+    selection_schema: str
+    generation_schema: str
+    report_schema: str
+    backend: str
+    template_version: str
+    max_new_tokens: int
+    expected_lora_parameters: int
+    requires_reference_selection: bool
+
+
+_GATE_B_PROTOCOL_PROFILES = {
+    (GATE_B_PROTOCOL_SCHEMA_VERSION, GATE_B_PROTOCOL_ID): GateBProtocolProfile(
+        protocol_schema=GATE_B_PROTOCOL_SCHEMA_VERSION,
+        protocol_id=GATE_B_PROTOCOL_ID,
+        selection_schema=GATE_B_SELECTION_SCHEMA_VERSION,
+        generation_schema=GATE_B_GENERATION_SCHEMA_VERSION,
+        report_schema=GATE_B_REPORT_SCHEMA_VERSION,
+        backend="qwen3_vl",
+        template_version=QWEN_TEMPLATE_VERSION,
+        max_new_tokens=384,
+        expected_lora_parameters=EXPECTED_ATTENTION_LORA_R8_PARAMETERS,
+        requires_reference_selection=False,
+    ),
+    (
+        GATE_B_PROTOCOL_SCHEMA_VERSION_V2,
+        GATE_B_QWEN35_PROTOCOL_ID,
+    ): GateBProtocolProfile(
+        protocol_schema=GATE_B_PROTOCOL_SCHEMA_VERSION_V2,
+        protocol_id=GATE_B_QWEN35_PROTOCOL_ID,
+        selection_schema=GATE_B_SELECTION_SCHEMA_VERSION_V2,
+        generation_schema=GATE_B_GENERATION_SCHEMA_VERSION_V2,
+        report_schema=GATE_B_REPORT_SCHEMA_VERSION_V2,
+        backend="qwen3_5",
+        template_version=QWEN35_TEMPLATE_VERSION,
+        max_new_tokens=768,
+        expected_lora_parameters=(
+            EXPECTED_QWEN35_FULL_ATTENTION_LORA_R8_PARAMETERS
+        ),
+        requires_reference_selection=True,
+    ),
+}
+
+
+def gate_b_protocol_profile(
+    schema_version: Any,
+    protocol_id: Any,
+) -> GateBProtocolProfile:
+    profile = _GATE_B_PROTOCOL_PROFILES.get((schema_version, protocol_id))
+    if profile is None:
+        _fail(
+            "Gate B protocol schema/id 组合不受支持",
+            details={
+                "schema_version": schema_version,
+                "protocol_id": protocol_id,
+            },
+        )
+    return profile
+
+
+@dataclass(frozen=True)
 class GateBProtocolSource:
     path: Path
     raw: Mapping[str, Any]
     base_config: VLMConfig
     adapter_config: VLMConfig
+    profile: GateBProtocolProfile
 
 
 def _fail(message: str, *, details: Mapping[str, Any] | None = None) -> None:
@@ -436,10 +558,83 @@ def _validated_config_section(
     )
 
 
-def _validate_protocol_values(row: dict[str, Any]) -> None:
-    if row["schema_version"] != GATE_B_PROTOCOL_SCHEMA_VERSION:
+def _validated_reference_selection(
+    value: Any,
+    *,
+    base: Path,
+) -> dict[str, Any]:
+    row = _mapping(value, location="$.reference_selection")
+    _exact_fields(
+        row,
+        _REFERENCE_SELECTION_FIELDS,
+        location="$.reference_selection",
+    )
+    path = _resolved_protocol_path(
+        base,
+        row["path"],
+        location="$.reference_selection.path",
+    )
+    file_sha = _sha(
+        row["file_sha256"],
+        location="$.reference_selection.file_sha256",
+    )
+    if sha256_file(path) != file_sha:
+        _fail("reference selection 文件 SHA-256 不匹配")
+    reference = _read_mapping(path, location="reference selection")
+    selection_sha = _sha(
+        row["selection_sha256"],
+        location="$.reference_selection.selection_sha256",
+    )
+    reference_body = {
+        key: item
+        for key, item in reference.items()
+        if key != "selection_sha256"
+    }
+    if (
+        reference.get("schema_version") != GATE_B_SELECTION_SCHEMA_VERSION
+        or reference.get("protocol_id") != GATE_B_PROTOCOL_ID
+        or reference.get("sample_count") != GATE_B_SAMPLE_COUNT
+        or reference.get("parent_count") != GATE_B_SAMPLE_COUNT
+        or reference.get("selection_sha256") != selection_sha
+        or sha256_text(canonical_json(reference_body)) != selection_sha
+    ):
+        _fail("reference selection v1 身份或 canonical SHA 不匹配")
+    items = reference.get("items")
+    if not isinstance(items, list) or len(items) != GATE_B_SAMPLE_COUNT:
+        _fail("reference selection items 必须恰好为 256")
+    record_ids = [
+        item.get("record_id") if isinstance(item, dict) else None
+        for item in items
+    ]
+    if (
+        not all(isinstance(record_id, str) and record_id for record_id in record_ids)
+        or len(set(record_ids)) != GATE_B_SAMPLE_COUNT
+    ):
+        _fail("reference selection record_id 非法或重复")
+    ordered_sha = _sha(
+        row["ordered_record_ids_sha256"],
+        location="$.reference_selection.ordered_record_ids_sha256",
+    )
+    if sha256_text(canonical_json(record_ids)) != ordered_sha:
+        _fail("reference selection ordered record IDs SHA 不匹配")
+    if row["sample_count"] != GATE_B_SAMPLE_COUNT:
+        _fail("reference selection sample_count 不匹配")
+    return {
+        "path": str(path.resolve()),
+        "file_sha256": file_sha,
+        "selection_sha256": selection_sha,
+        "ordered_record_ids_sha256": ordered_sha,
+        "sample_count": GATE_B_SAMPLE_COUNT,
+    }
+
+
+def _validate_protocol_values(
+    row: dict[str, Any],
+    profile: GateBProtocolProfile,
+) -> None:
+    if row["schema_version"] != profile.protocol_schema:
         _fail("protocol schema_version 不匹配")
-    if row["protocol_id"] != GATE_B_PROTOCOL_ID:
+    if row["protocol_id"] != profile.protocol_id:
         _fail("protocol_id 不匹配")
 
     benchmark = _mapping(row["benchmark"], location="$.benchmark")
@@ -467,30 +662,78 @@ def _validate_protocol_values(row: dict[str, Any]) -> None:
     _integer(training["adapter_size_bytes"], location="$.training.adapter_size_bytes", minimum=1)
 
     model = _mapping(row["model_identity"], location="$.model_identity")
-    _exact_fields(model, _MODEL_IDENTITY_FIELDS, location="$.model_identity")
-    for name in ("model_path", "model_type"):
-        _string(model[name], location=f"$.model_identity.{name}")
-    for name in (
-        "config_sha256",
-        "weights_metadata_sha256",
-        "processor_config_sha256",
-    ):
-        _sha(model[name], location=f"$.model_identity.{name}")
-    _integer(
-        model["base_parameter_count"],
-        location="$.model_identity.base_parameter_count",
-        minimum=1,
+    model_fields = (
+        _MODEL_IDENTITY_FIELDS
+        if profile.backend == "qwen3_vl"
+        else _MODEL_IDENTITY_FIELDS_V2
     )
+    _exact_fields(model, model_fields, location="$.model_identity")
+    if profile.backend == "qwen3_vl":
+        for name in ("model_path", "model_type"):
+            _string(model[name], location=f"$.model_identity.{name}")
+        for name in (
+            "config_sha256",
+            "weights_metadata_sha256",
+            "processor_config_sha256",
+        ):
+            _sha(model[name], location=f"$.model_identity.{name}")
+        _integer(
+            model["base_parameter_count"],
+            location="$.model_identity.base_parameter_count",
+            minimum=1,
+        )
+    else:
+        for name in (
+            "backend",
+            "model_path",
+            "hub_repo_id",
+            "hub_revision",
+            "asset_ledger_path",
+            "model_type",
+            "architecture",
+        ):
+            _string(model[name], location=f"$.model_identity.{name}")
+        for name in (
+            "asset_ledger_file_sha256",
+            "asset_ledger_payload_sha256",
+            "config_sha256",
+            "weights_index_sha256",
+        ):
+            _sha(model[name], location=f"$.model_identity.{name}")
+        for name in (
+            "checkpoint_parameter_count",
+            "unused_mtp_parameter_count",
+            "base_parameter_count",
+        ):
+            _integer(
+                model[name],
+                location=f"$.model_identity.{name}",
+                minimum=1,
+            )
+        layers = model["full_attention_layers"]
+        if (
+            not isinstance(layers, list)
+            or layers != [3, 7, 11, 15, 19, 23, 27, 31]
+        ):
+            _fail("$.model_identity.full_attention_layers 不匹配")
+        if (
+            model["backend"] != "qwen3_5"
+            or model["hub_repo_id"] != "Qwen/Qwen3.5-4B"
+            or model["model_type"] != "qwen3_5"
+            or model["architecture"] != "Qwen3_5ForConditionalGeneration"
+        ):
+            _fail("$.model_identity Qwen3.5 家族身份不匹配")
 
     processor = _mapping(
         row["processor_identity"],
         location="$.processor_identity",
     )
-    _exact_fields(
-        processor,
-        _PROCESSOR_IDENTITY_FIELDS,
-        location="$.processor_identity",
+    processor_fields = (
+        _PROCESSOR_IDENTITY_FIELDS
+        if profile.backend == "qwen3_vl"
+        else _PROCESSOR_IDENTITY_FIELDS_V2
     )
+    _exact_fields(processor, processor_fields, location="$.processor_identity")
     _string(
         processor["processor_path"],
         location="$.processor_identity.processor_path",
@@ -499,11 +742,24 @@ def _validate_protocol_values(row: dict[str, Any]) -> None:
         processor["files"],
         location="$.processor_identity.files",
     )
-    if set(files) != {
-        "preprocessor_config.json",
-        "tokenizer_config.json",
-        "chat_template.json",
-    }:
+    expected_processor_files = (
+        {
+            "preprocessor_config.json",
+            "tokenizer_config.json",
+            "chat_template.json",
+        }
+        if profile.backend == "qwen3_vl"
+        else {
+            "preprocessor_config.json",
+            "video_preprocessor_config.json",
+            "tokenizer_config.json",
+            "tokenizer.json",
+            "vocab.json",
+            "merges.txt",
+            "chat_template.jinja",
+        }
+    )
+    if set(files) != expected_processor_files:
         _fail("$.processor_identity.files: 文件集合不匹配")
     for name, value in files.items():
         _sha(value, location=f"$.processor_identity.files.{name}")
@@ -513,6 +769,61 @@ def _validate_protocol_values(row: dict[str, Any]) -> None:
         processor["pad_token_id"],
         location="$.processor_identity.pad_token_id",
     )
+    if profile.backend == "qwen3_5":
+        if (
+            processor["backend"] != "qwen3_5"
+            or processor["chat_template_format"] != "jinja"
+            or processor["thinking_supported"] is not True
+        ):
+            _fail("$.processor_identity Qwen3.5 processor 合同不匹配")
+        asset_identity = _mapping(
+            processor["asset_identity"],
+            location="$.processor_identity.asset_identity",
+        )
+        _exact_fields(
+            asset_identity,
+            _PROCESSOR_ASSET_IDENTITY_FIELDS,
+            location="$.processor_identity.asset_identity",
+        )
+        for name in (
+            "backend",
+            "hub_repo_id",
+            "hub_revision",
+            "model_root",
+            "asset_ledger_path",
+        ):
+            _string(
+                asset_identity[name],
+                location=f"$.processor_identity.asset_identity.{name}",
+            )
+        for name in (
+            "asset_ledger_file_sha256",
+            "asset_ledger_payload_sha256",
+        ):
+            _sha(
+                asset_identity[name],
+                location=f"$.processor_identity.asset_identity.{name}",
+            )
+        for name in ("asset_total_size_bytes", "asset_file_count"):
+            _integer(
+                asset_identity[name],
+                location=f"$.processor_identity.asset_identity.{name}",
+                minimum=1,
+            )
+        _string_list(
+            asset_identity["weight_shards"],
+            location="$.processor_identity.asset_identity.weight_shards",
+        )
+        if (
+            asset_identity.get("backend") != "qwen3_5"
+            or asset_identity.get("hub_repo_id") != "Qwen/Qwen3.5-4B"
+            or asset_identity.get("hub_revision") != model["hub_revision"]
+            or asset_identity.get("asset_ledger_file_sha256")
+            != model["asset_ledger_file_sha256"]
+            or asset_identity.get("asset_ledger_payload_sha256")
+            != model["asset_ledger_payload_sha256"]
+        ):
+            _fail("$.processor_identity.asset_identity 与模型 ledger 不一致")
 
     selection = _mapping(row["selection"], location="$.selection")
     _exact_fields(selection, _SELECTION_FIELDS, location="$.selection")
@@ -530,14 +841,23 @@ def _validate_protocol_values(row: dict[str, Any]) -> None:
     )
 
     generation = _mapping(row["generation"], location="$.generation")
-    _exact_fields(generation, _GENERATION_FIELDS, location="$.generation")
+    generation_fields = (
+        _GENERATION_FIELDS
+        if profile.backend == "qwen3_vl"
+        else _GENERATION_FIELDS_V2
+    )
+    _exact_fields(generation, generation_fields, location="$.generation")
     if (
         generation["seed"] != GATE_B_SEED
-        or generation["max_new_tokens"] != 384
+        or generation["max_new_tokens"] != profile.max_new_tokens
         or generation["do_sample"] is not False
         or _number(generation["temperature"], location="$.generation.temperature") != 0.0
         or _number(generation["top_p"], location="$.generation.top_p") != 1.0
-        or generation["template_version"] != QWEN_TEMPLATE_VERSION
+        or generation["template_version"] != profile.template_version
+        or (
+            profile.backend == "qwen3_5"
+            and generation["enable_thinking"] is not False
+        )
     ):
         _fail("$.generation: 固定生成参数不匹配")
 
@@ -597,6 +917,26 @@ def _validate_protocol_values(row: dict[str, Any]) -> None:
         elif _number(actual, location=f"$.evaluation.criteria.{name}") != expected:
             _fail(f"$.evaluation.criteria.{name}: 固定值不匹配")
 
+    if profile.requires_reference_selection:
+        reference = _mapping(
+            row["reference_selection"],
+            location="$.reference_selection",
+        )
+        _exact_fields(
+            reference,
+            _REFERENCE_SELECTION_FIELDS,
+            location="$.reference_selection",
+        )
+        _string(reference["path"], location="$.reference_selection.path")
+        for name in (
+            "file_sha256",
+            "selection_sha256",
+            "ordered_record_ids_sha256",
+        ):
+            _sha(reference[name], location=f"$.reference_selection.{name}")
+        if reference["sample_count"] != GATE_B_SAMPLE_COUNT:
+            _fail("$.reference_selection.sample_count 必须为 256")
+
 
 def load_gate_b_protocol(path: Path | str) -> GateBProtocolSource:
     protocol_path = _regular_file(Path(path), location="protocol")
@@ -604,8 +944,17 @@ def load_gate_b_protocol(path: Path | str) -> GateBProtocolSource:
         row = _load_yaml(protocol_path)
     except VLMError as error:
         _fail("无法严格读取 Gate B protocol YAML", details={"error": str(error)})
-    _exact_fields(row, _PROTOCOL_FIELDS, location="$")
-    _validate_protocol_values(row)
+    profile = gate_b_protocol_profile(
+        row.get("schema_version"),
+        row.get("protocol_id"),
+    )
+    expected_fields = (
+        _PROTOCOL_FIELDS_V2
+        if profile.requires_reference_selection
+        else _PROTOCOL_FIELDS
+    )
+    _exact_fields(row, expected_fields, location="$")
+    _validate_protocol_values(row, profile)
     base_row, base_config = _validated_config_section(
         row["base"],
         base=protocol_path.parent,
@@ -624,6 +973,11 @@ def load_gate_b_protocol(path: Path | str) -> GateBProtocolSource:
         _fail("Base config 必须只登记 external_val")
     if adapter_config.data.roles != ("external_train",):
         _fail("Adapter config 必须只登记 external_train")
+    if (
+        base_config.model.backend != profile.backend
+        or adapter_config.model.backend != profile.backend
+    ):
+        _fail("Base/Adapter config backend 与 protocol profile 不一致")
 
     benchmark = row["benchmark"]
     expected_data = {
@@ -691,28 +1045,50 @@ def load_gate_b_protocol(path: Path | str) -> GateBProtocolSource:
     normalized = dict(row)
     normalized["base"] = base_row
     normalized["adapter"] = adapter_row
+    if profile.requires_reference_selection:
+        normalized["reference_selection"] = _validated_reference_selection(
+            row["reference_selection"],
+            base=protocol_path.parent,
+        )
     return GateBProtocolSource(
         path=protocol_path,
         raw=normalized,
         base_config=base_config,
         adapter_config=adapter_config,
+        profile=profile,
     )
 
 
-def _implementation_identity() -> dict[str, str]:
+def _implementation_identity(
+    profile: GateBProtocolProfile,
+) -> dict[str, str]:
     package_root = Path(__file__).resolve().parents[2]
-    paths = {
-        # 键属于冻结 Gate B protocol；路径指向当前能力化实现，SHA 漂移必须如实失败。
-        "phase3/exporter.py": package_root / "data" / "rs_general" / "exporter.py",
-        "phase4/checkpoint.py": package_root / "vlm" / "checkpoint.py",
-        "phase4/data.py": package_root / "vlm" / "data.py",
-        "phase4/gate_b_contracts.py": Path(__file__),
-        "phase4/gate_b_evaluation.py": Path(__file__).with_name("metrics.py"),
-        "phase4/gate_b_generation.py": Path(__file__).with_name("generation.py"),
-        "phase4/gate_b_selection.py": Path(__file__).with_name("selection.py"),
-        "phase4/model.py": package_root / "vlm" / "model.py",
-        "phase4/processing.py": package_root / "vlm" / "processing.py",
-    }
+    if profile.backend == "qwen3_vl":
+        paths = {
+            # 键属于冻结 Gate B v1；当前实现 SHA 漂移必须如实失败。
+            "phase3/exporter.py": package_root / "data" / "rs_general" / "exporter.py",
+            "phase4/checkpoint.py": package_root / "vlm" / "checkpoint.py",
+            "phase4/data.py": package_root / "vlm" / "data.py",
+            "phase4/gate_b_contracts.py": Path(__file__),
+            "phase4/gate_b_evaluation.py": Path(__file__).with_name("metrics.py"),
+            "phase4/gate_b_generation.py": Path(__file__).with_name("generation.py"),
+            "phase4/gate_b_selection.py": Path(__file__).with_name("selection.py"),
+            "phase4/model.py": package_root / "vlm" / "backends" / "qwen3_vl" / "model.py",
+            "phase4/processing.py": package_root / "vlm" / "backends" / "qwen3_vl" / "processing.py",
+        }
+    else:
+        paths = {
+            "data/rs_general/exporter.py": package_root / "data" / "rs_general" / "exporter.py",
+            "evaluation/rs_general/acceptance.py": Path(__file__).with_name("acceptance.py"),
+            "evaluation/rs_general/contracts.py": Path(__file__),
+            "evaluation/rs_general/generation.py": Path(__file__).with_name("generation.py"),
+            "evaluation/rs_general/metrics.py": Path(__file__).with_name("metrics.py"),
+            "evaluation/rs_general/selection.py": Path(__file__).with_name("selection.py"),
+            "vlm/backends/qwen3_5/model.py": package_root / "vlm" / "backends" / "qwen3_5" / "model.py",
+            "vlm/backends/qwen3_5/processing.py": package_root / "vlm" / "backends" / "qwen3_5" / "processing.py",
+            "vlm/checkpoint.py": package_root / "vlm" / "checkpoint.py",
+            "vlm/data.py": package_root / "vlm" / "data.py",
+        }
     return {
         name: sha256_file(_regular_file(path, location=f"implementation.{name}"))
         for name, path in sorted(paths.items())
@@ -720,7 +1096,7 @@ def _implementation_identity() -> dict[str, str]:
 
 
 def static_protocol_snapshot(source: GateBProtocolSource) -> dict[str, Any]:
-    return {
+    snapshot = {
         "benchmark": dict(source.raw["benchmark"]),
         "base": dict(source.raw["base"]),
         "adapter": dict(source.raw["adapter"]),
@@ -730,8 +1106,13 @@ def static_protocol_snapshot(source: GateBProtocolSource) -> dict[str, Any]:
         "selection": dict(source.raw["selection"]),
         "generation": dict(source.raw["generation"]),
         "evaluation": dict(source.raw["evaluation"]),
-        "implementation_files": _implementation_identity(),
+        "implementation_files": _implementation_identity(source.profile),
     }
+    if source.profile.requires_reference_selection:
+        snapshot["reference_selection"] = dict(
+            source.raw["reference_selection"]
+        )
+    return snapshot
 
 
 def _fingerprint(path: Path) -> tuple[int, int, int, int, str]:
@@ -930,26 +1311,40 @@ def _training_run_identity(
         or not all(isinstance(name, str) and name for name in trainable_names)
         or len(trainable_names) != len(set(trainable_names))
         or checkpoint_manifest.get("trainable_parameter_count")
-        != EXPECTED_ATTENTION_LORA_R8_PARAMETERS
+        != source.profile.expected_lora_parameters
     ):
         _fail("checkpoint LoRA parameter identity 不满足固定合同")
 
-    actual_model = local_model_identity(
-        source.adapter_config.model.path,
-        base_parameter_count=source.raw["model_identity"]["base_parameter_count"],
-        model_type=source.raw["model_identity"]["model_type"],
-    ).to_dict()
+    if source.profile.backend == "qwen3_vl":
+        actual_model = qwen3_vl_local_model_identity(
+            source.adapter_config.model.path,
+            base_parameter_count=source.raw["model_identity"][
+                "base_parameter_count"
+            ],
+            model_type=source.raw["model_identity"]["model_type"],
+        ).to_dict()
+    else:
+        model_config = source.adapter_config.model
+        if (
+            model_config.asset_ledger_path is None
+            or model_config.hub_repo_id is None
+            or model_config.hub_revision is None
+        ):
+            _fail("Qwen3.5 config 缺少固定 revision/asset ledger")
+        assets = verify_model_asset_ledger(
+            model_config.asset_ledger_path,
+            expected_backend="qwen3_5",
+            expected_repo_id=model_config.hub_repo_id,
+            expected_revision=model_config.hub_revision,
+            expected_model_root=model_config.path,
+        )
+        actual_model = qwen3_5_local_model_identity(
+            model_config,
+            assets,
+        ).to_dict()
     if actual_model != source.raw["model_identity"]:
         _fail("本地 Base model identity 与 protocol 不一致")
-    processor = Qwen3VLProcessorAdapter(
-        processor_path=source.adapter_config.model.processor_path,
-        local_files_only=source.adapter_config.model.local_files_only,
-        trust_remote_code=source.adapter_config.model.trust_remote_code,
-        min_pixels=source.adapter_config.limits.min_pixels,
-        max_pixels=source.adapter_config.limits.max_pixels,
-        max_images=source.adapter_config.limits.max_images,
-        max_input_tokens=source.adapter_config.limits.max_input_tokens,
-    )
+    processor = build_processor_adapter(source.adapter_config)
     actual_processor = processor.identity()
     if actual_processor != source.raw["processor_identity"]:
         _fail("本地 processor identity 与 protocol 不一致")
@@ -1053,7 +1448,7 @@ def _training_run_identity(
             "manifest_sha256": expected["checkpoint_manifest_sha256"],
             "adapter_size_bytes": expected["adapter_size_bytes"],
             "adapter_sha256": expected["adapter_sha256"],
-            "trainable_parameter_count": EXPECTED_ATTENTION_LORA_R8_PARAMETERS,
+            "trainable_parameter_count": source.profile.expected_lora_parameters,
         },
         "benchmark_identity": benchmark_identity,
         "model_identity": actual_model,
@@ -1071,8 +1466,8 @@ def build_frozen_protocol(
     access = open_benchmark_access(source.base_config)
     training_run = _training_run_identity(source, training_root, access)
     body = {
-        "schema_version": GATE_B_PROTOCOL_SCHEMA_VERSION,
-        "protocol_id": GATE_B_PROTOCOL_ID,
+        "schema_version": source.profile.protocol_schema,
+        "protocol_id": source.profile.protocol_id,
         "static_protocol": static_protocol_snapshot(source),
         "training_run": training_run,
     }
@@ -1086,11 +1481,10 @@ def build_frozen_protocol(
 def read_frozen_protocol(path: Path | str) -> dict[str, Any]:
     row = _read_mapping(Path(path), location="frozen protocol")
     _exact_fields(row, _FROZEN_PROTOCOL_FIELDS, location="frozen protocol")
-    if (
-        row.get("schema_version") != GATE_B_PROTOCOL_SCHEMA_VERSION
-        or row.get("protocol_id") != GATE_B_PROTOCOL_ID
-    ):
-        _fail("frozen protocol schema/id 不匹配")
+    gate_b_protocol_profile(
+        row.get("schema_version"),
+        row.get("protocol_id"),
+    )
     expected = _sha(
         row["protocol_sha256"],
         location="frozen protocol.protocol_sha256",
@@ -1113,6 +1507,11 @@ def validate_frozen_protocol(
 ) -> tuple[dict[str, Any], GateBProtocolSource]:
     frozen = read_frozen_protocol(frozen_path)
     source = load_gate_b_protocol(protocol_path)
+    if (
+        frozen["schema_version"] != source.profile.protocol_schema
+        or frozen["protocol_id"] != source.profile.protocol_id
+    ):
+        _fail("protocol YAML 与 frozen protocol profile 不一致")
     current_static = static_protocol_snapshot(source)
     if current_static != frozen["static_protocol"]:
         _fail("protocol 或 Gate B implementation 在冻结后发生变化")

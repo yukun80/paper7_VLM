@@ -13,6 +13,7 @@ from oa_groundrag.artifacts.identity import (
     sha256_text,
 )
 from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.rs_general.io import read_json
 
 from oa_groundrag.vlm.config import VLMConfig, _load_yaml, load_config
 from oa_groundrag.grounding.contracts import MaskMode
@@ -20,6 +21,10 @@ from oa_groundrag.vlm.errors import ConfigError, ReasonCode
 
 
 STAGE5_CONFIG_SCHEMA = "rs_vlm.mask_grounded_train_config.v2"
+STAGE5_CONFIG_SCHEMA_V3 = "rs_vlm.mask_grounded_train_config.v3"
+STAGE5_CONFIG_SCHEMAS = frozenset(
+    {STAGE5_CONFIG_SCHEMA, STAGE5_CONFIG_SCHEMA_V3}
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,19 @@ class Stage5DataContract:
 
 
 @dataclass(frozen=True)
+class Stage5RetentionContract:
+    gate_b_protocol_path: Path
+    gate_b_protocol_file_sha256: str
+    gate_b_selection_path: Path
+    gate_b_selection_file_sha256: str
+    rs_general_predictions_path: Path
+    rs_general_predictions_file_sha256: str
+    gate_b_report_path: Path
+    gate_b_report_file_sha256: str
+    max_new_tokens: int
+
+
+@dataclass(frozen=True)
 class Stage5Config:
     """兼容现有 trainer 属性，同时把 Stage 5 身份加入 checkpoint SHA。"""
 
@@ -49,6 +67,7 @@ class Stage5Config:
     base: VLMConfig
     data_contract: Stage5DataContract
     warm_start: WarmStartContract
+    retention_contract: Stage5RetentionContract | None
     workflow_root: Path
     config_path: Path
     semantic_sha256: str
@@ -82,7 +101,7 @@ class Stage5Config:
         return self.base.generation
 
     def semantic_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "schema_version": self.schema_version,
             "trainer": self.base.semantic_dict(),
             "data_contract": {
@@ -101,6 +120,31 @@ class Stage5Config:
                 "adapter_sha256": self.warm_start.adapter_sha256,
             },
         }
+        if self.retention_contract is not None:
+            retention = self.retention_contract
+            value["run_name"] = self.run.name
+            value["retention_contract"] = {
+                "gate_b_protocol_path": str(retention.gate_b_protocol_path),
+                "gate_b_protocol_file_sha256": (
+                    retention.gate_b_protocol_file_sha256
+                ),
+                "gate_b_selection_path": str(retention.gate_b_selection_path),
+                "gate_b_selection_file_sha256": (
+                    retention.gate_b_selection_file_sha256
+                ),
+                "rs_general_predictions_path": str(
+                    retention.rs_general_predictions_path
+                ),
+                "rs_general_predictions_file_sha256": (
+                    retention.rs_general_predictions_file_sha256
+                ),
+                "gate_b_report_path": str(retention.gate_b_report_path),
+                "gate_b_report_file_sha256": (
+                    retention.gate_b_report_file_sha256
+                ),
+                "max_new_tokens": retention.max_new_tokens,
+            }
+        return value
 
     def snapshot_dict(self) -> dict[str, Any]:
         value = self.semantic_dict()
@@ -160,6 +204,19 @@ def _ratio(value: Any, location: str) -> float:
     return result
 
 
+def _name(value: Any, location: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in value)
+    ):
+        raise ConfigError(
+            ReasonCode.TYPE_MISMATCH,
+            f"{location} 必须是小写字母、数字、下划线或连字符组成的名称",
+        )
+    return value
+
+
 def load_stage5_config(path: Path | str) -> Stage5Config:
     """读取配置并强制锁定负责人确认的训练、split、replay 与科学边界。"""
 
@@ -168,16 +225,32 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
     if linked is not None or not config_path.is_file() or config_path.is_symlink():
         raise ConfigError(ReasonCode.OUTPUT_LINK, f"Stage 5 配置必须是普通文件：{config_path}")
     row = _load_yaml(config_path)
-    _exact(
-        row,
-        (
-            "schema_version", "base_config", "workflow_root", "data", "warm_start",
-            "training", "generation",
-        ),
-        "$",
-    )
-    if row["schema_version"] != STAGE5_CONFIG_SCHEMA:
-        raise ConfigError(ReasonCode.INVALID_ENUM, f"仅支持 {STAGE5_CONFIG_SCHEMA}")
+    schema_version = row.get("schema_version")
+    if schema_version not in STAGE5_CONFIG_SCHEMAS:
+        raise ConfigError(
+            ReasonCode.INVALID_ENUM,
+            f"仅支持 {sorted(STAGE5_CONFIG_SCHEMAS)}",
+        )
+    if schema_version == STAGE5_CONFIG_SCHEMA:
+        _exact(
+            row,
+            (
+                "schema_version", "base_config", "workflow_root", "data",
+                "warm_start", "training", "generation",
+            ),
+            "$",
+        )
+        run_name = "mask_grounded_region_lora_qwen3vl_2b_trainonly_v2"
+    else:
+        _exact(
+            row,
+            (
+                "schema_version", "base_config", "run_name", "workflow_root",
+                "data", "warm_start", "retention", "training", "generation",
+            ),
+            "$",
+        )
+        run_name = _name(row["run_name"], "$.run_name")
     base_path = _path(config_path.parent, row["base_config"], "$.base_config")
     base = load_config(base_path)
     data = _mapping(row["data"], "$.data")
@@ -231,6 +304,69 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
     )
     if warm_start.checkpoint_step != 1000:
         raise ConfigError(ReasonCode.CHECKPOINT_INCOMPATIBLE, "warm-start 必须是 RS-General step-1000")
+    retention_contract: Stage5RetentionContract | None = None
+    if schema_version == STAGE5_CONFIG_SCHEMA_V3:
+        retention = _mapping(row["retention"], "$.retention")
+        _exact(
+            retention,
+            (
+                "gate_b_protocol_path", "gate_b_protocol_file_sha256",
+                "gate_b_selection_path", "gate_b_selection_file_sha256",
+                "rs_general_predictions_path",
+                "rs_general_predictions_file_sha256", "gate_b_report_path",
+                "gate_b_report_file_sha256", "max_new_tokens",
+            ),
+            "$.retention",
+        )
+        retention_max_new_tokens = _integer(
+            retention["max_new_tokens"],
+            "$.retention.max_new_tokens",
+            minimum=1,
+        )
+        if retention_max_new_tokens != 768:
+            raise ConfigError(
+                ReasonCode.TYPE_MISMATCH,
+                "v3 RS-General retention generation 固定为 768 tokens",
+            )
+        retention_contract = Stage5RetentionContract(
+            gate_b_protocol_path=_path(
+                config_path.parent,
+                retention["gate_b_protocol_path"],
+                "$.retention.gate_b_protocol_path",
+            ),
+            gate_b_protocol_file_sha256=_sha(
+                retention["gate_b_protocol_file_sha256"],
+                "$.retention.gate_b_protocol_file_sha256",
+            ),
+            gate_b_selection_path=_path(
+                config_path.parent,
+                retention["gate_b_selection_path"],
+                "$.retention.gate_b_selection_path",
+            ),
+            gate_b_selection_file_sha256=_sha(
+                retention["gate_b_selection_file_sha256"],
+                "$.retention.gate_b_selection_file_sha256",
+            ),
+            rs_general_predictions_path=_path(
+                config_path.parent,
+                retention["rs_general_predictions_path"],
+                "$.retention.rs_general_predictions_path",
+            ),
+            rs_general_predictions_file_sha256=_sha(
+                retention["rs_general_predictions_file_sha256"],
+                "$.retention.rs_general_predictions_file_sha256",
+            ),
+            gate_b_report_path=_path(
+                config_path.parent,
+                retention["gate_b_report_path"],
+                "$.retention.gate_b_report_path",
+            ),
+            gate_b_report_file_sha256=_sha(
+                retention["gate_b_report_file_sha256"],
+                "$.retention.gate_b_report_file_sha256",
+            ),
+            max_new_tokens=retention_max_new_tokens,
+        )
     training = _mapping(row["training"], "$.training")
     _exact(
         training,
@@ -258,7 +394,7 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
     workflow_root = _path(config_path.parent, row["workflow_root"], "$.workflow_root")
     trainer_run = replace(
         base.run,
-        name="mask_grounded_region_lora_qwen3vl_2b_trainonly_v2",
+        name=run_name,
         seed=data_contract.split_seed,
         mask_mode=MaskMode.GT_MASK,
         output_root=workflow_root / "training",
@@ -292,10 +428,11 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
         semantic_sha256="stage5-provisional",
     )
     provisional = Stage5Config(
-        schema_version=STAGE5_CONFIG_SCHEMA,
+        schema_version=schema_version,
         base=provisional_base,
         data_contract=data_contract,
         warm_start=warm_start,
+        retention_contract=retention_contract,
         workflow_root=workflow_root,
         config_path=config_path,
         semantic_sha256="",
@@ -342,4 +479,95 @@ def verify_warm_start_files(config: Stage5Config) -> dict[str, Any]:
         "best_pointer_sha256": config.warm_start.best_pointer_sha256,
         "checkpoint_manifest_sha256": config.warm_start.checkpoint_manifest_sha256,
         "adapter_sha256": config.warm_start.adapter_sha256,
+    }
+
+
+def verify_retention_reference_files(config: Stage5Config) -> dict[str, Any]:
+    """v3 在训练前绑定已接受 Gate B；v2 保持原冻结语义。"""
+
+    retention = config.retention_contract
+    if retention is None:
+        return {
+            "schema_version": "rs_vlm.mask_grounded_retention_reference.v2",
+            "explicit_identity_binding": False,
+        }
+    paths = (
+        (
+            retention.gate_b_protocol_path,
+            retention.gate_b_protocol_file_sha256,
+            "Gate B protocol YAML",
+        ),
+        (
+            retention.gate_b_selection_path,
+            retention.gate_b_selection_file_sha256,
+            "Gate B selection",
+        ),
+        (
+            retention.rs_general_predictions_path,
+            retention.rs_general_predictions_file_sha256,
+            "RS-General predictions",
+        ),
+        (
+            retention.gate_b_report_path,
+            retention.gate_b_report_file_sha256,
+            "Gate B report",
+        ),
+    )
+    for path, expected, label in paths:
+        linked = first_symlink_component(path)
+        if (
+            linked is not None
+            or not path.is_file()
+            or path.is_symlink()
+            or path.stat().st_nlink != 1
+        ):
+            raise ConfigError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                f"{label} 不是普通单链接文件：{path}",
+            )
+        if sha256_file(path) != expected:
+            raise ConfigError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                f"{label} SHA-256 漂移：{path}",
+            )
+    report = read_json(retention.gate_b_report_path)
+    selection = read_json(retention.gate_b_selection_path)
+    adapter_generation = report.get("adapter_generation", {})
+    report_selection = report.get("selection_identity", {})
+    report_model = adapter_generation.get("model_identity", {})
+    if (
+        report.get("status") != "completed"
+        or report.get("gate_b_passed") is not True
+        or report.get("formal_acceptance") is not True
+        or report.get("adapter_status") != "accepted"
+        or report_selection.get("selection_file_sha256")
+        != retention.gate_b_selection_file_sha256
+        or adapter_generation.get("prediction_sha256")
+        != retention.rs_general_predictions_file_sha256
+        or report.get("protocol_identity", {}).get("protocol_sha256")
+        != selection.get("protocol_sha256")
+        or report_model.get("backend") != config.model.backend
+        or report_model.get("hub_repo_id") != config.model.hub_repo_id
+        or report_model.get("hub_revision") != config.model.hub_revision
+    ):
+        raise ConfigError(
+            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            "retention reference 未绑定同家族且正式接受的 Gate B",
+        )
+    return {
+        "schema_version": "rs_vlm.mask_grounded_retention_reference.v3",
+        "explicit_identity_binding": True,
+        "gate_b_protocol_path": str(retention.gate_b_protocol_path),
+        "gate_b_protocol_file_sha256": retention.gate_b_protocol_file_sha256,
+        "gate_b_selection_path": str(retention.gate_b_selection_path),
+        "gate_b_selection_file_sha256": retention.gate_b_selection_file_sha256,
+        "rs_general_predictions_path": str(
+            retention.rs_general_predictions_path
+        ),
+        "rs_general_predictions_file_sha256": (
+            retention.rs_general_predictions_file_sha256
+        ),
+        "gate_b_report_path": str(retention.gate_b_report_path),
+        "gate_b_report_file_sha256": retention.gate_b_report_file_sha256,
+        "max_new_tokens": retention.max_new_tokens,
     }

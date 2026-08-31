@@ -1,0 +1,131 @@
+schema_version: rs_vlm.gate_b_protocol.v2
+protocol_id: rs_generaldesc_gate_b_qwen35_4b_r851bf6e8_v1
+benchmark:
+  root: /home/yukun80/codes/benchmark/rs_generaldesc_v1
+  manifest_schema: rs_generaldesc.manifest.v1
+  canonical_schema: rs_generaldesc.canonical.v1
+  manifest_sha256: 36875efb59619cf10fa614ce5995afb88f7d7888624267f7ed216f29ae385832
+  validation_sha256: bbc9e75afcdd23d3bd5ec83d724bdd5a1ae4e4507b1a2743a8350631e1fc0e9b
+  build_id: build_3ebc09a4daad10e121fc14c2727d9896e10371a95bbaf6b780d15aa42eaf3c03
+  payload_sha256: 549281f296b357bce256e6af71cec7412fe17e36052d6a8674f4876ae2d06e0b
+  hash_manifest_sha256: 55ac26d9771ce8385318fbd23a10b999afb754ac195e823be659f4e49b0a7090
+base:
+  config: rs_generaldesc_prompt_only_qwen35_4b_v3.yaml
+  config_file_sha256: af104cd8086a32b681b0237b8bebf315b5794265deb1b2d98b65128abcc09646
+  config_semantic_sha256: 63699b67094fae088abb82617024380603493258923e8e3f35b5cad6b5629471
+adapter:
+  config: rs_generaldesc_lora_qwen35_4b_v3.yaml
+  config_file_sha256: beb825e96d22f20d0ec9c94c997cfb7e3602e442d7e67129febf2427c9450ab0
+  config_semantic_sha256: f2e3a3dc05b5152ddda64e1e88d765c4825b128021d355b9425b35d53220b843
+training:
+  training_report_sha256: cf3f135bf452a365907c3a4bd3f4d9d07a0f0031be5cab7c01d0ed93401bfec0
+  training_manifest_sha256: d03ccfb8e3e395076f8eb29489adc7e867a2ec116683ec0f719c21871b54e9de
+  config_snapshot_sha256: 6be378029d88324818d2d22219762a7f832b23a71292cbbfd0a7c03ecc51e9e8
+  best_checkpoint_sha256: 9ee78b2c239321ac983ea94e76d254f083e093aebe84928c55438baf8d106a5e
+  monitoring_selection_file_sha256: fe21878b9e894fa687f86f05619132f1ee0f3e014f27f54883e536697ea1e9a2
+  monitoring_selection_sha256: ffe1ba8ff7c2ea001887f984f47b091fbaab30898e7f41cb328055bb1e229514
+  validation_results_sha256: b144622d36757cd3d6d40964e90636ce329624c781edaecfb6c2507c1d591aab
+  checkpoint_step: 1000
+  checkpoint_manifest_sha256: 22cc396e89a8ba84843657b8a9272acc8bcaced7de475c2a831370580cccf98c
+  adapter_size_bytes: 6301344
+  adapter_sha256: 0be1b656d5646073c54183837e43cbf0c2c45f24d1c9652f4b7a9ccd9d89f6d5
+model_identity:
+  backend: qwen3_5
+  model_path: /home/yukun80/codes/paper7_VLM/models_zoo/Qwen3.5-4B-r851bf6e8
+  hub_repo_id: Qwen/Qwen3.5-4B
+  hub_revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  asset_ledger_path: /home/yukun80/codes/paper7_VLM/configs/vlm/assets/qwen3_5_4b_r851bf6e8.asset_ledger.json
+  asset_ledger_file_sha256: ca48af5142c25796898f0f9c44a6720d0656747714565544341f1733ea9dab2f
+  asset_ledger_payload_sha256: 23355763f89e7f03e6dc756fede244c5d6761360b065308b2adcbffeb1e5b1ce
+  model_type: qwen3_5
+  architecture: Qwen3_5ForConditionalGeneration
+  config_sha256: ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670
+  weights_index_sha256: cf3f798ee02ba45f9622aa8892a47369ab667d0afbf154ee7c2212de42e6302d
+  checkpoint_parameter_count: 4659865088
+  unused_mtp_parameter_count: 120599552
+  base_parameter_count: 4539265536
+  full_attention_layers: [3, 7, 11, 15, 19, 23, 27, 31]
+processor_identity:
+  processor_path: /home/yukun80/codes/paper7_VLM/models_zoo/Qwen3.5-4B-r851bf6e8
+  files:
+    preprocessor_config.json: 27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516
+    video_preprocessor_config.json: 7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13
+    tokenizer_config.json: 316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8
+    tokenizer.json: 5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42
+    vocab.json: ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003
+    merges.txt: a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d
+    chat_template.jinja: a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715
+  processor_class: Qwen3VLProcessor
+  tokenizer_class: TokenizersBackend
+  pad_token_id: 248044
+  backend: qwen3_5
+  chat_template_format: jinja
+  thinking_supported: true
+  asset_identity:
+    backend: qwen3_5
+    hub_repo_id: Qwen/Qwen3.5-4B
+    hub_revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+    model_root: /home/yukun80/codes/paper7_VLM/models_zoo/Qwen3.5-4B-r851bf6e8
+    asset_ledger_path: /home/yukun80/codes/paper7_VLM/configs/vlm/assets/qwen3_5_4b_r851bf6e8.asset_ledger.json
+    asset_ledger_file_sha256: ca48af5142c25796898f0f9c44a6720d0656747714565544341f1733ea9dab2f
+    asset_ledger_payload_sha256: 23355763f89e7f03e6dc756fede244c5d6761360b065308b2adcbffeb1e5b1ce
+    asset_total_size_bytes: 9342907469
+    asset_file_count: 14
+    weight_shards:
+      - model.safetensors-00001-of-00002.safetensors
+      - model.safetensors-00002-of-00002.safetensors
+selection:
+  algorithm: external_val_parent_source_task_waterfill.v1
+  role: external_val
+  sample_count: 256
+  seed: 20260802
+  task_order:
+    - bbox_region_caption
+    - global_caption
+    - object_count
+    - scene_understanding
+    - spatial_relation
+    - visible_change_report
+    - visual_qa
+reference_selection:
+  path: ../../../outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen3vl_2b_v1/selection/gate_b_selection.json
+  file_sha256: 98290aaa585b798dcc5a30b9a4d47083e778aa4d48980e24bbce647705b915bd
+  selection_sha256: 75285af6d8cee21c84760edcc2f20d71beb283bca8d340d6d3243e22c8537119
+  ordered_record_ids_sha256: 00109c005c9f06d16d2cce58be76fee24f49abb6949517fd913a61c28e0928f7
+  sample_count: 256
+generation:
+  seed: 20260802
+  max_new_tokens: 768
+  do_sample: false
+  temperature: 0.0
+  top_p: 1.0
+  template_version: qwen3_5_jinja_non_thinking.v1
+  enable_thinking: false
+evaluation:
+  open_tasks:
+    - bbox_region_caption
+    - global_caption
+    - visible_change_report
+  short_tasks:
+    - visual_qa
+    - object_count
+    - scene_understanding
+    - spatial_relation
+  text_normalization: unicode_word_lower.v1
+  token_f1: multiset_token_f1.v1
+  rouge_l: token_lcs_f1.v1
+  task_macro_weighting: equal_task.v1
+  source_macro_weighting: equal_present_source_task_cell.v1
+  bootstrap:
+    iterations: 10000
+    seed: 20260802
+    confidence_level: 0.95
+    rng: numpy.PCG64
+    quantile_method: linear
+  criteria:
+    primary_ci_lower_strictly_greater_than: 0.0
+    minimum_improved_tasks: 4
+    task_delta_floor: -0.02
+    source_delta_floor: -0.02
+    open_rouge_l_delta_floor: 0.0
+    short_exact_match_delta_floor: 0.0

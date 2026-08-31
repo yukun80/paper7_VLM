@@ -6,7 +6,7 @@
 输出：warm-start checkpoint、train/monitor 与 RS-General retention 报告。
 写入：只写配置指定的全新 train-only 根；合法阶段复用，非法已有根拒绝覆盖。
 阶段：Mask-Grounded training curriculum；不是正式评价或科学验收。
-运行：使用本地 Qwen3-VL-2B 与 GPU；不访问 OA-GroundedEval、RAG 或 test。
+运行：由配置显式选择本地 VLM backend 与 GPU；不访问 OA-GroundedEval、RAG 或 test。
 """
 
 from __future__ import annotations
@@ -36,6 +36,12 @@ def _parser() -> argparse.ArgumentParser:
         help="按 preflight→retention probes→train/resume→retention 顺序运行",
     )
     workflow.add_argument("--config", type=Path, required=True)
+    workflow.add_argument(
+        "--stop-after-steps",
+        type=int,
+        choices=(1, 20),
+        help="仅用于按顺序执行 1-step/20-step bounded CUDA smoke",
+    )
     return parser
 
 
@@ -50,6 +56,7 @@ def entrypoint(argv: Sequence[str] | None = None) -> int:
             raise AssertionError("unreachable")
         result = run_stage5_workflow(
             arguments.config,
+            stop_after_steps=arguments.stop_after_steps,
             progress_callback=lambda value: _print(value, stream=sys.stderr),
         )
         _print(result)

@@ -28,6 +28,7 @@ from .errors import (
 )
 from .inference import run_inference
 from oa_groundrag.evaluation.rs_general.acceptance import verify_gate_b_acceptance
+from oa_groundrag.evaluation.rs_general.comparison import compare_gate_b_families
 from oa_groundrag.evaluation.rs_general.metrics import evaluate_gate_b
 from oa_groundrag.evaluation.rs_general.generation import generate_gate_b
 from oa_groundrag.evaluation.rs_general.media import (
@@ -35,9 +36,9 @@ from oa_groundrag.evaluation.rs_general.media import (
     locate_gate_b_media,
 )
 from oa_groundrag.evaluation.rs_general.selection import prepare_gate_b
-from .model import Qwen3VLModelAdapter
+from .backends import build_model_adapter, build_processor_adapter
 from .preflight import BenchmarkAccess, open_benchmark_access, run_preflight
-from .processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from .processing import DescriptionCollator
 from oa_groundrag.training.vlm.progress import compact_training_result
 from oa_groundrag.evaluation.vlm_smoke import run_bounded_external_smoke
 from oa_groundrag.training.vlm.trainer import DescriptionTrainer, training_layout_identity
@@ -104,6 +105,27 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     gate_verify.add_argument("--expected-report-sha256", required=True)
+    family_compare = subcommands.add_parser("gate-b-family-compare")
+    family_compare.add_argument("--reference-protocol", type=Path, required=True)
+    family_compare.add_argument("--reference-selection", type=Path, required=True)
+    family_compare.add_argument("--reference-adapter-run", type=Path, required=True)
+    family_compare.add_argument(
+        "--reference-evaluation-root",
+        type=Path,
+        required=True,
+    )
+    family_compare.add_argument(
+        "--expected-reference-report-sha256",
+        required=True,
+    )
+    family_compare.add_argument(
+        "--expected-reference-predictions-sha256",
+        required=True,
+    )
+    family_compare.add_argument("--candidate-protocol", type=Path, required=True)
+    family_compare.add_argument("--candidate-selection", type=Path, required=True)
+    family_compare.add_argument("--candidate-adapter-run", type=Path, required=True)
+    family_compare.add_argument("--output-root", type=Path, required=True)
     gate_locate = subcommands.add_parser("gate-b-locate-media")
     gate_locate.add_argument("--predictions", type=Path, required=True)
     gate_locate.add_argument("--line-number", type=int, required=True)
@@ -116,15 +138,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _processor(config):
-    return Qwen3VLProcessorAdapter(
-        processor_path=config.model.processor_path,
-        local_files_only=config.model.local_files_only,
-        trust_remote_code=config.model.trust_remote_code,
-        min_pixels=config.limits.min_pixels,
-        max_pixels=config.limits.max_pixels,
-        max_images=config.limits.max_images,
-        max_input_tokens=config.limits.max_input_tokens,
-    )
+    return build_processor_adapter(config)
 
 
 def _external_dataset(
@@ -216,6 +230,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
+    if arguments.command == "gate-b-family-compare":
+        outcome = compare_gate_b_families(
+            reference_protocol=arguments.reference_protocol,
+            reference_selection=arguments.reference_selection,
+            reference_adapter_run=arguments.reference_adapter_run,
+            reference_evaluation_root=arguments.reference_evaluation_root,
+            expected_reference_report_sha256=(
+                arguments.expected_reference_report_sha256
+            ),
+            expected_reference_predictions_sha256=(
+                arguments.expected_reference_predictions_sha256
+            ),
+            candidate_protocol=arguments.candidate_protocol,
+            candidate_selection=arguments.candidate_selection,
+            candidate_adapter_run=arguments.candidate_adapter_run,
+            output_root=arguments.output_root,
+        )
+        print(outcome.root)
+        return 0
     config = load_config(arguments.config)
     if arguments.command in {"preflight", "train"}:
         config = apply_runtime_overrides(
@@ -305,9 +338,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             flush=True,
         )
     processor = _processor(config)
-    model = Qwen3VLModelAdapter.load(
-        config.model,
-        config.adaptation,
+    model = build_model_adapter(
+        config,
         device=device,
         gradient_checkpointing=(
             arguments.command == "train"

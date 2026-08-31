@@ -23,21 +23,21 @@ from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
 from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 from oa_groundrag.vlm.checkpoint import CheckpointManager
-from oa_groundrag.grounding.contracts import GATE_B_GENERATION_SCHEMA_VERSION
 from oa_groundrag.vlm.data import ExternalDescriptionDataset
 from oa_groundrag.vlm.errors import VLMError, PredictionError, ReasonCode
 from .contracts import (
-    GATE_B_PROTOCOL_ID,
     GATE_B_SAMPLE_COUNT,
     GATE_B_SEED,
     GATE_B_TASK_ORDER,
-    QWEN_TEMPLATE_VERSION,
     validate_frozen_training_root,
 )
 from .selection import load_gate_b_selection, selection_locations
-from oa_groundrag.vlm.model import Qwen3VLModelAdapter
+from oa_groundrag.vlm.backends import (
+    build_model_adapter,
+    build_processor_adapter,
+)
 from oa_groundrag.vlm.outputs import failure_row, generic_prediction_row
-from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.processing import DescriptionCollator
 from oa_groundrag.training.vlm.trainer import set_global_seed, training_layout_identity
 
 
@@ -170,6 +170,7 @@ def generate_gate_b(
     context = load_gate_b_selection(protocol_path, selection_path)
     frozen = context.frozen_protocol
     source = context.protocol_source
+    profile = source.profile
     if model_role == "adapter":
         assert training_root is not None
         validate_frozen_training_root(
@@ -188,24 +189,15 @@ def generate_gate_b(
     config = (
         source.base_config if model_role == "base" else source.adapter_config
     )
-    processor = Qwen3VLProcessorAdapter(
-        processor_path=config.model.processor_path,
-        local_files_only=config.model.local_files_only,
-        trust_remote_code=config.model.trust_remote_code,
-        min_pixels=config.limits.min_pixels,
-        max_pixels=config.limits.max_pixels,
-        max_images=config.limits.max_images,
-        max_input_tokens=config.limits.max_input_tokens,
-    )
+    processor = build_processor_adapter(config)
     processor_identity = processor.identity()
     if processor_identity != frozen["static_protocol"]["processor_identity"]:
         raise PredictionError(
             ReasonCode.MODEL_IDENTITY_MISMATCH,
             "Gate B processor identity 与 frozen protocol 不一致",
         )
-    model = Qwen3VLModelAdapter.load(
-        config.model,
-        config.adaptation,
+    model = build_model_adapter(
+        config,
         device=device,
         gradient_checkpointing=False,
     )
@@ -265,10 +257,10 @@ def generate_gate_b(
                 generated = model.generate_text(
                     _move_batch(batch, device),
                     processor=processor.processor,
-                    max_new_tokens=384,
-                    do_sample=False,
-                    temperature=0.0,
-                    top_p=1.0,
+                    max_new_tokens=config.generation.max_new_tokens,
+                    do_sample=config.generation.do_sample,
+                    temperature=config.generation.temperature,
+                    top_p=config.generation.top_p,
                 )
                 if len(generated) != 1 or not generated[0].strip():
                     raise PredictionError(
@@ -280,7 +272,7 @@ def generate_gate_b(
                     "canonical_payload_sha256": context.access.identity.payload_sha256,
                     "renderer": "phase3.render_canonical_messages",
                     "gate_b": {
-                        "protocol_id": GATE_B_PROTOCOL_ID,
+                        "protocol_id": profile.protocol_id,
                         "protocol_sha256": frozen["protocol_sha256"],
                         "selection_sha256": selection["selection_sha256"],
                         "ordinal": ordinal,
@@ -288,7 +280,7 @@ def generate_gate_b(
                         "source": item["source"],
                         "shard_path": item["shard_path"],
                         "line_index": item["line_index"],
-                        "template_version": QWEN_TEMPLATE_VERSION,
+                        "template_version": profile.template_version,
                     },
                 }
                 predictions.append(
@@ -323,10 +315,10 @@ def generate_gate_b(
             and len(failures) == 0
         )
         manifest = {
-            "schema_version": GATE_B_GENERATION_SCHEMA_VERSION,
+            "schema_version": profile.generation_schema,
             "status": "completed" if valid else "invalid",
             "model_role": model_role,
-            "protocol_id": GATE_B_PROTOCOL_ID,
+            "protocol_id": profile.protocol_id,
             "protocol_sha256": frozen["protocol_sha256"],
             "selection_sha256": selection["selection_sha256"],
             "selection_file_sha256": sha256_file(Path(selection_path)),

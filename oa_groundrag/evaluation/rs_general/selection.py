@@ -23,7 +23,10 @@ from oa_groundrag.data.rs_general.dataset import CanonicalRecordLocation
 from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
 from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
-from oa_groundrag.grounding.contracts import GATE_B_SELECTION_SCHEMA_VERSION
+from oa_groundrag.grounding.contracts import (
+    GATE_B_PROTOCOL_SCHEMA_VERSION,
+    GATE_B_SELECTION_SCHEMA_VERSION,
+)
 from oa_groundrag.vlm.errors import ContractError, ReasonCode
 from .contracts import (
     GATE_B_PROTOCOL_ID,
@@ -31,9 +34,11 @@ from .contracts import (
     GATE_B_SEED,
     GATE_B_SELECTION_ALGORITHM,
     GATE_B_TASK_ORDER,
+    GateBProtocolProfile,
     GateBProtocolSource,
     build_frozen_protocol,
     load_gate_b_protocol,
+    gate_b_protocol_profile,
     read_frozen_protocol,
     static_protocol_snapshot,
     validate_frozen_protocol,
@@ -63,6 +68,7 @@ _SELECTION_FIELDS = {
     "monitoring_exclusion",
     "items",
 }
+_SELECTION_FIELDS_V2 = _SELECTION_FIELDS | {"reference_selection_identity"}
 _ITEM_FIELDS = {
     "ordinal",
     "record_id",
@@ -79,6 +85,14 @@ _EXCLUSION_FIELDS = {
     "parent_count",
     "parent_ids_sha256",
     "intersection_count",
+}
+_REFERENCE_SELECTION_IDENTITY_FIELDS = {
+    "path",
+    "file_sha256",
+    "selection_sha256",
+    "ordered_record_ids_sha256",
+    "sample_count",
+    "exact_item_identity_match",
 }
 
 
@@ -491,7 +505,14 @@ def _selection_document(
     monitoring_file_sha256: str,
     monitoring_selection_sha256: str,
     monitoring_parents: Sequence[str],
+    profile: GateBProtocolProfile | None = None,
+    reference_selection_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if profile is None:
+        profile = gate_b_protocol_profile(
+            GATE_B_PROTOCOL_SCHEMA_VERSION,
+            GATE_B_PROTOCOL_ID,
+        )
     task_counts = Counter(candidate.task_family for candidate in selected)
     source_counts = Counter(candidate.source for candidate in selected)
     cell_counts = Counter(candidate.cell for candidate in selected)
@@ -508,8 +529,8 @@ def _selection_document(
         for ordinal, candidate in enumerate(selected)
     ]
     body = {
-        "schema_version": GATE_B_SELECTION_SCHEMA_VERSION,
-        "protocol_id": GATE_B_PROTOCOL_ID,
+        "schema_version": profile.selection_schema,
+        "protocol_id": profile.protocol_id,
         "protocol_sha256": frozen_protocol["protocol_sha256"],
         "benchmark_identity": access.identity.to_dict(),
         "role": "external_val",
@@ -551,6 +572,12 @@ def _selection_document(
         },
         "items": items,
     }
+    if profile.requires_reference_selection:
+        if reference_selection_identity is None:
+            _fail("Gate B v2 selection 缺少 reference selection identity")
+        body["reference_selection_identity"] = dict(
+            reference_selection_identity
+        )
     if body["task_counts"] != {
         task: quotas[task] for task in GATE_B_TASK_ORDER
     }:
@@ -559,6 +586,58 @@ def _selection_document(
         **body,
         "selection_sha256": sha256_text(canonical_json(body)),
     }
+
+
+def _reference_selection_identity(
+    source: GateBProtocolSource,
+    selected: Sequence[GateBCandidate],
+) -> dict[str, Any] | None:
+    if not source.profile.requires_reference_selection:
+        return None
+    identity = dict(source.raw["reference_selection"])
+    path = Path(identity["path"])
+    if sha256_file(path) != identity["file_sha256"]:
+        _fail("reference selection 在 protocol 读取后发生变化")
+    try:
+        reference = read_json(path)
+    except RSGeneralDescError as error:
+        _fail("无法严格读取 reference selection", details={"error": str(error)})
+    if not isinstance(reference, dict):
+        _fail("reference selection 必须是对象")
+    expected_items = [
+        {
+            "ordinal": ordinal,
+            "record_id": candidate.record_id,
+            "parent_id": candidate.parent_id,
+            "source": candidate.source,
+            "task_family": candidate.task_family,
+            "shard_path": candidate.shard_path,
+            "line_index": candidate.line_index,
+        }
+        for ordinal, candidate in enumerate(selected)
+    ]
+    if reference.get("items") != expected_items:
+        first_difference = next(
+            (
+                index
+                for index, (actual, expected) in enumerate(
+                    zip(
+                        reference.get("items", []),
+                        expected_items,
+                        strict=False,
+                    )
+                )
+                if actual != expected
+            ),
+            None,
+        )
+        _fail(
+            "Qwen3.5 Gate B 未精确复用冻结 2B 的 256 个 record identity",
+            details={"first_item_difference": first_difference},
+        )
+    if sha256_file(path) != identity["file_sha256"]:
+        _fail("reference selection 在精确复用检查期间发生变化")
+    return {**identity, "exact_item_identity_match": True}
 
 
 def prepare_gate_b(
@@ -597,6 +676,7 @@ def prepare_gate_b(
             candidates,
             excluded_parents=set(monitoring_parents),
         )
+        reference_identity = _reference_selection_identity(source, selected)
         selection = _selection_document(
             frozen_protocol=frozen,
             access=access,
@@ -608,6 +688,8 @@ def prepare_gate_b(
             monitoring_file_sha256=expected_monitoring_file_sha,
             monitoring_selection_sha256=monitoring_identity["selection_sha256"],
             monitoring_parents=monitoring_parents,
+            profile=source.profile,
+            reference_selection_identity=reference_identity,
         )
         if selection["monitoring_exclusion"]["intersection_count"] != 0:
             _fail("Gate B selection 与 monitoring parents 相交")
@@ -618,18 +700,31 @@ def prepare_gate_b(
         return writer.publish()
 
 
-def _strict_selection(row: Mapping[str, Any]) -> None:
-    if set(row) != _SELECTION_FIELDS:
+def _strict_selection(
+    row: Mapping[str, Any],
+    profile: GateBProtocolProfile | None = None,
+) -> None:
+    if profile is None:
+        profile = gate_b_protocol_profile(
+            GATE_B_PROTOCOL_SCHEMA_VERSION,
+            GATE_B_PROTOCOL_ID,
+        )
+    expected_fields = (
+        _SELECTION_FIELDS_V2
+        if profile.requires_reference_selection
+        else _SELECTION_FIELDS
+    )
+    if set(row) != expected_fields:
         _fail(
             "selection 字段不匹配",
             details={
-                "unknown": sorted(set(row) - _SELECTION_FIELDS),
-                "missing": sorted(_SELECTION_FIELDS - set(row)),
+                "unknown": sorted(set(row) - expected_fields),
+                "missing": sorted(expected_fields - set(row)),
             },
         )
     if (
-        row.get("schema_version") != GATE_B_SELECTION_SCHEMA_VERSION
-        or row.get("protocol_id") != GATE_B_PROTOCOL_ID
+        row.get("schema_version") != profile.selection_schema
+        or row.get("protocol_id") != profile.protocol_id
         or row.get("role") != "external_val"
         or row.get("algorithm") != GATE_B_SELECTION_ALGORITHM
         or row.get("seed") != GATE_B_SEED
@@ -774,6 +869,30 @@ def _strict_selection(row: Mapping[str, Any]) -> None:
         )
     ):
         _fail("selection monitoring exclusion 结论非法")
+    if profile.requires_reference_selection:
+        reference = row.get("reference_selection_identity")
+        if (
+            not isinstance(reference, dict)
+            or set(reference) != _REFERENCE_SELECTION_IDENTITY_FIELDS
+            or reference.get("sample_count") != GATE_B_SAMPLE_COUNT
+            or reference.get("exact_item_identity_match") is not True
+            or not isinstance(reference.get("path"), str)
+            or not reference["path"]
+            or any(
+                not isinstance(reference.get(name), str)
+                or len(reference[name]) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in reference[name]
+                )
+                for name in (
+                    "file_sha256",
+                    "selection_sha256",
+                    "ordered_record_ids_sha256",
+                )
+            )
+        ):
+            _fail("selection reference_selection_identity 非法")
 
 
 def _selection_paths(selection_path: Path | str) -> tuple[Path, Path]:
@@ -815,7 +934,7 @@ def _load_selection_context(
         _fail("无法严格读取 frozen selection", details={"error": str(error)})
     if not isinstance(selection, dict):
         _fail("frozen selection 必须是对象")
-    _strict_selection(selection)
+    _strict_selection(selection, source.profile)
     if selection["protocol_sha256"] != frozen["protocol_sha256"]:
         _fail("selection protocol SHA 与 sibling frozen protocol 不一致")
     access = open_benchmark_access(source.base_config)
@@ -840,6 +959,13 @@ def _load_selection_context(
         or exclusion["parent_ids_sha256"] != frozen_monitoring["parent_ids_sha256"]
     ):
         _fail("selection monitoring exclusion identity 与 protocol 不一致")
+    if source.profile.requires_reference_selection:
+        expected_reference = {
+            **dict(source.raw["reference_selection"]),
+            "exact_item_identity_match": True,
+        }
+        if selection.get("reference_selection_identity") != expected_reference:
+            _fail("selection reference identity 与 protocol 不一致")
     return GateBSelectionContext(
         frozen_protocol=frozen,
         protocol_source=source,

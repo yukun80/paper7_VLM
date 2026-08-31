@@ -3,10 +3,10 @@
 ## 1. 当前研究主线
 
 本仓库基于现有 OA-AuxSeg、RS-GeneralDesc 和 Mask-Grounded VLM 资产，按
-OA-GroundRAG v2 路线继续开发。权威边界为：
+ OA-GroundRAG v3.1 路线继续开发。权威边界为：
 
 1. 项目负责人当前明确指令；
-2. `docs/OA-GroundRAG_算法构建方案_0811.md` 中的冻结算法设计；
+2. `docs/OA-GroundRAG_算法构建方案_0829.md` 中的冻结算法设计；
 3. `REBUILD_PROGRESS.md` 中的实时阶段、产物身份和验收证据；
 4. `README.md` 中的稳定入口和使用说明。
 
@@ -119,8 +119,10 @@ HDF5 格式统一不代表字段、模态、配准、数值范围或科学语义
 
 ## 7. 文档职责
 
-- `docs/OA-GroundRAG_算法构建方案_0811.md`：冻结的唯一详细算法设计。不得因实施
+- `docs/OA-GroundRAG_算法构建方案_0829.md`：冻结的唯一详细算法设计。不得因实施
   进度、运行结果或产物发布修改；只有负责人明确授权新的设计版本时才能变更。
+- `docs/OA-GroundRAG_算法构建方案_0811.md`：历史冻结设计，永久只读，仅用于
+  provenance，不再作为当前接口或验收依据。
 - `README.md`：稳定项目概览、接口和运行入口；不记录实施进度或正式产物身份。
 - `REBUILD_PROGRESS.md`：唯一实时进度、运行结果、产物身份和验收证据文件。
 - `docs/archive/`：只读历史资料。

@@ -15,16 +15,15 @@ from oa_groundrag.data.rs_general.io import (
 from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
 from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
-from oa_groundrag.grounding.contracts import GATE_B_REPORT_SCHEMA_VERSION
 from oa_groundrag.vlm.errors import EvaluationError, ReasonCode
 from .contracts import (
-    GATE_B_PROTOCOL_ID,
     GATE_B_SEED,
     GATE_B_TASK_ORDER,
     validate_frozen_training_root,
 )
 from .metrics import (
     _completed_metrics,
+    _context_profile,
     _load_generation_run,
     _validate_prediction_rows,
 )
@@ -32,6 +31,7 @@ from .selection import (
     _scan_candidates,
     _select_candidates,
     _selection_document,
+    _reference_selection_identity,
     load_gate_b_selection,
     selection_locations,
 )
@@ -198,6 +198,12 @@ def _recompute_selection(context: Any, training_root: Path) -> None:
         candidates,
         excluded_parents=set(monitoring_parents),
     )
+    profile = _context_profile(context)
+    reference_identity = (
+        _reference_selection_identity(context.protocol_source, selected)
+        if profile.requires_reference_selection
+        else None
+    )
     rebuilt = _selection_document(
         frozen_protocol=frozen,
         access=context.access,
@@ -209,6 +215,8 @@ def _recompute_selection(context: Any, training_root: Path) -> None:
         monitoring_file_sha256=actual_monitoring_sha,
         monitoring_selection_sha256=monitoring_identity["selection_sha256"],
         monitoring_parents=monitoring_parents,
+        profile=profile,
+        reference_selection_identity=reference_identity,
     )
     if rebuilt != context.selection:
         first_difference = next(
@@ -242,7 +250,7 @@ def verify_gate_b_acceptance(
     expected_protocol_file_sha256: str,
     expected_report_sha256: str,
 ) -> GateBAcceptanceVerification:
-    """严格只读复核已发布 Gate B v1 接受证据，不读取图像资产。"""
+    """严格只读复核已发布的版本化 Gate B 接受证据，不读取图像资产。"""
 
     expected_protocol_file_sha256 = _sha(
         expected_protocol_file_sha256,
@@ -289,6 +297,7 @@ def verify_gate_b_acceptance(
         )
 
     context = load_gate_b_selection(protocol_path, selection_path)
+    profile = _context_profile(context)
     training_root = _regular_directory(
         Path(training_root),
         location="Gate B training root",
@@ -376,14 +385,14 @@ def verify_gate_b_acceptance(
             },
         )
     expected_report = {
-        "schema_version": GATE_B_REPORT_SCHEMA_VERSION,
+        "schema_version": profile.report_schema,
         "status": "completed",
         "gate_b_evaluated": True,
         "gate_b_passed": True,
         "formal_acceptance": True,
         "adapter_status": "accepted",
         "protocol_identity": {
-            "protocol_id": GATE_B_PROTOCOL_ID,
+            "protocol_id": profile.protocol_id,
             "protocol_sha256": context.frozen_protocol["protocol_sha256"],
         },
         "selection_identity": {

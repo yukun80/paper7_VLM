@@ -26,8 +26,7 @@ from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 
 from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 from oa_groundrag.grounding.contracts import (
-    GATE_B_GENERATION_SCHEMA_VERSION,
-    GATE_B_REPORT_SCHEMA_VERSION,
+    GATE_B_PROTOCOL_SCHEMA_VERSION,
     PREDICTION_SCHEMA_VERSION,
 )
 from oa_groundrag.vlm.errors import EvaluationError, VLMError, ReasonCode
@@ -38,7 +37,7 @@ from .contracts import (
     GATE_B_SEED,
     GATE_B_SHORT_TASKS,
     GATE_B_TASK_ORDER,
-    QWEN_TEMPLATE_VERSION,
+    gate_b_protocol_profile,
 )
 from .selection import (
     GateBSelectionContext,
@@ -102,6 +101,28 @@ class GateBEvaluationOutcome:
     root: Path
     status: str
     gate_b_passed: bool
+
+
+def _context_profile(context: Any):
+    source = getattr(context, "protocol_source", None)
+    profile = getattr(source, "profile", None)
+    if profile is not None:
+        return profile
+    frozen = getattr(context, "frozen_protocol", {})
+    schema = (
+        frozen.get("schema_version")
+        if isinstance(frozen, Mapping)
+        else None
+    )
+    protocol_id = (
+        frozen.get("protocol_id")
+        if isinstance(frozen, Mapping)
+        else None
+    )
+    if schema is None and protocol_id is None:
+        schema = GATE_B_PROTOCOL_SCHEMA_VERSION
+        protocol_id = GATE_B_PROTOCOL_ID
+    return gate_b_protocol_profile(schema, protocol_id)
 
 
 def normalize_gate_b_text(value: str) -> str:
@@ -385,6 +406,7 @@ def _load_generation_run(
         )
     selection = context.selection
     frozen = context.frozen_protocol
+    profile = _context_profile(context)
     expected_config = (
         context.protocol_source.base_config
         if model_role == "base"
@@ -399,9 +421,9 @@ def _load_generation_run(
         canonical_json([item["record_id"] for item in selection["items"]])
     )
     if (
-        manifest.get("schema_version") != GATE_B_GENERATION_SCHEMA_VERSION
+        manifest.get("schema_version") != profile.generation_schema
         or manifest.get("model_role") != model_role
-        or manifest.get("protocol_id") != GATE_B_PROTOCOL_ID
+        or manifest.get("protocol_id") != profile.protocol_id
         or manifest.get("protocol_sha256") != frozen["protocol_sha256"]
         or manifest.get("selection_sha256") != selection["selection_sha256"]
     ):
@@ -582,8 +604,9 @@ def _validate_prediction_rows(
                 details={"ordinal": ordinal},
             )
         gate = provenance["gate_b"]
+        profile = _context_profile(context)
         expected_gate = {
-            "protocol_id": GATE_B_PROTOCOL_ID,
+            "protocol_id": profile.protocol_id,
             "protocol_sha256": context.frozen_protocol["protocol_sha256"],
             "selection_sha256": context.selection["selection_sha256"],
             "ordinal": ordinal,
@@ -591,7 +614,7 @@ def _validate_prediction_rows(
             "source": item["source"],
             "shard_path": item["shard_path"],
             "line_index": item["line_index"],
-            "template_version": QWEN_TEMPLATE_VERSION,
+            "template_version": profile.template_version,
         }
         if not isinstance(gate, dict) or set(gate) != _GATE_PROVENANCE_FIELDS or gate != expected_gate:
             raise EvaluationError(
@@ -635,6 +658,7 @@ def _completed_metrics(
     base_rows: Sequence[Mapping[str, Any]],
     adapter_rows: Sequence[Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], list[dict[str, Any]], bool]:
+    profile = _context_profile(context)
     paired: list[dict[str, Any]] = []
     by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_cell: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -660,7 +684,7 @@ def _completed_metrics(
             for name in sorted(base_score)
         }
         row = {
-            "schema_version": GATE_B_REPORT_SCHEMA_VERSION,
+            "schema_version": profile.report_schema,
             "artifact_kind": "paired_score",
             "ordinal": item["ordinal"],
             "record_id": item["record_id"],
@@ -779,6 +803,10 @@ def evaluate_gate_b(
     adapter_run: Path,
     output_root: Path,
 ) -> GateBEvaluationOutcome:
+    profile = gate_b_protocol_profile(
+        GATE_B_PROTOCOL_SCHEMA_VERSION,
+        GATE_B_PROTOCOL_ID,
+    )
     with AtomicArtifactDirectory(Path(output_root)) as writer:
         paired: list[dict[str, Any]] = []
         context: GateBSelectionContext | None = None
@@ -789,6 +817,7 @@ def evaluate_gate_b(
         invalid_reasons: list[dict[str, Any]] = []
         try:
             context = load_gate_b_selection(protocol_path, selection_path)
+            profile = _context_profile(context)
             expected_selection_file_sha = sha256_file(Path(selection_path))
             base_manifest, base_rows, base_manifest_sha = _load_generation_run(
                 Path(base_run),
@@ -862,7 +891,7 @@ def evaluate_gate_b(
         writer.write_jsonl("paired_scores.jsonl", paired)
         paired_path = writer.path("paired_scores.jsonl")
         report = {
-            "schema_version": GATE_B_REPORT_SCHEMA_VERSION,
+            "schema_version": profile.report_schema,
             "status": status,
             "gate_b_evaluated": evaluated,
             "gate_b_passed": bool(evaluated and passed),
@@ -876,7 +905,7 @@ def evaluate_gate_b(
                 None
                 if context is None
                 else {
-                    "protocol_id": GATE_B_PROTOCOL_ID,
+                    "protocol_id": profile.protocol_id,
                     "protocol_sha256": context.frozen_protocol["protocol_sha256"],
                 }
             ),

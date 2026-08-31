@@ -23,15 +23,22 @@ from oa_groundrag.data.rs_general.io import read_json
 from oa_groundrag.data.rs_general.dataset import RSGeneralDescDataset
 
 from oa_groundrag.vlm.checkpoint import CheckpointManager
+from oa_groundrag.vlm.backends import (
+    VLMModelAdapter,
+    VLMProcessorAdapter,
+    build_model_adapter,
+    build_processor_adapter,
+)
 from oa_groundrag.vlm.config import AdaptationSection
 from oa_groundrag.vlm.data import ExternalDescriptionDataset
 from oa_groundrag.vlm.errors import ModelError, ReasonCode
-from oa_groundrag.vlm.model import Qwen3VLModelAdapter
 from oa_groundrag.vlm.preflight import BenchmarkIdentity, open_benchmark_access
-from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.processing import DescriptionCollator
 from .config import (
+    STAGE5_CONFIG_SCHEMA_V3,
     Stage5Config,
     load_stage5_config,
+    verify_retention_reference_files,
     verify_warm_start_files,
     with_monitor_parent_count,
 )
@@ -55,6 +62,7 @@ from oa_groundrag.training.vlm.validation import evaluate_teacher_forced_loss, s
 
 
 STAGE5_WORKFLOW_SCHEMA = "rs_vlm.mask_grounded_train_workflow.v2"
+STAGE5_WORKFLOW_SCHEMA_V3 = "rs_vlm.mask_grounded_train_workflow.v3"
 STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS = 1
 _GATE_B_STATIC_PROTOCOL_FILENAME = "rs_generaldesc_gate_b_qwen3vl_2b.yaml"
 
@@ -62,10 +70,20 @@ _GATE_B_STATIC_PROTOCOL_FILENAME = "rs_generaldesc_gate_b_qwen3vl_2b.yaml"
 def _emit(
     callback: Callable[[Mapping[str, Any]], None] | None,
     event: str,
+    *,
+    schema_version: str = STAGE5_WORKFLOW_SCHEMA,
     **details: Any,
 ) -> None:
     if callback is not None:
-        callback({"schema_version": STAGE5_WORKFLOW_SCHEMA, "event": event, **details})
+        callback({"schema_version": schema_version, "event": event, **details})
+
+
+def _workflow_schema(config: Stage5Config) -> str:
+    return (
+        STAGE5_WORKFLOW_SCHEMA_V3
+        if config.schema_version == STAGE5_CONFIG_SCHEMA_V3
+        else STAGE5_WORKFLOW_SCHEMA
+    )
 
 
 def _prepare_stage5_training_memory(device: torch.device) -> None:
@@ -78,7 +96,36 @@ def _prepare_stage5_training_memory(device: torch.device) -> None:
 def _stage5_gate_b_protocol_path(config: Stage5Config) -> Path:
     """返回 Gate B 静态 YAML；frozen JSON 仅由 selection validator 旁路读取。"""
 
+    if config.retention_contract is not None:
+        return config.retention_contract.gate_b_protocol_path
     return config.base.config_path.parent / _GATE_B_STATIC_PROTOCOL_FILENAME
+
+
+def _legacy_gate_b_root(config: Stage5Config) -> Path:
+    return (
+        config.config_path.parents[3]
+        / "outputs"
+        / "phase4_rs_vlm"
+        / "rs_generaldesc_gate_b_qwen3vl_2b_v1"
+    )
+
+
+def _stage5_gate_b_selection_path(config: Stage5Config) -> Path:
+    if config.retention_contract is not None:
+        return config.retention_contract.gate_b_selection_path
+    return _legacy_gate_b_root(config) / "selection" / "gate_b_selection.json"
+
+
+def _stage5_rs_general_predictions_path(config: Stage5Config) -> Path:
+    if config.retention_contract is not None:
+        return config.retention_contract.rs_general_predictions_path
+    return _legacy_gate_b_root(config) / "adapter" / "predictions.jsonl"
+
+
+def _stage5_retention_max_new_tokens(config: Stage5Config) -> int:
+    if config.retention_contract is not None:
+        return config.retention_contract.max_new_tokens
+    return 384
 
 
 def _compact_benchmark_identity(dataset: CompactTrainingMessageDataset) -> BenchmarkIdentity:
@@ -103,16 +150,8 @@ def _compact_benchmark_identity(dataset: CompactTrainingMessageDataset) -> Bench
     )
 
 
-def _processor(config: Stage5Config) -> Qwen3VLProcessorAdapter:
-    return Qwen3VLProcessorAdapter(
-        processor_path=config.model.processor_path,
-        local_files_only=config.model.local_files_only,
-        trust_remote_code=config.model.trust_remote_code,
-        min_pixels=config.limits.min_pixels,
-        max_pixels=config.limits.max_pixels,
-        max_images=config.limits.max_images,
-        max_input_tokens=config.limits.max_input_tokens,
-    )
+def _processor(config: Stage5Config) -> VLMProcessorAdapter:
+    return build_processor_adapter(config.base)
 
 
 def _prompt_only_adaptation(config: Stage5Config) -> AdaptationSection:
@@ -127,7 +166,7 @@ def _prompt_only_adaptation(config: Stage5Config) -> AdaptationSection:
 
 
 def _load_warm_start(
-    model: Qwen3VLModelAdapter,
+    model: VLMModelAdapter,
     processor_identity: Mapping[str, Any],
     config: Stage5Config,
 ) -> dict[str, Any]:
@@ -172,14 +211,26 @@ def _training_complete(training_root: Path) -> bool:
     if not report_path.exists():
         return False
     report = read_json(report_path)
-    if report.get("status") != "completed" or report.get("cursor", {}).get("global_step") != 1000:
-        raise ModelError(ReasonCode.CHECKPOINT_CORRUPT, "Stage 5 training report 已存在但未完成/非法")
-    return True
+    status = report.get("status")
+    step = report.get("cursor", {}).get("global_step")
+    if status == "completed" and step == 1000:
+        return True
+    if (
+        status == "paused"
+        and isinstance(step, int)
+        and not isinstance(step, bool)
+        and 0 < step < 1000
+    ):
+        return False
+    raise ModelError(
+        ReasonCode.CHECKPOINT_CORRUPT,
+        "Mask-Grounded training report 状态/step 非法",
+    )
 
 
 def _load_stage5_best(
     *,
-    model: Qwen3VLModelAdapter,
+    model: VLMModelAdapter,
     processor_identity: Mapping[str, Any],
     config: Stage5Config,
     benchmark_identity: BenchmarkIdentity,
@@ -211,20 +262,43 @@ def _load_stage5_best(
 def run_stage5_workflow(
     config_path: Path | str,
     *,
+    stop_after_steps: int | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """运行固定状态机；已有合法阶段只读复用，非法/部分输出拒绝覆盖。"""
 
     config = load_stage5_config(config_path)
+    if isinstance(stop_after_steps, bool) or stop_after_steps not in {None, 1, 20}:
+        raise ModelError(
+            ReasonCode.TYPE_MISMATCH,
+            "Mask-Grounded bounded smoke 只允许 stop_after_steps=1 或 20",
+        )
+    smoke_mode = stop_after_steps is not None
+    workflow_schema = _workflow_schema(config)
+
+    def emit(event: str, **details: Any) -> None:
+        _emit(
+            progress_callback,
+            event,
+            schema_version=workflow_schema,
+            **details,
+        )
+
     compact = CompactTrainingMessageDataset(config.data_contract.compact_training_root)
     split = split_compact_by_parent(compact, seed=config.data_contract.split_seed)
     config = with_monitor_parent_count(config, len(split.monitor_parents))
     identity = _compact_benchmark_identity(compact)
     access = open_benchmark_access(config.base)
     warm_identity = verify_warm_start_files(config)
+    retention_identity = verify_retention_reference_files(config)
     workflow_root = config.workflow_root
     if workflow_root.exists() and (not workflow_root.is_dir() or workflow_root.is_symlink()):
         raise ModelError(ReasonCode.OUTPUT_LINK, "Stage 5 workflow root 必须是普通目录")
+    if stop_after_steps == 20 and not workflow_root.is_dir():
+        raise ModelError(
+            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            "20-step smoke 必须从已通过的同根 1-step checkpoint 恢复",
+        )
     workflow_root.mkdir(parents=True, exist_ok=True)
     snapshot_path = workflow_root / "stage5_config_snapshot.json"
     split_path = workflow_root / "region_parent_split.json"
@@ -237,21 +311,24 @@ def run_stage5_workflow(
         atomic_write_json(snapshot_path, config.snapshot_dict())
         atomic_write_json(split_path, split.to_dict())
         atomic_write_json(workflow_root / "workflow_state.json", {
-            "schema_version": STAGE5_WORKFLOW_SCHEMA,
+            "schema_version": workflow_schema,
             "stage": "preflight",
             "compact_manifest_sha256": sha256_file(compact.root / "manifest.json"),
             "split_identity_sha256": split.identity_sha256,
             "warm_start": warm_identity,
+            "retention_reference": retention_identity,
+            "bounded_smoke": smoke_mode,
             "formal_acceptance": False,
         })
-    _emit(
-        progress_callback,
+    emit(
         "preflight_complete",
         compact_records=len(compact),
         train_records=len(split.train_indices),
         monitor_records=len(split.monitor_indices),
         train_parents=len(split.train_parents),
         monitor_parents=len(split.monitor_parents),
+        backend=config.model.backend,
+        bounded_smoke=smoke_mode,
     )
     if not torch.cuda.is_available():
         raise ModelError(ReasonCode.CUDA_REQUIRED, "Mask-Grounded training/retention 要求 CUDA")
@@ -299,20 +376,25 @@ def run_stage5_workflow(
             max_parents=config.data_contract.replay_validation_parents,
         )
         loss_path = workflow_root / "retention_losses.json"
-        losses = read_json(loss_path) if loss_path.exists() else {
-            "schema_version": "rs_vlm.mask_grounded_train_retention_losses.v2",
-            "selection": retention_selection.to_dict(),
-            "base": None,
-            "rs_general_adapter": None,
-            "mask_grounded_region_adapter": None,
-            "retention_gate_frozen": False,
-            "formal_acceptance": False,
-        }
-        if losses["base"] is None:
-            _emit(progress_callback, "base_retention_probe_starting")
-            base_model = Qwen3VLModelAdapter.load(
-                config.model,
-                _prompt_only_adaptation(config),
+        losses = None if smoke_mode else (
+            read_json(loss_path) if loss_path.exists() else {
+                "schema_version": "rs_vlm.mask_grounded_train_retention_losses.v2",
+                "selection": retention_selection.to_dict(),
+                "base": None,
+                "rs_general_adapter": None,
+                "mask_grounded_region_adapter": None,
+                "retention_gate_frozen": False,
+                "formal_acceptance": False,
+            }
+        )
+        if losses is not None and losses["base"] is None:
+            emit("base_retention_probe_starting")
+            base_config = replace(
+                config.base,
+                adaptation=_prompt_only_adaptation(config),
+            )
+            base_model = build_model_adapter(
+                base_config,
                 device=device,
                 gradient_checkpointing=False,
             )
@@ -328,16 +410,15 @@ def run_stage5_workflow(
             del base_model
             gc.collect()
             torch.cuda.empty_cache()
-            _emit(progress_callback, "base_retention_probe_complete")
-        model = Qwen3VLModelAdapter.load(
-            config.model,
-            config.adaptation,
+            emit("base_retention_probe_complete")
+        model = build_model_adapter(
+            config.base,
             device=device,
             gradient_checkpointing=True,
         )
         warm = _load_warm_start(model, processor_identity, config)
-        if losses["rs_general_adapter"] is None:
-            _emit(progress_callback, "rs_general_retention_probe_starting")
+        if losses is not None and losses["rs_general_adapter"] is None:
+            emit("rs_general_retention_probe_starting")
             losses["rs_general_adapter"] = evaluate_teacher_forced_loss(
                 model=model,
                 collator=DescriptionCollator(processor, training=True),
@@ -347,7 +428,7 @@ def run_stage5_workflow(
                 step=0,
             ).to_dict()
             atomic_write_json(loss_path, losses)
-            _emit(progress_callback, "rs_general_retention_probe_complete")
+            emit("rs_general_retention_probe_complete")
         region_train = RegionSubsetDataset(
             compact,
             split.train_indices,
@@ -373,19 +454,69 @@ def run_stage5_workflow(
                 STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS
             ),
         )
-        if not _training_complete(config.run.output_root):
+        training_complete = _training_complete(config.run.output_root)
+        if training_complete and smoke_mode:
+            raise ModelError(
+                ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                "bounded smoke 根不得包含已完成的 1000-step training",
+            )
+        if not training_complete:
             resume = _latest_checkpoint(config.run.output_root)
-            _emit(
-                progress_callback,
+            if stop_after_steps == 1 and resume is not None:
+                raise ModelError(
+                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                    "1-step smoke 必须写入全新 training root",
+                )
+            if stop_after_steps == 20 and (
+                resume is None or resume.name != "step-00000001"
+            ):
+                raise ModelError(
+                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                    "20-step smoke 只接受同根 step-00000001 checkpoint",
+                )
+            emit(
                 "training_starting" if resume is None else "training_resuming",
                 resume_checkpoint=None if resume is None else str(resume),
                 warm_start=warm,
+                stop_after_steps=stop_after_steps,
             )
             # retention probe 产生了可变长度 forward cache；正式训练前只清理
             # Python 无用对象与 allocator 空闲块，不触碰模型权重或训练超参数。
             _prepare_stage5_training_memory(device)
-            trainer.fit(mixed, resume_checkpoint=resume)
-            _emit(progress_callback, "training_complete")
+            training_result = trainer.fit(
+                mixed,
+                resume_checkpoint=resume,
+                stop_after_steps=stop_after_steps,
+            )
+            if training_result.status == "paused":
+                state = {
+                    "schema_version": workflow_schema,
+                    "stage": "bounded_smoke_paused",
+                    "config_semantic_sha256": config.semantic_sha256,
+                    "compact_manifest_sha256": sha256_file(
+                        compact.root / "manifest.json"
+                    ),
+                    "region_split_identity_sha256": split.identity_sha256,
+                    "warm_start": warm,
+                    "retention_reference": retention_identity,
+                    "retention_probes_executed": False,
+                    "execution_stop_step": stop_after_steps,
+                    "cursor": training_result.cursor.to_dict(),
+                    "checkpoint": str(training_result.checkpoint),
+                    "cuda_peak_gib": training_result.cuda_peak_gib,
+                    "formal_acceptance": False,
+                    "scientific_acceptance": False,
+                    "sealed_test_evaluated": False,
+                }
+                atomic_write_json(workflow_root / "workflow_state.json", state)
+                emit(
+                    "bounded_smoke_complete",
+                    step=training_result.cursor.global_step,
+                    checkpoint=str(training_result.checkpoint),
+                    cuda_peak_gib=training_result.cuda_peak_gib,
+                )
+                return {"ok": True, "root": str(workflow_root), **state}
+            emit("training_complete")
         best = _load_stage5_best(
             model=model,
             processor_identity=processor_identity,
@@ -393,9 +524,10 @@ def run_stage5_workflow(
             benchmark_identity=identity,
             selection=selection,
         )
+        if losses is None:
+            raise AssertionError("正式训练完成后 retention losses 不得为空")
         if losses["mask_grounded_region_adapter"] is None:
-            _emit(
-                progress_callback,
+            emit(
                 "region_adapter_retention_probe_starting",
                 checkpoint=str(best),
             )
@@ -408,28 +540,25 @@ def run_stage5_workflow(
                 step=int(read_json(config.run.output_root / "best_checkpoint.json")["step"]),
             ).to_dict()
             atomic_write_json(loss_path, losses)
-            _emit(progress_callback, "region_adapter_retention_probe_complete")
+            emit("region_adapter_retention_probe_complete")
         retention_root = workflow_root / "rs_general_retention"
         if not retention_root.exists():
-            _emit(progress_callback, "retention_report_starting")
-            gate_b_root = (
-                config.config_path.parents[2]
-                / "outputs"
-                / "phase4_rs_vlm"
-                / "rs_generaldesc_gate_b_qwen3vl_2b_v1"
-            )
+            emit("retention_report_starting")
             run_rs_general_retention_report(
                 protocol_path=_stage5_gate_b_protocol_path(config),
-                selection_path=gate_b_root / "selection" / "gate_b_selection.json",
-                frozen_rs_predictions_path=gate_b_root / "adapter" / "predictions.jsonl",
+                selection_path=_stage5_gate_b_selection_path(config),
+                frozen_rs_predictions_path=(
+                    _stage5_rs_general_predictions_path(config)
+                ),
                 model=model,
                 processor_adapter=processor,
                 config=config,
                 device=device,
+                max_new_tokens=_stage5_retention_max_new_tokens(config),
                 output_root=retention_root,
             )
         state = {
-            "schema_version": STAGE5_WORKFLOW_SCHEMA,
+            "schema_version": workflow_schema,
             "stage": "complete",
             "config_semantic_sha256": config.semantic_sha256,
             "compact_manifest_sha256": sha256_file(compact.root / "manifest.json"),
@@ -439,6 +568,7 @@ def run_stage5_workflow(
             "region_micro_ratio": 0.9,
             "rs_general_replay_micro_ratio": 0.1,
             "warm_start": warm,
+            "retention_reference": retention_identity,
             "best_checkpoint": str(best),
             "reference_authority": "automatic_contract_only",
             "expert_metrics_available": False,
@@ -449,5 +579,5 @@ def run_stage5_workflow(
             "sealed_test_evaluated": False,
         }
         atomic_write_json(workflow_root / "workflow_state.json", state)
-        _emit(progress_callback, "workflow_complete", best_checkpoint=str(best))
+        emit("workflow_complete", best_checkpoint=str(best))
         return {"ok": True, "root": str(workflow_root), **state}

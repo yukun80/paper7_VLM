@@ -16,6 +16,7 @@ from oa_groundrag.data.rs_general.dataset import (
 
 from oa_groundrag.artifacts.directory import AtomicArtifactDirectory
 from oa_groundrag.vlm.config import VLMConfig
+from oa_groundrag.vlm.backends import build_processor_adapter
 from oa_groundrag.grounding.contracts import RUN_MANIFEST_SCHEMA_VERSION, DataMode
 from oa_groundrag.vlm.data import (
     REQUIRED_EXTERNAL_ROLES,
@@ -26,7 +27,7 @@ from oa_groundrag.vlm.data import (
 )
 from oa_groundrag.vlm.errors import PreflightError, ReasonCode
 from oa_groundrag.vlm.preflight import open_benchmark_access
-from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.processing import DescriptionCollator
 from oa_groundrag.vlm.reference import MAIN_REFERENCE
 
 
@@ -81,15 +82,7 @@ def run_bounded_external_smoke(
             source_weights=config.data.source_weights,
             task_weights=config.data.task_weights,
         )
-        processor = Qwen3VLProcessorAdapter(
-            processor_path=config.model.processor_path,
-            local_files_only=config.model.local_files_only,
-            trust_remote_code=config.model.trust_remote_code,
-            min_pixels=config.limits.min_pixels,
-            max_pixels=config.limits.max_pixels,
-            max_images=config.limits.max_images,
-            max_input_tokens=config.limits.max_input_tokens,
-        )
+        processor = build_processor_adapter(config)
         collator = DescriptionCollator(processor, training=True)
         loader = DataLoader(
             dataset,

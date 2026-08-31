@@ -50,7 +50,9 @@ from oa_groundrag.vlm.errors import (
 )
 from oa_groundrag.vlm.inference import run_inference
 from oa_groundrag.grounding.messages import build_mask_grounded_messages
-from oa_groundrag.vlm.model import assistant_sample_mean_causal_loss
+from oa_groundrag.vlm.backends.qwen3_vl.model import (
+    assistant_sample_mean_causal_loss,
+)
 from oa_groundrag.vlm.outputs import prediction_row, serialize_model_output
 from oa_groundrag.vlm.preflight import BenchmarkIdentity
 from oa_groundrag.vlm.processing import (

@@ -8,11 +8,12 @@ from typing import Any
 
 _EXPORTS = {
     "CheckpointManager": (".checkpoint", "CheckpointManager"),
-    "Qwen3VLModelAdapter": (".model", "Qwen3VLModelAdapter"),
-    "Qwen3VLProcessorAdapter": (".processing", "Qwen3VLProcessorAdapter"),
     "VLMConfig": (".config", "VLMConfig"),
     "load_config": (".config", "load_config"),
     "run_inference": (".inference", "run_inference"),
+    "resolve_vlm_backend": (".backends", "resolve_vlm_backend"),
+    "build_processor_adapter": (".backends", "build_processor_adapter"),
+    "build_model_adapter": (".backends", "build_model_adapter"),
 }
 
 __all__ = list(_EXPORTS)

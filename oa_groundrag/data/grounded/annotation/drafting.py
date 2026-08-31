@@ -26,12 +26,15 @@ from oa_groundrag.vlm.config import (
 from oa_groundrag.grounding.contracts import MaskMode
 from oa_groundrag.vlm.data import DescriptionSample
 from oa_groundrag.vlm.errors import VLMError
-from oa_groundrag.vlm.model import Qwen3VLModelAdapter
+from oa_groundrag.vlm.backends.qwen3_vl.model import Qwen3VLModelAdapter
 from oa_groundrag.grounding.outputs import (
     assess_region_draft_quality,
     parse_region_model_output,
 )
-from oa_groundrag.vlm.processing import DescriptionCollator, Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.processing import DescriptionCollator
+from oa_groundrag.vlm.backends.qwen3_vl.processing import (
+    Qwen3VLProcessorAdapter,
+)
 
 from ..contracts import fail
 from .project import (

@@ -17,9 +17,13 @@ from oa_groundrag.data.rs_general.io import (
 )
 
 from .checkpoint import CheckpointManager
+from .backends import (
+    VLMModelAdapter,
+    VLMProcessorAdapter,
+    build_model_adapter,
+    build_processor_adapter,
+)
 from .errors import ContractError, ReasonCode
-from .model import Qwen3VLModelAdapter
-from .processing import Qwen3VLProcessorAdapter
 from oa_groundrag.training.grounding.config import (
     load_stage5_config,
     with_monitor_parent_count,
@@ -55,8 +59,8 @@ class Stage5BestReference:
 @dataclass(frozen=True)
 class Stage5GeneratorBundle:
     config: Any
-    processor: Qwen3VLProcessorAdapter
-    model: Qwen3VLModelAdapter
+    processor: VLMProcessorAdapter
+    model: VLMModelAdapter
     checkpoint: Path
     identity: dict[str, Any]
 
@@ -199,18 +203,9 @@ def load_stage5_best_generator(
         benchmark_payload_sha256=benchmark_identity.payload_sha256,
         seed=stage5.run.seed,
     )
-    processor = Qwen3VLProcessorAdapter(
-        processor_path=stage5.model.processor_path,
-        local_files_only=stage5.model.local_files_only,
-        trust_remote_code=stage5.model.trust_remote_code,
-        min_pixels=stage5.limits.min_pixels,
-        max_pixels=stage5.limits.max_pixels,
-        max_images=stage5.limits.max_images,
-        max_input_tokens=stage5.limits.max_input_tokens,
-    )
-    model = Qwen3VLModelAdapter.load(
-        stage5.model,
-        stage5.adaptation,
+    processor = build_processor_adapter(stage5.base)
+    model = build_model_adapter(
+        stage5.base,
         device=device,
         gradient_checkpointing=False,
     )

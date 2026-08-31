@@ -164,6 +164,40 @@ class ArchitectureTest(unittest.TestCase):
         ):
             self.assertIsNotNone(importlib.import_module(name))
 
+    def test_vlm_backends_are_physical_and_active_callers_use_factory(self) -> None:
+        vlm_root = PACKAGE_ROOT / "vlm"
+        self.assertFalse((vlm_root / "model.py").exists())
+        for path in (
+            vlm_root / "backends/qwen3_vl/model.py",
+            vlm_root / "backends/qwen3_vl/processing.py",
+            vlm_root / "backends/qwen3_5/__init__.py",
+        ):
+            self.assertTrue(path.is_file(), msg=str(path))
+        processing_classes = {
+            node.name
+            for node in ast.parse(
+                (vlm_root / "processing.py").read_text(encoding="utf-8")
+            ).body
+            if isinstance(node, ast.ClassDef)
+        }
+        self.assertNotIn("Qwen3VLProcessorAdapter", processing_classes)
+        public = importlib.import_module("oa_groundrag.vlm")
+        self.assertFalse(hasattr(public, "Qwen3VLModelAdapter"))
+        self.assertFalse(hasattr(public, "Qwen3VLProcessorAdapter"))
+        for relative in (
+            "vlm/cli.py",
+            "vlm/grounded_adapter.py",
+            "vlm/grounded_runtime.py",
+            "training/grounding/workflow.py",
+            "evaluation/vlm_smoke.py",
+            "evaluation/rs_general/generation.py",
+            "evaluation/retrieval/gate_d.py",
+        ):
+            text = (PACKAGE_ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotIn("Qwen3VLModelAdapter", text, msg=relative)
+            self.assertNotIn("Qwen3VLProcessorAdapter", text, msg=relative)
+            self.assertIn("build_", text, msg=relative)
+
     def test_active_configs_parse_at_new_locations(self) -> None:
         configs = REPOSITORY_ROOT / "configs"
         load_runtime_config(configs / "segmentation/full_proposed_dropout_b16_nockpt_e100.json")

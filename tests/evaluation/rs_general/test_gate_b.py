@@ -65,7 +65,7 @@ from oa_groundrag.evaluation.rs_general.selection import (
     _selection_document,
     _strict_selection,
 )
-from oa_groundrag.vlm.model import Qwen3VLModelAdapter
+from oa_groundrag.vlm.backends.qwen3_vl.model import Qwen3VLModelAdapter
 from oa_groundrag.vlm.outputs import generic_prediction_row
 
 

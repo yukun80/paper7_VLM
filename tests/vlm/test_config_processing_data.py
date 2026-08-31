@@ -41,12 +41,14 @@ from oa_groundrag.data.rs_general.errors import RSGeneralDescError
 from oa_groundrag.data.rs_general.hash_ledger import HashLedgerVerifier
 from oa_groundrag.vlm.config import (
     CONFIG_SCHEMA_VERSION,
+    CONFIG_SCHEMA_VERSION_V3,
     apply_runtime_overrides,
     load_config,
 )
 from oa_groundrag.grounding.contracts import MaskMode
 from oa_groundrag.evaluation.rs_general.contracts import (
     GATE_B_PROTOCOL_SCHEMA_VERSION,
+    GATE_B_PROTOCOL_SCHEMA_VERSION_V2,
     load_gate_b_protocol,
 )
 from oa_groundrag.vlm.data import (
@@ -71,7 +73,7 @@ from oa_groundrag.vlm.processing import (
     EncodedSample,
     assistant_only_labels,
 )
-from oa_groundrag.vlm.model import (
+from oa_groundrag.vlm.backends.qwen3_vl.model import (
     EXPECTED_QWEN3VL_2B_UNIQUE_PARAMETERS,
     ModelIdentity,
     Qwen3VLModelAdapter,
@@ -79,7 +81,11 @@ from oa_groundrag.vlm.model import (
     local_model_identity,
 )
 from oa_groundrag.vlm.reference import MAIN_REFERENCE
-from oa_groundrag.training.grounding.config import STAGE5_CONFIG_SCHEMA, load_stage5_config
+from oa_groundrag.training.grounding.config import (
+    STAGE5_CONFIG_SCHEMA,
+    STAGE5_CONFIG_SCHEMA_V3,
+    load_stage5_config,
+)
 from oa_groundrag.vlm.grounded_runtime import (
     GROUNDED_RUNTIME_CONFIG_SCHEMA,
     load_grounded_runtime_config,
@@ -95,8 +101,11 @@ CONFIG_ROOT = REPO / "configs/vlm/rs_general"
 GROUNDED_CONFIG_ROOT = REPO / "configs/vlm/grounded"
 EXPECTED_TRAINING_CONFIG_NAMES = (
     "bounded_smoke.yaml",
+    "qwen35_4b_bounded_lora_smoke_v3.yaml",
     "rs_generaldesc_lora_qwen3vl_2b.yaml",
+    "rs_generaldesc_lora_qwen35_4b_v3.yaml",
     "rs_generaldesc_prompt_only_qwen3vl_2b.yaml",
+    "rs_generaldesc_prompt_only_qwen35_4b_v3.yaml",
 )
 
 
@@ -105,8 +114,11 @@ def vlm_yaml_contracts() -> dict[str, tuple[Path, ...]]:
 
     grouped: dict[str, list[Path]] = {
         CONFIG_SCHEMA_VERSION: [],
+        CONFIG_SCHEMA_VERSION_V3: [],
         GATE_B_PROTOCOL_SCHEMA_VERSION: [],
+        GATE_B_PROTOCOL_SCHEMA_VERSION_V2: [],
         STAGE5_CONFIG_SCHEMA: [],
+        STAGE5_CONFIG_SCHEMA_V3: [],
         GROUNDED_RUNTIME_CONFIG_SCHEMA: [],
     }
     for path in sorted((*CONFIG_ROOT.glob("*.yaml"), *GROUNDED_CONFIG_ROOT.glob("*.yaml"))):
@@ -247,9 +259,14 @@ class ConfigAndPreflightTests(unittest.TestCase):
 
     def test_all_vlm_yaml_contracts_are_discovered_and_strictly_parse(self) -> None:
         contracts = vlm_yaml_contracts()
-        config_paths = contracts[CONFIG_SCHEMA_VERSION]
-        protocol_paths = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION]
+        config_paths = (
+            *contracts[CONFIG_SCHEMA_VERSION],
+            *contracts[CONFIG_SCHEMA_VERSION_V3],
+        )
+        protocol_paths_v1 = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION]
+        protocol_paths_v2 = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION_V2]
         stage5_paths = contracts[STAGE5_CONFIG_SCHEMA]
+        stage5_paths_v3 = contracts[STAGE5_CONFIG_SCHEMA_V3]
         grounded_runtime_paths = contracts[GROUNDED_RUNTIME_CONFIG_SCHEMA]
         configs = {
             path.name: load_config(path)
@@ -260,12 +277,23 @@ class ConfigAndPreflightTests(unittest.TestCase):
             set(EXPECTED_TRAINING_CONFIG_NAMES),
         )
         self.assertEqual(
-            tuple(path.name for path in protocol_paths),
+            tuple(path.name for path in protocol_paths_v1),
             ("rs_generaldesc_gate_b_qwen3vl_2b.yaml",),
+        )
+        self.assertEqual(
+            tuple(path.name for path in protocol_paths_v2),
+            ("rs_generaldesc_gate_b_qwen35_4b_v2.yaml",),
         )
         self.assertEqual(
             tuple(path.name for path in stage5_paths),
             ("train_v2.yaml",),
+        )
+        self.assertEqual(
+            tuple(path.name for path in stage5_paths_v3),
+            (
+                "qwen35_4b_bounded_train_smoke_v3.yaml",
+                "train_qwen35_4b_v3.yaml",
+            ),
         )
         self.assertEqual(
             tuple(path.name for path in grounded_runtime_paths),
@@ -282,13 +310,27 @@ class ConfigAndPreflightTests(unittest.TestCase):
         self.assertEqual(stage5.data_contract.region_micro_ratio, 0.9)
         self.assertEqual(stage5.data_contract.replay_micro_ratio, 0.1)
         self.assertFalse(hasattr(stage5, "evidence"))
-        for path in protocol_paths:
+        for path in stage5_paths_v3:
+            grounded = load_stage5_config(path)
+            self.assertEqual(grounded.schema_version, STAGE5_CONFIG_SCHEMA_V3)
+            self.assertEqual(grounded.model.backend, "qwen3_5")
+            self.assertEqual(grounded.training.learning_rate, 5e-5)
+        for path in (*protocol_paths_v1, *protocol_paths_v2):
             self.assertEqual(
                 load_gate_b_protocol(path).raw["schema_version"],
-                GATE_B_PROTOCOL_SCHEMA_VERSION,
+                (
+                    GATE_B_PROTOCOL_SCHEMA_VERSION_V2
+                    if "qwen35" in path.name
+                    else GATE_B_PROTOCOL_SCHEMA_VERSION
+                ),
             )
-        for config in configs.values():
-            self.assertEqual(config.schema_version, CONFIG_SCHEMA_VERSION)
+        for name, config in configs.items():
+            expected_schema = (
+                CONFIG_SCHEMA_VERSION_V3
+                if "qwen35" in name
+                else CONFIG_SCHEMA_VERSION
+            )
+            self.assertEqual(config.schema_version, expected_schema)
             self.assertEqual(len(config.semantic_sha256), 64)
             self.assertFalse(hasattr(config, "evidence"))
             self.assertFalse(hasattr(config, "evaluation"))
@@ -619,6 +661,15 @@ class ConfigAndPreflightTests(unittest.TestCase):
             ),
             "rs_generaldesc_prompt_only_qwen3vl_2b.yaml": (
                 "37c772d70b2fed6bb349d0404cbe5d8931e52a18c64253948eb6f8f62a992a7e"
+            ),
+            "qwen35_4b_bounded_lora_smoke_v3.yaml": (
+                "0949466f3371433177b65a0757acc7f0d1cd3ec81d6622398cefe08bbb2151ca"
+            ),
+            "rs_generaldesc_lora_qwen35_4b_v3.yaml": (
+                "f2e3a3dc05b5152ddda64e1e88d765c4825b128021d355b9425b35d53220b843"
+            ),
+            "rs_generaldesc_prompt_only_qwen35_4b_v3.yaml": (
+                "63699b67094fae088abb82617024380603493258923e8e3f35b5cad6b5629471"
             ),
         }
         for name, expected in expected_semantic_hashes.items():

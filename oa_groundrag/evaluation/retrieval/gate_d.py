@@ -37,7 +37,10 @@ from oa_groundrag.vlm.errors import (
     ReasonCode,
     SelectionError,
 )
-from oa_groundrag.vlm.processing import Qwen3VLProcessorAdapter
+from oa_groundrag.vlm.backends import (
+    VLMProcessorAdapter,
+    build_processor_adapter,
+)
 from oa_groundrag.training.grounding.config import load_stage5_config
 
 from oa_groundrag.retrieval.bank import validate_bank
@@ -294,17 +297,9 @@ def select_gate_d_records(
     return selected
 
 
-def _make_processor(stage6: Stage6Config) -> tuple[Any, Qwen3VLProcessorAdapter]:
+def _make_processor(stage6: Stage6Config) -> tuple[Any, VLMProcessorAdapter]:
     stage5 = load_stage5_config(stage6.stage5.config_path)
-    processor = Qwen3VLProcessorAdapter(
-        processor_path=stage5.model.processor_path,
-        local_files_only=stage5.model.local_files_only,
-        trust_remote_code=stage5.model.trust_remote_code,
-        min_pixels=stage5.limits.min_pixels,
-        max_pixels=stage5.limits.max_pixels,
-        max_images=stage5.limits.max_images,
-        max_input_tokens=stage5.limits.max_input_tokens,
-    )
+    processor = build_processor_adapter(stage5.base)
     return stage5, processor
 
 

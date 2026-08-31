@@ -19,10 +19,14 @@ from oa_groundrag.data.rs_general.io import (
 )
 
 from .checkpoint import CheckpointManager
+from .backends import (
+    VLMModelAdapter,
+    VLMProcessorAdapter,
+    build_model_adapter,
+    build_processor_adapter,
+)
 from .config import VLMConfig, _load_yaml, load_config
 from .errors import ConfigError, ContractError, ReasonCode
-from .model import Qwen3VLModelAdapter
-from .processing import Qwen3VLProcessorAdapter
 
 
 GROUNDED_RUNTIME_CONFIG_SCHEMA = "oa_groundrag.grounded_runtime.config.v1"
@@ -82,8 +86,8 @@ class GroundedRuntimeReference:
 @dataclass(frozen=True)
 class GroundedRuntimeBundle:
     config: GroundedRuntimeConfig
-    processor: Qwen3VLProcessorAdapter
-    model: Qwen3VLModelAdapter
+    processor: VLMProcessorAdapter
+    model: VLMModelAdapter
     checkpoint: Path
     identity: Mapping[str, Any]
 
@@ -292,18 +296,10 @@ def load_grounded_runtime_generator(
     """只加载已发布 Grounded LoRA；不读取任何训练或评价数据。"""
 
     reference = resolve_grounded_runtime_checkpoint(config, binding)
-    processor = Qwen3VLProcessorAdapter(
-        processor_path=config.model.processor_path,
-        local_files_only=config.model.local_files_only,
-        trust_remote_code=config.model.trust_remote_code,
-        min_pixels=config.limits.min_pixels,
-        max_pixels=config.limits.max_pixels,
-        max_images=config.limits.max_images,
-        max_input_tokens=config.limits.max_input_tokens,
-    )
-    model = Qwen3VLModelAdapter.load(
-        config.model,
-        config.adaptation,
+    processor_config = replace(config.base, limits=config.limits)
+    processor = build_processor_adapter(processor_config)
+    model = build_model_adapter(
+        config.base,
         device=device,
         gradient_checkpointing=False,
     )

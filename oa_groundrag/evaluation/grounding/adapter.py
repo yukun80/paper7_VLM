@@ -282,9 +282,20 @@ def run_rs_general_retention_report(
     processor_adapter: Any,
     config: Any,
     device: Any,
+    max_new_tokens: int,
     output_root: Path | str,
 ) -> dict[str, Any]:
     """在冻结 Gate B selection 上只报告相对 RS-General Adapter 的变化。"""
+
+    if (
+        isinstance(max_new_tokens, bool)
+        or not isinstance(max_new_tokens, int)
+        or max_new_tokens <= 0
+    ):
+        raise PredictionError(
+            ReasonCode.TYPE_MISMATCH,
+            "retention max_new_tokens 必须是正整数",
+        )
 
     context = load_gate_b_selection_for_stage5_retention(
         protocol_path,
@@ -311,7 +322,7 @@ def run_rs_general_retention_report(
             generated = model.generate_text(
                 batch,
                 processor=processor_adapter.processor,
-                max_new_tokens=384,
+                max_new_tokens=max_new_tokens,
                 do_sample=False,
                 temperature=0.0,
                 top_p=1.0,
@@ -361,6 +372,7 @@ def run_rs_general_retention_report(
         "selection_sha256": selection["selection_sha256"],
         "selection_file_sha256": sha256_file(Path(selection_path)),
         "frozen_rs_predictions_sha256": sha256_file(Path(frozen_rs_predictions_path)),
+        "max_new_tokens": max_new_tokens,
         "sample_count": len(paired),
         "selection_authority": "frozen_gate_b_selection_only",
         "historical_gate_b_implementation_match": (

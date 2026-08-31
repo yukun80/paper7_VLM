@@ -24,6 +24,8 @@ from oa_groundrag.grounding.contracts import (
     MaskMode,
 )
 from .errors import ConfigError, ReasonCode
+CONFIG_SCHEMA_VERSION_V3 = "rs_vlm.config.v3"
+SUPPORTED_VLM_BACKENDS = frozenset({"qwen3_vl", "qwen3_5"})
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -118,6 +120,10 @@ class ModelSection:
     dtype: str
     attn_implementation: str
     trust_remote_code: bool
+    backend: str = "qwen3_vl"
+    hub_repo_id: str | None = None
+    hub_revision: str | None = None
+    asset_ledger_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -177,7 +183,7 @@ class VLMConfig:
     def semantic_dict(self) -> dict[str, Any]:
         """排除输出位置与 resume 指针的可恢复语义快照。"""
 
-        return {
+        value = {
             "schema_version": self.schema_version,
             "run": {
                 "seed": self.run.seed,
@@ -233,6 +239,17 @@ class VLMConfig:
                 for name in self.generation.__dataclass_fields__
             },
         }
+
+        if self.schema_version == CONFIG_SCHEMA_VERSION_V3:
+            value["model"].update(
+                {
+                    "backend": self.model.backend,
+                    "hub_repo_id": self.model.hub_repo_id,
+                    "hub_revision": self.model.hub_revision,
+                    "asset_ledger_path": str(self.model.asset_ledger_path),
+                }
+            )
+        return value
 
     def snapshot_dict(self) -> dict[str, Any]:
         value = self.semantic_dict()
@@ -414,6 +431,18 @@ def _sha256(value: Any, *, location: str) -> str:
     return result
 
 
+def _commit_revision(value: Any, *, location: str) -> str:
+    result = _string(value, location=location)
+    if len(result) != 40 or any(
+        character not in "0123456789abcdef" for character in result
+    ):
+        raise ConfigError(
+            ReasonCode.TYPE_MISMATCH,
+            f"{location}: 必须是 40 位小写 commit SHA",
+        )
+    return result
+
+
 def _weights(value: Any, *, location: str) -> dict[str, float]:
     row = _mapping(value, location=location)
     output: dict[str, float] = {}
@@ -477,10 +506,18 @@ def load_config(path: Path | str) -> VLMConfig:
         "generation",
     )
     _keys(row, required=section_names, location="$")
-    if row["schema_version"] != CONFIG_SCHEMA_VERSION:
+    schema_version = _string(
+        row["schema_version"],
+        location="$.schema_version",
+    )
+    if schema_version not in {
+        CONFIG_SCHEMA_VERSION,
+        CONFIG_SCHEMA_VERSION_V3,
+    }:
         raise ConfigError(
             ReasonCode.INVALID_ENUM,
-            f"仅支持 schema_version={CONFIG_SCHEMA_VERSION}",
+            "仅支持 schema_version="
+            f"{CONFIG_SCHEMA_VERSION}/{CONFIG_SCHEMA_VERSION_V3}",
         )
 
     run_row = _mapping(row["run"], location="$.run")
@@ -627,32 +664,61 @@ def load_config(path: Path | str) -> VLMConfig:
             ReasonCode.TYPE_MISMATCH,
             "min_pixels 不能大于 max_pixels",
         )
-    if (
-        limits.max_images != 5
-        or limits.max_input_tokens != 2048
-        or limits.min_pixels != 28 * 28 * 16
-        or limits.max_pixels != 28 * 28 * 256
-        or limits.max_new_tokens > 384
-    ):
-        raise ConfigError(
-            ReasonCode.TYPE_MISMATCH,
-            "Qwen3-VL 主线固定 max_images=5、input_tokens=2048、"
-            "pixels=28x28x[16,256]、max_new_tokens<=384",
-        )
-
     model_row = _mapping(row["model"], location="$.model")
+    model_names = (
+        "path",
+        "processor_path",
+        "local_files_only",
+        "dtype",
+        "attn_implementation",
+        "trust_remote_code",
+    )
+    if schema_version == CONFIG_SCHEMA_VERSION_V3:
+        model_names = (
+            *model_names,
+            "backend",
+            "hub_repo_id",
+            "hub_revision",
+            "asset_ledger_path",
+        )
     _keys(
         model_row,
-        required=(
-            "path",
-            "processor_path",
-            "local_files_only",
-            "dtype",
-            "attn_implementation",
-            "trust_remote_code",
-        ),
+        required=model_names,
         location="$.model",
     )
+    backend = (
+        "qwen3_vl"
+        if schema_version == CONFIG_SCHEMA_VERSION
+        else _string(model_row["backend"], location="$.model.backend")
+    )
+    if backend not in SUPPORTED_VLM_BACKENDS:
+        raise ConfigError(
+            ReasonCode.BACKEND_UNKNOWN,
+            f"$.model.backend: 未知 backend {backend!r}",
+            details={"available": sorted(SUPPORTED_VLM_BACKENDS)},
+        )
+    hub_repo_id = None
+    hub_revision = None
+    asset_ledger_path = None
+    if schema_version == CONFIG_SCHEMA_VERSION_V3:
+        hub_repo_id = _string(
+            model_row["hub_repo_id"],
+            location="$.model.hub_repo_id",
+        )
+        hub_revision = _commit_revision(
+            model_row["hub_revision"],
+            location="$.model.hub_revision",
+        )
+        asset_ledger_path = _path(
+            model_row["asset_ledger_path"],
+            base=base,
+            location="$.model.asset_ledger_path",
+        )
+        if backend == "qwen3_5" and hub_repo_id != "Qwen/Qwen3.5-4B":
+            raise ConfigError(
+                ReasonCode.MODEL_IDENTITY_MISMATCH,
+                "qwen3_5 backend 固定官方 Qwen/Qwen3.5-4B",
+            )
     model = ModelSection(
         path=_path(model_row["path"], base=base, location="$.model.path"),
         processor_path=_path(
@@ -673,6 +739,10 @@ def load_config(path: Path | str) -> VLMConfig:
             model_row["trust_remote_code"],
             location="$.model.trust_remote_code",
         ),
+        backend=backend,
+        hub_repo_id=hub_repo_id,
+        hub_revision=hub_revision,
+        asset_ledger_path=asset_ledger_path,
     )
     if (
         not model.local_files_only
@@ -684,6 +754,20 @@ def load_config(path: Path | str) -> VLMConfig:
             ReasonCode.MODEL_IDENTITY_MISMATCH,
             "本阶段固定 local_files_only=true、bfloat16、sdpa、"
             "trust_remote_code=false",
+        )
+    expected_max_new_tokens = 384 if backend == "qwen3_vl" else 768
+    if (
+        limits.max_images != 5
+        or limits.max_input_tokens != 2048
+        or limits.min_pixels != 28 * 28 * 16
+        or limits.max_pixels != 28 * 28 * 256
+        or limits.max_new_tokens > expected_max_new_tokens
+    ):
+        raise ConfigError(
+            ReasonCode.TYPE_MISMATCH,
+            f"{backend} 主线固定 max_images=5、input_tokens=2048、"
+            "pixels=28x28x[16,256]、"
+            f"max_new_tokens<={expected_max_new_tokens}",
         )
 
     adaptation_row = _mapping(row["adaptation"], location="$.adaptation")
@@ -918,6 +1002,15 @@ def load_config(path: Path | str) -> VLMConfig:
             "prefetch=1..4、pin=true，"
             "且 validation_max_parents<=128",
         )
+    if backend == "qwen3_5" and (
+        training.batch_size,
+        training.gradient_accumulation_steps,
+    ) != (1, 16):
+        raise ConfigError(
+            ReasonCode.TYPE_MISMATCH,
+            "Qwen3.5-4B 24 GB 主线固定 batch_size=1、"
+            "gradient_accumulation_steps=16",
+        )
 
     generation_row = _mapping(row["generation"], location="$.generation")
     _keys(
@@ -961,12 +1054,12 @@ def load_config(path: Path | str) -> VLMConfig:
     if mode is not DataMode.EXTERNAL_GENERIC:
         raise ConfigError(
             ReasonCode.INVALID_ENUM,
-            "config v2 只支持 external_generic",
+            f"config {schema_version} 只支持 external_generic",
         )
     if mask_mode is not MaskMode.EXTERNAL_GENERIC:
         raise ConfigError(
             ReasonCode.EXTERNAL_MASK_FORBIDDEN,
-            "config v2 只支持 external_generic mask_mode",
+            f"config {schema_version} 只支持 external_generic mask_mode",
         )
     if set(data.roles) - {"external_train", "external_val"}:
         raise ConfigError(
@@ -975,7 +1068,7 @@ def load_config(path: Path | str) -> VLMConfig:
         )
 
     provisional = VLMConfig(
-        schema_version=CONFIG_SCHEMA_VERSION,
+        schema_version=schema_version,
         run=run,
         data=data,
         limits=limits,
