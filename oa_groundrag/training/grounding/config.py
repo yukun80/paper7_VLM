@@ -22,9 +22,28 @@ from oa_groundrag.vlm.errors import ConfigError, ReasonCode
 
 STAGE5_CONFIG_SCHEMA = "rs_vlm.mask_grounded_train_config.v2"
 STAGE5_CONFIG_SCHEMA_V3 = "rs_vlm.mask_grounded_train_config.v3"
+STAGE5_CONFIG_SCHEMA_V4 = "rs_vlm.mask_grounded_train_config.v4"
 STAGE5_CONFIG_SCHEMAS = frozenset(
-    {STAGE5_CONFIG_SCHEMA, STAGE5_CONFIG_SCHEMA_V3}
+    {STAGE5_CONFIG_SCHEMA, STAGE5_CONFIG_SCHEMA_V3, STAGE5_CONFIG_SCHEMA_V4}
 )
+
+QWEN35_LOSS_PROJECTION = "qwen3_5_supervised_positions.v1"
+QWEN35_CROSS_ENTROPY_DTYPE = "float32"
+CUDA_TELEMETRY_SCHEMA = "rs_vlm.cuda_microbatch_telemetry.v1"
+ALLOCATOR_PROFILE_NATIVE = "native"
+ALLOCATOR_PROFILE_EXPANDABLE = "expandable_segments"
+ALLOCATOR_PROFILE_EXPANDABLE_MICRO_CACHE = (
+    "expandable_segments_post_backward_empty_cache"
+)
+ALLOCATOR_PROFILES = frozenset(
+    {
+        ALLOCATOR_PROFILE_NATIVE,
+        ALLOCATOR_PROFILE_EXPANDABLE,
+        ALLOCATOR_PROFILE_EXPANDABLE_MICRO_CACHE,
+    }
+)
+MICROBATCH_CACHE_NONE = "none"
+MICROBATCH_CACHE_POST_BACKWARD = "post_backward_empty_cache"
 
 
 @dataclass(frozen=True)
@@ -60,6 +79,22 @@ class Stage5RetentionContract:
 
 
 @dataclass(frozen=True)
+class Stage5ResourceContract:
+    execution_mode: str
+    loss_projection: str
+    cross_entropy_dtype: str
+    allocator_profile: str
+    microbatch_cache_policy: str
+    min_cuda_free_bytes: int
+    telemetry_schema: str
+    telemetry_max_microbatches: int
+    synchronize_cuda: bool
+    profile_root: Path
+    resource_gate_root: Path
+    loss_parity_root: Path
+
+
+@dataclass(frozen=True)
 class Stage5Config:
     """兼容现有 trainer 属性，同时把 Stage 5 身份加入 checkpoint SHA。"""
 
@@ -68,6 +103,7 @@ class Stage5Config:
     data_contract: Stage5DataContract
     warm_start: WarmStartContract
     retention_contract: Stage5RetentionContract | None
+    resource_contract: Stage5ResourceContract | None
     workflow_root: Path
     config_path: Path
     semantic_sha256: str
@@ -143,6 +179,24 @@ class Stage5Config:
                     retention.gate_b_report_file_sha256
                 ),
                 "max_new_tokens": retention.max_new_tokens,
+            }
+        if self.resource_contract is not None:
+            resource = self.resource_contract
+            value["resource_contract"] = {
+                "execution_mode": resource.execution_mode,
+                "loss_projection": resource.loss_projection,
+                "cross_entropy_dtype": resource.cross_entropy_dtype,
+                "allocator_profile": resource.allocator_profile,
+                "microbatch_cache_policy": resource.microbatch_cache_policy,
+                "min_cuda_free_bytes": resource.min_cuda_free_bytes,
+                "telemetry_schema": resource.telemetry_schema,
+                "telemetry_max_microbatches": (
+                    resource.telemetry_max_microbatches
+                ),
+                "synchronize_cuda": resource.synchronize_cuda,
+                "profile_root": str(resource.profile_root),
+                "resource_gate_root": str(resource.resource_gate_root),
+                "loss_parity_root": str(resource.loss_parity_root),
             }
         return value
 
@@ -241,12 +295,23 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
             "$",
         )
         run_name = "mask_grounded_region_lora_qwen3vl_2b_trainonly_v2"
-    else:
+    elif schema_version == STAGE5_CONFIG_SCHEMA_V3:
         _exact(
             row,
             (
                 "schema_version", "base_config", "run_name", "workflow_root",
                 "data", "warm_start", "retention", "training", "generation",
+            ),
+            "$",
+        )
+        run_name = _name(row["run_name"], "$.run_name")
+    else:
+        _exact(
+            row,
+            (
+                "schema_version", "base_config", "run_name", "workflow_root",
+                "data", "warm_start", "retention", "resource", "training",
+                "generation",
             ),
             "$",
         )
@@ -305,7 +370,7 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
     if warm_start.checkpoint_step != 1000:
         raise ConfigError(ReasonCode.CHECKPOINT_INCOMPATIBLE, "warm-start 必须是 RS-General step-1000")
     retention_contract: Stage5RetentionContract | None = None
-    if schema_version == STAGE5_CONFIG_SCHEMA_V3:
+    if schema_version in {STAGE5_CONFIG_SCHEMA_V3, STAGE5_CONFIG_SCHEMA_V4}:
         retention = _mapping(row["retention"], "$.retention")
         _exact(
             retention,
@@ -326,7 +391,7 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
         if retention_max_new_tokens != 768:
             raise ConfigError(
                 ReasonCode.TYPE_MISMATCH,
-                "v3 RS-General retention generation 固定为 768 tokens",
+                "Qwen3.5 RS-General retention generation 固定为 768 tokens",
             )
         retention_contract = Stage5RetentionContract(
             gate_b_protocol_path=_path(
@@ -367,6 +432,102 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
             ),
             max_new_tokens=retention_max_new_tokens,
         )
+    resource_contract: Stage5ResourceContract | None = None
+    if schema_version == STAGE5_CONFIG_SCHEMA_V4:
+        resource = _mapping(row["resource"], "$.resource")
+        _exact(
+            resource,
+            (
+                "execution_mode", "loss_projection", "cross_entropy_dtype",
+                "allocator_profile",
+                "microbatch_cache_policy", "min_cuda_free_bytes",
+                "telemetry_schema", "telemetry_max_microbatches",
+                "synchronize_cuda", "profile_root",
+                "resource_gate_root",
+                "loss_parity_root",
+            ),
+            "$.resource",
+        )
+        allocator_profile = resource["allocator_profile"]
+        cache_policy = resource["microbatch_cache_policy"]
+        if allocator_profile not in ALLOCATOR_PROFILES:
+            raise ConfigError(
+                ReasonCode.INVALID_ENUM,
+                f"$.resource.allocator_profile 只允许 {sorted(ALLOCATOR_PROFILES)}",
+            )
+        expected_cache_policy = (
+            MICROBATCH_CACHE_POST_BACKWARD
+            if allocator_profile == ALLOCATOR_PROFILE_EXPANDABLE_MICRO_CACHE
+            else MICROBATCH_CACHE_NONE
+        )
+        if cache_policy != expected_cache_policy:
+            raise ConfigError(
+                ReasonCode.TYPE_MISMATCH,
+                "allocator profile 与 microbatch cache policy 不匹配",
+            )
+        if resource["synchronize_cuda"] is not True:
+            raise ConfigError(
+                ReasonCode.TYPE_MISMATCH,
+                "M7 v4 资源门必须启用同步 CUDA 遥测",
+            )
+        resource_contract = Stage5ResourceContract(
+            execution_mode=str(resource["execution_mode"]),
+            loss_projection=str(resource["loss_projection"]),
+            cross_entropy_dtype=str(resource["cross_entropy_dtype"]),
+            allocator_profile=str(allocator_profile),
+            microbatch_cache_policy=str(cache_policy),
+            min_cuda_free_bytes=_integer(
+                resource["min_cuda_free_bytes"],
+                "$.resource.min_cuda_free_bytes",
+                minimum=1,
+            ),
+            telemetry_schema=str(resource["telemetry_schema"]),
+            telemetry_max_microbatches=_integer(
+                resource["telemetry_max_microbatches"],
+                "$.resource.telemetry_max_microbatches",
+                minimum=1,
+            ),
+            synchronize_cuda=True,
+            profile_root=_path(
+                config_path.parent,
+                resource["profile_root"],
+                "$.resource.profile_root",
+            ),
+            resource_gate_root=_path(
+                config_path.parent,
+                resource["resource_gate_root"],
+                "$.resource.resource_gate_root",
+            ),
+            loss_parity_root=_path(
+                config_path.parent,
+                resource["loss_parity_root"],
+                "$.resource.loss_parity_root",
+            ),
+        )
+        if (
+            base.model.backend != "qwen3_5"
+            or resource_contract.execution_mode
+            not in {"resource_gate", "formal_training"}
+            or resource_contract.loss_projection != QWEN35_LOSS_PROJECTION
+            or resource_contract.cross_entropy_dtype
+            != QWEN35_CROSS_ENTROPY_DTYPE
+            or resource_contract.min_cuda_free_bytes != 2_147_483_648
+            or resource_contract.telemetry_schema != CUDA_TELEMETRY_SCHEMA
+            or resource_contract.telemetry_max_microbatches != 16_000
+            or (
+                resource_contract.execution_mode == "resource_gate"
+                and resource_contract.resource_gate_root
+                != _path(
+                    config_path.parent,
+                    row["workflow_root"],
+                    "$.workflow_root",
+                )
+            )
+        ):
+            raise ConfigError(
+                ReasonCode.TYPE_MISMATCH,
+                "M7 v4 Qwen3.5 loss/资源遥测合同未按冻结设计填写",
+            )
     training = _mapping(row["training"], "$.training")
     _exact(
         training,
@@ -433,6 +594,7 @@ def load_stage5_config(path: Path | str) -> Stage5Config:
         data_contract=data_contract,
         warm_start=warm_start,
         retention_contract=retention_contract,
+        resource_contract=resource_contract,
         workflow_root=workflow_root,
         config_path=config_path,
         semantic_sha256="",

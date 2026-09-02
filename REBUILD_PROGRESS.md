@@ -13,23 +13,23 @@ provenance，不代表当前入口或状态。
 
 | 字段 | 当前值 |
 | --- | --- |
-| 更新时间 | `2026-08-30` |
+| 更新时间 | `2026-09-02` |
 | program | `OA_GROUNDRAG_V3` |
-| 当前工程状态 | `QWEN3_5_4B_DUAL_BACKEND / M7_RESOURCE_GATE_FAILED / SERIAL_STOPPED` |
-| 当前授权任务 | `QWEN3_5_4B_DUAL_BACKEND_SERIAL_M0_M10 / authorized` |
-| 下一任务 | `无自动下一模块；M7 的 20-step smoke 已真实 OOM，等待负责人重新 grill 并明确新的实验授权` |
-| Git 基线 | 本轮开始于 `main@95fff178fd976aff53589688f171a8ee2a695362`；当前为负责人授权的未提交工作树 |
+| 当前工程状态 | `QWEN3_5_4B_DUAL_BACKEND / M7_V4_GRADIENT_EQUIVALENCE_GATE_FAILED / SERIAL_STOPPED` |
+| 当前授权任务 | `QWEN3_5_4B_M7_EQUIVALENT_MEMORY_OPTIMIZATION / stopped_at_R1_gate` |
+| 下一任务 | `无自动下一模块；监督位置 logits 虽降低峰值显存，但 64-LoRA 梯度等价门失败，等待负责人重新 grill` |
+| Git 基线 | 本轮开始于 `main@88d7feb2955deadb706a42b82b538f201898c4c4`；当前为负责人授权的未提交工作树 |
 | upstream 基线 | 本轮开始时本地 `origin/main` 与上述 HEAD 一致，`ahead=0 / behind=0` |
 | 发行接口 | `oa-groundrag==0.2.0`；`oa-groundrag = oa_groundrag.runtime.cli:main` |
 | 总体科学状态 | P0 与能力驱动重构仅为工程完成；Frozen Eval-dev 及其下游开发评价产物已退役，不升级 Gate A/C/D 或系统科学验收 |
 | Benchmark test / sealed test | 未评价 / 未访问 |
 
-本轮负责人已明确授权按新冻结设计串行实施 Qwen3.5-4B 双后端链，包括新设计/代码、
-固定 revision 模型下载、GPU smoke、两段 1000-step 训练、独立 Gate B、全新 100 条
-val-only Grounded 评价以及 README/本文件更新。每个模块必须通过测试后才进入下一模块；
-任何资源、合同、Gate 或零容忍评价失败立即停止，不自动采用 QLoRA、缩减输入、安装
-kernel 或 hybrid LoRA。既有 2B、Benchmark、checkpoint、outputs 和 models_zoo 资产保持
-只读，不访问 test/sealed，不 commit/push。
+本轮负责人明确授权按 v3.2 设计只重做 Qwen3.5-4B M7：先实现监督位置 logits 和严格
+等价门，再串行执行 allocator profile 的最坏样本、1/20/100-step 资源门，只有完整通过后
+才允许 1000-step 正式训练、retention 与条件清理。R1 真实 CUDA 梯度等价门已失败，因此
+本轮按合同停在 R2 前；未自动调整阈值、accumulation、输入、LoRA、kernel 或量化，未执行
+旧 v3 配置/失败根清理，也未启动 M8–M10。既有 2B、Benchmark、checkpoint、正式 outputs
+和 models_zoo 资产保持只读，不访问 test/sealed，不 commit/push。
 
 此前负责人授权修复 Frozen Eval-dev 退役后的运行时间接依赖。Shared MLLM
 现在只按 workflow state、best pointer、checkpoint manifest、Adapter 与当前
@@ -65,10 +65,10 @@ wire schema；其边界不用于描述本轮已授权的 Qwen3.5 训练。当前
 
 | 项目 | 冻结值 |
 | --- | --- |
-| 冻结算法设计 | `docs/OA-GroundRAG_算法构建方案_0829.md`（v3.1，SHA-256 `1eea63b99b840847440df667899ab26b85faf9f0ea05a947dbcd6a5b67cdacc9`） |
+| 冻结算法设计 | `docs/OA-GroundRAG_算法构建方案_0829.md`（v3.2，SHA-256 `ddba2c90d9a54fc3561177baec70430d68ac982f08afc02bd87a639595bdf7a0`）；原 v3.1 SHA-256 `1eea63b99b840847440df667899ab26b85faf9f0ea05a947dbcd6a5b67cdacc9` 为 superseded provenance |
 | 历史冻结设计 | `docs/OA-GroundRAG_算法构建方案_0811.md`；只读 provenance |
 | 设计基线提交 | `087ae4b438a26cc0bdcd3c453b339bccadcc9e85` |
-| 设计 SHA-256 | `fd088b0a25b3fc8888e7b4c07971ef36858c784ffcfaa735219e8e8514251243` |
+| 0811 历史设计 SHA-256 | `fd088b0a25b3fc8888e7b4c07971ef36858c784ffcfaa735219e8e8514251243` |
 | P0 unified runtime 提交 | `6d9cd816495f79bf9b13263d9725d6e159fe448b` |
 | 能力路径迁移提交 | `b784c746c7749783739f21e3e810012ac493bd6b` |
 | 能力重构发布提交 | `ac94fc1107b524f37dfbcf529cf4dc09bde27405` |
@@ -92,7 +92,7 @@ AGENTS 不保存动态运行结果。
 | M4 4B model 与资源门 | `COMPLETE` | 使用 `AutoModelForMultimodalLM`，严格锁定 full-attention 层 `3/7/11/15/19/23/27/31` 的 q/k/v/o LoRA：64 tensors、`1,572,864` 参数；vision/merger 冻结，跨家族与 hybrid LoRA 拒绝。官方磁盘完整参数 `4,659,865,088`，标准 AutoModel 运行时唯一参数 `4,539,265,536`；差异精确绑定 15 个 `mtp.*` tensors / `120,599,552` 参数及 tied `lm_head` 视图，任何其他映射 fail closed。RTX 4090 D（`25,756,696,576` bytes）真实 base 推理峰值 `9,161,038,848` bytes；LoRA step-1/step-20 峰值 `10,082,741,760` / `10,103,844,352` bytes，20-step 无 OOM。相关回归 209 项及显式 CUDA gate 1 项通过；compileall/diff check 通过；缺少可选 FLA/causal-conv kernel 时按方案使用原生 PyTorch fallback，未安装 kernel |
 | M5 4B RS-General 训练 | `COMPLETE` | prompt-only、bounded LoRA 与正式 LoRA 三份 v3 配置已严格解析，2B v2 semantic SHA 不变；bounded/formal Benchmark preflight 通过。bounded smoke 完成 batch1×acc16 的 1 个 optimizer step。正式 batch1×acc16、BF16/SDPA、non-thinking LoRA 训练在全新根完成 `1000/1000` steps，16,000 samples / 4,974,722 input tokens / 20,571 images，CUDA peak `11.020907878875732 GiB`；10 次同模型 val monitor 后 step 1000 为 best，macro/overall loss=`0.8256946369626602 / 1.0491456486446964`。训练 report/run manifest/best pointer/step-1000 manifest/Adapter SHA 分别为 `cf3f13...fec0` / `d03ccf...9de` / `9ee78b...a5e` / `22cc39...f98c` / `0be1b6...f6d5`；64 LoRA tensors、`1,572,864` 参数，`formal_acceptance=false`。真实产物严格 JSON/JSONL、选择规则、逐文件 SHA 与 symlink 审计通过；相关回归 210 项、compileall 和 diff check 通过 |
 | M6 4B 独立 Gate B | `COMPLETE` | 新 v2 协议精确复用原 2B 的 256 个 val record，逐项 identity 与 ordered record SHA 一致，并绑定 4B backend/revision/ledger/config/step-1000 Adapter。RTX 4090 D 单记录 base/best-Adapter CUDA 预检通过，峰值分别为 `9,282,672,640 / 9,287,720,960` bytes；正式 base 与 Adapter 均为 `256/256`、0 failures、70,875 input tokens / 338 images。六项判据全部 PASS：primary macro bootstrap 95% CI 下界 `0.23548574735894734`、7 个任务改善、最差 task/source primary delta=`0.0564974355534128 / 0.19484760058784772`、open-generation Rouge-L delta=`0.3085196745470501`、short-answer EM delta=`0.09923780487804876`；严格只读 verifier 返回 `accepted / formal_acceptance=true`。2B/4B 256 条配对报告固定 `report_only=true / promotion_criterion_used=false / scientific_superiority_claim_supported=false`。相关回归 215 项及显式 CUDA smoke 1 项通过；compileall、架构与 diff check 通过；旧 2B Gate B 八个冻结 SHA 不变 |
-| M7 4B Grounded 训练 | `STOPPED / RESOURCE_GATE_FAILED` | v3 配置、同家族 warm-start/retention 合同、跨家族拒绝和 bounded 1/20-step 严格恢复已实现；M7 合同 16/16、VLM 58/58、架构 9/9、Grounded evaluator 1/1、compileall/CLI/diff check 通过。RTX 4090 D 上 1-step smoke 完成：loss `0.8616053573787212`、16 samples / 23,785 input tokens / 46 images、64 tensors / `1,572,864` LoRA 参数、allocator peak `14.034749984741211 GiB`。从唯一 step-1 checkpoint 恢复到 step 20 时，设备巡检已达 `23,978 / 24,564 MiB`，随后在 backward 报 `CUDA out of memory` 并以 exit `134` 终止；没有任何 step 2+ 日志、trace 或 checkpoint，正式训练根未创建。按冻结方案立即停止，未改 QLoRA、输入、kernel 或 LoRA 拓扑 |
+| M7 4B Grounded 训练 | `STOPPED / V4_GRADIENT_EQUIVALENCE_GATE_FAILED` | v3.2/R0 已回放完整两 epoch、16,000 条确定性序列并冻结 2 条合并最坏样本；profile manifest/schedule/selection file/canonical selection SHA 为 `94fb0f...dd33` / `2b2517...9f9c` / `aba9e0...271` / `7458e7...831a`。R1 已实现训练专属监督位置 logits、FP32 CE、v4 严格配置、allocator/有界遥测、失败证据和 1→20→100 恢复合同；模块静态测试为 training/vlm `16/16`、training/grounding `22/22`、architecture `10/10`。真实 RTX 4090 D parity 样本的 full/projected loss 均为 `0.904739260673523`，峰值从 `11,204,981,760` 降至 `9,673,601,536` bytes，节省 `1,531,380,224` bytes；但 64-LoRA aggregate relative-L2=`0.009208712726831436`，超过 `0.001`，故 R1 失败并立即停止。R2 allocator profiles、R3 正式训练/retention 与条件清理均未执行 |
 | M8–M10 | `NOT_STARTED / BLOCKED_BY_M7` | 未创建 4B Grounded Runtime/Demo、100 条 val-only Grounded 资产或默认发布；未访问 test/sealed |
 
 ## 当前能力状态
@@ -100,8 +100,8 @@ AGENTS 不保存动态运行结果。
 | 能力 | 稳定代码位置 | 当前结果 | 尚未越过的边界 |
 | --- | --- | --- | --- |
 | Spatial Perception / OA-AuxSeg | `oa_groundrag/segmentation`；`oa_groundrag/training/segmentation`；`oa_groundrag/evaluation/segmentation.py` | full Benchmark 与负责人定版 checkpoint 可用 | Gate A、正式 fixed predicted masks、sealed test 均未执行 |
-| Shared RS-Geohazard MLLM | `oa_groundrag/vlm`；`oa_groundrag/data/rs_general`；`oa_groundrag/training/vlm` | RS-GeneralDesc native v1、冻结 2B step-1000 Adapter/Gate B，以及新 4B step-1000 RS-General Adapter/独立 Gate B 可用 | 4B Gate B 只接受其 RS-GeneralDesc 冻结作用域；4B Mask-Grounded 20-step 资源门失败，Adapter、Runtime 与 Grounded 绝对验证均未完成 |
-| Grounded Multimodal Understanding | `oa_groundrag/grounding`；`oa_groundrag/data/grounded`；`oa_groundrag/training/grounding` | train-only Corpus、compact supervision、step-900 2B Region Adapter 及评价 reader/实现保留；4B v3 训练合同与 step-1 smoke 证据存在，但未形成可发布 Adapter；Eval-dev 实例与默认重建配方已退役 | 4B 20-step smoke 在 backward OOM 后串行停止；当前无 materialized OA-GroundedEval-dev，Gate C、专家共识和正式 OA-GroundedEval 未完成 |
+| Shared RS-Geohazard MLLM | `oa_groundrag/vlm`；`oa_groundrag/data/rs_general`；`oa_groundrag/training/vlm` | RS-GeneralDesc native v1、冻结 2B step-1000 Adapter/Gate B，以及新 4B step-1000 RS-General Adapter/独立 Gate B 可用；Qwen3.5 监督位置训练包装器仅存在于 training 边界 | 4B Gate B 只接受其 RS-GeneralDesc 冻结作用域；M7 v4 梯度等价门失败，4B Grounded Adapter、Runtime 与 Grounded 绝对验证均未完成 |
+| Grounded Multimodal Understanding | `oa_groundrag/grounding`；`oa_groundrag/data/grounded`；`oa_groundrag/training/grounding` | train-only Corpus、compact supervision、step-900 2B Region Adapter 及评价 reader/实现保留；4B v4 资源画像和失败 parity 证据可审计，但未形成可发布 Adapter；Eval-dev 实例与默认重建配方已退役 | R1 梯度等价阈值失败后未进入 allocator 1/20/100 资源门；当前无 materialized OA-GroundedEval-dev，Gate C、专家共识和正式 OA-GroundedEval 未完成 |
 | Knowledge Augmentation | `oa_groundrag/retrieval`；`oa_groundrag/evaluation/retrieval` | Text Bank、Bank-only runtime retrieval/Pass-2 与评价实现保留；旧 development retrieval/Pass-2/Gate-D artifacts 与默认 dev 配置已退役 | 当前无 materialized Gate-D development evaluation；无 retrieval Gold、专家盲评或正式阈值；Gate D 未科学通过 |
 | Unified Inference | `oa_groundrag/runtime` | 六类显式任务、确定性 router、lazy provider 与双语只读 Demo 工程完成；Shared MLLM/Text RAG provider 已与退役 Eval/dev outputs 解耦；纯 `KNOWLEDGE_QA` 不消费 Benchmark payload，candidate 解释需人工显式选择 | auxiliary preview 不进入当前 P0 MLLM formal grounded input；Demo selection 仅作 qualitative 展示；test 默认锁定；P1 多源 grounded evidence 与统一科学评价均未开始 |
 
@@ -187,7 +187,9 @@ Qwen3.5-4B Gate B 正式根：
 | Region Corpus extension | `../benchmark/oa_grounded_stage4_v2/region_corpus/mask_grounded_region_corpus_train_extension_v2_7950` | `a26f4267ba12fad8ac39481dcd16dd40a65dacdec7133453847cb2e2c71d43fe` |
 | Region collection | `../benchmark/oa_grounded_stage4_v2/region_collection/mask_grounded_region_train_collection_v2_8450` | `cd2b86f6244f4f5f42d846166f11a34efdb9edd636239039b42444c453e435d2` |
 | compact training messages | `../benchmark/oa_grounded_stage4_v2/training_messages/mask_grounded_region_compact_training_messages_train_v3_6974` | `746f641f1fbe48f4301ffc0c52b586437a1dc0b68a5add4be1e3db50d69a1184`；6,974 mixed-supervision records |
-| Qwen3.5-4B Grounded bounded smoke | `outputs/smoke/mask_grounded_region_lora_qwen35_4b_rsinit_r851bf6e8_smoke_v1` | step-1 workflow state/report/checkpoint manifest/Adapter SHA 为 `5181f05233740457c5f3177beee5cbaed1af985016da2113839dbf3660d0c4c9` / `158f48a5ac96b29c6ccd2582f28aa199681ca5a662d2ad66542ebe66d21af755` / `c1fea784bf6e949628286f04da14d402ba6a3f84c14084d0790d0f6abe620532` / `41c6182fbbe7abb8cf533b9a2f6295ad0feda259a3426317b1c54fb12612e040`；step-20 resume 在生成新持久化 step 前 OOM，故这里只登记失败门证据，不是可发布 Adapter |
+| Qwen3.5-4B Grounded bounded smoke（v3） | `outputs/smoke/mask_grounded_region_lora_qwen35_4b_rsinit_r851bf6e8_smoke_v1` | step-1 workflow state/report/checkpoint manifest/Adapter SHA 为 `5181f05233740457c5f3177beee5cbaed1af985016da2113839dbf3660d0c4c9` / `158f48a5ac96b29c6ccd2582f28aa199681ca5a662d2ad66542ebe66d21af755` / `c1fea784bf6e949628286f04da14d402ba6a3f84c14084d0790d0f6abe620532` / `41c6182fbbe7abb8cf533b9a2f6295ad0feda259a3426317b1c54fb12612e040`；v4 资源门未通过，故条件清理未授权触发，目录与旧 v3 配置继续保留且不是可发布 Adapter |
+| M7 v4 两 epoch 资源画像 | `outputs/smoke/qwen35_4b_m7_schedule_profile_v4` | 16,000 rows / 1,000 optimizer steps；manifest `94fb0ff87a27e6b219eeb46929c15b73be736be4bb373dba626e3b626d7add33`；schedule `2b25174b9c18437f142ca50b118fee8c045ca97da14a5c7f73b26c06e4329f9c`；selection file/canonical `aba9e06c1adabe66314de0f562d96d37d9bab566e0d3b796fbccc71ba889d271` / `7458e73a091641bace07bbfc9c8cd53b3fa38414904d618959df7d704fdf831a`；`train_only / test_or_sealed_accessed=false` |
+| M7 v4 loss/gradient parity 失败根 | `outputs/smoke/qwen35_4b_m7_loss_parity_v4` | report/failure SHA 为 `11953cd3de6940975dff1db517d4d05a985b757c476c384421d20b1931dc1d5a` / `5939162a29dbfa1f68c7d7b73ecb96f25e9428048cbad213e0c95440545a6603`；loss 差 `0`、峰值节省 `1,531,380,224` bytes，但 aggregate gradient relative-L2=`0.009208712726831436 > 0.001`，状态严格为 `failed`，verifier 不可消费 |
 
 Region Adapter 正式根：
 `outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1`。
@@ -246,15 +248,15 @@ unsupported-claim 人工率、专家相关性、Recall@K、MRR、nDCG 和 `gate_
 
 | 检查 | 最近结果 |
 | --- | --- |
-| 全量回归基线 | 能力重构时收集 339 项：331 passed，4 项因缺少 `oa_auxseg_hdf5_v1/small` skip，4 项含 backward/optimizer step 仅收集未执行；M6 完成后双后端/VLM/训练/Gate B/Runtime/Retrieval/架构相关回归 215/215 通过，另有 Qwen3.5 Gate B 单记录真实 CUDA smoke 1/1 通过；M7 变更后本模块/VLM/架构/Grounded evaluator 分别 16/16、58/58、9/9、1/1 通过，但 20-step CUDA smoke OOM，故不得把静态通过升级为 M7 工程通过 |
+| 全量回归基线 | 能力重构时收集 339 项：331 passed，4 项因缺少 `oa_auxseg_hdf5_v1/small` skip，4 项含 backward/optimizer step 仅收集未执行；M6 完成后相关回归 215/215 通过，另有 Qwen3.5 Gate B 单记录真实 CUDA smoke 1/1。M7 v4 最终相关回归 `204/204`：VLM 58、training/vlm 16、training/grounding 22、Gate B 34、Runtime 63、Grounded evaluator 1、architecture 10；真实 CUDA 梯度等价门仍失败，故不得升级为 M7 工程通过 |
 | Runtime / Demo CPU | `tests/runtime` 63/63；新增实测 inference-only Shared MLLM loader 不调用 compact/Eval reader/Benchmark `__getitem__`/HDF5，checkpoint/Adapter/Bank SHA 漂移 fail closed，六任务配置在 Eval-dev 缺失时仍可预检；既有 Demo、i18n、candidate、test lock 和 user-mask 合同继续通过 |
-| Stage-5 / retrieval / data | 当前 `tests/training/grounding` 16/16；此前 `tests/retrieval` 24/24、`tests/data/grounded` 71/71。M7 v3 同家族 warm-start、固定 retention identity、独立正式/smoke 根及 1/20-step 恢复合同通过静态测试；20-step 真实 CUDA 资源门失败 |
-| Architecture | 9/9；活动配置可解析，双后端保持物理分离，已删 Eval/dev 路径不再出现于活动 YAML/JSON，package import graph 与薄 CLI 保持稳定 |
+| Stage-5 / retrieval / data | 当前 `tests/training/grounding` 22/22；此前 `tests/retrieval` 24/24、`tests/data/grounded` 71/71。M7 v4 严格配置、监督位置 loss、allocator telemetry、同家族 warm-start、跨 profile 拒绝及 1→20→100 恢复合同通过静态测试；R1 真实 CUDA 梯度等价门失败，R2 未启动 |
+| Architecture | 10/10；监督位置包装器仅由 training workflow 导入，Runtime/Gate B 不消费该实现；活动配置可解析，双后端保持物理分离，package import graph 与薄 CLI 保持稳定 |
 | Gradio smoke | Blocks 构建由 Runtime/Demo tests 覆盖；最终代码在 `127.0.0.1:8977` 成功启动并关闭，`share=false`，allowed path 仅 `outputs/demo/unified_workbench_v1` |
-| compile / CLI / diff | `compileall`、Demo/Unified/Text-RAG/Grounded/Gate-D CLI help、`git diff --check` 通过；development retrieval/Gate-D CLI 要求显式 `--config`，不再带退役默认值 |
+| compile / CLI / diff | 最新 `compileall`、Grounded 顶层及三个 v4 子命令 help、`git diff --check` 通过；最终相关回归使用 Python 标准库 `unittest` 实跑，未安装新依赖 |
 | 真实输入预览 | 固定 val `landslide4sense::landslide4sense_000002` 从同一 raw sample 展示 B01–B12、DEM 与 slope；逐通道 raw min/max、valid fraction 和 transform 可审计，且未进入 MLLM formal input |
 | CUDA bounded Demo | 固定 val `gdcld::gdcld_val_original_00002`：`VLM_ONLY=SUCCESS`、`SEGMENT_AND_UNDERSTAND=SUCCESS`、首次 RI=`WAITING_FOR_CANDIDATE`；本次真实 candidates `[0,1,2,3]`，candidate 0 replay 未重跑 OA-AuxSeg，Pass-1、6-item retrieval、Pass-2 与 6 citations 全部成功；CUDA peak `4,684,341,760` bytes，`sealed_test_accessed=false` |
-| 删除与保护资产 | 退役配置 5 份已删，新增 Grounded runtime/train-only 与 Text RAG runtime 配置；Benchmark manifest/index、OA-AuxSeg checkpoint、Region Adapter checkpoint manifest/Adapter/workflow、Text Bank manifest/ledger 实施前后 SHA-256 不变；不修改历史 output provenance |
+| 删除与保护资产 | M7 v4 失败后未触发旧配置/19 MiB 根的条件清理；M6 冻结的 10 个 implementation SHA 全部复算一致，4B Gate B 严格 verifier 仍为 `accepted / 256 / formal_acceptance=true`，M5 best/checkpoint/Adapter 与 2B 资产不变；不修改历史 output provenance |
 | Ruff | 未安装；准确结果为 `No module named ruff` |
 
 Unified Demo 的上述 CPU、UI 与 CUDA smoke 均为 engineering validation，不构成 Gate A/C/D、
@@ -266,16 +268,20 @@ sidecar，正式 `UnifiedRequest/UnifiedResponse v1` 与底层
 
 ## 下一任务与授权
 
-当前没有可自动执行的下一模块。M7 的 1-step smoke 已通过，但从唯一 step-1 checkpoint
-恢复的 20-step smoke 在 RTX 4090 D 上真实 OOM；这正是冻结方案规定的资源硬停止条件。
-因此 1000-step Grounded 正式训练、M8 Runtime、M9 100 条 val-only 评价与 M10 默认发布均
-未启动。
+当前没有可自动执行的下一模块。v3.2/R0 已冻结完整 16,000 条资源画像；R1 的监督位置
+logits 在同一真实样本上将 CUDA peak 从 `11,204,981,760` 降到 `9,673,601,536` bytes，
+且 loss 完全一致，但 64-LoRA gradient aggregate relative-L2 为 `0.009208712726831436`，
+超过预注册上限 `0.001`。这正是 v3.2 规定的串行硬停止条件，因此 native/expandable 的
+最坏样本与 1/20/100-step R2、1000-step R3、retention、M8 Runtime、M9 100 条 val-only
+评价及 M10 默认发布均未启动。
 
-若要继续，负责人必须重新 grill 并明确授权一个新的实验方案；QLoRA、缩减输入/图像、
-安装可选 kernel、改变 LoRA 层或换用更大显存设备都属于新方案，不得在本轮自动尝试。
-在取得新方案前必须保留 step-1 smoke 证据和正式根缺失状态，并继续保持既有 2B/4B
-RS-General Adapter、Gate B、Benchmark、Text Evidence Bank 与正式 outputs 只读；仍禁止
-访问 test/sealed、Gate A/C/D、Case RAG、commit 和 push。
+资源门未通过，所以旧 M7 v3 配置、解析分支和 19 MiB 失败根均未删除；不得把“条件清理
+未触发”误记为清理遗漏。若要继续，负责人必须重新 grill 并明确一个新实验合同，例如
+决定是否接受 BF16 LM-head 不同矩阵形状带来的梯度数值差、改用何种等价计算，或改走
+QLoRA、输入缩减、可选 kernel、LoRA 拓扑调整/更大显存设备。任何阈值放宽或数学路径变化
+都不得在本轮自动采用。在取得新授权前必须保留 R0 profile、R1 failed parity 与旧 step-1
+smoke 证据，并继续保持既有 2B/4B RS-General Adapter、Gate B、Benchmark、Text Evidence
+Bank 与正式 outputs 只读；仍禁止访问 test/sealed、Gate A/C/D、Case RAG、commit 和 push。
 
 ## 维护规则
 

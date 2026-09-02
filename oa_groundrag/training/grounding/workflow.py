@@ -36,12 +36,19 @@ from oa_groundrag.vlm.preflight import BenchmarkIdentity, open_benchmark_access
 from oa_groundrag.vlm.processing import DescriptionCollator
 from .config import (
     STAGE5_CONFIG_SCHEMA_V3,
+    STAGE5_CONFIG_SCHEMA_V4,
     Stage5Config,
     load_stage5_config,
     verify_retention_reference_files,
     verify_warm_start_files,
     with_monitor_parent_count,
 )
+from .resource_profile import verify_stage5_resource_profile
+from .resource_gate import (
+    run_worst_case_cuda_gate,
+    verify_worst_case_cuda_gate,
+)
+from .loss_parity import verify_qwen35_loss_parity
 from .data import (
     REGION_MONITOR_ROLE,
     REGION_TRAIN_ROLE,
@@ -58,11 +65,20 @@ from oa_groundrag.evaluation.grounding.adapter import (
     run_rs_general_retention_report,
 )
 from oa_groundrag.training.vlm.trainer import DescriptionTrainer, clear_cuda_cache, training_layout_identity
+from oa_groundrag.training.vlm.cuda_telemetry import (
+    CudaMicrobatchTelemetry,
+    CudaTelemetryPolicy,
+    allocator_environment_identity,
+)
+from oa_groundrag.training.vlm.qwen35_supervised import (
+    wrap_qwen35_for_supervised_position_training,
+)
 from oa_groundrag.training.vlm.validation import evaluate_teacher_forced_loss, select_bounded_external_validation
 
 
 STAGE5_WORKFLOW_SCHEMA = "rs_vlm.mask_grounded_train_workflow.v2"
 STAGE5_WORKFLOW_SCHEMA_V3 = "rs_vlm.mask_grounded_train_workflow.v3"
+STAGE5_WORKFLOW_SCHEMA_V4 = "rs_vlm.mask_grounded_train_workflow.v4"
 STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS = 1
 _GATE_B_STATIC_PROTOCOL_FILENAME = "rs_generaldesc_gate_b_qwen3vl_2b.yaml"
 
@@ -79,6 +95,8 @@ def _emit(
 
 
 def _workflow_schema(config: Stage5Config) -> str:
+    if config.schema_version == STAGE5_CONFIG_SCHEMA_V4:
+        return STAGE5_WORKFLOW_SCHEMA_V4
     return (
         STAGE5_WORKFLOW_SCHEMA_V3
         if config.schema_version == STAGE5_CONFIG_SCHEMA_V3
@@ -91,6 +109,28 @@ def _prepare_stage5_training_memory(device: torch.device) -> None:
 
     gc.collect()
     clear_cuda_cache(device)
+
+
+def _stage5_cuda_policy(
+    config: Stage5Config,
+    resource_profile_identity: Mapping[str, Any] | None,
+) -> CudaTelemetryPolicy | None:
+    resource = config.resource_contract
+    if resource is None:
+        if resource_profile_identity is not None:
+            raise AssertionError("非 v4 配置不能绑定 resource profile")
+        return None
+    if resource_profile_identity is None:
+        raise AssertionError("M7 v4 缺少 resource profile identity")
+    return CudaTelemetryPolicy(
+        schema_version=resource.telemetry_schema,
+        allocator_profile=resource.allocator_profile,
+        microbatch_cache_policy=resource.microbatch_cache_policy,
+        min_cuda_free_bytes=resource.min_cuda_free_bytes,
+        max_microbatches=resource.telemetry_max_microbatches,
+        synchronize_cuda=resource.synchronize_cuda,
+        resource_profile_identity=dict(resource_profile_identity),
+    )
 
 
 def _stage5_gate_b_protocol_path(config: Stage5Config) -> Path:
@@ -235,6 +275,7 @@ def _load_stage5_best(
     config: Stage5Config,
     benchmark_identity: BenchmarkIdentity,
     selection: Any,
+    cuda_resource_identity: Mapping[str, Any] | None = None,
 ) -> Path:
     pointer = read_json(config.run.output_root / "best_checkpoint.json")
     if pointer.get("selection_metric") != "region_monitor_loss":
@@ -252,6 +293,7 @@ def _load_stage5_best(
             cuda_cache_cleanup_interval_steps=(
                 STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS
             ),
+            cuda_resource_identity=cuda_resource_identity,
         ),
         expected_trainable_names=model.trainable_names,
     )
@@ -268,10 +310,33 @@ def run_stage5_workflow(
     """运行固定状态机；已有合法阶段只读复用，非法/部分输出拒绝覆盖。"""
 
     config = load_stage5_config(config_path)
-    if isinstance(stop_after_steps, bool) or stop_after_steps not in {None, 1, 20}:
+    allowed_stops = (
+        {1, 20, 100}
+        if config.schema_version == STAGE5_CONFIG_SCHEMA_V4
+        else {1, 20}
+    )
+    if (
+        isinstance(stop_after_steps, bool)
+        or stop_after_steps not in {None, *allowed_stops}
+    ):
         raise ModelError(
             ReasonCode.TYPE_MISMATCH,
-            "Mask-Grounded bounded smoke 只允许 stop_after_steps=1 或 20",
+            "Mask-Grounded bounded smoke stop_after_steps 与 schema 不匹配",
+        )
+    if config.resource_contract is not None:
+        if (
+            config.resource_contract.execution_mode == "resource_gate"
+            and stop_after_steps is None
+        ) or (
+            config.resource_contract.execution_mode == "formal_training"
+            and stop_after_steps is not None
+        ):
+            raise ModelError(
+                ReasonCode.TYPE_MISMATCH,
+                "M7 v4 resource_gate/formal_training 与 stop_after_steps 不匹配",
+            )
+        allocator_environment_identity(
+            config.resource_contract.allocator_profile
         )
     smoke_mode = stop_after_steps is not None
     workflow_schema = _workflow_schema(config)
@@ -291,6 +356,25 @@ def run_stage5_workflow(
     access = open_benchmark_access(config.base)
     warm_identity = verify_warm_start_files(config)
     retention_identity = verify_retention_reference_files(config)
+    resource_profile_identity = (
+        verify_stage5_resource_profile(config)
+        if config.resource_contract is not None
+        else None
+    )
+    loss_parity_identity = (
+        verify_qwen35_loss_parity(config)
+        if config.resource_contract is not None
+        else None
+    )
+    resource_evidence_identity = (
+        None
+        if resource_profile_identity is None
+        else {
+            **resource_profile_identity,
+            "loss_parity": loss_parity_identity,
+        }
+    )
+    cuda_policy = _stage5_cuda_policy(config, resource_evidence_identity)
     workflow_root = config.workflow_root
     if workflow_root.exists() and (not workflow_root.is_dir() or workflow_root.is_symlink()):
         raise ModelError(ReasonCode.OUTPUT_LINK, "Stage 5 workflow root 必须是普通目录")
@@ -298,6 +382,11 @@ def run_stage5_workflow(
         raise ModelError(
             ReasonCode.CHECKPOINT_INCOMPATIBLE,
             "20-step smoke 必须从已通过的同根 1-step checkpoint 恢复",
+        )
+    if stop_after_steps == 100 and not workflow_root.is_dir():
+        raise ModelError(
+            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            "100-step resource gate 必须从已通过的同根 20-step checkpoint 恢复",
         )
     workflow_root.mkdir(parents=True, exist_ok=True)
     snapshot_path = workflow_root / "stage5_config_snapshot.json"
@@ -317,6 +406,8 @@ def run_stage5_workflow(
             "split_identity_sha256": split.identity_sha256,
             "warm_start": warm_identity,
             "retention_reference": retention_identity,
+            "resource_profile": resource_profile_identity,
+            "loss_parity": loss_parity_identity,
             "bounded_smoke": smoke_mode,
             "formal_acceptance": False,
         })
@@ -398,6 +489,10 @@ def run_stage5_workflow(
                 device=device,
                 gradient_checkpointing=False,
             )
+            if config.schema_version == STAGE5_CONFIG_SCHEMA_V4:
+                base_model = wrap_qwen35_for_supervised_position_training(
+                    base_model
+                )
             losses["base"] = evaluate_teacher_forced_loss(
                 model=base_model,
                 collator=DescriptionCollator(processor, training=True),
@@ -416,6 +511,8 @@ def run_stage5_workflow(
             device=device,
             gradient_checkpointing=True,
         )
+        if config.schema_version == STAGE5_CONFIG_SCHEMA_V4:
+            model = wrap_qwen35_for_supervised_position_training(model)
         warm = _load_warm_start(model, processor_identity, config)
         if losses is not None and losses["rs_general_adapter"] is None:
             emit("rs_general_retention_probe_starting")
@@ -435,10 +532,38 @@ def run_stage5_workflow(
             logical_role=REGION_TRAIN_ROLE,
         )
         mixed = Stage5MixedDataset(region_train, replay)
+        training_collator = DescriptionCollator(processor, training=True)
+        if cuda_policy is not None:
+            assert config.resource_contract is not None
+            worst_case_root = (
+                config.resource_contract.resource_gate_root
+                / "worst_case_cuda_gate"
+            )
+            if (
+                config.resource_contract.execution_mode == "resource_gate"
+                and stop_after_steps == 1
+            ):
+                emit("worst_case_cuda_gate_starting")
+                run_worst_case_cuda_gate(
+                    config=config,
+                    dataset=mixed,
+                    collator=training_collator,
+                    model=model,
+                    device=device,
+                    policy=cuda_policy,
+                    output_root=worst_case_root,
+                )
+                emit("worst_case_cuda_gate_complete")
+            else:
+                verify_worst_case_cuda_gate(
+                    config=config,
+                    policy=cuda_policy,
+                    output_root=worst_case_root,
+                )
         trainer = DescriptionTrainer(
             config=config,
             model=model,
-            collator=DescriptionCollator(processor, training=True),
+            collator=training_collator,
             validation_dataset=monitor,
             validation_collator=DescriptionCollator(processor, training=True),
             validation_selection=selection,
@@ -452,6 +577,11 @@ def run_stage5_workflow(
             validation_row_parser=parse_region_monitor_result,
             cuda_cache_cleanup_interval_steps=(
                 STAGE5_CUDA_CACHE_CLEANUP_INTERVAL_STEPS
+            ),
+            cuda_resource_telemetry=(
+                None
+                if cuda_policy is None
+                else CudaMicrobatchTelemetry(policy=cuda_policy, device=device)
             ),
         )
         training_complete = _training_complete(config.run.output_root)
@@ -473,6 +603,13 @@ def run_stage5_workflow(
                 raise ModelError(
                     ReasonCode.CHECKPOINT_INCOMPATIBLE,
                     "20-step smoke 只接受同根 step-00000001 checkpoint",
+                )
+            if stop_after_steps == 100 and (
+                resume is None or resume.name != "step-00000020"
+            ):
+                raise ModelError(
+                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
+                    "100-step resource gate 只接受同根 step-00000020 checkpoint",
                 )
             emit(
                 "training_starting" if resume is None else "training_resuming",
@@ -499,6 +636,8 @@ def run_stage5_workflow(
                     "region_split_identity_sha256": split.identity_sha256,
                     "warm_start": warm,
                     "retention_reference": retention_identity,
+                    "resource_profile": resource_profile_identity,
+                    "loss_parity": loss_parity_identity,
                     "retention_probes_executed": False,
                     "execution_stop_step": stop_after_steps,
                     "cursor": training_result.cursor.to_dict(),
@@ -523,6 +662,9 @@ def run_stage5_workflow(
             config=config,
             benchmark_identity=identity,
             selection=selection,
+            cuda_resource_identity=(
+                None if cuda_policy is None else cuda_policy.layout_identity()
+            ),
         )
         if losses is None:
             raise AssertionError("正式训练完成后 retention losses 不得为空")
@@ -569,6 +711,11 @@ def run_stage5_workflow(
             "rs_general_replay_micro_ratio": 0.1,
             "warm_start": warm,
             "retention_reference": retention_identity,
+            "resource_profile": resource_profile_identity,
+            "loss_parity": loss_parity_identity,
+            "cuda_resource_identity": (
+                None if cuda_policy is None else cuda_policy.layout_identity()
+            ),
             "best_checkpoint": str(best),
             "reference_authority": "automatic_contract_only",
             "expert_metrics_available": False,

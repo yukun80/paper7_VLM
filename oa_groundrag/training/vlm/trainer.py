@@ -41,6 +41,7 @@ from .input_pipeline import (
     OrderedBatchPrefetcher,
     sampler_state_at_epoch,
 )
+from .cuda_telemetry import CudaMicrobatchTelemetry
 from oa_groundrag.vlm.preflight import BenchmarkIdentity
 from oa_groundrag.vlm.processing import DescriptionCollator
 from .progress import TrainingProgress
@@ -150,6 +151,7 @@ def training_layout_identity(
     config: VLMConfig,
     *,
     cuda_cache_cleanup_interval_steps: int | None = None,
+    cuda_resource_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """返回 checkpoint/resume 所需的不可变物理训练布局。"""
 
@@ -186,6 +188,16 @@ def training_layout_identity(
         result["cuda_cache_cleanup_interval_steps"] = (
             cuda_cache_cleanup_interval_steps
         )
+    if cuda_resource_identity is not None:
+        if (
+            not isinstance(cuda_resource_identity, Mapping)
+            or not cuda_resource_identity
+        ):
+            raise ModelError(
+                ReasonCode.TYPE_MISMATCH,
+                "CUDA resource identity 必须是非空 mapping 或 null",
+            )
+        result["cuda_resource_identity"] = dict(cuda_resource_identity)
     return result
 
 
@@ -828,6 +840,7 @@ class DescriptionTrainer:
         validation_selection_metric: str = "macro_task_loss",
         validation_row_parser: Callable[[Mapping[str, Any]], ValidationResult] = _validation_from_row,
         cuda_cache_cleanup_interval_steps: int | None = None,
+        cuda_resource_telemetry: CudaMicrobatchTelemetry | None = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -848,6 +861,7 @@ class DescriptionTrainer:
         self.cuda_cache_cleanup_interval_steps = (
             cuda_cache_cleanup_interval_steps
         )
+        self.cuda_resource_telemetry = cuda_resource_telemetry
         if not self.allowed_training_roles or not validation_selection_metric:
             raise ModelError(
                 ReasonCode.TYPE_MISMATCH,
@@ -857,6 +871,11 @@ class DescriptionTrainer:
             config,
             cuda_cache_cleanup_interval_steps=(
                 self.cuda_cache_cleanup_interval_steps
+            ),
+            cuda_resource_identity=(
+                None
+                if self.cuda_resource_telemetry is None
+                else self.cuda_resource_telemetry.layout_identity()
             ),
         )
         if model.trainable_parameter_count <= 0:
@@ -947,6 +966,11 @@ class DescriptionTrainer:
             config,
             cuda_cache_cleanup_interval_steps=(
                 self.cuda_cache_cleanup_interval_steps
+            ),
+            cuda_resource_identity=(
+                None
+                if self.cuda_resource_telemetry is None
+                else self.cuda_resource_telemetry.layout_identity()
             ),
         )
         worker_collators = tuple(
@@ -1229,6 +1253,11 @@ class DescriptionTrainer:
             start_step=global_step,
             stop_step=target_steps,
         )
+        if self.cuda_resource_telemetry is not None:
+            self.cuda_resource_telemetry.start(
+                output_root,
+                completed_microbatches=len(trace_rows),
+            )
         input_pipeline: OrderedBatchPrefetcher | None = None
         try:
             remaining_micro_batches = (
@@ -1300,8 +1329,51 @@ class DescriptionTrainer:
                 sample_epochs = prepared.plan.sample_epochs
                 epoch = prepared.plan.next_epoch
                 sample_offset = prepared.plan.next_sample_offset
+                resource_metadata = None
+                if self.cuda_resource_telemetry is not None:
+                    cpu_labels = prepared.batch.get("labels")
+                    cpu_pixels = prepared.batch.get("pixel_values")
+                    cpu_grid = prepared.batch.get("image_grid_thw")
+                    if not all(
+                        isinstance(value, Tensor)
+                        for value in (cpu_labels, cpu_pixels, cpu_grid)
+                    ):
+                        raise ModelError(
+                            ReasonCode.TYPE_MISMATCH,
+                            "CUDA telemetry batch 缺少 labels/pixel/grid",
+                        )
+                    assert isinstance(cpu_labels, Tensor)
+                    assert isinstance(cpu_pixels, Tensor)
+                    assert isinstance(cpu_grid, Tensor)
+                    resource_metadata = {
+                        "optimizer_step": global_step + 1,
+                        "micro_step": micro_step + 1,
+                        "epoch": sample_epochs[0],
+                        "record_id": samples[0].record_id,
+                        "parent_id": samples[0].parent_id,
+                        "logical_role": samples[0].logical_role,
+                        "task_family": samples[0].task_family,
+                        "input_tokens": int(
+                            prepared.batch["input_token_counts"][0]
+                        ),
+                        "supervised_tokens": int(
+                            cpu_labels[:, 1:].ne(-100).sum()
+                        ),
+                        "image_count": int(
+                            prepared.batch["image_counts"][0]
+                        ),
+                        "pixel_shape": list(cpu_pixels.shape),
+                        "pixel_dtype": str(cpu_pixels.dtype),
+                        "pixel_numel": int(cpu_pixels.numel()),
+                        "image_grid_thw": cpu_grid.tolist(),
+                    }
                 batch = _move_batch(prepared.batch, self.device)
+                if self.cuda_resource_telemetry is not None:
+                    assert resource_metadata is not None
+                    self.cuda_resource_telemetry.begin(resource_metadata)
                 result = self.model.forward(batch)
+                if self.cuda_resource_telemetry is not None:
+                    self.cuda_resource_telemetry.after_forward()
                 loss = getattr(result, "loss", None)
                 if (
                     not isinstance(loss, Tensor)
@@ -1314,6 +1386,8 @@ class DescriptionTrainer:
                     )
                 scaled = loss / config.training.gradient_accumulation_steps
                 scaled.backward()
+                if self.cuda_resource_telemetry is not None:
+                    self.cuda_resource_telemetry.after_backward()
                 accumulated_loss += float(loss.detach().cpu())
                 sample_trace.extend(sample.record_id for sample in samples)
                 cumulative_input_tokens += sum(batch["input_token_counts"])
@@ -1350,6 +1424,8 @@ class DescriptionTrainer:
                 # backward 已完成后立即释放 logits/batch 等大对象，避免下一次 forward
                 # 求值期间仍持有上一条可变形状样本的显存。
                 del labels, scaled, loss, result, batch, prepared
+                if self.cuda_resource_telemetry is not None:
+                    self.cuda_resource_telemetry.complete_after_release()
                 if micro_step < config.training.gradient_accumulation_steps:
                     continue
                 gradient_norm_tensor = torch.nn.utils.clip_grad_norm_(
@@ -1374,6 +1450,10 @@ class DescriptionTrainer:
                     and global_step % cleanup_interval == 0
                 ):
                     clear_cuda_cache(self.device)
+                if self.cuda_resource_telemetry is not None:
+                    self.cuda_resource_telemetry.record_post_zero_grad(
+                        optimizer_step=global_step
+                    )
                 step_loss = (
                     accumulated_loss
                     / config.training.gradient_accumulation_steps
@@ -1639,6 +1719,15 @@ class DescriptionTrainer:
                     "resume_recoveries": resume_recoveries,
                 },
             }
+            if self.cuda_resource_telemetry is not None:
+                report["artifacts"].update(
+                    {
+                        "cuda_resource_identity": "cuda_resource_identity.json",
+                        "cuda_resource_telemetry": "cuda_resource_telemetry.jsonl",
+                        "cuda_step_telemetry": "cuda_step_telemetry.jsonl",
+                        "cuda_active_microbatch": "cuda_active_microbatch.json",
+                    }
+                )
             atomic_write_json(report_path, report)
             atomic_write_json(
                 output_root / "manifest.json",
@@ -1680,6 +1769,16 @@ class DescriptionTrainer:
                 loss_history=tuple(loss_history),
                 sample_trace=tuple(sample_trace),
             )
+        except BaseException as error:
+            if self.cuda_resource_telemetry is not None:
+                self.cuda_resource_telemetry.persist_failure(
+                    error,
+                    last_completed_optimizer_step=global_step,
+                    last_completed_microbatches=(
+                        self.cuda_resource_telemetry.completed_microbatches
+                    ),
+                )
+            raise
         finally:
             if input_pipeline is not None:
                 input_pipeline.close()

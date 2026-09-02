@@ -125,3 +125,4 @@ Zone.Identifier
 
 # Stage 4 本地模型（不得被 git add -A 纳入）
 /models_zoo/Qwen3-VL-8B-Instruct-r60595eb/
+docs/PPT/

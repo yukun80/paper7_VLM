@@ -198,6 +198,28 @@ class ArchitectureTest(unittest.TestCase):
             self.assertNotIn("Qwen3VLProcessorAdapter", text, msg=relative)
             self.assertIn("build_", text, msg=relative)
 
+    def test_qwen35_supervised_logits_wrapper_is_training_only(self) -> None:
+        token = "training.vlm.qwen35_supervised"
+        importers = []
+        for path in PACKAGE_ROOT.rglob("*.py"):
+            if token in path.read_text(encoding="utf-8"):
+                importers.append(path.relative_to(PACKAGE_ROOT).as_posix())
+        self.assertEqual(
+            importers,
+            [
+                "training/grounding/loss_parity.py",
+                "training/grounding/workflow.py",
+            ],
+        )
+        for relative in (
+            "vlm/backends/qwen3_5/model.py",
+            "evaluation/rs_general/generation.py",
+            "runtime/providers.py",
+            "vlm/grounded_runtime.py",
+        ):
+            text = (PACKAGE_ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotIn("qwen35_supervised", text, msg=relative)
+
     def test_active_configs_parse_at_new_locations(self) -> None:
         configs = REPOSITORY_ROOT / "configs"
         load_runtime_config(configs / "segmentation/full_proposed_dropout_b16_nockpt_e100.json")
@@ -205,6 +227,9 @@ class ArchitectureTest(unittest.TestCase):
         load_export_config(configs / "data/rs_general/qwen_train.yaml")
         load_config(configs / "vlm/rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml")
         load_stage5_config(configs / "vlm/grounded/train_v2.yaml")
+        load_stage5_config(
+            configs / "vlm/grounded/qwen35_4b_resource_gate_native_v4.yaml"
+        )
         grounded = load_grounded_runtime_config(configs / "vlm/grounded/runtime_v1.yaml")
         retrieval = load_text_rag_runtime_config(configs / "retrieval/runtime_v1.yaml")
         bank_manifest = json.loads(

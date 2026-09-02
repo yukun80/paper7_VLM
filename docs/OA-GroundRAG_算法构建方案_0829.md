@@ -1,11 +1,15 @@
-# OA-GroundRAG v3.1：双后端 Shared RS-Geohazard MLLM
+# OA-GroundRAG v3.2：双后端 Shared RS-Geohazard MLLM
 
-> **冻结日期：** 2026-08-29  
+> **冻结日期：** 2026-09-02
 > **状态：** 负责人授权的新冻结算法设计  
 > **替代关系：** 本文件自发布起替代 `OA-GroundRAG_算法构建方案_0811.md`
 > 作为当前唯一详细算法设计；0811 版本永久只读，仅用于历史 provenance。  
 > **实时状态：** 实施进度、产物 SHA、checkpoint 与验收结果只记录在
 > `REBUILD_PROGRESS.md`，不得从本文件推断。
+
+v3.2 仅替代 v3.1 的 Qwen3.5-4B Mask-Grounded M7 资源合同。双后端、模型资产、
+LoRA 拓扑、数据、训练预算、Gate B 与运行时边界保持不变；v3.1 的文件 SHA 仅作为
+superseded provenance 保存在 `REBUILD_PROGRESS.md`。
 
 ## 0. 设计目标与不变量
 
@@ -177,10 +181,26 @@ DeltaNet 的 `in_proj_qkv`、`in_proj_z`、`in_proj_a`、`in_proj_b`、`out_proj
 实现必须按真实模块拓扑选择目标，不能仅凭叶子名误命中非 full-attention 层；只能有
 上述 LoRA 参数和允许的 adapter wrapper state 可训练。
 
-资源门按顺序执行：tiny forward/backward → state round-trip → 跨家族拒绝 → 真实 CUDA
-推理 → 1-step → 20-step。记录设备、软件栈、输入边界、峰值 allocated/reserved memory。
-任何 OOM、拓扑不符或 processor/kernel 不兼容立即停止；本轮不得自动安装可选 kernel、
-量化、缩减输入或扩展成 hybrid LoRA。
+M4 资源门仍按顺序执行：tiny forward/backward → state round-trip → 跨家族拒绝 → 真实
+CUDA 推理 → 1-step → 20-step。M7 因完整 `[B,S,V]` logits 与 FP32 CE 临时张量触发
+24 GB 单卡 OOM 后，负责人只授权数学目标等价的 Qwen3.5 训练期优化：对 causal shift 后
+实际受监督的位置使用原生一维 `logits_to_keep`，再以 FP32 cross entropy 计算原有
+assistant-token mean loss。该包装器位于 `oa_groundrag/training/vlm/`，不得修改或进入
+Qwen3.5 backend、Gate B 或 runtime/generation 路径。
+
+M7 新资源门使用完整两 epoch/16,000 条确定性序列画像，并冻结 input tokens、supervised
+tokens、pixel tensor、vision grid 与综合 footprint 的最坏样本。随后对每个 allocator
+profile 在独立新根依次执行最坏样本 forward/backward、fresh 1-step、resume 20-step、
+resume 100-step。profile 顺序固定为 native、`expandable_segments=True`、以及相同
+expandable allocator 加 post-backward `empty_cache`。仅选择首个完整通过者，不跨 profile
+恢复。
+
+资源门要求无 OOM、非有限 loss/gradient 或 allocator retry；所有同步采样点设备可用显存
+不少于 2 GiB；step 20/100 post-zero-grad allocated 不超过 step 1 稳态基线 256 MiB；
+sampler/cursor/resume 身份严格一致。监督位置实现相对 full-logits 参考的 loss 容差固定为
+`atol<=1e-4, rtol<=1e-3`，64 个 LoRA 梯度 aggregate relative-L2 `<=1e-3` 且 cosine
+`>=0.9999`；新 step-1 loss 相对旧证据差异 `<=1e-3`。三个 profile 均失败则停止，不得
+自动安装 kernel、量化、缩减输入、改变 accumulation/LoRA 或扩展成 hybrid LoRA。
 
 ## 6. 两段训练 curriculum
 
@@ -208,7 +228,12 @@ DeltaNet 的 `in_proj_qkv`、`in_proj_z`、`in_proj_a`、`in_proj_b`、`out_proj
 - 预算：`max_steps=1000`；
 - 输出：独立 checkpoint、Adapter、best pointer 与完整身份 manifest。
 
-先执行 1-step 与 20-step smoke；任何跨家族 warm-start 必须拒绝。
+配置使用严格 `rs_vlm.mask_grounded_train_config.v4`，显式绑定监督位置 loss、FP32 CE、
+allocator、microbatch cache、2 GiB 余量门和有界资源遥测。旧 M7 v3 配置与解析分支在新
+资源门通过后删除，不提供 alias。通过 1→20→100-step 资源门后，正式训练必须从冻结
+M5 step-1000 best fresh warm-start 到独立新根，不得从 smoke-100 恢复；任何跨家族
+warm-start 必须拒绝。正式 M7 完成与 retention 只构成工程完成，`formal_acceptance` 与
+`scientific_acceptance` 均保持 false，不新增 Gate C 或 retention 科学阈值。
 
 ## 7. 评价与发布状态机
 
@@ -276,7 +301,9 @@ HDF5 或 sealed/test 路径。
 实施固定为 M0–M10：设计与基线、公共 backend、2B 迁移、4B processor/资产、4B 模型与
 资源门、RS-General 训练、Gate B、Grounded 训练、candidate runtime、100 条验证、默认发布。
 
-每个模块必须先通过本模块测试和所有已完成模块回归，才能进入下一模块。任何以下条件
+每个模块必须先通过本模块测试和所有已完成模块回归，才能进入下一模块。M7 v3.2 的
+内部串行顺序为 R0 保护/画像、R1 等价 loss 与合同、R2 allocator 资源门、R3 正式训练/
+retention；R3 完成后停在 M8 前。任何以下条件
 触发 fail-closed 停止并在 `REBUILD_PROGRESS.md` 留证：
 
 - protected asset 身份漂移或输出根已存在；
@@ -300,4 +327,3 @@ Gate D、可选 Case RAG、OA-AuxSeg Gate A、Gate C 或 sealed test 合同；�
 - Qwen3.5-4B 官方配置：<https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/config.json>
 - Transformers Qwen3.5 文档：<https://huggingface.co/docs/transformers/model_doc/qwen3_5>
 - 历史冻结设计：`docs/OA-GroundRAG_算法构建方案_0811.md`
-

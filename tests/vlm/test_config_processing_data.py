@@ -84,6 +84,7 @@ from oa_groundrag.vlm.reference import MAIN_REFERENCE
 from oa_groundrag.training.grounding.config import (
     STAGE5_CONFIG_SCHEMA,
     STAGE5_CONFIG_SCHEMA_V3,
+    STAGE5_CONFIG_SCHEMA_V4,
     load_stage5_config,
 )
 from oa_groundrag.vlm.grounded_runtime import (
@@ -119,6 +120,7 @@ def vlm_yaml_contracts() -> dict[str, tuple[Path, ...]]:
         GATE_B_PROTOCOL_SCHEMA_VERSION_V2: [],
         STAGE5_CONFIG_SCHEMA: [],
         STAGE5_CONFIG_SCHEMA_V3: [],
+        STAGE5_CONFIG_SCHEMA_V4: [],
         GROUNDED_RUNTIME_CONFIG_SCHEMA: [],
     }
     for path in sorted((*CONFIG_ROOT.glob("*.yaml"), *GROUNDED_CONFIG_ROOT.glob("*.yaml"))):
@@ -267,6 +269,7 @@ class ConfigAndPreflightTests(unittest.TestCase):
         protocol_paths_v2 = contracts[GATE_B_PROTOCOL_SCHEMA_VERSION_V2]
         stage5_paths = contracts[STAGE5_CONFIG_SCHEMA]
         stage5_paths_v3 = contracts[STAGE5_CONFIG_SCHEMA_V3]
+        stage5_paths_v4 = contracts[STAGE5_CONFIG_SCHEMA_V4]
         grounded_runtime_paths = contracts[GROUNDED_RUNTIME_CONFIG_SCHEMA]
         configs = {
             path.name: load_config(path)
@@ -296,6 +299,14 @@ class ConfigAndPreflightTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
+            tuple(path.name for path in stage5_paths_v4),
+            (
+                "qwen35_4b_resource_gate_expandable_microcache_v4.yaml",
+                "qwen35_4b_resource_gate_expandable_v4.yaml",
+                "qwen35_4b_resource_gate_native_v4.yaml",
+            ),
+        )
+        self.assertEqual(
             tuple(path.name for path in grounded_runtime_paths),
             ("runtime_v1.yaml",),
         )
@@ -315,6 +326,14 @@ class ConfigAndPreflightTests(unittest.TestCase):
             self.assertEqual(grounded.schema_version, STAGE5_CONFIG_SCHEMA_V3)
             self.assertEqual(grounded.model.backend, "qwen3_5")
             self.assertEqual(grounded.training.learning_rate, 5e-5)
+        for path in stage5_paths_v4:
+            grounded = load_stage5_config(path)
+            self.assertEqual(grounded.schema_version, STAGE5_CONFIG_SCHEMA_V4)
+            self.assertEqual(grounded.model.backend, "qwen3_5")
+            self.assertEqual(grounded.training.batch_size, 1)
+            self.assertEqual(grounded.training.gradient_accumulation_steps, 16)
+            self.assertEqual(grounded.training.learning_rate, 5e-5)
+            self.assertIsNotNone(grounded.resource_contract)
         for path in (*protocol_paths_v1, *protocol_paths_v2):
             self.assertEqual(
                 load_gate_b_protocol(path).raw["schema_version"],
