@@ -33,6 +33,7 @@ from oa_groundrag.training.grounding.workflow import (
     _stage5_gate_b_selection_path,
     _stage5_rs_general_predictions_path,
     run_stage5_workflow,
+    stage5_training_root,
 )
 from oa_groundrag.evaluation.rs_general.contracts import load_gate_b_protocol
 from oa_groundrag.evaluation.rs_general.selection import (
@@ -78,6 +79,21 @@ class FakeDataset:
 
 
 class Stage5DataTests(unittest.TestCase):
+    def test_resource_checks_use_independent_fresh_roots(self) -> None:
+        config = load_stage5_config(QWEN35_CONFIG)
+        roots = {
+            step: stage5_training_root(config, stop_after_steps=step)
+            for step in (1, 20, 100)
+        }
+        self.assertEqual(len(set(roots.values())), 3)
+        self.assertEqual(roots[1].name, "step-00000001-fresh")
+        self.assertEqual(roots[20].name, "step-00000020-fresh")
+        self.assertEqual(roots[100].name, "step-00000100-fresh")
+        self.assertEqual(
+            stage5_training_root(config, stop_after_steps=None),
+            config.run.output_root,
+        )
+
     def test_parent_split_is_deterministic_disjoint_and_forces_experts_train(self) -> None:
         records = []
         for index in range(200):

@@ -15,12 +15,12 @@ from oa_groundrag.data.oa_auxseg.dataset import (
     collate_benchmark_samples,
 )
 from oa_groundrag.segmentation.checkpoint import (
+    INFERENCE_CHECKPOINT_SCHEMA_VERSION,
     model_from_checkpoint,
     read_checkpoint,
     save_training_checkpoint,
 )
 from oa_groundrag.segmentation.contracts import (
-    CHECKPOINT_SCHEMA_VERSION,
     CONFIG_SCHEMA_VERSION,
     INFERENCE_SCHEMA_VERSION,
     OAAuxSegConfig,
@@ -40,9 +40,6 @@ from oa_groundrag.segmentation.inference import run_inference
 from oa_groundrag.segmentation.model import OAAuxSegModel
 from oa_groundrag.training.segmentation.engine import (
     _acceptance_collated,
-    make_optimizer,
-    make_scaler,
-    make_scheduler,
 )
 from tests.segmentation.test_oa_auxseg import synthetic_batch, synthetic_registry
 
@@ -206,7 +203,7 @@ class OAAuxSegSmallAssetIntegrationTest(unittest.TestCase):
         (SMALL_ROOT / "index.jsonl").is_file(),
         "requires local oa_auxseg_hdf5_v1/small",
     )
-    def test_training_batcher_is_fixed_and_resume_exact(self) -> None:
+    def test_training_batcher_has_reproducible_sequence(self) -> None:
         batcher = StatefulTrainingBatcher(
             SMALL_ROOT,
             batch_size=8,
@@ -321,14 +318,6 @@ class OAAuxSegSmallAssetIntegrationTest(unittest.TestCase):
             device="cpu",
             max_steps=2,
         )
-        optimizer = make_optimizer(self.model, config)
-        scheduler = make_scheduler(
-            optimizer,
-            total_steps=2,
-            warmup_ratio=config.warmup_ratio,
-            min_lr_ratio=config.min_lr_ratio,
-        )
-        scaler = make_scaler(torch.device("cpu"))
         benchmark_contract = benchmark_contract_from_root(SMALL_ROOT)
         with torch.no_grad():
             before = self.model(self.batch)
@@ -337,24 +326,16 @@ class OAAuxSegSmallAssetIntegrationTest(unittest.TestCase):
             save_training_checkpoint(
                 path,
                 model=self.model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
                 step=1,
                 benchmark_contract=benchmark_contract,
-                subset_sampler_state=None,
-                training_batcher_state={"unit_test": True},
-                training_state={
-                    "runtime_config": config.to_dict(),
-                    "unit_test": True,
-                },
+                selection_metrics={"validation_dice": 0.5},
             )
             payload = read_checkpoint(
                 path,
                 expected_benchmark_contract=benchmark_contract,
             )
             self.assertEqual(
-                payload["schema_version"], CHECKPOINT_SCHEMA_VERSION
+                payload["schema_version"], INFERENCE_CHECKPOINT_SCHEMA_VERSION
             )
             self.assertEqual(
                 payload["benchmark_contract"],

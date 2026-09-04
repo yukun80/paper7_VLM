@@ -260,23 +260,29 @@ class RuntimeRetrieverContractTest(unittest.TestCase):
 class RuntimeInferenceOnlyLoaderTest(unittest.TestCase):
     def test_shared_mllm_load_does_not_touch_training_eval_or_hdf5(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            workflow = root / "workflow"
+            root = Path(directory) / "portable-bundle"
+            repository = root / "paper7_VLM"
+            (root / "benchmark").mkdir(parents=True)
+            model_root = repository / "models/fixture"
+            model_root.mkdir(parents=True)
+            workflow = repository / "workflow"
             training = workflow / "training"
             checkpoint = training / "checkpoints/step-00000001"
             config_sha = "1" * 64
-            model_identity = {"model_type": "fixture", "revision": "v1"}
-            processor_identity = {"processor": "fixture-v1"}
+            model_identity = {
+                "model_path": "paper7_VLM/models/fixture",
+                "model_type": "fixture",
+                "revision": "v1",
+            }
+            processor_identity = {
+                "processor_path": "paper7_VLM/models/fixture",
+                "processor": "fixture-v1",
+            }
             names = ("lora.fixture.weight",)
             CheckpointManager().save(
                 checkpoint,
                 trainable_state={names[0]: torch.ones(2, 2)},
-                optimizer_state={"unused": True},
-                scheduler_state={"unused": True},
                 cursor=TrainingCursor(0, 0, 1, 0),
-                sampler_state={"unused": True},
-                multireference_epoch=0,
-                config_snapshot={"fixture": True},
                 config_semantic_sha256=config_sha,
                 benchmark_identity={"published": "fixture"},
                 validation_selection_identity={"published": "fixture"},
@@ -293,12 +299,7 @@ class RuntimeInferenceOnlyLoaderTest(unittest.TestCase):
                     "sample_trace_schema_version": "rs_vlm.sample_trace.v1",
                 },
                 trainable_names=names,
-                rng_state={
-                    "python": (),
-                    "numpy": (),
-                    "torch_cpu": torch.zeros(1),
-                    "torch_cuda": [],
-                },
+                selection_metrics={"region_monitor_loss": 1.0},
             )
             pointer = training / "best_checkpoint.json"
             atomic_write_json(pointer, {
@@ -319,13 +320,40 @@ class RuntimeInferenceOnlyLoaderTest(unittest.TestCase):
                 "scientific_acceptance": False,
                 "sealed_test_evaluated": False,
             })
-            runtime_config = root / "runtime.yaml"
+            runtime_config = repository / "configs/runtime.yaml"
+            runtime_config.parent.mkdir(parents=True)
             runtime_config.write_text(
-                "schema_version: oa_groundrag.grounded_runtime.config.v1\n"
-                f"base_config: {REPO_ROOT / 'configs/vlm/rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml'}\n"
-                f"workflow_root: {workflow}\n"
+                "schema_version: oa_groundrag.grounded_runtime.config.v2\n"
+                "bundle_root: ../..\n"
+                "workflow_root: paper7_VLM/workflow\n"
                 f"published_training_config_semantic_sha256: '{config_sha}'\n"
-                "generation:\n  max_new_tokens: 768\n",
+                "model:\n"
+                "  backend: qwen3_vl\n"
+                "  path: paper7_VLM/models/fixture\n"
+                "  processor_path: paper7_VLM/models/fixture\n"
+                "  local_files_only: true\n"
+                "  dtype: bfloat16\n"
+                "  attn_implementation: sdpa\n"
+                "  trust_remote_code: false\n"
+                "adaptation:\n"
+                "  strategy: lora\n"
+                "  target_modules: [q_proj, k_proj, v_proj, o_proj]\n"
+                "  rank: 8\n"
+                "  alpha: 16\n"
+                "  dropout: 0.05\n"
+                "  freeze_vision: true\n"
+                "  freeze_merger: true\n"
+                "limits:\n"
+                "  max_images: 5\n"
+                "  max_input_tokens: 4096\n"
+                "  min_pixels: 12544\n"
+                "  max_pixels: 200704\n"
+                "  max_new_tokens: 768\n"
+                "generation:\n"
+                "  max_new_tokens: 768\n"
+                "  do_sample: false\n"
+                "  temperature: 0.0\n"
+                "  top_p: 1.0\n",
                 encoding="utf-8",
             )
             manifest = checkpoint / "manifest.json"
@@ -340,7 +368,10 @@ class RuntimeInferenceOnlyLoaderTest(unittest.TestCase):
 
             class Identity:
                 def to_dict(self):
-                    return dict(model_identity)
+                    return {
+                        **dict(model_identity),
+                        "model_path": str(model_root),
+                    }
 
             class FakeModel:
                 identity = Identity()
@@ -360,7 +391,10 @@ class RuntimeInferenceOnlyLoaderTest(unittest.TestCase):
                     self.kwargs = kwargs
 
                 def identity(self):
-                    return dict(processor_identity)
+                    return {
+                        **dict(processor_identity),
+                        "processor_path": str(model_root),
+                    }
 
             model = FakeModel()
             from oa_groundrag.runtime.providers import GroundedVLMProvider
@@ -417,6 +451,12 @@ class ConfigAndCliContractTest(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(process.returncode, 0, msg=f"{relative}: {process.stderr}")
+            if relative in {
+                "scripts/train/oa_auxseg.py",
+                "scripts/train/rs_vlm.py",
+                "scripts/train/grounded_adapter.py",
+            }:
+                self.assertNotIn("--resume", process.stdout)
 
     def test_live_unified_config_resolves_from_its_own_directory(self) -> None:
         config = load_unified_config(UNIFIED_CONFIG)
@@ -501,22 +541,26 @@ class ConfigAndCliContractTest(unittest.TestCase):
 
     def test_dry_config_does_not_require_checkpoint_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "config.yaml"
+            root = Path(directory) / "portable-bundle"
+            repository = root / "paper7_VLM"
+            (root / "benchmark").mkdir(parents=True)
+            path = repository / "configs/config.yaml"
+            path.parent.mkdir(parents=True)
             path.write_text(
                 "schema_version: oa_groundrag.unified_inference.config.v2\n"
-                f"repository_root: {REPO_ROOT}\n"
+                "repository_root: ..\n"
                 "spatial:\n"
-                f"  config: {REPO_ROOT / 'configs/segmentation/full_proposed_dropout_b16_nockpt_e100.json'}\n"
-                "  checkpoint: /tmp/nonexistent-unified-checkpoint.pt\n"
+                "  config: segmentation.json\n"
+                "  checkpoint: nonexistent-unified-checkpoint.pt\n"
                 f"  checkpoint_sha256: \"{'0' * 64}\"\n"
                 "semantic_core:\n"
-                f"  config: {REPO_ROOT / 'configs/vlm/grounded/runtime_v1.yaml'}\n"
+                "  config: grounded.yaml\n"
                 f"  best_pointer_sha256: \"{'0' * 64}\"\n"
                 f"  checkpoint_manifest_sha256: \"{'0' * 64}\"\n"
                 f"  adapter_sha256: \"{'0' * 64}\"\n"
                 f"  workflow_state_sha256: \"{'0' * 64}\"\n"
                 "retrieval:\n"
-                f"  config: {REPO_ROOT / 'configs/retrieval/runtime_v1.yaml'}\n"
+                "  config: retrieval.yaml\n"
                 "runtime:\n"
                 "  device: cuda\n"
                 "  release_spatial_before_shared: true\n"

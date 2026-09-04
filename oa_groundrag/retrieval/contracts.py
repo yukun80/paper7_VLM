@@ -180,10 +180,10 @@ class SourceRegistry:
     sources: tuple[SourceEntry, ...]
     semantic_sha256: str
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, source_root: str | None = None) -> dict[str, Any]:
         return {
             "schema_version": SOURCE_REGISTRY_SCHEMA,
-            "source_root": str(self.source_root),
+            "source_root": str(self.source_root) if source_root is None else source_root,
             "source_count": len(self.sources),
             "sources": [source.to_dict() for source in self.sources],
             "registry_semantic_sha256": self.semantic_sha256,

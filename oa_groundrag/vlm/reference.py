@@ -60,7 +60,7 @@ MAIN_REFERENCE = ReferenceProject(
         "preprocess_qwen_visual/apply_chat_template",
         "SupervisedDatasetCollator",
         "Qwen3VL forward/causal loss",
-        "Trainer checkpoint/resume",
+        "Trainer inference checkpoint",
         "Transformers quickstart or RealWorldQA vLLM generate",
         "RealWorldQA prediction JSONL",
         "RealWorldQA rule/optional-judge evaluator",

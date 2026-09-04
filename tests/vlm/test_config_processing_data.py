@@ -796,14 +796,13 @@ class ConfigAndPreflightTests(unittest.TestCase):
                     with self.assertRaises(ConfigError):
                         load_config(path)
 
-    def test_resume_semantic_hash_excludes_output_pointer_only(self) -> None:
+    def test_output_override_is_not_semantic_and_resume_config_is_rejected(self) -> None:
         config = load_config(CONFIG_ROOT / "bounded_smoke.yaml")
         changed_output = replace(
             config,
             run=replace(
                 config.run,
                 output_root=Path("/tmp/another-output"),
-                resume_checkpoint=Path("/tmp/explicit-checkpoint"),
             ),
         )
         self.assertEqual(
@@ -820,6 +819,18 @@ class ConfigAndPreflightTests(unittest.TestCase):
             config.semantic_sha256,
             changed_log.semantic_sha256,
         )
+        source = yaml.safe_load(
+            (CONFIG_ROOT / "bounded_smoke.yaml").read_text(encoding="utf-8")
+        )
+        source["run"]["resume_checkpoint"] = "checkpoints/step-00000001"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "resume-disabled.yaml"
+            path.write_text(
+                yaml.safe_dump(source, sort_keys=False),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path)
 
     def test_train_cli_output_override_and_cuda_guard(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, mock.patch(

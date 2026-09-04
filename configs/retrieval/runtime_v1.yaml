@@ -1,16 +1,17 @@
-schema_version: oa_groundrag.text_rag.runtime_config.v1
+schema_version: oa_groundrag.text_rag.runtime_config.v2
+bundle_root: ../../..
 source_registry: sources_v1.yaml
 bank:
-  root: ../../outputs/stage6_text_rag/text_evidence_bank_v1
-  bank_id: 9322a9139d04be7665feb154153b7dc1c2d35b0871fc32bbd6a6daa942fabb28
-  manifest_sha256: 9b891e191581746173a27b80356caa18ec9be5d3c36eaee67444b05a070f0bcc
-  ledger_sha256: 1c73fbd6135daaaf4767f8427e7c9e1ba69f09e0223aaad2c3e151a013c1e650
+  root: paper7_VLM/outputs/stage6_text_rag/text_evidence_bank_v1
+  bank_id: 28935a7533a228d0aaa0e8754304549b62b84d067f4653e31b105ec55599284d
+  manifest_sha256: 8d21adefa103f8a53adacc0a82e08e5fdc194b8e780084ab109dc3bbc6c4bb05
+  ledger_sha256: 114a3fffef4067bdfce6f69cc9c7388823773ff5cd54d00c0a1866dd443225ea
   build_config_semantic_sha256: 15343b90dd4e447bb13e65c106af9e817c41f70e2b5e6e0b2c22b6040a4afb6a
   registry_semantic_sha256: f18a65169af4fa1a8529f8c3d17287f957943080f5801620e391964586070fc0
 dense:
   repo_id: BAAI/bge-m3
   revision: 5617a9f61b028005a4858fdac845db406aefb181
-  model_root: ../../models_zoo/text_embeddings/bge-m3-5617a9f61b028005a4858fdac845db406aefb181
+  model_root: paper7_VLM/models_zoo/text_embeddings/bge-m3-5617a9f61b028005a4858fdac845db406aefb181
   device: cuda
   batch_size: 8
   max_tokens: 1024

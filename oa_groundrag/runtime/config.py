@@ -8,13 +8,17 @@ from pathlib import Path
 import re
 from typing import Any
 
-from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.artifacts.io import (
+    PortablePathError,
+    first_symlink_component,
+    resolve_config_reference,
+    validate_bundle_root,
+)
 from oa_groundrag.data.rs_general.io import (
     require_bool,
     require_exact_keys,
     require_mapping,
     require_string,
-    resolve_config_path,
 )
 from oa_groundrag.vlm.config import _load_yaml
 
@@ -115,11 +119,11 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
                 UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
                 f"只支持 unified config schema {UNIFIED_CONFIG_SCHEMA}",
             )
-        base = config_path.parent
-        repository_root = resolve_config_path(
-            base,
-            row["repository_root"],
-            location="$.repository_root",
+        repository_root = resolve_config_reference(
+            config_path,
+            require_string(
+                row["repository_root"], location="$.repository_root"
+            ),
         )
         spatial_row = require_mapping(row["spatial"], location="$.spatial")
         require_exact_keys(
@@ -184,26 +188,33 @@ def load_unified_config(path: Path | str) -> UnifiedInferenceConfig:
             UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
             f"Unified v2 安全/释放开关必须为 true：{disabled}",
         )
-    spatial_config = resolve_config_path(
-        base,
-        spatial_row["config"],
-        location="$.spatial.config",
-    )
-    checkpoint = resolve_config_path(
-        base,
-        spatial_row["checkpoint"],
-        location="$.spatial.checkpoint",
-    )
-    semantic_config = resolve_config_path(
-        base,
-        semantic_row["config"],
-        location="$.semantic_core.config",
-    )
-    retrieval_config = resolve_config_path(
-        base,
-        retrieval_row["config"],
-        location="$.retrieval.config",
-    )
+    try:
+        spatial_config = resolve_config_reference(
+            config_path,
+            require_string(spatial_row["config"], location="$.spatial.config"),
+        )
+        checkpoint = resolve_config_reference(
+            config_path,
+            require_string(
+                spatial_row["checkpoint"], location="$.spatial.checkpoint"
+            ),
+        )
+        semantic_config = resolve_config_reference(
+            config_path,
+            require_string(
+                semantic_row["config"], location="$.semantic_core.config"
+            ),
+        )
+        retrieval_config = resolve_config_reference(
+            config_path,
+            require_string(retrieval_row["config"], location="$.retrieval.config"),
+        )
+    except PortablePathError as error:
+        raise UnifiedInferenceError(
+            UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
+            f"Unified 配置路径非法：{error}",
+            cause_type=type(error).__name__,
+        ) from error
     for label, value in (
         ("repository_root", repository_root),
         ("spatial.config", spatial_config),
@@ -265,6 +276,22 @@ def validate_provider_paths(config: UnifiedInferenceConfig) -> None:
     backbone_weights = spatial.resolve_path(spatial.backbone_weights, config.repository_root)
     semantic_core = load_grounded_runtime_config(config.semantic_core.config_path)
     retrieval = load_text_rag_runtime_config(config.retrieval.config_path)
+    try:
+        bundle_root = validate_bundle_root(config.repository_root.parent)
+    except PortablePathError as error:
+        raise UnifiedInferenceError(
+            UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
+            f"Unified bundle 布局非法：{error}",
+        ) from error
+    if (
+        config.repository_root != bundle_root / "paper7_VLM"
+        or semantic_core.bundle_root != bundle_root
+        or retrieval.bundle_root != bundle_root
+    ):
+        raise UnifiedInferenceError(
+            UnifiedReasonCode.REQUEST_CONTRACT_INVALID,
+            "Unified、Grounded 与 Text RAG 的 bundle_root 不一致",
+        )
     first_paths = {
         "spatial.benchmark_root": benchmark_root,
         "spatial.output_root": output_root,

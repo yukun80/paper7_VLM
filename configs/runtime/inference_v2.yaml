@@ -7,9 +7,9 @@ spatial:
 semantic_core:
   config: ../vlm/grounded/runtime_v1.yaml
   best_pointer_sha256: 368bc48fec6e5303c80e8b2c0d397f4d55eb8c6d51fe70d9da417833ac8a2c1b
-  checkpoint_manifest_sha256: c203823597c7b3ecf7f1bce9b3030efe7f5ef2dc5c1ae58bbc58e0982aae5c30
+  checkpoint_manifest_sha256: 65ecb7b890f38868ae5a1b7af144ff3dc2befad149bdefb6b6f133b0cfa42bb6
   adapter_sha256: 858e12ff7e902ce0a3fdfb1a3dfbc2e58ad0892dec870a73fa4fc0a3411f84d7
-  workflow_state_sha256: 9c5a90743e26576f55a83157e8a1bd3fcf28c1005cc97ff098be1a3b02a62efa
+  workflow_state_sha256: f1e7fe6b6d3cfe4b86e93fde6d963487b92e696cfd53a3d028cc719f28725155
 retrieval:
   config: ../retrieval/runtime_v1.yaml
 runtime:

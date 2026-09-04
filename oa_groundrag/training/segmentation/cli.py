@@ -33,7 +33,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = subparsers.add_parser("train", help="训练任一消融或 proposed 模型")
     train.add_argument("--config", type=Path, required=True)
-    train.add_argument("--resume", type=str)
     train.add_argument(
         "--full-report-json",
         action="store_true",
@@ -44,7 +43,6 @@ def build_parser() -> argparse.ArgumentParser:
         "overfit", help="全部 train、全可用辅助模态的容量验收"
     )
     overfit.add_argument("--config", type=Path, required=True)
-    overfit.add_argument("--resume", type=str)
     overfit.add_argument(
         "--full-report-json",
         action="store_true",
@@ -98,11 +96,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             config,
             repo_root=repo_root,
             capacity_overfit=False,
-            resume_checkpoint=(
-                _path_from_repo(arguments.resume, repo_root)
-                if arguments.resume
-                else None
-            ),
         )
     elif arguments.command == "overfit":
         if config.variant != "proposed_dropout":
@@ -113,11 +106,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             config,
             repo_root=repo_root,
             capacity_overfit=True,
-            resume_checkpoint=(
-                _path_from_repo(arguments.resume, repo_root)
-                if arguments.resume
-                else None
-            ),
         )
     elif arguments.command == "finalize":
         report = finalize_training_run(

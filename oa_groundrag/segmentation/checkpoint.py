@@ -1,14 +1,12 @@
-"""OA-AuxSeg 当前 schema 的原子 checkpoint 保存与严格恢复。"""
+"""OA-AuxSeg 推理 checkpoint 保存与既有产物只读加载。"""
 
 from __future__ import annotations
 
 import os
-import random
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
-import numpy as np
 import torch
 from torch import nn
 
@@ -36,50 +34,7 @@ from .model import (
 from .validity import VALIDITY_CONTRACT
 
 
-def _numpy_rng_state() -> dict[str, Any]:
-    name, keys, position, has_gauss, cached_gaussian = np.random.get_state()
-    return {
-        "name": str(name),
-        "keys": keys.tolist(),
-        "position": int(position),
-        "has_gauss": int(has_gauss),
-        "cached_gaussian": float(cached_gaussian),
-    }
-
-
-def capture_rng_state() -> dict[str, Any]:
-    return {
-        "python": random.getstate(),
-        "numpy": _numpy_rng_state(),
-        "torch_cpu": torch.get_rng_state(),
-        "torch_cuda": (
-            [state.cpu() for state in torch.cuda.get_rng_state_all()]
-            if torch.cuda.is_available()
-            else []
-        ),
-    }
-
-
-def restore_rng_state(state: Mapping[str, Any]) -> None:
-    random.setstate(state["python"])
-    numpy_state = state["numpy"]
-    np.random.set_state(
-        (
-            str(numpy_state["name"]),
-            np.asarray(numpy_state["keys"], dtype=np.uint32),
-            int(numpy_state["position"]),
-            int(numpy_state["has_gauss"]),
-            float(numpy_state["cached_gaussian"]),
-        )
-    )
-    torch.set_rng_state(state["torch_cpu"])
-    cuda_states = list(state["torch_cuda"])
-    if cuda_states:
-        if not torch.cuda.is_available():
-            raise RuntimeError("checkpoint 含 CUDA RNG，但当前 CUDA 不可用")
-        if len(cuda_states) != torch.cuda.device_count():
-            raise RuntimeError("checkpoint CUDA RNG 数量与当前设备数不一致")
-        torch.cuda.set_rng_state_all(cuda_states)
+INFERENCE_CHECKPOINT_SCHEMA_VERSION = "oa_auxseg_checkpoint_v7"
 
 
 def atomic_torch_save(path: Path, payload: Mapping[str, Any]) -> None:
@@ -157,45 +112,27 @@ def _validated_benchmark_contract(
 def build_checkpoint(
     *,
     model: OAAuxSegModel,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler,
-    scaler: torch.amp.GradScaler,
     step: int,
     benchmark_contract: Mapping[str, Any],
-    subset_sampler_state: Mapping[str, Any] | None,
-    training_batcher_state: Mapping[str, Any],
-    training_state: Mapping[str, Any],
+    selection_metrics: Mapping[str, Any],
 ) -> dict[str, Any]:
     if step < 0:
         raise ValueError("checkpoint step 不能小于 0")
     contract = model.model_contract()
     if not contract["backbone_sha256"]:
         raise ValueError("正式 checkpoint 必须记录本地 backbone SHA-256")
-    runtime_config = training_state.get("runtime_config")
-    if not isinstance(runtime_config, Mapping):
-        raise ValueError("checkpoint training_state 缺少 runtime_config")
-    RuntimeConfig.from_dict(runtime_config)
+    if not isinstance(selection_metrics, Mapping):
+        raise ValueError("checkpoint selection_metrics 必须是对象")
     frozen_benchmark_contract = _validated_benchmark_contract(
         benchmark_contract
     )
     return {
-        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "schema_version": INFERENCE_CHECKPOINT_SCHEMA_VERSION,
         "model_contract": contract,
         "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-        "scheduler_state": scheduler.state_dict(),
-        "amp_state": {
-            "enabled": bool(scaler.is_enabled()),
-            "state": scaler.state_dict(),
-        },
         "step": int(step),
         "benchmark_contract": frozen_benchmark_contract,
-        "rng_state": capture_rng_state(),
-        "subset_sampler_state": (
-            dict(subset_sampler_state) if subset_sampler_state is not None else None
-        ),
-        "training_batcher_state": dict(training_batcher_state),
-        "training_state": dict(training_state),
+        "selection_metrics": dict(selection_metrics),
     }
 
 
@@ -212,12 +149,16 @@ def read_checkpoint(
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict):
         raise ValueError("checkpoint 顶层必须是对象")
-    if payload.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+    schema_version = payload.get("schema_version")
+    if schema_version not in {
+        CHECKPOINT_SCHEMA_VERSION,
+        INFERENCE_CHECKPOINT_SCHEMA_VERSION,
+    }:
         raise ValueError(
-            f"只支持 {CHECKPOINT_SCHEMA_VERSION}，实际为 "
+            f"不支持 checkpoint schema，实际为 "
             f"{payload.get('schema_version')!r}"
         )
-    required = {
+    legacy_required = {
         "schema_version",
         "model_contract",
         "model_state",
@@ -231,6 +172,19 @@ def read_checkpoint(
         "training_batcher_state",
         "training_state",
     }
+    inference_required = {
+        "schema_version",
+        "model_contract",
+        "model_state",
+        "step",
+        "benchmark_contract",
+        "selection_metrics",
+    }
+    required = (
+        legacy_required
+        if schema_version == CHECKPOINT_SCHEMA_VERSION
+        else inference_required
+    )
     unknown = set(payload) - required
     missing = required - set(payload)
     if unknown or missing:
@@ -247,15 +201,18 @@ def read_checkpoint(
         )
         if recorded_benchmark_contract != expected:
             raise ValueError("checkpoint 与当前 Benchmark 合同不一致")
-    training_state = payload["training_state"]
-    if not isinstance(training_state, dict):
-        raise ValueError("checkpoint training_state 必须是对象")
-    runtime_config = training_state.get("runtime_config")
-    if not isinstance(runtime_config, dict):
-        raise ValueError("checkpoint training_state 缺少 runtime_config")
-    RuntimeConfig.from_dict(runtime_config)
-    if not isinstance(payload["training_batcher_state"], dict):
-        raise ValueError("checkpoint training_batcher_state 必须是对象")
+    if schema_version == CHECKPOINT_SCHEMA_VERSION:
+        training_state = payload["training_state"]
+        if not isinstance(training_state, dict):
+            raise ValueError("checkpoint training_state 必须是对象")
+        runtime_config = training_state.get("runtime_config")
+        if not isinstance(runtime_config, dict):
+            raise ValueError("checkpoint training_state 缺少 runtime_config")
+        RuntimeConfig.from_dict(runtime_config)
+        if not isinstance(payload["training_batcher_state"], dict):
+            raise ValueError("checkpoint training_batcher_state 必须是对象")
+    elif not isinstance(payload["selection_metrics"], dict):
+        raise ValueError("checkpoint selection_metrics 必须是对象")
     return payload
 
 
@@ -338,31 +295,6 @@ def model_from_checkpoint(
     model.load_state_dict(payload["model_state"], strict=True)
     model.backbone_sha256 = str(contract["backbone_sha256"])
     return model.to(device)
-
-
-def restore_training_state(
-    *,
-    payload: Mapping[str, Any],
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler,
-    scaler: torch.amp.GradScaler,
-) -> None:
-    optimizer.load_state_dict(payload["optimizer_state"])
-    scheduler.load_state_dict(payload["scheduler_state"])
-    amp_state = payload["amp_state"]
-    if bool(amp_state["enabled"]) != bool(scaler.is_enabled()):
-        raise ValueError("checkpoint AMP 配置与当前运行不一致")
-    scaler.load_state_dict(amp_state["state"])
-    restore_rng_state(payload["rng_state"])
-
-
-def optimizer_state_to_device(
-    optimizer: torch.optim.Optimizer, device: torch.device
-) -> None:
-    for state in optimizer.state.values():
-        for key, value in state.items():
-            if isinstance(value, torch.Tensor):
-                state[key] = value.to(device)
 
 
 def module_parameter_snapshot(

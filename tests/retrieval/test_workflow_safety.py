@@ -46,14 +46,12 @@ class WorkflowSafetyTest(unittest.TestCase):
             manager.save(
                 root,
                 trainable_state={"adapter.weight": torch.ones(2)},
-                optimizer_state={"state": {}}, scheduler_state={"state": {}},
                 cursor=TrainingCursor(epoch=0, sample_offset=0, global_step=1, micro_step=0),
-                sampler_state={"epoch": 0}, multireference_epoch=0,
-                config_snapshot={"a": 1}, config_semantic_sha256="a" * 64,
+                config_semantic_sha256="a" * 64,
                 benchmark_identity={"id": "b"}, validation_selection_identity={"id": "v"},
                 model_identity={"id": "m"}, processor_identity={"id": "p"},
                 training_layout=layout, trainable_names=("adapter.weight",),
-                rng_state={"python": (), "numpy": (), "torch_cpu": torch.tensor([1], dtype=torch.uint8), "torch_cuda": None},
+                selection_metrics={"loss": 0.5},
             )
             with patch("torch.load", side_effect=AssertionError("training state must not load")):
                 manifest = manager.inspect_trainable(root, **common)

@@ -1,4 +1,4 @@
-"""原子 checkpoint、严格 identity 比对与可重复 resume。"""
+"""推理所需 checkpoint 与既有训练产物的只读身份验证。"""
 
 from __future__ import annotations
 
@@ -55,6 +55,21 @@ _CHECKPOINT_MANIFEST_FIELDS = {
     "multireference_epoch",
     "files",
 }
+INFERENCE_CHECKPOINT_SCHEMA_VERSION = "rs_vlm.checkpoint.v2"
+_INFERENCE_CHECKPOINT_MANIFEST_FIELDS = {
+    "schema_version",
+    "config_semantic_sha256",
+    "benchmark_identity",
+    "validation_selection_identity",
+    "model_identity",
+    "processor_identity",
+    "training_layout",
+    "trainable_parameter_names",
+    "trainable_parameter_count",
+    "cursor",
+    "selection_metrics",
+    "files",
+}
 _BASE_TRAINING_LAYOUT_FIELDS = {
     "physical_batch_size",
     "gradient_accumulation_steps",
@@ -66,6 +81,7 @@ _BASE_TRAINING_LAYOUT_FIELDS = {
     "sample_trace_schema_version",
 }
 _CUDA_CACHE_LAYOUT_FIELD = "cuda_cache_cleanup_interval_steps"
+_CUDA_RESOURCE_LAYOUT_FIELD = "cuda_resource_identity"
 
 
 def _validated_training_layout(
@@ -77,6 +93,13 @@ def _validated_training_layout(
     allowed_fields = {
         frozenset(_BASE_TRAINING_LAYOUT_FIELDS),
         frozenset((*_BASE_TRAINING_LAYOUT_FIELDS, _CUDA_CACHE_LAYOUT_FIELD)),
+        frozenset(
+            (
+                *_BASE_TRAINING_LAYOUT_FIELDS,
+                _CUDA_CACHE_LAYOUT_FIELD,
+                _CUDA_RESOURCE_LAYOUT_FIELD,
+            )
+        ),
     }
     if not isinstance(value, Mapping) or frozenset(fields) not in allowed_fields:
         raise CheckpointError(
@@ -114,6 +137,14 @@ def _validated_training_layout(
                 ReasonCode.CHECKPOINT_INCOMPATIBLE,
                 f"{label} training_layout.{_CUDA_CACHE_LAYOUT_FIELD} 必须是正整数",
             )
+    if _CUDA_RESOURCE_LAYOUT_FIELD in result and (
+        not isinstance(result[_CUDA_RESOURCE_LAYOUT_FIELD], Mapping)
+        or not result[_CUDA_RESOURCE_LAYOUT_FIELD]
+    ):
+        raise CheckpointError(
+            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            f"{label} training_layout.{_CUDA_RESOURCE_LAYOUT_FIELD} 必须是非空对象",
+        )
     backend = result["input_pipeline_backend"]
     if (
         result["effective_batch_size"]
@@ -226,29 +257,13 @@ def restore_rng_state(state: Mapping[str, Any]) -> None:
         torch.cuda.set_rng_state_all(cuda_states)
 
 
-def _save_torch(path: Path, value: Any) -> None:
-    temporary = path.parent / f".{path.name}.tmp"
-    if temporary.exists() or temporary.is_symlink():
-        raise CheckpointError(
-            ReasonCode.OUTPUT_EXISTS,
-            f"临时 checkpoint 文件已存在：{temporary}",
-        )
-    torch.save(value, temporary)
-    temporary.replace(path)
-
-
 class CheckpointManager:
     def save(
         self,
         root: Path,
         *,
         trainable_state: Mapping[str, Tensor],
-        optimizer_state: Mapping[str, Any],
-        scheduler_state: Mapping[str, Any],
         cursor: TrainingCursor,
-        sampler_state: Mapping[str, Any],
-        multireference_epoch: int,
-        config_snapshot: Mapping[str, Any],
         config_semantic_sha256: str,
         benchmark_identity: Mapping[str, Any],
         validation_selection_identity: Mapping[str, Any],
@@ -256,7 +271,7 @@ class CheckpointManager:
         processor_identity: Mapping[str, Any],
         training_layout: Mapping[str, Any],
         trainable_names: tuple[str, ...],
-        rng_state: Mapping[str, Any] | None = None,
+        selection_metrics: Mapping[str, Any] | None = None,
     ) -> Path:
         root = Path(root)
         normalized_training_layout = _validated_training_layout(
@@ -273,15 +288,6 @@ class CheckpointManager:
             raise CheckpointError(
                 ReasonCode.OUTPUT_EXISTS,
                 f"checkpoint root 已存在：{root}",
-            )
-        if (
-            isinstance(multireference_epoch, bool)
-            or not isinstance(multireference_epoch, int)
-            or multireference_epoch < 0
-        ):
-            raise CheckpointError(
-                ReasonCode.TYPE_MISMATCH,
-                "multireference_epoch 必须是 >= 0 的整数",
             )
         if tuple(sorted(trainable_state)) != tuple(sorted(trainable_names)):
             raise CheckpointError(
@@ -308,19 +314,6 @@ class CheckpointManager:
                 tensors,
                 str(adapter_dir / "adapter_model.safetensors"),
             )
-            _save_torch(staging / "optimizer.pt", dict(optimizer_state))
-            _save_torch(staging / "scheduler.pt", dict(scheduler_state))
-            _save_torch(
-                staging / "rng.pt",
-                dict(rng_state or capture_rng_state()),
-            )
-            atomic_write_json(staging / "config_snapshot.json", config_snapshot)
-            state_row = {
-                "cursor": cursor.to_dict(),
-                "sampler_state": dict(sampler_state),
-                "multireference_epoch": multireference_epoch,
-            }
-            atomic_write_json(staging / "training_state.json", state_row)
             payload_files = sorted(
                 path
                 for path in staging.rglob("*")
@@ -334,11 +327,8 @@ class CheckpointManager:
                 for path in payload_files
             }
             manifest = {
-                "schema_version": CHECKPOINT_SCHEMA_VERSION,
+                "schema_version": INFERENCE_CHECKPOINT_SCHEMA_VERSION,
                 "config_semantic_sha256": config_semantic_sha256,
-                "config_snapshot_sha256": sha256_text(
-                    canonical_json(config_snapshot)
-                ),
                 "benchmark_identity": dict(benchmark_identity),
                 "validation_selection_identity": dict(
                     validation_selection_identity
@@ -351,7 +341,7 @@ class CheckpointManager:
                     sum(value.numel() for value in tensors.values())
                 ),
                 "cursor": cursor.to_dict(),
-                "multireference_epoch": multireference_epoch,
+                "selection_metrics": dict(selection_metrics or {}),
                 "files": files,
             }
             atomic_write_json(staging / "manifest.json", manifest)
@@ -659,7 +649,7 @@ class CheckpointManager:
         *,
         expected_config_semantic_sha256: str,
         expected_benchmark_identity: Mapping[str, Any],
-        expected_validation_selection_identity: Mapping[str, Any],
+        expected_validation_selection_identity: Mapping[str, Any] | None,
         expected_model_identity: Mapping[str, Any],
         expected_processor_identity: Mapping[str, Any],
         expected_training_layout: Mapping[str, Any],
@@ -675,12 +665,21 @@ class CheckpointManager:
                 f"checkpoint root 不存在或含链接：{root}",
             )
         manifest = _read_checkpoint_json(self._file(root, "manifest.json"))
-        if not isinstance(manifest, dict) or set(manifest) != _CHECKPOINT_MANIFEST_FIELDS:
+        schema_version = manifest.get("schema_version") if isinstance(manifest, dict) else None
+        expected_fields = (
+            _CHECKPOINT_MANIFEST_FIELDS
+            if schema_version == CHECKPOINT_SCHEMA_VERSION
+            else _INFERENCE_CHECKPOINT_MANIFEST_FIELDS
+        )
+        if not isinstance(manifest, dict) or set(manifest) != expected_fields:
             raise CheckpointError(
                 ReasonCode.CHECKPOINT_CORRUPT,
                 "checkpoint manifest 字段不匹配",
             )
-        if manifest.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        if schema_version not in {
+            CHECKPOINT_SCHEMA_VERSION,
+            INFERENCE_CHECKPOINT_SCHEMA_VERSION,
+        }:
             raise CheckpointError(
                 ReasonCode.CHECKPOINT_INCOMPATIBLE,
                 "checkpoint schema 不兼容",
@@ -693,17 +692,24 @@ class CheckpointManager:
             manifest.get("training_layout"),
             label="checkpoint",
         )
+        validation_identity = manifest.get("validation_selection_identity")
+        if not isinstance(validation_identity, dict) or not validation_identity:
+            raise CheckpointError(
+                ReasonCode.CHECKPOINT_CORRUPT,
+                "checkpoint validation selection identity 非法",
+            )
         comparisons = {
             "config_semantic_sha256": expected_config_semantic_sha256,
             "benchmark_identity": dict(expected_benchmark_identity),
-            "validation_selection_identity": dict(
-                expected_validation_selection_identity
-            ),
             "model_identity": dict(expected_model_identity),
             "processor_identity": dict(expected_processor_identity),
             "training_layout": expected_layout,
             "trainable_parameter_names": list(expected_trainable_names),
         }
+        if expected_validation_selection_identity is not None:
+            comparisons["validation_selection_identity"] = dict(
+                expected_validation_selection_identity
+            )
         actual = {
             key: saved_layout if key == "training_layout" else manifest.get(key)
             for key in comparisons
@@ -762,7 +768,7 @@ class CheckpointManager:
         *,
         expected_config_semantic_sha256: str,
         expected_benchmark_identity: Mapping[str, Any],
-        expected_validation_selection_identity: Mapping[str, Any],
+        expected_validation_selection_identity: Mapping[str, Any] | None,
         expected_model_identity: Mapping[str, Any],
         expected_processor_identity: Mapping[str, Any],
         expected_training_layout: Mapping[str, Any],
@@ -838,12 +844,21 @@ class CheckpointManager:
                 "checkpoint manifest SHA-256 与发布绑定不一致",
             )
         manifest = _read_checkpoint_json(manifest_path)
-        if not isinstance(manifest, dict) or set(manifest) != _CHECKPOINT_MANIFEST_FIELDS:
+        schema_version = manifest.get("schema_version") if isinstance(manifest, dict) else None
+        expected_fields = (
+            _CHECKPOINT_MANIFEST_FIELDS
+            if schema_version == CHECKPOINT_SCHEMA_VERSION
+            else _INFERENCE_CHECKPOINT_MANIFEST_FIELDS
+        )
+        if not isinstance(manifest, dict) or set(manifest) != expected_fields:
             raise CheckpointError(
                 ReasonCode.CHECKPOINT_CORRUPT,
                 "checkpoint manifest 字段不匹配",
             )
-        if manifest.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        if schema_version not in {
+            CHECKPOINT_SCHEMA_VERSION,
+            INFERENCE_CHECKPOINT_SCHEMA_VERSION,
+        }:
             raise CheckpointError(
                 ReasonCode.CHECKPOINT_INCOMPATIBLE,
                 "checkpoint schema 不兼容",
@@ -875,16 +890,21 @@ class CheckpointManager:
             )
         files = manifest.get("files")
         adapter_relative = "adapter/adapter_model.safetensors"
-        inference_excluded_files = {
+        legacy_training_files = {
             "optimizer.pt",
             "scheduler.pt",
             "rng.pt",
             "config_snapshot.json",
             "training_state.json",
         }
+        expected_payload_files = (
+            {adapter_relative, *legacy_training_files}
+            if schema_version == CHECKPOINT_SCHEMA_VERSION
+            else {adapter_relative}
+        )
         if (
             not isinstance(files, dict)
-            or set(files) != {adapter_relative, *inference_excluded_files}
+            or set(files) != expected_payload_files
         ):
             raise CheckpointError(
                 ReasonCode.CHECKPOINT_CORRUPT,

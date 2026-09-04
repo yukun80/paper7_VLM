@@ -1,4 +1,4 @@
-"""Mask-Grounded train/monitor/replay/retention 的可恢复状态机。"""
+"""Mask-Grounded train/monitor/replay/retention 的全新运行状态机。"""
 
 from __future__ import annotations
 
@@ -109,6 +109,23 @@ def _prepare_stage5_training_memory(device: torch.device) -> None:
 
     gc.collect()
     clear_cuda_cache(device)
+
+
+def stage5_training_root(
+    config: Stage5Config,
+    *,
+    stop_after_steps: int | None,
+) -> Path:
+    """为正式训练或每个独立资源检查返回互不复用的输出根。"""
+
+    if stop_after_steps is None:
+        return config.run.output_root
+    if stop_after_steps not in {1, 20, 100}:
+        raise ModelError(
+            ReasonCode.TYPE_MISMATCH,
+            "资源检查步数只允许 1、20 或 100",
+        )
+    return config.workflow_root / f"step-{stop_after_steps:08d}-fresh"
 
 
 def _stage5_cuda_policy(
@@ -235,39 +252,6 @@ def _load_warm_start(
     }
 
 
-def _latest_checkpoint(training_root: Path) -> Path | None:
-    checkpoints = training_root / "checkpoints"
-    if not checkpoints.is_dir() or checkpoints.is_symlink():
-        return None
-    values = sorted(
-        (path for path in checkpoints.glob("step-*") if path.is_dir() and not path.is_symlink()),
-        key=lambda path: path.name,
-    )
-    return None if not values else values[-1]
-
-
-def _training_complete(training_root: Path) -> bool:
-    report_path = training_root / "training_report.json"
-    if not report_path.exists():
-        return False
-    report = read_json(report_path)
-    status = report.get("status")
-    step = report.get("cursor", {}).get("global_step")
-    if status == "completed" and step == 1000:
-        return True
-    if (
-        status == "paused"
-        and isinstance(step, int)
-        and not isinstance(step, bool)
-        and 0 < step < 1000
-    ):
-        return False
-    raise ModelError(
-        ReasonCode.CHECKPOINT_CORRUPT,
-        "Mask-Grounded training report 状态/step 非法",
-    )
-
-
 def _load_stage5_best(
     *,
     model: VLMModelAdapter,
@@ -281,7 +265,7 @@ def _load_stage5_best(
     if pointer.get("selection_metric") != "region_monitor_loss":
         raise ModelError(ReasonCode.CHECKPOINT_CORRUPT, "best checkpoint 未按 Region monitor loss 选择")
     checkpoint = config.run.output_root / str(pointer["checkpoint"])
-    payload = CheckpointManager().load(
+    manifest, trainable = CheckpointManager().load_trainable(
         checkpoint,
         expected_config_semantic_sha256=config.semantic_sha256,
         expected_benchmark_identity=benchmark_identity.training_identity_dict(),
@@ -297,8 +281,13 @@ def _load_stage5_best(
         ),
         expected_trainable_names=model.trainable_names,
     )
-    model.load_trainable_state_dict(payload.trainable_state)
-    return payload.root
+    model.load_trainable_state_dict(trainable)
+    if manifest.get("cursor", {}).get("global_step") != pointer.get("step"):
+        raise ModelError(
+            ReasonCode.CHECKPOINT_CORRUPT,
+            "best checkpoint step 与 manifest 不一致",
+        )
+    return checkpoint
 
 
 def run_stage5_workflow(
@@ -307,7 +296,7 @@ def run_stage5_workflow(
     stop_after_steps: int | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """运行固定状态机；已有合法阶段只读复用，非法/部分输出拒绝覆盖。"""
+    """运行固定状态机；每次模型训练都要求全新输出根。"""
 
     config = load_stage5_config(config_path)
     allowed_stops = (
@@ -378,16 +367,6 @@ def run_stage5_workflow(
     workflow_root = config.workflow_root
     if workflow_root.exists() and (not workflow_root.is_dir() or workflow_root.is_symlink()):
         raise ModelError(ReasonCode.OUTPUT_LINK, "Stage 5 workflow root 必须是普通目录")
-    if stop_after_steps == 20 and not workflow_root.is_dir():
-        raise ModelError(
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            "20-step smoke 必须从已通过的同根 1-step checkpoint 恢复",
-        )
-    if stop_after_steps == 100 and not workflow_root.is_dir():
-        raise ModelError(
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            "100-step resource gate 必须从已通过的同根 20-step checkpoint 恢复",
-        )
     workflow_root.mkdir(parents=True, exist_ok=True)
     snapshot_path = workflow_root / "stage5_config_snapshot.json"
     split_path = workflow_root / "region_parent_split.json"
@@ -560,6 +539,17 @@ def run_stage5_workflow(
                     policy=cuda_policy,
                     output_root=worst_case_root,
                 )
+        training_root = stage5_training_root(
+            config,
+            stop_after_steps=stop_after_steps,
+        )
+        config = replace(
+            config,
+            base=replace(
+                config.base,
+                run=replace(config.base.run, output_root=training_root),
+            ),
+        )
         trainer = DescriptionTrainer(
             config=config,
             model=model,
@@ -584,78 +574,51 @@ def run_stage5_workflow(
                 else CudaMicrobatchTelemetry(policy=cuda_policy, device=device)
             ),
         )
-        training_complete = _training_complete(config.run.output_root)
-        if training_complete and smoke_mode:
-            raise ModelError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "bounded smoke 根不得包含已完成的 1000-step training",
-            )
-        if not training_complete:
-            resume = _latest_checkpoint(config.run.output_root)
-            if stop_after_steps == 1 and resume is not None:
-                raise ModelError(
-                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                    "1-step smoke 必须写入全新 training root",
-                )
-            if stop_after_steps == 20 and (
-                resume is None or resume.name != "step-00000001"
-            ):
-                raise ModelError(
-                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                    "20-step smoke 只接受同根 step-00000001 checkpoint",
-                )
-            if stop_after_steps == 100 and (
-                resume is None or resume.name != "step-00000020"
-            ):
-                raise ModelError(
-                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                    "100-step resource gate 只接受同根 step-00000020 checkpoint",
-                )
+        emit(
+            "training_starting_fresh",
+            training_root=str(training_root),
+            warm_start=warm,
+            stop_after_steps=stop_after_steps,
+        )
+        # retention probe 产生了可变长度 forward cache；正式训练前只清理
+        # Python 无用对象与 allocator 空闲块，不触碰模型权重或训练超参数。
+        _prepare_stage5_training_memory(device)
+        training_result = trainer.fit(
+            mixed,
+            stop_after_steps=stop_after_steps,
+        )
+        if training_result.status == "bounded_complete":
+            state = {
+                "schema_version": workflow_schema,
+                "stage": "bounded_smoke_complete",
+                "config_semantic_sha256": config.semantic_sha256,
+                "compact_manifest_sha256": sha256_file(
+                    compact.root / "manifest.json"
+                ),
+                "region_split_identity_sha256": split.identity_sha256,
+                "warm_start": warm,
+                "retention_reference": retention_identity,
+                "resource_profile": resource_profile_identity,
+                "loss_parity": loss_parity_identity,
+                "retention_probes_executed": False,
+                "execution_stop_step": stop_after_steps,
+                "training_root": str(training_root),
+                "cursor": training_result.cursor.to_dict(),
+                "checkpoint": str(training_result.checkpoint),
+                "cuda_peak_gib": training_result.cuda_peak_gib,
+                "formal_acceptance": False,
+                "scientific_acceptance": False,
+                "sealed_test_evaluated": False,
+            }
+            atomic_write_json(workflow_root / "workflow_state.json", state)
             emit(
-                "training_starting" if resume is None else "training_resuming",
-                resume_checkpoint=None if resume is None else str(resume),
-                warm_start=warm,
-                stop_after_steps=stop_after_steps,
+                "bounded_smoke_complete",
+                step=training_result.cursor.global_step,
+                checkpoint=str(training_result.checkpoint),
+                cuda_peak_gib=training_result.cuda_peak_gib,
             )
-            # retention probe 产生了可变长度 forward cache；正式训练前只清理
-            # Python 无用对象与 allocator 空闲块，不触碰模型权重或训练超参数。
-            _prepare_stage5_training_memory(device)
-            training_result = trainer.fit(
-                mixed,
-                resume_checkpoint=resume,
-                stop_after_steps=stop_after_steps,
-            )
-            if training_result.status == "paused":
-                state = {
-                    "schema_version": workflow_schema,
-                    "stage": "bounded_smoke_paused",
-                    "config_semantic_sha256": config.semantic_sha256,
-                    "compact_manifest_sha256": sha256_file(
-                        compact.root / "manifest.json"
-                    ),
-                    "region_split_identity_sha256": split.identity_sha256,
-                    "warm_start": warm,
-                    "retention_reference": retention_identity,
-                    "resource_profile": resource_profile_identity,
-                    "loss_parity": loss_parity_identity,
-                    "retention_probes_executed": False,
-                    "execution_stop_step": stop_after_steps,
-                    "cursor": training_result.cursor.to_dict(),
-                    "checkpoint": str(training_result.checkpoint),
-                    "cuda_peak_gib": training_result.cuda_peak_gib,
-                    "formal_acceptance": False,
-                    "scientific_acceptance": False,
-                    "sealed_test_evaluated": False,
-                }
-                atomic_write_json(workflow_root / "workflow_state.json", state)
-                emit(
-                    "bounded_smoke_complete",
-                    step=training_result.cursor.global_step,
-                    checkpoint=str(training_result.checkpoint),
-                    cuda_peak_gib=training_result.cuda_peak_gib,
-                )
-                return {"ok": True, "root": str(workflow_root), **state}
-            emit("training_complete")
+            return {"ok": True, "root": str(workflow_root), **state}
+        emit("training_complete")
         best = _load_stage5_best(
             model=model,
             processor_identity=processor_identity,

@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
 from typing import Any, Mapping, Protocol
 
 from oa_groundrag.artifacts.identity import canonical_json, sha256_file, sha256_text
-from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.artifacts.io import (
+    PortablePathError,
+    bundle_relative_reference,
+    first_symlink_component,
+    resolve_config_reference,
+    resolve_bundle_reference,
+    validate_bundle_root,
+)
 from oa_groundrag.data.rs_general.io import (
     portable_relative_path,
+    require_bool,
     read_json,
     require_exact_keys,
+    require_int,
     require_mapping,
-    resolve_config_path,
+    require_string,
 )
 
 from .checkpoint import CheckpointManager
@@ -25,11 +34,11 @@ from .backends import (
     build_model_adapter,
     build_processor_adapter,
 )
-from .config import VLMConfig, _load_yaml, load_config
+from .config import AdaptationSection, GenerationSection, ModelSection, _load_yaml
 from .errors import ConfigError, ContractError, ReasonCode
 
 
-GROUNDED_RUNTIME_CONFIG_SCHEMA = "oa_groundrag.grounded_runtime.config.v1"
+GROUNDED_RUNTIME_CONFIG_SCHEMA = "oa_groundrag.grounded_runtime.config.v2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -42,38 +51,30 @@ class GroundedRuntimeBinding(Protocol):
 
 
 @dataclass(frozen=True)
+class GroundedRuntimeLimits:
+    max_images: int
+    max_input_tokens: int
+    min_pixels: int
+    max_pixels: int
+    max_new_tokens: int
+
+
+@dataclass(frozen=True)
 class GroundedRuntimeConfig:
     schema_version: str
-    base: VLMConfig
+    bundle_root: Path
     workflow_root: Path
+    model: ModelSection
+    adaptation: AdaptationSection
+    limits: GroundedRuntimeLimits
+    generation: GenerationSection
     published_training_config_semantic_sha256: str
-    max_new_tokens: int
     config_path: Path
     semantic_sha256: str
 
     @property
     def training_root(self) -> Path:
         return self.workflow_root / "training"
-
-    @property
-    def model(self):
-        return self.base.model
-
-    @property
-    def adaptation(self):
-        return self.base.adaptation
-
-    @property
-    def limits(self):
-        return replace(
-            self.base.limits,
-            max_input_tokens=4096,
-            max_new_tokens=self.max_new_tokens,
-        )
-
-    @property
-    def generation(self):
-        return replace(self.base.generation, max_new_tokens=self.max_new_tokens)
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,30 @@ def _regular_file(
         )
 
 
+def _portable_runtime_identity(
+    identity: Mapping[str, Any],
+    *,
+    bundle_root: Path,
+    path_key: str,
+) -> dict[str, Any]:
+    """将现场模型身份中的路径转换为可迁移的包根相对引用。"""
+
+    value = identity.get(path_key)
+    if not isinstance(value, str):
+        raise ContractError(
+            ReasonCode.MODEL_IDENTITY_MISMATCH,
+            f"模型身份缺少字符串字段 {path_key}",
+        )
+    try:
+        reference = bundle_relative_reference(bundle_root, Path(value))
+    except PortablePathError as error:
+        raise ContractError(
+            ReasonCode.PATH_ESCAPE,
+            f"模型身份不在可迁移包内：{value}",
+        ) from error
+    return {**dict(identity), path_key: reference}
+
+
 def load_grounded_runtime_config(path: Path | str) -> GroundedRuntimeConfig:
     """读取不含 Benchmark、compact 或 Eval-dev 绑定的推理配置。"""
 
@@ -134,9 +159,12 @@ def load_grounded_runtime_config(path: Path | str) -> GroundedRuntimeConfig:
         row,
         required=(
             "schema_version",
-            "base_config",
+            "bundle_root",
             "workflow_root",
             "published_training_config_semantic_sha256",
+            "model",
+            "adaptation",
+            "limits",
             "generation",
         ),
         location="$",
@@ -146,33 +174,188 @@ def load_grounded_runtime_config(path: Path | str) -> GroundedRuntimeConfig:
             ReasonCode.INVALID_ENUM,
             f"仅支持 {GROUNDED_RUNTIME_CONFIG_SCHEMA}",
         )
-    base_path = resolve_config_path(
-        config_path.parent,
-        row["base_config"],
-        location="$.base_config",
-    )
-    workflow_root = resolve_config_path(
-        config_path.parent,
-        row["workflow_root"],
-        location="$.workflow_root",
-    )
-    generation = require_mapping(row["generation"], location="$.generation")
-    require_exact_keys(generation, required=("max_new_tokens",), location="$.generation")
-    max_new_tokens = generation["max_new_tokens"]
-    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens != 768:
-        raise ConfigError(
-            ReasonCode.TYPE_MISMATCH,
-            "$.generation.max_new_tokens 必须保持发布值 768",
+    try:
+        bundle_root = validate_bundle_root(
+            resolve_config_reference(
+                config_path,
+                require_string(row["bundle_root"], location="$.bundle_root"),
+            )
         )
-    base = load_config(base_path)
+        workflow_root = resolve_bundle_reference(
+            bundle_root,
+            require_string(row["workflow_root"], location="$.workflow_root"),
+            expected="directory",
+        )
+    except PortablePathError as error:
+        raise ConfigError(
+            ReasonCode.PATH_ESCAPE,
+            f"Grounded runtime bundle 路径非法：{error}",
+        ) from error
+    model_row = require_mapping(row["model"], location="$.model")
+    require_exact_keys(
+        model_row,
+        required=(
+            "backend",
+            "path",
+            "processor_path",
+            "local_files_only",
+            "dtype",
+            "attn_implementation",
+            "trust_remote_code",
+        ),
+        location="$.model",
+    )
+    try:
+        model_path = resolve_bundle_reference(
+            bundle_root,
+            require_string(model_row["path"], location="$.model.path"),
+            expected="directory",
+        )
+        processor_path = resolve_bundle_reference(
+            bundle_root,
+            require_string(
+                model_row["processor_path"],
+                location="$.model.processor_path",
+            ),
+            expected="directory",
+        )
+    except PortablePathError as error:
+        raise ConfigError(
+            ReasonCode.PATH_ESCAPE,
+            f"Grounded runtime model 路径非法：{error}",
+        ) from error
+    model = ModelSection(
+        backend=require_string(model_row["backend"], location="$.model.backend"),
+        path=model_path,
+        processor_path=processor_path,
+        local_files_only=require_bool(
+            model_row["local_files_only"], location="$.model.local_files_only"
+        ),
+        dtype=require_string(model_row["dtype"], location="$.model.dtype"),
+        attn_implementation=require_string(
+            model_row["attn_implementation"],
+            location="$.model.attn_implementation",
+        ),
+        trust_remote_code=require_bool(
+            model_row["trust_remote_code"], location="$.model.trust_remote_code"
+        ),
+    )
     if (
-        base.adaptation.strategy != "lora"
-        or not base.adaptation.freeze_vision
-        or not base.adaptation.freeze_merger
+        model.backend != "qwen3_vl"
+        or not model.local_files_only
+        or model.dtype != "bfloat16"
+        or model.attn_implementation != "sdpa"
+        or model.trust_remote_code
+        or model.path != model.processor_path
     ):
         raise ConfigError(
             ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            "Grounded runtime 只接受冻结 vision/merger 的 LoRA 语义主体",
+            "Grounded runtime 仅接受已发布的本地 Qwen3-VL-2B 模型合同",
+        )
+    adaptation_row = require_mapping(row["adaptation"], location="$.adaptation")
+    require_exact_keys(
+        adaptation_row,
+        required=(
+            "strategy",
+            "target_modules",
+            "rank",
+            "alpha",
+            "dropout",
+            "freeze_vision",
+            "freeze_merger",
+        ),
+        location="$.adaptation",
+    )
+    target_modules = adaptation_row["target_modules"]
+    if not isinstance(target_modules, list) or not all(
+        isinstance(value, str) and value for value in target_modules
+    ):
+        raise ConfigError(
+            ReasonCode.TYPE_MISMATCH,
+            "$.adaptation.target_modules 必须是非空字符串列表",
+        )
+    dropout = adaptation_row["dropout"]
+    if isinstance(dropout, bool) or not isinstance(dropout, (int, float)):
+        raise ConfigError(ReasonCode.TYPE_MISMATCH, "$.adaptation.dropout 必须是数值")
+    adaptation = AdaptationSection(
+        strategy=require_string(
+            adaptation_row["strategy"], location="$.adaptation.strategy"
+        ),
+        target_modules=tuple(target_modules),
+        rank=require_int(adaptation_row["rank"], location="$.adaptation.rank", minimum=1),
+        alpha=require_int(
+            adaptation_row["alpha"], location="$.adaptation.alpha", minimum=1
+        ),
+        dropout=float(dropout),
+        freeze_vision=require_bool(
+            adaptation_row["freeze_vision"], location="$.adaptation.freeze_vision"
+        ),
+        freeze_merger=require_bool(
+            adaptation_row["freeze_merger"], location="$.adaptation.freeze_merger"
+        ),
+    )
+    if (
+        adaptation.strategy != "lora"
+        or adaptation.target_modules != ("q_proj", "k_proj", "v_proj", "o_proj")
+        or adaptation.rank != 8
+        or adaptation.alpha != 16
+        or adaptation.dropout != 0.05
+        or not adaptation.freeze_vision
+        or not adaptation.freeze_merger
+    ):
+        raise ConfigError(
+            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            "Grounded runtime LoRA 合同与已发布 Adapter 不兼容",
+        )
+    limits_row = require_mapping(row["limits"], location="$.limits")
+    limit_fields = (
+        "max_images",
+        "max_input_tokens",
+        "min_pixels",
+        "max_pixels",
+        "max_new_tokens",
+    )
+    require_exact_keys(limits_row, required=limit_fields, location="$.limits")
+    limits = GroundedRuntimeLimits(
+        **{
+            name: require_int(limits_row[name], location=f"$.limits.{name}", minimum=1)
+            for name in limit_fields
+        }
+    )
+    if limits != GroundedRuntimeLimits(5, 4096, 12544, 200704, 768):
+        raise ConfigError(
+            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            "Grounded runtime 输入与生成上限必须保持发布值",
+        )
+    generation = require_mapping(row["generation"], location="$.generation")
+    require_exact_keys(
+        generation,
+        required=("max_new_tokens", "do_sample", "temperature", "top_p"),
+        location="$.generation",
+    )
+    temperature = generation["temperature"]
+    top_p = generation["top_p"]
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in (temperature, top_p)
+    ):
+        raise ConfigError(ReasonCode.TYPE_MISMATCH, "Grounded generation 数值非法")
+    generation_section = GenerationSection(
+        max_new_tokens=require_int(
+            generation["max_new_tokens"],
+            location="$.generation.max_new_tokens",
+            minimum=1,
+        ),
+        do_sample=require_bool(
+            generation["do_sample"], location="$.generation.do_sample"
+        ),
+        temperature=float(temperature),
+        top_p=float(top_p),
+    )
+    if generation_section != GenerationSection(768, False, 0.0, 1.0):
+        raise ConfigError(
+            ReasonCode.CHECKPOINT_INCOMPATIBLE,
+            "Grounded generation 必须保持发布值",
         )
     training_sha = _sha256(
         row["published_training_config_semantic_sha256"],
@@ -180,17 +363,30 @@ def load_grounded_runtime_config(path: Path | str) -> GroundedRuntimeConfig:
     )
     semantic_payload = {
         "schema_version": GROUNDED_RUNTIME_CONFIG_SCHEMA,
-        "base_config_semantic_sha256": base.semantic_sha256,
-        "workflow_root": str(workflow_root),
+        "workflow_root": require_string(
+            row["workflow_root"], location="$.workflow_root"
+        ),
+        "model": {
+            **model_row,
+            "path": require_string(model_row["path"], location="$.model.path"),
+            "processor_path": require_string(
+                model_row["processor_path"], location="$.model.processor_path"
+            ),
+        },
+        "adaptation": adaptation_row,
+        "limits": limits_row,
         "published_training_config_semantic_sha256": training_sha,
-        "generation": {"max_new_tokens": max_new_tokens},
+        "generation": generation,
     }
     return GroundedRuntimeConfig(
         schema_version=GROUNDED_RUNTIME_CONFIG_SCHEMA,
-        base=base,
+        bundle_root=bundle_root,
         workflow_root=workflow_root,
+        model=model,
+        adaptation=adaptation,
+        limits=limits,
+        generation=generation_section,
         published_training_config_semantic_sha256=training_sha,
-        max_new_tokens=max_new_tokens,
         config_path=config_path,
         semantic_sha256=sha256_text(canonical_json(semantic_payload)),
     )
@@ -296,10 +492,9 @@ def load_grounded_runtime_generator(
     """只加载已发布 Grounded LoRA；不读取任何训练或评价数据。"""
 
     reference = resolve_grounded_runtime_checkpoint(config, binding)
-    processor_config = replace(config.base, limits=config.limits)
-    processor = build_processor_adapter(processor_config)
+    processor = build_processor_adapter(config)
     model = build_model_adapter(
-        config.base,
+        config,
         device=device,
         gradient_checkpointing=False,
     )
@@ -310,8 +505,16 @@ def load_grounded_runtime_generator(
         expected_config_semantic_sha256=(
             config.published_training_config_semantic_sha256
         ),
-        expected_model_identity=model.identity.to_dict(),
-        expected_processor_identity=processor.identity(),
+        expected_model_identity=_portable_runtime_identity(
+            model.identity.to_dict(),
+            bundle_root=config.bundle_root,
+            path_key="model_path",
+        ),
+        expected_processor_identity=_portable_runtime_identity(
+            processor.identity(),
+            bundle_root=config.bundle_root,
+            path_key="processor_path",
+        ),
         expected_trainable_names=model.trainable_names,
         expected_trainable_parameter_count=model.trainable_parameter_count,
     )

@@ -1,4 +1,4 @@
-"""可恢复 LoRA trainer：训练日志、External 有界验证与严格 checkpoint。"""
+"""仅从 step 0 启动的 LoRA trainer、External 有界验证与严格 checkpoint。"""
 
 from __future__ import annotations
 
@@ -20,13 +20,9 @@ from oa_groundrag.artifacts.io import (
     atomic_write_jsonl,
     first_symlink_component,
 )
-from oa_groundrag.data.rs_general.io import (
-    read_json,
-    read_jsonl,
-)
 from oa_groundrag.data.rs_general.dataset import ParentBalancedSampler
 
-from oa_groundrag.vlm.checkpoint import CheckpointManager, TrainingCursor, restore_rng_state
+from oa_groundrag.vlm.checkpoint import CheckpointManager, TrainingCursor
 from oa_groundrag.vlm.config import VLMConfig
 from oa_groundrag.grounding.contracts import (
     RUN_MANIFEST_SCHEMA_VERSION,
@@ -39,7 +35,6 @@ from .input_pipeline import (
     INPUT_PIPELINE_SYNC,
     DeterministicBatchPlanner,
     OrderedBatchPrefetcher,
-    sampler_state_at_epoch,
 )
 from .cuda_telemetry import CudaMicrobatchTelemetry
 from oa_groundrag.vlm.preflight import BenchmarkIdentity
@@ -153,7 +148,7 @@ def training_layout_identity(
     cuda_cache_cleanup_interval_steps: int | None = None,
     cuda_resource_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """返回 checkpoint/resume 所需的不可变物理训练布局。"""
+    """返回 checkpoint 身份所需的不可变物理训练布局。"""
 
     if (
         cuda_cache_cleanup_interval_steps is not None
@@ -367,238 +362,6 @@ def _train_log_row(
     }
 
 
-_TRAIN_LOG_FIELDS = {
-    "schema_version",
-    "step",
-    "loss",
-    "ema_loss",
-    "learning_rate",
-    "gradient_norm",
-    "gradient_clipped",
-    "samples",
-    "input_tokens",
-    "supervised_tokens",
-    "images",
-    "samples_per_second",
-    "tokens_per_second",
-    "step_duration_seconds",
-    "data_wait_seconds",
-    "data_wait_fraction",
-    "session_elapsed_seconds",
-    "run_elapsed_seconds",
-    "eta_seconds",
-    "cuda_allocated_gib",
-    "cuda_reserved_gib",
-    "cuda_peak_gib",
-}
-
-
-def _load_train_log(
-    path: Path,
-    *,
-    checkpoint_step: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    rows = read_jsonl(_regular_file(path, label="train_log"))
-    previous = 0
-    for row in rows:
-        if set(row) != _TRAIN_LOG_FIELDS or row.get(
-            "schema_version"
-        ) != TRAIN_LOG_SCHEMA_VERSION:
-            raise ModelError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "train_log schema/字段不兼容",
-            )
-        step = row.get("step")
-        if (
-            isinstance(step, bool)
-            or not isinstance(step, int)
-            or step <= previous
-        ):
-            raise ModelError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "train_log step 顺序不兼容",
-            )
-        for field in (
-            "samples",
-            "input_tokens",
-            "supervised_tokens",
-            "images",
-        ):
-            _artifact_int(row[field], label=f"train_log.{field}")
-        for field in (
-            "loss",
-            "ema_loss",
-            "learning_rate",
-            "gradient_norm",
-            "samples_per_second",
-            "tokens_per_second",
-            "step_duration_seconds",
-            "data_wait_seconds",
-            "data_wait_fraction",
-            "session_elapsed_seconds",
-            "run_elapsed_seconds",
-        ):
-            _artifact_number(
-                row[field],
-                label=f"train_log.{field}",
-                minimum=0.0,
-            )
-        for field in (
-            "eta_seconds",
-            "cuda_allocated_gib",
-            "cuda_reserved_gib",
-            "cuda_peak_gib",
-        ):
-            _artifact_number(
-                row[field],
-                label=f"train_log.{field}",
-                minimum=0.0,
-                allow_none=True,
-            )
-        if not isinstance(row["gradient_clipped"], bool):
-            raise ModelError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "train_log.gradient_clipped 必须是 bool",
-            )
-        previous = step
-    kept = [row for row in rows if row["step"] <= checkpoint_step]
-    orphaned = [row for row in rows if row["step"] > checkpoint_step]
-    if checkpoint_step > 0 and (
-        not kept or kept[-1]["step"] != checkpoint_step
-    ):
-        raise ModelError(
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            "train_log 未精确落到 resume checkpoint step",
-        )
-    return kept, orphaned
-
-
-def _load_sample_trace(
-    path: Path,
-    *,
-    expected_samples: int,
-    gradient_accumulation_steps: int,
-    batch_size: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    rows = read_jsonl(_regular_file(path, label="sample_trace"))
-    expected_fields = {
-        "schema_version",
-        "sequence_index",
-        "optimizer_step",
-        "micro_step",
-        "batch_slot",
-        "epoch",
-        "record_id",
-        "parent_id",
-        "task_family",
-    }
-    if len(rows) < expected_samples:
-        raise ModelError(
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            "sample_trace 落后于 checkpoint cursor",
-            details={"expected": expected_samples, "actual": len(rows)},
-        )
-    for index, row in enumerate(rows):
-        sequence_index = _artifact_int(
-            row.get("sequence_index"),
-            label="sample_trace.sequence_index",
-        )
-        optimizer_step = _artifact_int(
-            row.get("optimizer_step"),
-            label="sample_trace.optimizer_step",
-            minimum=1,
-        )
-        micro_step = _artifact_int(
-            row.get("micro_step"),
-            label="sample_trace.micro_step",
-            minimum=1,
-        )
-        batch_slot = _artifact_int(
-            row.get("batch_slot"),
-            label="sample_trace.batch_slot",
-        )
-        _artifact_int(
-            row.get("epoch"),
-            label="sample_trace.epoch",
-        )
-        samples_per_step = gradient_accumulation_steps * batch_size
-        position_in_step = index % samples_per_step
-        if (
-            set(row) != expected_fields
-            or row.get("schema_version") != SAMPLE_TRACE_SCHEMA_VERSION
-            or sequence_index != index
-            or optimizer_step
-            != index // samples_per_step + 1
-            or micro_step
-            != position_in_step // batch_size + 1
-            or batch_slot != position_in_step % batch_size
-        ):
-            raise ModelError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "sample_trace schema/顺序不兼容",
-            )
-        for field in ("record_id", "parent_id", "task_family"):
-            _artifact_string(
-                row[field],
-                label=f"sample_trace.{field}",
-            )
-    return rows[:expected_samples], rows[expected_samples:]
-
-
-def _resume_recovery_root(output_root: Path) -> Path:
-    root = output_root / "resume_recoveries"
-    linked = first_symlink_component(root)
-    if linked is not None or (
-        root.exists() and (not root.is_dir() or root.is_symlink())
-    ):
-        raise ModelError(
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            f"resume recovery 根非法：{root}",
-        )
-    root.mkdir(exist_ok=True)
-    return root
-
-
-def _archive_orphaned_rows(
-    *,
-    output_root: Path,
-    rows: Sequence[Mapping[str, Any]],
-    kind: str,
-    checkpoint_step: int,
-    final_index: int,
-) -> Path | None:
-    if not rows:
-        return None
-    recovery_root = _resume_recovery_root(output_root)
-    archive_path = recovery_root / (
-        f"{kind}_after-step-{checkpoint_step:08d}"
-        f"_through-{final_index:08d}.jsonl"
-    )
-    payload = [dict(row) for row in rows]
-    if archive_path.exists() or archive_path.is_symlink():
-        saved = read_jsonl(_regular_file(archive_path, label=kind))
-        if saved != payload:
-            raise ModelError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                f"既有 {kind} recovery artifact 内容不一致",
-            )
-    else:
-        atomic_write_jsonl(archive_path, payload)
-    return archive_path
-
-
-def _list_resume_recoveries(output_root: Path) -> list[str]:
-    root = output_root / "resume_recoveries"
-    if not root.exists() and not root.is_symlink():
-        return []
-    _resume_recovery_root(output_root)
-    output: list[str] = []
-    for path in sorted(root.iterdir()):
-        _regular_file(path, label="resume recovery")
-        output.append(path.relative_to(output_root).as_posix())
-    return output
-
-
 def _validation_from_row(row: Mapping[str, Any]) -> ValidationResult:
     expected = {
         "schema_version",
@@ -731,71 +494,6 @@ def _validation_from_row(row: Mapping[str, Any]) -> ValidationResult:
     return result
 
 
-def _load_validation_history(
-    path: Path,
-    *,
-    checkpoint_step: int,
-    row_parser: Callable[[Mapping[str, Any]], ValidationResult] = _validation_from_row,
-) -> list[ValidationResult]:
-    if not path.exists():
-        return []
-    rows = read_jsonl(_regular_file(path, label="validation_results"))
-    results = [row_parser(row) for row in rows]
-    steps = [result.step for result in results]
-    if (
-        steps != sorted(set(steps))
-        or any(step > checkpoint_step for step in steps)
-    ):
-        raise ModelError(
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            "validation_results step 与 resume checkpoint 不兼容",
-        )
-    return results
-
-
-def _best_result(
-    history: Sequence[ValidationResult],
-) -> ValidationResult | None:
-    best: ValidationResult | None = None
-    for result in history:
-        if validation_is_better(result, best):
-            best = result
-    return best
-
-
-def _pending_validation_at_checkpoint(
-    history: Sequence[ValidationResult],
-    *,
-    checkpoint_step: int,
-    validation_interval: int,
-) -> bool:
-    scheduled = set(
-        range(
-            validation_interval,
-            checkpoint_step + 1,
-            validation_interval,
-        )
-    )
-    present = {result.step for result in history}
-    unexpected = sorted(present - scheduled)
-    missing = sorted(scheduled - present)
-    if unexpected:
-        raise ModelError(
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-            "validation_results 含非计划 step",
-            details={"unexpected_steps": unexpected},
-        )
-    if not missing:
-        return False
-    if missing == [checkpoint_step]:
-        return True
-    raise ModelError(
-        ReasonCode.CHECKPOINT_INCOMPATIBLE,
-        "resume checkpoint 之前存在无法补算的 validation 缺口",
-        details={"missing_steps": missing},
-    )
-
-
 def _best_pointer(
     *,
     output_root: Path,
@@ -901,7 +599,6 @@ class DescriptionTrainer:
         self,
         dataset: DescriptionTrainingDataset,
         *,
-        resume_checkpoint: Path | None = None,
         stop_after_steps: int | None = None,
     ) -> TrainingResult:
         config = self.config
@@ -983,193 +680,41 @@ class DescriptionTrainer:
         selection_path = output_root / "validation_selection.json"
         best_path = output_root / "best_checkpoint.json"
         report_path = output_root / "training_report.json"
-        log_rows: list[dict[str, Any]]
-        trace_rows: list[dict[str, Any]]
-        validation_history: list[ValidationResult]
-        resume_recoveries: list[str]
-        pending_validation = False
+        log_rows: list[dict[str, Any]] = []
+        trace_rows: list[dict[str, Any]] = []
+        validation_history: list[ValidationResult] = []
         prior_elapsed = 0.0
         cumulative_input_tokens = 0
         cumulative_supervised_tokens = 0
         cumulative_images = 0
         ema_loss: float | None = None
-        if resume_checkpoint is None:
-            if output_root.exists() or output_root.is_symlink():
-                raise ModelError(
-                    ReasonCode.OUTPUT_EXISTS,
-                    f"fresh training output_root 已存在：{output_root}",
-                )
-            output_root.mkdir(parents=True)
-            atomic_write_json(
-                output_root / "config_snapshot.json",
-                config.snapshot_dict(),
+        if output_root.exists() or output_root.is_symlink():
+            raise ModelError(
+                ReasonCode.OUTPUT_EXISTS,
+                f"training output_root 必须是全新路径：{output_root}",
             )
-            atomic_write_json(
-                selection_path,
-                self.validation_selection.to_dict(),
-            )
-            set_global_seed(config.run.seed)
-            cursor = TrainingCursor(0, 0, 0, 0)
-            log_rows = []
-            trace_rows = []
-            validation_history = []
-            resume_recoveries = []
-        else:
-            if not output_root.is_dir() or output_root.is_symlink():
-                raise ModelError(
-                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                    "resume 要求显式 checkpoint 且原 output_root 存在",
-                )
-            try:
-                Path(resume_checkpoint).resolve().relative_to(
-                    output_root.resolve()
-                )
-            except ValueError as error:
-                raise ModelError(
-                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                    "resume checkpoint 必须位于当前 output_root",
-                ) from error
-            saved_selection = read_json(
-                _regular_file(
-                    selection_path,
-                    label="validation_selection",
-                )
-            )
-            if saved_selection != self.validation_selection.to_dict():
-                raise ModelError(
-                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                    "validation selection 与原训练运行不一致",
-                )
-            payload = manager.load(
-                resume_checkpoint,
-                expected_config_semantic_sha256=config.semantic_sha256,
-                expected_benchmark_identity=benchmark_row,
-                expected_validation_selection_identity=validation_identity,
-                expected_model_identity=model_identity,
-                expected_processor_identity=self.processor_identity,
-                expected_training_layout=training_layout,
-                expected_trainable_names=self.model.trainable_names,
-            )
-            self.model.load_trainable_state_dict(payload.trainable_state)
-            optimizer.load_state_dict(payload.optimizer_state)
-            scheduler.load_state_dict(payload.scheduler_state)
-            sampler.load_state_dict(payload.sampler_state)
-            restore_rng_state(payload.rng_state)
-            cursor = payload.cursor
-            if cursor.micro_step != 0:
-                raise ModelError(
-                    ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                    "当前 checkpoint 合同只在 optimizer boundary 保存",
-                )
-            for child in (output_root / "checkpoints").glob("step-*"):
-                if child.is_dir():
-                    try:
-                        child_step = int(child.name.removeprefix("step-"))
-                    except ValueError as error:
-                        raise ModelError(
-                            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                            f"非法 checkpoint 目录名：{child.name}",
-                        ) from error
-                    if child_step > cursor.global_step:
-                        raise ModelError(
-                            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                            "output_root 含晚于显式 resume checkpoint 的目录",
-                            details={"later_checkpoint": str(child)},
-                        )
-            log_rows, orphaned_log_rows = _load_train_log(
-                train_log_path,
-                checkpoint_step=cursor.global_step,
-            )
-            expected_samples = (
-                cursor.global_step
-                * config.training.gradient_accumulation_steps
-                * config.training.batch_size
-            )
-            trace_rows, orphaned_trace_rows = _load_sample_trace(
-                trace_path,
-                expected_samples=expected_samples,
-                gradient_accumulation_steps=(
-                    config.training.gradient_accumulation_steps
-                ),
-                batch_size=config.training.batch_size,
-            )
-            archived_log = _archive_orphaned_rows(
-                output_root=output_root,
-                rows=orphaned_log_rows,
-                kind="train_log",
-                checkpoint_step=cursor.global_step,
-                final_index=(
-                    cursor.global_step
-                    if not orphaned_log_rows
-                    else int(orphaned_log_rows[-1]["step"])
-                ),
-            )
-            archived_trace = _archive_orphaned_rows(
-                output_root=output_root,
-                rows=orphaned_trace_rows,
-                kind="sample_trace",
-                checkpoint_step=cursor.global_step,
-                final_index=(
-                    expected_samples - 1
-                    if not orphaned_trace_rows
-                    else int(orphaned_trace_rows[-1]["sequence_index"])
-                ),
-            )
-            if archived_log is not None:
-                atomic_write_jsonl(train_log_path, log_rows)
-            if archived_trace is not None:
-                atomic_write_jsonl(trace_path, trace_rows)
-            resume_recoveries = _list_resume_recoveries(output_root)
-            validation_history = _load_validation_history(
-                validation_path,
-                checkpoint_step=cursor.global_step,
-                row_parser=self.validation_row_parser,
-            )
-            pending_validation = _pending_validation_at_checkpoint(
-                validation_history,
-                checkpoint_step=cursor.global_step,
-                validation_interval=config.training.validation_interval,
-            )
-            if log_rows:
-                last_log = log_rows[-1]
-                prior_elapsed = float(last_log["run_elapsed_seconds"])
-                cumulative_input_tokens = int(last_log["input_tokens"])
-                cumulative_supervised_tokens = int(
-                    last_log["supervised_tokens"]
-                )
-                cumulative_images = int(last_log["images"])
-                ema_loss = float(last_log["ema_loss"])
-            expected_best = select_best_result(validation_history)
-            if expected_best is None:
-                if best_path.exists() or best_path.is_symlink():
-                    raise ModelError(
-                        ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                        "无 validation history 却存在 best_checkpoint.json",
-                    )
-            else:
-                saved_best = read_json(
-                    _regular_file(best_path, label="best_checkpoint")
-                )
-                if saved_best != _best_pointer(
-                    output_root=output_root,
-                    result=expected_best,
-                    selection_metric=self.validation_selection_metric,
-                ):
-                    raise ModelError(
-                        ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                        "best_checkpoint 与 validation history 不一致",
-                    )
+        output_root.mkdir(parents=True)
+        atomic_write_json(
+            output_root / "config_snapshot.json",
+            config.snapshot_dict(),
+        )
+        atomic_write_json(
+            selection_path,
+            self.validation_selection.to_dict(),
+        )
+        set_global_seed(config.run.seed)
+        cursor = TrainingCursor(0, 0, 0, 0)
         target_steps = config.training.max_steps
         if stop_after_steps is not None:
             if (
                 isinstance(stop_after_steps, bool)
                 or not isinstance(stop_after_steps, int)
-                or stop_after_steps <= cursor.global_step
+                or stop_after_steps <= 0
                 or stop_after_steps > target_steps
             ):
                 raise ModelError(
                     ReasonCode.TYPE_MISMATCH,
-                    "stop_after_steps 必须位于 (current_step,max_steps]",
+                    "stop_after_steps 必须位于 [1,max_steps]",
                 )
             target_steps = stop_after_steps
         progress = self.progress or TrainingProgress(
@@ -1230,11 +775,6 @@ class DescriptionTrainer:
             checkpoint_interval=config.training.checkpoint_interval,
             output_root=output_root,
         )
-        if resume_recoveries:
-            progress.phase(
-                "[resume] recovery_artifacts="
-                + ",".join(resume_recoveries)
-            )
         self.model.train()
         optimizer.zero_grad(set_to_none=True)
         epoch = cursor.epoch
@@ -1285,34 +825,6 @@ class DescriptionTrainer:
                 ),
                 worker_collators=worker_collators,
             )
-            if pending_validation:
-                validation = self.validation_evaluator(
-                    model=self.model,
-                    collator=self.validation_collator,
-                    dataset=self.validation_dataset,
-                    selection=self.validation_selection,
-                    device=self.device,
-                    step=global_step,
-                    progress=progress,
-                )
-                validation_history.append(validation)
-                atomic_write_jsonl(
-                    validation_path,
-                    (
-                        item.to_dict()
-                        for item in validation_history
-                    ),
-                )
-                incumbent = select_best_result(validation_history[:-1])
-                if self.validation_better(validation, incumbent):
-                    atomic_write_json(
-                        best_path,
-                        _best_pointer(
-                            output_root=output_root,
-                            result=validation,
-                            selection_metric=self.validation_selection_metric,
-                        ),
-                    )
             optimizer_step_started = time.perf_counter()
             data_wait_seconds = 0.0
             while global_step < target_steps:
@@ -1551,15 +1063,7 @@ class DescriptionTrainer:
                     last_checkpoint = manager.save(
                         checkpoint,
                         trainable_state=self.model.trainable_state_dict(),
-                        optimizer_state=optimizer.state_dict(),
-                        scheduler_state=scheduler.state_dict(),
                         cursor=cursor,
-                        sampler_state=sampler_state_at_epoch(
-                            sampler,
-                            epoch=epoch,
-                        ),
-                        multireference_epoch=epoch,
-                        config_snapshot=config.snapshot_dict(),
                         config_semantic_sha256=config.semantic_sha256,
                         benchmark_identity=benchmark_row,
                         validation_selection_identity=validation_identity,
@@ -1567,6 +1071,10 @@ class DescriptionTrainer:
                         processor_identity=self.processor_identity,
                         training_layout=training_layout,
                         trainable_names=self.model.trainable_names,
+                        selection_metrics={
+                            "training_loss": step_loss,
+                            "ema_loss": ema_loss,
+                        },
                     )
                     progress.checkpoint(
                         step=global_step,
@@ -1650,7 +1158,7 @@ class DescriptionTrainer:
             status = (
                 "completed"
                 if global_step == config.training.max_steps
-                else "paused"
+                else "bounded_complete"
             )
             report = {
                 "schema_version": TRAINING_REPORT_SCHEMA_VERSION,
@@ -1716,7 +1224,6 @@ class DescriptionTrainer:
                         if best_checkpoint is not None
                         else None
                     ),
-                    "resume_recoveries": resume_recoveries,
                 },
             }
             if self.cuda_resource_telemetry is not None:
@@ -1752,7 +1259,6 @@ class DescriptionTrainer:
                         else str(best_checkpoint.resolve())
                     ),
                     "training_report": str(report_path.resolve()),
-                    "resume_recoveries": resume_recoveries,
                     "formal_acceptance": False,
                 },
             )

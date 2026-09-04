@@ -13,12 +13,12 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
+from oa_groundrag.artifacts.io import first_symlink_component
 from oa_groundrag.data.oa_auxseg.dataset import (
     BenchmarkDataset,
     atomic_write_json,
     atomic_write_jsonl,
     collate_benchmark_samples,
-    read_jsonl,
     sha256_file,
 )
 
@@ -26,9 +26,6 @@ from oa_groundrag.segmentation.checkpoint import (
     maximum_parameter_change,
     model_from_checkpoint,
     module_parameter_snapshot,
-    optimizer_state_to_device,
-    read_checkpoint,
-    restore_training_state,
     save_training_checkpoint,
 )
 from oa_groundrag.segmentation.config import load_runtime_config, resolve_runtime
@@ -220,18 +217,8 @@ def optimizer_learning_rates(
 
 
 def make_scaler(device: torch.device) -> torch.amp.GradScaler:
-    # bf16 不需要动态 loss scaling；仍保存 AMP state 以固定 checkpoint 合同。
+    # bf16 不需要动态 loss scaling；scaler 只服务当前运行，不写入 checkpoint。
     return torch.amp.GradScaler("cuda", enabled=False)
-
-
-
-
-
-
-
-
-
-
 
 
 def _gradient_modules(model: OAAuxSegModel) -> dict[str, nn.Module]:
@@ -365,18 +352,6 @@ def _validation_is_better(
         -float(best["no_target_false_positive_rate"]),
     )
     return candidate_key > best_key
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _acceptance_collated(
@@ -548,62 +523,12 @@ def checkpoint_reload_difference(
 
 
 def _new_output_directory(path: Path) -> None:
-    if path.exists() and any(path.iterdir()):
-        raise FileExistsError(f"输出目录非空，拒绝覆盖：{path}")
-    path.mkdir(parents=True, exist_ok=True)
-
-
-def _training_state(
-    *,
-    config: RuntimeConfig,
-    loss_history: Sequence[float],
-    ema_loss: float | None,
-    initial_ema_loss: float | None,
-    gradient_max: Mapping[str, float],
-    parameter_change_max: Mapping[str, float],
-    training_step_seconds: float,
-    training_samples_seen: int,
-    training_steps_timed: int,
-    clipped_steps: int,
-    clip_scale_sum: float,
-    clip_scale_min: float,
-    validation_trajectory: Sequence[Mapping[str, Any]],
-    best_selection: Mapping[str, Any] | None,
-    training_subset_counts: Mapping[str, int],
-    training_subset_reason_counts: Mapping[str, int],
-    training_native_auxiliary_samples: int,
-    training_active_auxiliary_samples: int,
-) -> dict[str, Any]:
-    return {
-        "runtime_config": config.to_dict(),
-        "loss_history": list(loss_history),
-        "ema_loss": ema_loss,
-        "initial_ema_loss": initial_ema_loss,
-        "gradient_max": dict(gradient_max),
-        "parameter_change_max": dict(parameter_change_max),
-        "training_step_seconds": float(training_step_seconds),
-        "training_samples_seen": int(training_samples_seen),
-        "training_steps_timed": int(training_steps_timed),
-        "clipped_steps": int(clipped_steps),
-        "clip_scale_sum": float(clip_scale_sum),
-        "clip_scale_min": float(clip_scale_min),
-        "validation_trajectory": [
-            dict(item) for item in validation_trajectory
-        ],
-        "best_selection": (
-            dict(best_selection) if best_selection is not None else None
-        ),
-        "training_subset_counts": dict(training_subset_counts),
-        "training_subset_reason_counts": dict(
-            training_subset_reason_counts
-        ),
-        "training_native_auxiliary_samples": int(
-            training_native_auxiliary_samples
-        ),
-        "training_active_auxiliary_samples": int(
-            training_active_auxiliary_samples
-        ),
-    }
+    linked = first_symlink_component(path)
+    if linked is not None:
+        raise FileExistsError(f"输出路径含符号链接，拒绝写入：{linked}")
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(f"输出目录已存在，拒绝覆盖：{path}")
+    path.mkdir(parents=True)
 
 
 def run_training(
@@ -611,7 +536,6 @@ def run_training(
     *,
     repo_root: Path,
     capacity_overfit: bool,
-    resume_checkpoint: Path | None = None,
     progress: TrainingProgress | None = None,
 ) -> dict[str, Any]:
     terminal = (
@@ -624,17 +548,10 @@ def run_training(
             config,
             repo_root=repo_root,
             capacity_overfit=capacity_overfit,
-            resume_checkpoint=resume_checkpoint,
             progress=terminal,
         )
     finally:
         terminal.close()
-
-
-
-
-
-
 
 
 def _run_training_impl(
@@ -642,7 +559,6 @@ def _run_training_impl(
     *,
     repo_root: Path,
     capacity_overfit: bool,
-    resume_checkpoint: Path | None,
     progress: TrainingProgress,
 ) -> dict[str, Any]:
     wall_started = time.perf_counter()
@@ -651,7 +567,7 @@ def _run_training_impl(
     )
     if config.num_workers != 0:
         raise ValueError(
-            "v6 可恢复定长训练 batcher 要求 num_workers=0；"
+            "确定性定长训练 batcher 要求 num_workers=0；"
             "评价与推理仍可使用多 worker"
         )
     benchmark_root, output_dir, backbone_weights, device = resolve_runtime(
@@ -677,140 +593,40 @@ def _run_training_impl(
         if config.variant == "proposed_dropout" and not capacity_overfit
         else None
     )
-    if resume_checkpoint is None:
-        require_local_backbone(backbone_weights)
-        _new_output_directory(output_dir)
-        registry = registry_from_benchmark(benchmark_root)
-        model = OAAuxSegModel(
-            OAAuxSegConfig(
-                variant=config.variant,
-                optical_stochastic_depth=config.optical_stochastic_depth,
-                auxiliary_drop_path=config.auxiliary_drop_path,
-                decoder_dropout=config.decoder_dropout,
-                region_threshold=config.region_threshold,
-                min_region_area=config.min_region_area,
-            ),
-            registry,
-            backbone_weights=backbone_weights,
-            gradient_checkpointing=config.gradient_checkpointing,
-        ).to(device)
-        start_step = 0
-        loss_history: list[float] = []
-        ema_loss: float | None = None
-        initial_ema_loss: float | None = None
-        gradient_max: dict[str, float] = defaultdict(float)
-        parameter_change_max: dict[str, float] = defaultdict(float)
-        training_step_seconds = 0.0
-        training_samples_seen = 0
-        training_steps_timed = 0
-        clipped_steps = 0
-        clip_scale_sum = 0.0
-        clip_scale_min = 1.0
-        validation_trajectory: list[dict[str, Any]] = []
-        best_selection: dict[str, Any] | None = None
-        training_subset_counts: Counter[str] = Counter()
-        training_subset_reason_counts: Counter[str] = Counter()
-        training_native_auxiliary_samples = 0
-        training_active_auxiliary_samples = 0
-        resume_payload = None
-    else:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        resume_payload = read_checkpoint(
-            Path(resume_checkpoint),
-            expected_benchmark_contract=benchmark_contract,
-        )
-        model = model_from_checkpoint(resume_payload, device=device)
-        model.set_gradient_checkpointing(config.gradient_checkpointing)
-        if model.variant != config.variant:
-            raise ValueError("resume checkpoint variant 与配置不一致")
-        if model.registry != registry_from_benchmark(benchmark_root):
-            raise ValueError("resume checkpoint registry 与 Benchmark 不一致")
-        start_step = int(resume_payload["step"])
-        state = resume_payload["training_state"]
-        old_config = dict(state["runtime_config"])
-        for name in (
-            "variant",
-            "backbone",
-            "seed",
-            "batch_size",
-            "normalization",
-            "max_steps",
-            "backbone_lr",
-            "new_lr",
-            "weight_decay",
-            "warmup_ratio",
-            "min_lr_ratio",
-            "modality_dropout",
-            "train_sampler",
-            "optical_stochastic_depth",
-            "auxiliary_drop_path",
-            "decoder_dropout",
-            "use_bf16",
-            "grad_clip",
-            "gradient_checkpointing",
-        ):
-            if old_config[name] != getattr(config, name):
-                raise ValueError(f"resume 配置字段 {name} 不一致")
-        loss_history = [float(value) for value in state["loss_history"]]
-        ema_loss = (
-            None if state["ema_loss"] is None else float(state["ema_loss"])
-        )
-        initial_ema_loss = (
-            None
-            if state["initial_ema_loss"] is None
-            else float(state["initial_ema_loss"])
-        )
-        gradient_max = defaultdict(
-            float,
-            {str(key): float(value) for key, value in state["gradient_max"].items()},
-        )
-        parameter_change_max = defaultdict(
-            float,
-            {
-                str(key): float(value)
-                for key, value in state.get(
-                    "parameter_change_max", {}
-                ).items()
-            },
-        )
-        training_step_seconds = float(
-            state.get("training_step_seconds", 0.0)
-        )
-        training_samples_seen = int(state.get("training_samples_seen", 0))
-        training_steps_timed = int(state.get("training_steps_timed", 0))
-        clipped_steps = int(state.get("clipped_steps", 0))
-        clip_scale_sum = float(state.get("clip_scale_sum", 0.0))
-        clip_scale_min = float(state.get("clip_scale_min", 1.0))
-        validation_trajectory = [
-            dict(item)
-            for item in state.get("validation_trajectory", [])
-        ]
-        stored_best = state.get("best_selection")
-        best_selection = (
-            None if stored_best is None else dict(stored_best)
-        )
-        training_subset_counts = Counter(
-            {
-                str(key): int(value)
-                for key, value in state.get(
-                    "training_subset_counts", {}
-                ).items()
-            }
-        )
-        training_subset_reason_counts = Counter(
-            {
-                str(key): int(value)
-                for key, value in state.get(
-                    "training_subset_reason_counts", {}
-                ).items()
-            }
-        )
-        training_native_auxiliary_samples = int(
-            state.get("training_native_auxiliary_samples", 0)
-        )
-        training_active_auxiliary_samples = int(
-            state.get("training_active_auxiliary_samples", 0)
-        )
+    require_local_backbone(backbone_weights)
+    _new_output_directory(output_dir)
+    registry = registry_from_benchmark(benchmark_root)
+    model = OAAuxSegModel(
+        OAAuxSegConfig(
+            variant=config.variant,
+            optical_stochastic_depth=config.optical_stochastic_depth,
+            auxiliary_drop_path=config.auxiliary_drop_path,
+            decoder_dropout=config.decoder_dropout,
+            region_threshold=config.region_threshold,
+            min_region_area=config.min_region_area,
+        ),
+        registry,
+        backbone_weights=backbone_weights,
+        gradient_checkpointing=config.gradient_checkpointing,
+    ).to(device)
+    start_step = 0
+    loss_history: list[float] = []
+    ema_loss: float | None = None
+    initial_ema_loss: float | None = None
+    gradient_max: dict[str, float] = defaultdict(float)
+    parameter_change_max: dict[str, float] = defaultdict(float)
+    training_step_seconds = 0.0
+    training_samples_seen = 0
+    training_steps_timed = 0
+    clipped_steps = 0
+    clip_scale_sum = 0.0
+    clip_scale_min = 1.0
+    validation_trajectory: list[dict[str, Any]] = []
+    best_selection: dict[str, Any] | None = None
+    training_subset_counts: Counter[str] = Counter()
+    training_subset_reason_counts: Counter[str] = Counter()
+    training_native_auxiliary_samples = 0
+    training_active_auxiliary_samples = 0
     optimizer = make_optimizer(model, config)
     scheduler = make_scheduler(
         optimizer,
@@ -842,43 +658,14 @@ def _run_training_impl(
         shuffle=False,
         num_workers=config.num_workers,
     )
-    if resume_payload is not None:
-        restore_training_state(
-            payload=resume_payload,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            scaler=scaler,
-        )
-        optimizer_state_to_device(optimizer, device)
-        if subset_sampler is not None:
-            sampler_state = resume_payload["subset_sampler_state"]
-            if sampler_state is None:
-                raise ValueError("proposed_dropout checkpoint 缺少 sampler state")
-            subset_sampler.load_state_dict(sampler_state)
-        train_batcher.load_state_dict(
-            resume_payload["training_batcher_state"]
-        )
     modules = _gradient_modules(model)
     snapshots = {
         name: module_parameter_snapshot(module) for name, module in modules.items()
     }
     train_log_path = output_dir / "train_log.jsonl"
-    logs: list[dict[str, Any]] = (
-        [dict(item) for item in read_jsonl(train_log_path)]
-        if resume_payload is not None and train_log_path.is_file()
-        else []
-    )
+    logs: list[dict[str, Any]] = []
     checkpoint_path = output_dir / "checkpoint_last.pt"
     best_checkpoint_path = output_dir / "checkpoint_best.pt"
-    if (
-        resume_payload is not None
-        and best_selection is not None
-        and not best_checkpoint_path.is_file()
-    ):
-        raise FileNotFoundError(
-            "resume checkpoint 记录了 best_selection，"
-            f"但输出目录缺少 {best_checkpoint_path.name}"
-        )
     checkpoint_total_seconds = 0.0
     speed_window: deque[tuple[float, int]] = deque(
         maxlen=max(config.log_interval, 10)
@@ -910,7 +697,6 @@ def _run_training_impl(
         path: Path,
         *,
         step: int,
-        training_state: Mapping[str, Any],
         label: str,
     ) -> tuple[float, int]:
         progress.phase(f"[checkpoint] step={step} saving {label} {path}")
@@ -918,18 +704,13 @@ def _run_training_impl(
         save_training_checkpoint(
             path,
             model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            scaler=scaler,
             step=step,
             benchmark_contract=benchmark_contract,
-            subset_sampler_state=(
-                subset_sampler.state_dict()
-                if subset_sampler is not None
-                else None
-            ),
-            training_batcher_state=train_batcher.state_dict(),
-            training_state=training_state,
+            selection_metrics={
+                "training_loss": loss_history[-1],
+                "ema_loss": ema_loss,
+                "best_selection": best_selection,
+            },
         )
         duration = time.perf_counter() - started
         size = path.stat().st_size
@@ -941,9 +722,9 @@ def _run_training_impl(
         )
         return duration, size
 
-    actual_step = start_step
+    actual_step = 0
     early_capacity_acceptance: dict[str, bool] | None = None
-    for step in range(start_step + 1, config.max_steps + 1):
+    for step in range(1, config.max_steps + 1):
         actual_step = step
         step_started = time.perf_counter()
         prepared = prepare_collated_batch(train_batcher.next()).to(
@@ -1222,37 +1003,10 @@ def _run_training_impl(
                     parameter_change_max[name],
                     maximum_parameter_change(module, snapshots[name]),
                 )
-        training_state = _training_state(
-            config=config,
-            loss_history=loss_history,
-            ema_loss=ema_loss,
-            initial_ema_loss=initial_ema_loss,
-            gradient_max=gradient_max,
-            parameter_change_max=parameter_change_max,
-            training_step_seconds=training_step_seconds,
-            training_samples_seen=training_samples_seen,
-            training_steps_timed=training_steps_timed,
-            clipped_steps=clipped_steps,
-            clip_scale_sum=clip_scale_sum,
-            clip_scale_min=clip_scale_min,
-            validation_trajectory=validation_trajectory,
-            best_selection=best_selection,
-            training_subset_counts=training_subset_counts,
-            training_subset_reason_counts=(
-                training_subset_reason_counts
-            ),
-            training_native_auxiliary_samples=(
-                training_native_auxiliary_samples
-            ),
-            training_active_auxiliary_samples=(
-                training_active_auxiliary_samples
-            ),
-        )
         if is_new_best:
             duration, size = save_current_checkpoint(
                 best_checkpoint_path,
                 step=step,
-                training_state=training_state,
                 label="best",
             )
             checkpoint_total_seconds += duration
@@ -1280,7 +1034,6 @@ def _run_training_impl(
             duration, size = save_current_checkpoint(
                 checkpoint_path,
                 step=step,
-                training_state=training_state,
                 label="last",
             )
             checkpoint_total_seconds += duration

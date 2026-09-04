@@ -1,6 +1,31 @@
-schema_version: oa_groundrag.grounded_runtime.config.v1
-base_config: ../rs_general/rs_generaldesc_lora_qwen3vl_2b.yaml
-workflow_root: ../../../outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1
+schema_version: oa_groundrag.grounded_runtime.config.v2
+bundle_root: ../../../..
+workflow_root: paper7_VLM/outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen3vl_2b_rsinit_v1
 published_training_config_semantic_sha256: 8ea33e0e058a75a9d27ce248684bd6734fc10e3d09ffe22db16cb5b904ca943d
+model:
+  backend: qwen3_vl
+  path: paper7_VLM/models_zoo/Qwen3-VL-2B-Instruct
+  processor_path: paper7_VLM/models_zoo/Qwen3-VL-2B-Instruct
+  local_files_only: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  trust_remote_code: false
+adaptation:
+  strategy: lora
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  rank: 8
+  alpha: 16
+  dropout: 0.05
+  freeze_vision: true
+  freeze_merger: true
+limits:
+  max_images: 5
+  max_input_tokens: 4096
+  min_pixels: 12544
+  max_pixels: 200704
+  max_new_tokens: 768
 generation:
   max_new_tokens: 768
+  do_sample: false
+  temperature: 0.0
+  top_p: 1.0

@@ -23,7 +23,6 @@ from oa_groundrag.segmentation.checkpoint import (
 )
 from oa_groundrag.segmentation.contracts import (
     CONFIG_SCHEMA_VERSION,
-    CHECKPOINT_SCHEMA_VERSION,
     INFERENCE_SCHEMA_VERSION,
     ModelRegistry,
     OAAuxSegBatch,
@@ -55,7 +54,7 @@ from oa_groundrag.segmentation.inference import run_inference
 from oa_groundrag.training.segmentation.engine import (
     _acceptance_collated,
     _capacity_acceptance,
-    _training_state,
+    _new_output_directory,
     _validation_is_better,
     effective_training_config,
     make_optimizer,
@@ -209,6 +208,14 @@ class OAAuxSegTest(unittest.TestCase):
     def setUp(self) -> None:
         self.model.variant = "proposed_dropout"
         self.model.eval()
+
+    def test_training_output_directory_must_not_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fresh = Path(temporary) / "fresh"
+            _new_output_directory(fresh)
+            self.assertTrue(fresh.is_dir())
+            with self.assertRaisesRegex(FileExistsError, "已存在"):
+                _new_output_directory(fresh)
 
     def test_single_batch_inference_helper_matches_existing_math(self) -> None:
         prepared = PreparedBatch(
@@ -1021,32 +1028,6 @@ class OAAuxSegTest(unittest.TestCase):
                 best,
             )
         )
-        state = _training_state(
-            config=overfit,
-            loss_history=[1.0, 0.5],
-            ema_loss=0.5,
-            initial_ema_loss=1.0,
-            gradient_max={"mspa_stride4": 1.0},
-            parameter_change_max={"mspa_stride4": 0.1},
-            training_step_seconds=2.0,
-            training_samples_seen=16,
-            training_steps_timed=2,
-            clipped_steps=1,
-            clip_scale_sum=1.5,
-            clip_scale_min=0.5,
-            validation_trajectory=[],
-            best_selection=None,
-            training_subset_counts={"none": 1, "single": 1},
-            training_subset_reason_counts={
-                "native_none": 1,
-                "active": 1,
-            },
-            training_native_auxiliary_samples=1,
-            training_active_auxiliary_samples=1,
-        )
-        self.assertEqual(
-            state["parameter_change_max"]["mspa_stride4"], 0.1
-        )
         capacity = _capacity_acceptance(
             loss_history=[1.0] * 10 + [0.01] * 10,
             metrics={
@@ -1480,7 +1461,7 @@ class TrainingProgressTest(unittest.TestCase):
         self.assertNotIn("\x1b", output)
         self.assertTrue(progress.closed)
 
-    def test_tty_progress_resume_evaluation_and_exception_close(self) -> None:
+    def test_tty_progress_nonzero_display_evaluation_and_exception_close(self) -> None:
         stream = _PseudoTTY()
         progress = TrainingProgress(
             log_interval=10, stream=stream, force_tty=True
@@ -1681,7 +1662,7 @@ class FinalizationTest(unittest.TestCase):
         }
         return config, rows, selected_payload, last_payload
 
-    def test_manual_stop_evidence_keeps_log_tail_without_resume(self) -> None:
+    def test_manual_stop_evidence_keeps_uncheckpointed_log_tail(self) -> None:
         config, rows, selected_payload, last_payload = self._evidence()
         evidence = _validate_finalization_evidence(
             config=config,
@@ -1701,6 +1682,25 @@ class FinalizationTest(unittest.TestCase):
                 "included_in_final_weights": False,
             },
         )
+
+    def test_minimal_inference_checkpoints_support_final_selection(self) -> None:
+        config, rows, selected_payload, last_payload = self._evidence()
+        selected_state = selected_payload.pop("training_state")
+        last_state = last_payload.pop("training_state")
+        selected_payload["selection_metrics"] = {
+            "best_selection": selected_state["best_selection"],
+        }
+        last_payload["selection_metrics"] = {
+            "best_selection": last_state["best_selection"],
+        }
+        evidence = _validate_finalization_evidence(
+            config=config,
+            rows=rows,
+            selected_payload=selected_payload,
+            last_payload=last_payload,
+        )
+        self.assertEqual(evidence["selected_checkpoint_step"], 2)
+        self.assertEqual(evidence["last_checkpoint_step"], 3)
 
     def test_finalization_rejects_best_selection_mismatch(self) -> None:
         config, rows, selected_payload, last_payload = self._evidence()
@@ -1815,10 +1815,6 @@ class FinalizationTest(unittest.TestCase):
                     "oa_groundrag.training.segmentation.finalization.make_optimizer",
                     side_effect=AssertionError("finalize 不能创建 optimizer"),
                 ),
-                patch(
-                    "oa_groundrag.training.segmentation.finalization.save_training_checkpoint",
-                    side_effect=AssertionError("finalize 不能保存 checkpoint"),
-                ),
             ):
                 report = finalize_training_run(
                     config,
@@ -1830,7 +1826,7 @@ class FinalizationTest(unittest.TestCase):
                 report["schema_version"], TRAINING_REPORT_SCHEMA_VERSION
             )
             self.assertEqual(report["status"], "completed")
-            self.assertFalse(report["resume_required"])
+            self.assertNotIn("resume_required", report)
             self.assertFalse(report["gate_a_evaluated"])
             self.assertFalse(report["formal_acceptance"])
             self.assertFalse(report["test_evaluated"])

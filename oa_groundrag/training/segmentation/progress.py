@@ -87,14 +87,11 @@ class TrainingProgress:
         output_dir: Path,
     ) -> None:
         device_label = device if gpu_name is None else f"{device} ({gpu_name})"
-        resume_label = (
-            f" resume_step={start_step}" if start_step > 0 else ""
-        )
         self._emit(
             "[setup] "
             f"command={command} variant={variant} device={device_label} "
             f"train={train_samples} val={validation_samples} "
-            f"batch={batch_size} steps={total_steps}{resume_label} "
+            f"batch={batch_size} steps={total_steps} start_step={start_step} "
             f"log/eval/ckpt={self.log_interval}/{eval_interval}/"
             f"{checkpoint_interval} output={output_dir}"
         )

@@ -400,131 +400,55 @@ class TrainerCheckpointTests(unittest.TestCase):
         manifest = read_json(first.checkpoint / "manifest.json")
         self.assertEqual(manifest["training_layout"], expected)
 
-        with self.assertRaises(CheckpointError):
+        with self.assertRaises(ModelError) as caught:
             self.trainer(stage5_config, TinyAdapter()).fit(
                 TinyDataset(),
-                resume_checkpoint=first.checkpoint,
             )
-        with patch("oa_groundrag.training.vlm.trainer.clear_cuda_cache") as cleanup:
-            resumed = self.trainer(
-                stage5_config,
-                TinyAdapter(),
-                cuda_cache_cleanup_interval_steps=1,
-            ).fit(TinyDataset(), resume_checkpoint=first.checkpoint)
-        self.assertEqual(resumed.cursor.global_step, 2)
-        cleanup.assert_called_once_with(torch.device("cpu"))
+        self.assertEqual(caught.exception.code, ReasonCode.OUTPUT_EXISTS)
 
-    def test_interrupted_resume_matches_uninterrupted_next_sample_and_weights(
+    def test_interrupted_run_requires_new_output_and_restarts_from_step_zero(
         self,
     ) -> None:
-        uninterrupted_config = replace(
+        interrupted_config = replace(
             self.config,
             run=replace(
                 self.config.run,
-                output_root=self.base / "uninterrupted",
-            ),
-        )
-        torch.manual_seed(91)
-        uninterrupted_model = TinyAdapter()
-        uninterrupted_dataset = TinyDataset()
-        uninterrupted = self.trainer(
-            uninterrupted_config,
-            uninterrupted_model,
-        ).fit(uninterrupted_dataset)
-        self.assertGreater(uninterrupted_dataset.epoch, 0)
-
-        resumed_config = replace(
-            self.config,
-            run=replace(
-                self.config.run,
-                output_root=self.base / "resumed",
+                output_root=self.base / "interrupted",
             ),
         )
         torch.manual_seed(91)
         first_model = TinyAdapter()
-        first = self.trainer(resumed_config, first_model).fit(
+        first = self.trainer(interrupted_config, first_model).fit(
             TinyDataset(),
             stop_after_steps=1,
         )
-        torch.manual_seed(999)
+        with self.assertRaises(ModelError) as caught:
+            self.trainer(interrupted_config, TinyAdapter()).fit(TinyDataset())
+        self.assertEqual(caught.exception.code, ReasonCode.OUTPUT_EXISTS)
+
+        restarted_config = replace(
+            interrupted_config,
+            run=replace(
+                interrupted_config.run,
+                output_root=self.base / "restarted",
+            ),
+        )
+        torch.manual_seed(91)
         second_model = TinyAdapter()
-        second = self.trainer(resumed_config, second_model).fit(
+        second = self.trainer(restarted_config, second_model).fit(
             TinyDataset(),
-            resume_checkpoint=first.checkpoint,
+            stop_after_steps=1,
         )
-        self.assertEqual(
-            first.sample_trace + second.sample_trace,
-            uninterrupted.sample_trace,
-        )
-        for name, value in uninterrupted_model.model.state_dict().items():
+        self.assertEqual(first.sample_trace, second.sample_trace)
+        for name, value in first_model.model.state_dict().items():
             torch.testing.assert_close(
                 value,
                 second_model.model.state_dict()[name],
                 rtol=0,
                 atol=0,
             )
-        self.assertEqual(second.cursor.global_step, 2)
+        self.assertEqual(second.cursor.global_step, 1)
         self.assertEqual(second.cursor.micro_step, 0)
-        manifest = read_json(resumed_config.run.output_root / "manifest.json")
-        self.assertEqual(
-            manifest["schema_version"],
-            "rs_vlm.run_manifest.v1",
-        )
-        self.assertEqual(manifest["cursor"], second.cursor.to_dict())
-        self.assertTrue(second.best_checkpoint.is_dir())
-        best = read_json(
-            resumed_config.run.output_root / "best_checkpoint.json"
-        )
-        self.assertEqual(best["selection_metric"], "macro_task_loss")
-        self.assertIn(best["step"], {1, 2})
-        selection = read_json(
-            resumed_config.run.output_root / "validation_selection.json"
-        )
-        self.assertEqual(selection["selected_parents"], 7)
-        self.assertEqual(len(selection["source_counts"]), 3)
-        self.assertEqual(len(selection["task_counts"]), 7)
-        log_rows = read_jsonl(
-            resumed_config.run.output_root / "train_log.jsonl"
-        )
-        self.assertEqual([row["step"] for row in log_rows], [1, 2])
-        trace = read_jsonl(
-            resumed_config.run.output_root / "sample_trace.jsonl"
-        )
-        self.assertEqual(len(trace), 32)
-        self.assertTrue(
-            all(
-                row["schema_version"]
-                == "rs_vlm.sample_trace.v1"
-                for row in trace
-            )
-        )
-        self.assertEqual(
-            [row["batch_slot"] for row in trace[:16]],
-            list(range(resumed_config.training.batch_size))
-            * resumed_config.training.gradient_accumulation_steps,
-        )
-        self.assertEqual(
-            [row["micro_step"] for row in trace[:16]],
-            [
-                micro_step
-                for micro_step in range(
-                    1,
-                    resumed_config.training.gradient_accumulation_steps + 1,
-                )
-                for _ in range(resumed_config.training.batch_size)
-            ],
-        )
-        report = read_json(
-            resumed_config.run.output_root / "training_report.json"
-        )
-        self.assertEqual(report["status"], "completed")
-        self.assertEqual(len(report["validation_history"]), 2)
-        self.assertGreater(report["throughput"]["samples_per_second"], 0)
-        self.assertGreater(report["throughput"]["tokens_per_second"], 0)
-        self.assertTrue(np.isfinite(report["last_gradient_norm"]))
-        expected_layout = training_layout_identity(resumed_config)
-        self.assertEqual(report["training_layout"], expected_layout)
-        self.assertEqual(manifest["training_layout"], expected_layout)
 
     def test_batch4_matches_batch1_first_effective_batch_and_update(
         self,
@@ -574,7 +498,7 @@ class TrainerCheckpointTests(unittest.TestCase):
             )
 
         with self.assertRaises(CheckpointError) as caught:
-            CheckpointManager().load(
+            CheckpointManager().inspect_trainable(
                 batch1.checkpoint,
                 expected_config_semantic_sha256=(
                     batch1_config.semantic_sha256
@@ -597,120 +521,19 @@ class TrainerCheckpointTests(unittest.TestCase):
             ReasonCode.CHECKPOINT_INCOMPATIBLE,
         )
 
-    def test_resume_recovers_validation_pending_at_checkpoint(self) -> None:
+    def test_partial_output_directory_cannot_be_reused(self) -> None:
         config = replace(
             self.config,
             run=replace(
                 self.config.run,
-                output_root=self.base / "pending-validation",
+                output_root=self.base / "partial-output",
             ),
         )
-        torch.manual_seed(17)
-        first = self.trainer(config, TinyAdapter()).fit(
-            TinyDataset(),
-            stop_after_steps=1,
-        )
-        (config.run.output_root / "validation_results.jsonl").unlink()
-        (config.run.output_root / "best_checkpoint.json").unlink()
-
-        resumed = self.trainer(config, TinyAdapter()).fit(
-            TinyDataset(),
-            resume_checkpoint=first.checkpoint,
-        )
-
-        self.assertEqual(resumed.cursor.global_step, 2)
-        results = read_jsonl(
-            config.run.output_root / "validation_results.jsonl"
-        )
-        self.assertEqual([row["step"] for row in results], [1, 2])
-        self.assertTrue(
-            (config.run.output_root / "best_checkpoint.json").is_file()
-        )
-
-    def test_resume_rejects_bool_in_structured_train_log(self) -> None:
-        config = replace(
-            self.config,
-            run=replace(
-                self.config.run,
-                output_root=self.base / "bool-log",
-            ),
-        )
-        first = self.trainer(config, TinyAdapter()).fit(
-            TinyDataset(),
-            stop_after_steps=1,
-        )
-        log_path = config.run.output_root / "train_log.jsonl"
-        rows = read_jsonl(log_path)
-        rows[-1]["loss"] = True
-        atomic_write_jsonl(log_path, rows)
-
+        config.run.output_root.mkdir()
+        (config.run.output_root / "partial.txt").write_text("interrupted")
         with self.assertRaises(ModelError) as caught:
-            self.trainer(config, TinyAdapter()).fit(
-                TinyDataset(),
-                resume_checkpoint=first.checkpoint,
-            )
-        self.assertEqual(
-            caught.exception.code,
-            ReasonCode.CHECKPOINT_INCOMPATIBLE,
-        )
-
-    def test_resume_archives_rows_after_explicit_checkpoint(self) -> None:
-        config = replace(
-            self.config,
-            run=replace(
-                self.config.run,
-                output_root=self.base / "orphaned-rows",
-            ),
-        )
-        first = self.trainer(config, TinyAdapter()).fit(
-            TinyDataset(),
-            stop_after_steps=1,
-        )
-        log_path = config.run.output_root / "train_log.jsonl"
-        log_rows = read_jsonl(log_path)
-        orphaned_log = dict(log_rows[-1])
-        orphaned_log["step"] = 2
-        orphaned_log["samples"] = 32
-        atomic_write_jsonl(log_path, (*log_rows, orphaned_log))
-
-        trace_path = config.run.output_root / "sample_trace.jsonl"
-        trace_rows = read_jsonl(trace_path)
-        orphaned_trace = []
-        batch_size = config.training.batch_size
-        for index, row in enumerate(trace_rows):
-            orphaned = dict(row)
-            orphaned["sequence_index"] = len(trace_rows) + index
-            orphaned["optimizer_step"] = 2
-            orphaned["micro_step"] = index // batch_size + 1
-            orphaned["batch_slot"] = index % batch_size
-            orphaned["record_id"] = f"{row['record_id']}-orphaned"
-            orphaned_trace.append(orphaned)
-        atomic_write_jsonl(
-            trace_path,
-            (*trace_rows, *orphaned_trace),
-        )
-
-        resumed = self.trainer(config, TinyAdapter()).fit(
-            TinyDataset(),
-            resume_checkpoint=first.checkpoint,
-        )
-
-        recoveries = sorted(
-            (
-                config.run.output_root / "resume_recoveries"
-            ).glob("*.jsonl")
-        )
-        self.assertEqual(len(recoveries), 2)
-        self.assertEqual(
-            [row["step"] for row in read_jsonl(log_path)],
-            [1, 2],
-        )
-        self.assertEqual(len(read_jsonl(trace_path)), 32)
-        report = read_json(resumed.training_report)
-        self.assertEqual(
-            len(report["artifacts"]["resume_recoveries"]),
-            2,
-        )
+            self.trainer(config, TinyAdapter()).fit(TinyDataset())
+        self.assertEqual(caught.exception.code, ReasonCode.OUTPUT_EXISTS)
 
     def test_checkpoint_rejects_semantic_mismatch_and_tamper(self) -> None:
         config = replace(
@@ -728,7 +551,7 @@ class TrainerCheckpointTests(unittest.TestCase):
         )
         manager = CheckpointManager()
         with self.assertRaises(CheckpointError) as caught:
-            manager.load(
+            manager.inspect_trainable(
                 result.checkpoint,
                 expected_config_semantic_sha256="0" * 64,
                 expected_benchmark_identity=benchmark_identity(
@@ -747,7 +570,7 @@ class TrainerCheckpointTests(unittest.TestCase):
             ReasonCode.CHECKPOINT_INCOMPATIBLE,
         )
         with self.assertRaises(CheckpointError) as caught:
-            manager.load(
+            manager.inspect_trainable(
                 result.checkpoint,
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
@@ -771,7 +594,7 @@ class TrainerCheckpointTests(unittest.TestCase):
         del incomplete_manifest["training_layout"]
         atomic_write_json(manifest_path, incomplete_manifest)
         with self.assertRaises(CheckpointError) as caught:
-            manager.load(
+            manager.inspect_trainable(
                 result.checkpoint,
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
@@ -793,7 +616,7 @@ class TrainerCheckpointTests(unittest.TestCase):
         manifest["unknown"] = True
         atomic_write_json(manifest_path, manifest)
         with self.assertRaises(CheckpointError) as caught:
-            manager.load(
+            manager.inspect_trainable(
                 result.checkpoint,
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
@@ -813,7 +636,7 @@ class TrainerCheckpointTests(unittest.TestCase):
         unexpected_path = result.checkpoint / "unexpected.bin"
         unexpected_path.write_bytes(b"unexpected")
         with self.assertRaises(CheckpointError) as caught:
-            manager.load(
+            manager.inspect_trainable(
                 result.checkpoint,
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
@@ -829,10 +652,10 @@ class TrainerCheckpointTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, ReasonCode.CHECKPOINT_CORRUPT)
         unexpected_path.unlink()
-        optimizer_path = result.checkpoint / "optimizer.pt"
-        optimizer_path.write_bytes(optimizer_path.read_bytes() + b"tamper")
+        adapter_path = result.checkpoint / "adapter/adapter_model.safetensors"
+        adapter_path.write_bytes(adapter_path.read_bytes() + b"tamper")
         with self.assertRaises(CheckpointError) as caught:
-            manager.load(
+            manager.inspect_trainable(
                 result.checkpoint,
                 expected_config_semantic_sha256=config.semantic_sha256,
                 expected_benchmark_identity=benchmark_identity(
@@ -855,17 +678,12 @@ class TrainerCheckpointTests(unittest.TestCase):
         CheckpointManager().save(
             checkpoint,
             trainable_state=model.trainable_state_dict(),
-            optimizer_state={"not_loaded_by_inference": True},
-            scheduler_state={"not_loaded_by_inference": True},
             cursor=TrainingCursor(
                 epoch=0,
                 sample_offset=0,
                 global_step=1,
                 micro_step=0,
             ),
-            sampler_state={"not_loaded_by_inference": True},
-            multireference_epoch=0,
-            config_snapshot=self.config.snapshot_dict(),
             config_semantic_sha256=self.config.semantic_sha256,
             benchmark_identity=benchmark_identity(
                 self.base
@@ -877,12 +695,15 @@ class TrainerCheckpointTests(unittest.TestCase):
             processor_identity=self.processor_identity,
             training_layout=training_layout,
             trainable_names=model.trainable_names,
-            rng_state={
-                "python": (),
-                "numpy": (),
-                "torch_cpu": torch.zeros(1),
-                "torch_cuda": [],
+            selection_metrics={"macro_task_loss": 1.0},
+        )
+        self.assertEqual(
+            {
+                path.relative_to(checkpoint).as_posix()
+                for path in checkpoint.rglob("*")
+                if path.is_file()
             },
+            {"manifest.json", "adapter/adapter_model.safetensors"},
         )
         manifest_path = checkpoint / "manifest.json"
         adapter_path = checkpoint / "adapter/adapter_model.safetensors"

@@ -188,7 +188,7 @@ class CudaMicrobatchTelemetry:
         ):
             raise ModelError(
                 ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "CUDA telemetry resume microbatch cursor 非法",
+                "CUDA telemetry 已完成 microbatch 计数非法",
             )
         root = Path(output_root)
         linked = first_symlink_component(root)

@@ -9,13 +9,18 @@ import re
 from typing import Any
 
 from oa_groundrag.artifacts.identity import canonical_json, sha256_text
-from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.artifacts.io import (
+    PortablePathError,
+    first_symlink_component,
+    resolve_config_reference,
+    resolve_bundle_reference,
+    validate_bundle_root,
+)
 from oa_groundrag.data.rs_general.io import (
     require_exact_keys,
     require_int,
     require_mapping,
     require_string,
-    resolve_config_path,
 )
 from oa_groundrag.vlm.config import _load_yaml
 from oa_groundrag.vlm.errors import ConfigError, ReasonCode
@@ -23,7 +28,7 @@ from oa_groundrag.vlm.errors import ConfigError, ReasonCode
 from .contracts import DenseConfig, RetrievalConfig
 
 
-TEXT_RAG_RUNTIME_CONFIG_SCHEMA = "oa_groundrag.text_rag.runtime_config.v1"
+TEXT_RAG_RUNTIME_CONFIG_SCHEMA = "oa_groundrag.text_rag.runtime_config.v2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -40,6 +45,7 @@ class TextBankRuntimeBinding:
 @dataclass(frozen=True)
 class TextRAGRuntimeConfig:
     config_path: Path
+    bundle_root: Path
     source_registry_path: Path
     bank: TextBankRuntimeBinding
     dense: DenseConfig
@@ -71,7 +77,14 @@ def load_text_rag_runtime_config(path: Path | str) -> TextRAGRuntimeConfig:
     row = _load_yaml(config_path)
     require_exact_keys(
         row,
-        required=("schema_version", "source_registry", "bank", "dense", "retrieval"),
+        required=(
+            "schema_version",
+            "bundle_root",
+            "source_registry",
+            "bank",
+            "dense",
+            "retrieval",
+        ),
         location="$",
     )
     if row["schema_version"] != TEXT_RAG_RUNTIME_CONFIG_SCHEMA:
@@ -79,12 +92,28 @@ def load_text_rag_runtime_config(path: Path | str) -> TextRAGRuntimeConfig:
             ReasonCode.INVALID_ENUM,
             f"仅支持 {TEXT_RAG_RUNTIME_CONFIG_SCHEMA}",
         )
-    base = config_path.parent
-    source_registry_path = resolve_config_path(
-        base,
-        row["source_registry"],
-        location="$.source_registry",
-    )
+    try:
+        bundle_root = validate_bundle_root(
+            resolve_config_reference(
+                config_path,
+                require_string(row["bundle_root"], location="$.bundle_root"),
+            )
+        )
+    except PortablePathError as error:
+        raise ConfigError(
+            ReasonCode.PATH_ESCAPE,
+            f"Text RAG bundle_root 非法：{error}",
+        ) from error
+    try:
+        source_registry_path = resolve_config_reference(
+            config_path,
+            require_string(row["source_registry"], location="$.source_registry"),
+        )
+    except PortablePathError as error:
+        raise ConfigError(
+            ReasonCode.PATH_ESCAPE,
+            f"Text RAG source_registry 路径非法：{error}",
+        ) from error
     bank_row = require_mapping(row["bank"], location="$.bank")
     require_exact_keys(
         bank_row,
@@ -98,8 +127,19 @@ def load_text_rag_runtime_config(path: Path | str) -> TextRAGRuntimeConfig:
         ),
         location="$.bank",
     )
+    try:
+        bank_root = resolve_bundle_reference(
+            bundle_root,
+            require_string(bank_row["root"], location="$.bank.root"),
+            expected="directory",
+        )
+    except PortablePathError as error:
+        raise ConfigError(
+            ReasonCode.PATH_ESCAPE,
+            f"Text RAG Bank 路径非法：{error}",
+        ) from error
     bank = TextBankRuntimeBinding(
-        root=resolve_config_path(base, bank_row["root"], location="$.bank.root"),
+        root=bank_root,
         bank_id=_sha256(bank_row["bank_id"], location="$.bank.bank_id"),
         manifest_sha256=_sha256(
             bank_row["manifest_sha256"],
@@ -130,14 +170,21 @@ def load_text_rag_runtime_config(path: Path | str) -> TextRAGRuntimeConfig:
     device = require_string(dense_row["device"], location="$.dense.device")
     if device not in {"cpu", "cuda"}:
         raise ConfigError(ReasonCode.INVALID_ENUM, "$.dense.device 只允许 cpu/cuda")
+    try:
+        dense_model_root = resolve_bundle_reference(
+            bundle_root,
+            require_string(dense_row["model_root"], location="$.dense.model_root"),
+            expected="directory",
+        )
+    except PortablePathError as error:
+        raise ConfigError(
+            ReasonCode.PATH_ESCAPE,
+            f"Text RAG dense model 路径非法：{error}",
+        ) from error
     dense = DenseConfig(
         repo_id=require_string(dense_row["repo_id"], location="$.dense.repo_id"),
         revision=revision,
-        model_root=resolve_config_path(
-            base,
-            dense_row["model_root"],
-            location="$.dense.model_root",
-        ),
+        model_root=dense_model_root,
         device=device,
         batch_size=require_int(dense_row["batch_size"], location="$.dense.batch_size", minimum=1),
         max_tokens=require_int(dense_row["max_tokens"], location="$.dense.max_tokens", minimum=64),
@@ -158,19 +205,24 @@ def load_text_rag_runtime_config(path: Path | str) -> TextRAGRuntimeConfig:
     })
     semantic_payload = {
         "schema_version": TEXT_RAG_RUNTIME_CONFIG_SCHEMA,
-        "source_registry": str(source_registry_path),
+        "source_registry": require_string(
+            row["source_registry"], location="$.source_registry"
+        ),
         "bank": {
             **bank.__dict__,
-            "root": str(bank.root),
+            "root": require_string(bank_row["root"], location="$.bank.root"),
         },
         "dense": {
             **dense.__dict__,
-            "model_root": str(dense.model_root),
+            "model_root": require_string(
+                dense_row["model_root"], location="$.dense.model_root"
+            ),
         },
         "retrieval": retrieval.__dict__,
     }
     return TextRAGRuntimeConfig(
         config_path=config_path,
+        bundle_root=bundle_root,
         source_registry_path=source_registry_path,
         bank=bank,
         dense=dense,

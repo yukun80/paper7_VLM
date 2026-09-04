@@ -517,18 +517,6 @@ def run_preflight(
             ReasonCode.OUTPUT_LINK,
             f"output_root 含链接组件：{linked_output}",
         )
-    if config.run.resume_checkpoint is not None:
-        if require_new_output:
-            raise PreflightError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                "resume 必须由专用恢复路径执行，不能冒充 fresh run",
-            )
-        checkpoint = config.run.resume_checkpoint
-        if checkpoint.is_symlink() or not checkpoint.is_dir():
-            raise PreflightError(
-                ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                f"resume checkpoint 不存在或是链接：{checkpoint}",
-            )
     for path, label in (
         (config.model.path, "model.path"),
         (config.model.processor_path, "model.processor_path"),

@@ -39,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     workflow = commands.add_parser(
         "run-stage5-workflow",
-        help="按 preflight→retention probes→train/resume→retention 顺序运行",
+        help="按 preflight→retention probes→全新训练→retention 顺序运行",
     )
     workflow.add_argument("--config", type=Path, required=True)
     workflow.add_argument(

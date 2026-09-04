@@ -115,7 +115,7 @@ class DeterministicBatchPlanner:
                 if self.sample_offset > len(self._order):
                     raise ModelError(
                         ReasonCode.CHECKPOINT_INCOMPATIBLE,
-                        "resume sample_offset 超出当前 sampler order",
+                        "起始 sample_offset 超出当前 sampler order",
                     )
             if self.sample_offset == len(self._order):
                 self.epoch += 1

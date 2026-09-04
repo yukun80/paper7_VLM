@@ -61,7 +61,6 @@ def _parser() -> argparse.ArgumentParser:
         elif name == "smoke":
             child.add_argument("--output-root", type=Path)
         elif name == "train":
-            child.add_argument("--resume-checkpoint", type=Path)
             child.add_argument("--output-root", type=Path)
             child.add_argument("--stop-after-steps", type=int)
             child.add_argument("--log-interval", type=int)
@@ -254,11 +253,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = apply_runtime_overrides(
             config,
             output_root=_absolute_cli_path(arguments.output_root),
-            resume_checkpoint=(
-                _absolute_cli_path(arguments.resume_checkpoint)
-                if arguments.command == "train"
-                else None
-            ),
             log_interval=(
                 arguments.log_interval
                 if arguments.command == "train"
@@ -294,7 +288,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         run_preflight(
             config,
-            require_new_output=config.run.resume_checkpoint is None,
+            require_new_output=True,
             access=access,
         )
         if not torch.cuda.is_available():
@@ -395,7 +389,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             result = trainer.fit(
                 dataset,
-                resume_checkpoint=config.run.resume_checkpoint,
                 stop_after_steps=arguments.stop_after_steps,
             )
         print(compact_training_result(result.to_dict()))
@@ -411,7 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if config.adaptation.strategy == "lora":
                 assert arguments.checkpoint is not None
-                payload = CheckpointManager().load(
+                _, trainable = CheckpointManager().load_trainable(
                     arguments.checkpoint,
                     expected_config_semantic_sha256=config.semantic_sha256,
                     expected_benchmark_identity=(
@@ -423,7 +416,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     expected_training_layout=training_layout_identity(config),
                     expected_trainable_names=model.trainable_names,
                 )
-                model.load_trainable_state_dict(payload.trainable_state)
+                model.load_trainable_state_dict(trainable)
             samples = [
                 dataset[index]
                 for index in range(min(arguments.limit, len(dataset)))

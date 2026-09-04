@@ -181,7 +181,7 @@ class VLMConfig:
     semantic_sha256: str
 
     def semantic_dict(self) -> dict[str, Any]:
-        """排除输出位置与 resume 指针的可恢复语义快照。"""
+        """排除输出位置的训练语义快照。"""
 
         value = {
             "schema_version": self.schema_version,
@@ -541,6 +541,11 @@ def load_config(path: Path | str) -> VLMConfig:
             ReasonCode.INVALID_ENUM,
             "$.run mode/mask_mode 非法",
         ) from error
+    if run_row["resume_checkpoint"] is not None:
+        raise ConfigError(
+            ReasonCode.INVALID_ENUM,
+            "$.run.resume_checkpoint 已停用，必须为 null",
+        )
     run = RunSection(
         name=_string(run_row["name"], location="$.run.name"),
         seed=_int(run_row["seed"], location="$.run.seed"),
@@ -551,12 +556,7 @@ def load_config(path: Path | str) -> VLMConfig:
             base=base,
             location="$.run.output_root",
         ),
-        resume_checkpoint=_path(
-            run_row["resume_checkpoint"],
-            base=base,
-            location="$.run.resume_checkpoint",
-            nullable=True,
-        ),
+        resume_checkpoint=None,
     )
 
     data_row = _mapping(row["data"], location="$.data")
@@ -1094,7 +1094,6 @@ def apply_runtime_overrides(
     config: VLMConfig,
     *,
     output_root: Path | None = None,
-    resume_checkpoint: Path | None = None,
     log_interval: int | None = None,
 ) -> VLMConfig:
     """应用显式 CLI 覆盖并重新计算严格配置语义摘要。"""
@@ -1104,11 +1103,6 @@ def apply_runtime_overrides(
         run = replace(
             run,
             output_root=Path(os.path.abspath(output_root)),
-        )
-    if resume_checkpoint is not None:
-        run = replace(
-            run,
-            resume_checkpoint=Path(os.path.abspath(resume_checkpoint)),
         )
     training = config.training
     if log_interval is not None:

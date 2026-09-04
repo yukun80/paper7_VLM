@@ -698,6 +698,8 @@ def validate_bank(
     *,
     config: Stage6Config,
     verify_sources: bool = True,
+    normalized_source_root: str | None = None,
+    dense_model_root_reference: str | None = None,
 ) -> dict[str, Any]:
     root = Path(os.path.abspath(Path(root)))
     linked = first_symlink_component(root)
@@ -728,7 +730,7 @@ def validate_bank(
         raise ContractError(ReasonCode.BENCHMARK_IDENTITY_MISMATCH, "Bank ledger identity 漂移")
     registry = load_source_registry(config.source_registry_path, verify_files=verify_sources)
     normalized_registry = read_json(root / "normalized_registry.json")
-    if normalized_registry != registry.to_dict():
+    if normalized_registry != registry.to_dict(source_root=normalized_source_root):
         raise ContractError(ReasonCode.BENCHMARK_IDENTITY_MISMATCH, "Bank normalized registry 漂移")
     sources = {source.source_id: source for source in registry.sources}
     pages = read_jsonl(root / "source_pages.jsonl")
@@ -766,6 +768,23 @@ def validate_bank(
         elif duplicate_of != canonical_by_key[key] or unit["indexed"]:
             raise ContractError(ReasonCode.BENCHMARK_IDENTITY_MISMATCH, "exact duplicate 关系非法")
     dense_index = read_json(root / "dense_index.json")
+    environment = read_json(root / "environment.json")
+    dense_identity = dense_index.get("model_identity")
+    environment_dense = environment.get("dense")
+    if (
+        not isinstance(dense_identity, dict)
+        or dense_identity != environment_dense
+        or manifest.get("dense_model_identity_sha256")
+        != sha256_text(canonical_json(dense_identity))
+        or (
+            dense_model_root_reference is not None
+            and dense_identity.get("model_root") != dense_model_root_reference
+        )
+    ):
+        raise ContractError(
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            "Bank dense model identity 漂移",
+        )
     dense_ids = dense_index.get("unit_ids")
     expected_ids = [str(unit["unit_id"]) for unit in units if unit["indexed"]]
     if dense_ids != expected_ids or dense_index.get("unit_order_sha256") != sha256_text(canonical_json(expected_ids)):
@@ -879,6 +898,27 @@ def validate_runtime_bank(
             ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
             "runtime source registry 与已发布 Bank 身份不一致",
         )
+    from oa_groundrag.artifacts.io import bundle_relative_reference
+
+    normalized_source_root = bundle_relative_reference(
+        config.bundle_root,
+        registry.source_root,
+    )
+    dense_model_root_reference = bundle_relative_reference(
+        config.bundle_root,
+        config.dense.model_root,
+    )
+    dense_identity = read_json(resolved / "dense_index.json").get("model_identity")
+    if (
+        not isinstance(dense_identity, dict)
+        or dense_identity.get("repo_id") != config.dense.repo_id
+        or dense_identity.get("revision") != config.dense.revision
+        or dense_identity.get("model_root") != dense_model_root_reference
+    ):
+        raise ContractError(
+            ReasonCode.BENCHMARK_IDENTITY_MISMATCH,
+            "runtime dense model identity 与配置不一致",
+        )
     published_config = SimpleNamespace(
         source_registry_path=config.source_registry_path,
         semantic_sha256=config.bank.build_config_semantic_sha256,
@@ -887,6 +927,8 @@ def validate_runtime_bank(
         resolved,
         config=published_config,
         verify_sources=verify_sources,
+        normalized_source_root=normalized_source_root,
+        dense_model_root_reference=dense_model_root_reference,
     )
     if (
         result["bank_id"] != config.bank.bank_id

@@ -118,17 +118,9 @@ def run_smoke(config: RuntimeConfig, *, repo_root: Path) -> dict[str, Any]:
             save_training_checkpoint(
                 checkpoint_path,
                 model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
                 step=1,
                 benchmark_contract=benchmark_contract,
-                subset_sampler_state=None,
-                training_batcher_state={
-                    "smoke": True,
-                    "batch_size": config.batch_size,
-                },
-                training_state={"runtime_config": variant_config.to_dict()},
+                selection_metrics={"smoke_loss": float(loss.detach().cpu())},
             )
             difference = checkpoint_reload_difference(
                 checkpoint_path=checkpoint_path,

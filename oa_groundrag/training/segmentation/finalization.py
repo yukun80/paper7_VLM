@@ -18,7 +18,6 @@ from oa_groundrag.evaluation.segmentation import evaluate_model
 from oa_groundrag.segmentation.checkpoint import (
     model_from_checkpoint,
     read_checkpoint,
-    save_training_checkpoint,
 )
 from oa_groundrag.segmentation.config import resolve_runtime
 from oa_groundrag.segmentation.contracts import (
@@ -113,6 +112,15 @@ def _checkpoint_training_diagnostics(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     step = int(payload["step"])
+    if "training_state" not in payload:
+        metrics = payload.get("selection_metrics")
+        if not isinstance(metrics, Mapping):
+            raise ValueError("checkpoint selection_metrics 必须是对象")
+        return {
+            "step": step,
+            "training_state_persisted": False,
+            "selection_metrics": dict(metrics),
+        }
     state = payload["training_state"]
     if not isinstance(state, Mapping):
         raise ValueError("checkpoint training_state 必须是对象")
@@ -202,21 +210,34 @@ def _validate_finalization_evidence(
             f"last_logged={last_logged_step}, max={config.max_steps}"
         )
 
-    selected_state = selected_payload["training_state"]
-    last_state = last_payload["training_state"]
-    selected_config = RuntimeConfig.from_dict(
-        selected_state["runtime_config"]
-    )
-    last_config = RuntimeConfig.from_dict(last_state["runtime_config"])
-    if selected_config.to_dict() != config.to_dict():
-        raise ValueError("final checkpoint runtime config 与当前配置不一致")
-    if last_config.to_dict() != config.to_dict():
-        raise ValueError("last checkpoint runtime config 与当前配置不一致")
     if selected_payload["model_contract"] != last_payload["model_contract"]:
         raise ValueError("best/last checkpoint model contract 不一致")
-
-    selected_best = selected_state.get("best_selection")
-    last_best = last_state.get("best_selection")
+    legacy_training_state = (
+        "training_state" in selected_payload
+        and "training_state" in last_payload
+    )
+    if legacy_training_state:
+        selected_state = selected_payload["training_state"]
+        last_state = last_payload["training_state"]
+        selected_config = RuntimeConfig.from_dict(
+            selected_state["runtime_config"]
+        )
+        last_config = RuntimeConfig.from_dict(last_state["runtime_config"])
+        if selected_config.to_dict() != config.to_dict():
+            raise ValueError("final checkpoint runtime config 与当前配置不一致")
+        if last_config.to_dict() != config.to_dict():
+            raise ValueError("last checkpoint runtime config 与当前配置不一致")
+        selected_best = selected_state.get("best_selection")
+        last_best = last_state.get("best_selection")
+    else:
+        selected_metrics = selected_payload.get("selection_metrics")
+        last_metrics = last_payload.get("selection_metrics")
+        if not isinstance(selected_metrics, Mapping) or not isinstance(
+            last_metrics, Mapping
+        ):
+            raise ValueError("新 checkpoint 缺少 selection_metrics")
+        selected_best = selected_metrics.get("best_selection")
+        last_best = last_metrics.get("best_selection")
     if not isinstance(selected_best, Mapping):
         raise ValueError("final checkpoint 缺少 best_selection")
     if not isinstance(last_best, Mapping):
@@ -265,28 +286,29 @@ def _validate_finalization_evidence(
     if not _same_selection(log_selection, selected_best):
         raise ValueError("final checkpoint 与同一步日志指标不一致")
 
-    selected_trajectory = selected_state.get("validation_trajectory")
-    if not isinstance(selected_trajectory, list):
-        raise ValueError("final checkpoint validation_trajectory 必须是数组")
-    trajectory_matches = [
-        item
-        for item in selected_trajectory
-        if isinstance(item, Mapping)
-        and int(item.get("step", -1)) == selected_step
-    ]
-    if len(trajectory_matches) != 1:
-        raise ValueError("final checkpoint trajectory 缺少唯一的 best step")
-    trajectory_item = trajectory_matches[0]
-    if trajectory_item.get("is_new_best") is not True:
-        raise ValueError("final checkpoint trajectory 的 best step 标记错误")
-    trajectory_candidate = _finalization_candidate(
-        trajectory_item,
-        location=f"checkpoint.validation_trajectory@step{selected_step}",
-    )
-    if not _same_selection(trajectory_candidate, selected_best):
-        raise ValueError("checkpoint trajectory 与 best_selection 指标不一致")
-    if trajectory_item.get("validation") != selected_row.get("validation"):
-        raise ValueError("checkpoint trajectory 与 train log validation 不一致")
+    if legacy_training_state:
+        selected_trajectory = selected_state.get("validation_trajectory")
+        if not isinstance(selected_trajectory, list):
+            raise ValueError("final checkpoint validation_trajectory 必须是数组")
+        trajectory_matches = [
+            item
+            for item in selected_trajectory
+            if isinstance(item, Mapping)
+            and int(item.get("step", -1)) == selected_step
+        ]
+        if len(trajectory_matches) != 1:
+            raise ValueError("final checkpoint trajectory 缺少唯一的 best step")
+        trajectory_item = trajectory_matches[0]
+        if trajectory_item.get("is_new_best") is not True:
+            raise ValueError("final checkpoint trajectory 的 best step 标记错误")
+        trajectory_candidate = _finalization_candidate(
+            trajectory_item,
+            location=f"checkpoint.validation_trajectory@step{selected_step}",
+        )
+        if not _same_selection(trajectory_candidate, selected_best):
+            raise ValueError("checkpoint trajectory 与 best_selection 指标不一致")
+        if trajectory_item.get("validation") != selected_row.get("validation"):
+            raise ValueError("checkpoint trajectory 与 train log validation 不一致")
 
     return {
         "selected_checkpoint_step": selected_step,
@@ -554,7 +576,6 @@ def _finalize_training_run_impl(
             last_logged_step >= config.max_steps
         ),
         "stopped_early": last_logged_step < config.max_steps,
-        "resume_required": False,
         "configured_max_steps": config.max_steps,
         "maximum_steps": config.max_steps,
         "steps": last_logged_step,
@@ -600,7 +621,7 @@ def _finalize_training_run_impl(
         "training_diagnostics": {
             "sources": {
                 "complete_run_tail": "train_log.jsonl",
-                "last_recoverable_state": "checkpoint_last.pt",
+                "last_checkpoint": "checkpoint_last.pt",
                 "final_weight_state": "checkpoint_best.pt",
             },
             "selected_checkpoint": selected_diagnostics,
