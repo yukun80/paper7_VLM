@@ -1,0 +1,1354 @@
+"""OA-AuxSeg 训练与训练期验证引擎；不承载离线推理或评价 CLI。"""
+
+from __future__ import annotations
+
+import math
+import random
+import time
+from collections import Counter, defaultdict, deque
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+import torch
+from torch import Tensor, nn
+
+from oa_groundrag.artifacts.io import first_symlink_component
+from oa_groundrag.data.oa_auxseg.dataset import (
+    BenchmarkDataset,
+    atomic_write_json,
+    atomic_write_jsonl,
+    collate_benchmark_samples,
+    sha256_file,
+)
+
+from oa_groundrag.segmentation.checkpoint import (
+    maximum_parameter_change,
+    model_from_checkpoint,
+    module_parameter_snapshot,
+    save_training_checkpoint,
+)
+from oa_groundrag.segmentation.config import load_runtime_config, resolve_runtime
+from oa_groundrag.segmentation.contracts import (
+    CONFIG_SCHEMA_VERSION,
+    OAAuxSegBatch,
+    OAAuxSegConfig,
+    RuntimeConfig,
+    TRAINING_REPORT_SCHEMA_VERSION,
+    VARIANTS,
+)
+from oa_groundrag.segmentation.data import (
+    AuxiliarySubsetSampler,
+    PreparedBatch,
+    StatefulTrainingBatcher,
+    available_auxiliaries_by_sample,
+    benchmark_contract_from_root,
+    filter_auxiliaries,
+    make_dataloader,
+    prepare_collated_batch,
+    registry_from_benchmark,
+)
+from oa_groundrag.segmentation.losses import bce_dice_loss
+from oa_groundrag.segmentation.metrics import SegmentationMetrics
+from oa_groundrag.segmentation.model import OAAuxSegModel
+from oa_groundrag.segmentation.policy import (
+    autocast_context as _autocast,
+    prepare_policy_batch,
+    validate_benchmark_registry as _validate_benchmark_registry,
+    validate_inference_config as _validate_inference_config,
+)
+from oa_groundrag.evaluation.segmentation import (
+    _active_label,
+    _batch_conditional_weight_diagnostics,
+    _subset_category,
+    evaluate_model,
+)
+from .progress import TrainingProgress, format_duration
+
+
+def set_global_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def effective_training_config(
+    config: RuntimeConfig, *, capacity_overfit: bool
+) -> RuntimeConfig:
+    if not capacity_overfit:
+        return config
+    return config.with_overrides(
+        weight_decay=0.0,
+        eval_interval=100,
+        checkpoint_interval=100,
+        min_lr_ratio=0.10,
+        grad_clip=5.0,
+        modality_dropout=0.0,
+        train_sampler="uniform",
+        optical_stochastic_depth=0.0,
+        auxiliary_drop_path=0.0,
+        decoder_dropout=0.0,
+        use_bf16=False,
+        gradient_checkpointing=False,
+    )
+
+
+def require_local_backbone(path: Path) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(
+            "Phase 2 v6 真实训练要求本地 torchvision ConvNeXt-Small 官方 "
+            f"state_dict，当前不存在：{path}"
+        )
+
+
+def make_optimizer(
+    model: OAAuxSegModel, config: RuntimeConfig
+) -> torch.optim.AdamW:
+    backbone_modules = (
+        model.backbone,
+        model.optical_rgb_stem,
+        model.optical_stem_norm,
+    )
+    backbone_parameters = [
+        parameter
+        for module in backbone_modules
+        for parameter in module.parameters()
+        if parameter.requires_grad
+    ]
+    backbone_ids = {id(parameter) for parameter in backbone_parameters}
+    no_decay_ids: set[int] = set()
+    normalization_types = (
+        nn.LayerNorm,
+        nn.BatchNorm1d,
+        nn.BatchNorm2d,
+        nn.BatchNorm3d,
+        nn.GroupNorm,
+    )
+    for module_name, module in model.named_modules():
+        if isinstance(module, normalization_types):
+            no_decay_ids.update(
+                id(parameter)
+                for parameter in module.parameters(recurse=False)
+                if parameter.requires_grad
+            )
+        for parameter_name, parameter in module.named_parameters(
+            recurse=False
+        ):
+            qualified = (
+                f"{module_name}.{parameter_name}"
+                if module_name
+                else parameter_name
+            )
+            if parameter_name == "bias" or "layer_scale" in qualified:
+                no_decay_ids.add(id(parameter))
+    new_parameters = [
+        parameter
+        for parameter in model.parameters()
+        if parameter.requires_grad and id(parameter) not in backbone_ids
+    ]
+    if not backbone_parameters or not new_parameters:
+        raise RuntimeError("optimizer 参数分组为空")
+    groups = []
+    for family, parameters, learning_rate in (
+        ("backbone", backbone_parameters, config.backbone_lr),
+        ("new", new_parameters, config.new_lr),
+    ):
+        for decay_label, use_decay in (
+            ("decay", True),
+            ("no_decay", False),
+        ):
+            selected = [
+                parameter
+                for parameter in parameters
+                if (id(parameter) not in no_decay_ids) == use_decay
+            ]
+            if selected:
+                groups.append(
+                    {
+                        "params": selected,
+                        "lr": learning_rate,
+                        "weight_decay": (
+                            config.weight_decay if use_decay else 0.0
+                        ),
+                        "group_name": f"{family}_{decay_label}",
+                    }
+                )
+    return torch.optim.AdamW(
+        groups,
+        weight_decay=0.0,
+    )
+
+
+def make_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    total_steps: int,
+    warmup_ratio: float,
+    min_lr_ratio: float,
+) -> torch.optim.lr_scheduler.LambdaLR:
+    warmup_steps = int(total_steps * warmup_ratio)
+
+    def multiplier(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return max((step + 1) / warmup_steps, 1e-8)
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        progress = min(max(progress, 0.0), 1.0)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, multiplier)
+
+
+def optimizer_learning_rates(
+    optimizer: torch.optim.Optimizer,
+) -> tuple[float, float]:
+    values: dict[str, float] = {}
+    for group in optimizer.param_groups:
+        name = str(group.get("group_name", ""))
+        if name.startswith("backbone_"):
+            values["backbone"] = float(group["lr"])
+        elif name.startswith("new_"):
+            values["new"] = float(group["lr"])
+    if set(values) != {"backbone", "new"}:
+        raise RuntimeError("optimizer 缺少 backbone/new LR 参数组")
+    return values["backbone"], values["new"]
+
+
+def make_scaler(device: torch.device) -> torch.amp.GradScaler:
+    # bf16 不需要动态 loss scaling；scaler 只服务当前运行，不写入 checkpoint。
+    return torch.amp.GradScaler("cuda", enabled=False)
+
+
+def _gradient_modules(model: OAAuxSegModel) -> dict[str, nn.Module]:
+    modules: dict[str, nn.Module] = {
+        "extra_band_optical_stems": model.optical_stems,
+        "direct_concat_extra_stems": model.direct_stems,
+    }
+    modules.update(
+        {
+            f"auxiliary_adapter_{name}": module
+            for name, module in model.auxiliary_adapters.items()
+        }
+    )
+    for stride, auxiliary_stage, quality_selector, cmnext_selector, fusion in zip(
+        (4, 8, 16, 32),
+        model.auxiliary_stages,
+        model.quality_selectors,
+        model.cmnext_selectors,
+        model.progressive_fusions,
+        strict=True,
+    ):
+        modules[f"mspa_stride{stride}"] = auxiliary_stage
+        modules[f"quality_selector_stride{stride}"] = quality_selector
+        modules[f"cmnext_selector_stride{stride}"] = cmnext_selector
+        modules[f"frm_stride{stride}"] = fusion.rectification
+        modules[f"ffm_stride{stride}"] = fusion.fusion
+    return modules
+
+
+def _gradient_norms(
+    modules: Mapping[str, nn.Module],
+) -> dict[str, float]:
+    """在设备端聚合后一次回传，避免逐模块/逐参数 CUDA 同步。"""
+
+    names: list[str] = []
+    totals: list[Tensor] = []
+    fallback_device = next(
+        (
+            parameter.device
+            for module in modules.values()
+            for parameter in module.parameters()
+        ),
+        torch.device("cpu"),
+    )
+    for name, module in modules.items():
+        total: Tensor | None = None
+        for parameter in module.parameters():
+            if parameter.grad is None:
+                continue
+            squared = parameter.grad.detach().float().square().sum()
+            total = squared if total is None else total + squared
+        if total is None:
+            total = torch.zeros((), device=fallback_device)
+        names.append(name)
+        totals.append(total)
+    if not totals:
+        return {}
+    values = torch.stack(totals).sqrt().detach().cpu().tolist()
+    return {
+        name: float(value)
+        for name, value in zip(names, values, strict=True)
+    }
+
+
+def _required_auxiliary_modules(
+    model: OAAuxSegModel,
+) -> tuple[str, ...]:
+    return (
+        ("extra_band_optical_stems",)
+        + tuple(
+            f"auxiliary_adapter_{name}" for name in model.modality_order
+        )
+        + tuple(
+            f"{family}_stride{stride}"
+            for stride in (4, 8, 16, 32)
+            for family in ("mspa", "quality_selector", "frm", "ffm")
+        )
+    )
+
+
+def _capacity_acceptance(
+    *,
+    loss_history: Sequence[float],
+    metrics: Mapping[str, Any],
+    gradient_max: Mapping[str, float],
+    parameter_updates: Mapping[str, float],
+    required_modules: Sequence[str],
+) -> dict[str, bool]:
+    window = min(10, len(loss_history))
+    initial = sum(loss_history[:window]) / max(window, 1)
+    final = sum(loss_history[-window:]) / max(window, 1)
+    overall = metrics["overall"]
+    return {
+        "loss_drop_at_least_90_percent": (
+            1.0 - final / max(initial, 1e-12) >= 0.90
+        ),
+        "micro_dice_at_least_0_95": overall["dice"] >= 0.95,
+        "positive_dice_at_least_0_90": (
+            overall["positive_only_dice"] >= 0.90
+        ),
+        "empty_mask_fpr_zero": (
+            overall["no_target_false_positive_rate"] == 0
+        ),
+        "empty_mean_probability_at_most_0_01": (
+            overall["empty_mean_foreground_probability"] <= 0.01
+        ),
+        "all_auxiliary_gradients_nonzero": all(
+            gradient_max.get(name, 0.0) > 0 for name in required_modules
+        ),
+        "all_auxiliary_parameters_updated": all(
+            parameter_updates.get(name, 0.0) > 0
+            for name in required_modules
+        ),
+    }
+
+
+def _validation_is_better(
+    candidate: Mapping[str, Any],
+    best: Mapping[str, Any] | None,
+) -> bool:
+    if best is None:
+        return True
+    candidate_key = (
+        float(candidate["dice"]),
+        -float(candidate["loss"]),
+        -float(candidate["no_target_false_positive_rate"]),
+    )
+    best_key = (
+        float(best["dice"]),
+        -float(best["loss"]),
+        -float(best["no_target_false_positive_rate"]),
+    )
+    return candidate_key > best_key
+
+
+def _acceptance_collated(
+    benchmark_root: Path,
+    *,
+    normalization: str,
+    batch_size: int,
+) -> dict[str, Any]:
+    dataset = BenchmarkDataset(
+        benchmark_root,
+        split="train",
+        auxiliary_policy="all",
+        normalization=normalization,
+    )
+    if len(dataset) < batch_size:
+        raise ValueError(
+            f"acceptance batch 需要 {batch_size} 条 train，实际仅 {len(dataset)}"
+        )
+    registry = registry_from_benchmark(benchmark_root)
+
+    def row_modalities(row: Mapping[str, Any]) -> tuple[str, ...]:
+        names = set(str(name) for name in row["auxiliaries"])
+        return tuple(
+            name for name in registry.auxiliary_order if name in names
+        )
+
+    def row_features(row: Mapping[str, Any]) -> set[tuple[str, ...]]:
+        optical = tuple(
+            str(name) for name in row["optical"]["channel_names"]
+        )
+        modalities = row_modalities(row)
+        features = {
+            ("source", str(row["source"])),
+            ("optical", *optical),
+        }
+        features.update(("auxiliary", name) for name in modalities)
+        if not modalities:
+            features.add(("auxiliary_combination", "none"))
+        elif len(modalities) >= 2:
+            features.add(("auxiliary_combination", *modalities))
+        return features
+
+    features_by_index = [
+        row_features(row) for row in dataset.rows
+    ]
+    required_features = set().union(*features_by_index)
+    chosen: list[int] = []
+    uncovered = set(required_features)
+    while uncovered:
+        candidates = [
+            (
+                len(features & uncovered),
+                -index,
+                index,
+            )
+            for index, features in enumerate(features_by_index)
+            if index not in chosen
+        ]
+        gain, _, best_index = max(candidates, default=(0, 0, -1))
+        if gain <= 0 or best_index < 0:
+            raise RuntimeError("acceptance batch 无法覆盖当前 Benchmark 合同")
+        chosen.append(best_index)
+        uncovered -= features_by_index[best_index]
+        if len(chosen) > batch_size:
+            raise RuntimeError(
+                "acceptance batch_size 不足以覆盖当前 Benchmark 合同"
+            )
+    for index in range(len(dataset)):
+        if len(chosen) >= batch_size:
+            break
+        if index not in chosen:
+            chosen.append(index)
+    if len(chosen) != batch_size:
+        raise RuntimeError("无法构建指定大小的 acceptance batch")
+    collated = collate_benchmark_samples([dataset[index] for index in chosen])
+    actual_optical = {
+        tuple(str(name) for name in names)
+        for names in collated["optical_channel_names"]
+    }
+    if actual_optical != set(registry.optical_signatures):
+        raise RuntimeError("acceptance batch 未覆盖全部光学通道签名")
+    auxiliary_names = set(collated["auxiliaries"])
+    expected_auxiliaries = set(registry.auxiliary_order)
+    if auxiliary_names != expected_auxiliaries:
+        raise RuntimeError(
+            "acceptance batch 未覆盖全部已注册辅助模态："
+            f"actual={sorted(auxiliary_names)} "
+            f"expected={sorted(expected_auxiliaries)}"
+        )
+    present_names: list[list[str]] = [[] for _ in chosen]
+    for name, packed in collated["auxiliaries"].items():
+        for sample_index in packed["sample_indices"].tolist():
+            present_names[int(sample_index)].append(str(name))
+    present_combinations = {
+        tuple(
+            name
+            for name in registry.auxiliary_order
+            if name in set(names)
+        )
+        for names in present_names
+    }
+    expected_multi = {
+        row_modalities(row)
+        for row in dataset.rows
+        if len(row_modalities(row)) >= 2
+    }
+    if tuple() not in present_combinations or not expected_multi.issubset(
+        present_combinations
+    ):
+        raise RuntimeError("acceptance batch 未同时覆盖无辅助与多辅助样本")
+    return collated
+
+
+@torch.no_grad()
+def checkpoint_reload_difference(
+    *,
+    checkpoint_path: Path,
+    model: OAAuxSegModel,
+    collated: Mapping[str, Any],
+    benchmark_contract: Mapping[str, Any],
+    device: torch.device,
+) -> dict[str, float]:
+    prepared = prepare_collated_batch(collated).to(
+        device, non_blocking=device.type == "cuda"
+    )
+    model_batch, _, _ = prepare_policy_batch(
+        prepared.model, variant=model.variant, subset_sampler=None
+    )
+    model.eval()
+    before = model(model_batch)
+    payload = read_checkpoint(
+        checkpoint_path,
+        expected_benchmark_contract=benchmark_contract,
+    )
+    reloaded = model_from_checkpoint(payload, device=device)
+    reloaded.eval()
+    after = reloaded(model_batch)
+    differences = {
+        "mask_logits": float(
+            (before.mask_logits.float() - after.mask_logits.float())
+            .abs()
+            .max()
+            .item()
+        ),
+        "mask_probability": float(
+            (before.mask_probability.float() - after.mask_probability.float())
+            .abs()
+            .max()
+            .item()
+        ),
+        "modality_weights": float(
+            (before.modality_weights.float() - after.modality_weights.float())
+            .abs()
+            .max()
+            .item()
+        ),
+    }
+    differences["modality_weight_maps"] = max(
+        float(
+            (first.float() - second.float()).abs().max().item()
+        )
+        for first, second in zip(
+            before.modality_weight_maps,
+            after.modality_weight_maps,
+            strict=True,
+        )
+    )
+    return differences
+
+
+def _new_output_directory(path: Path) -> None:
+    linked = first_symlink_component(path)
+    if linked is not None:
+        raise FileExistsError(f"输出路径含符号链接，拒绝写入：{linked}")
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(f"输出目录已存在，拒绝覆盖：{path}")
+    path.mkdir(parents=True)
+
+
+def run_training(
+    config: RuntimeConfig,
+    *,
+    repo_root: Path,
+    capacity_overfit: bool,
+    progress: TrainingProgress | None = None,
+) -> dict[str, Any]:
+    terminal = (
+        progress
+        if progress is not None
+        else TrainingProgress(log_interval=config.log_interval)
+    )
+    try:
+        return _run_training_impl(
+            config,
+            repo_root=repo_root,
+            capacity_overfit=capacity_overfit,
+            progress=terminal,
+        )
+    finally:
+        terminal.close()
+
+
+def _run_training_impl(
+    config: RuntimeConfig,
+    *,
+    repo_root: Path,
+    capacity_overfit: bool,
+    progress: TrainingProgress,
+) -> dict[str, Any]:
+    wall_started = time.perf_counter()
+    config = effective_training_config(
+        config, capacity_overfit=capacity_overfit
+    )
+    if config.num_workers != 0:
+        raise ValueError(
+            "确定性定长训练 batcher 要求 num_workers=0；"
+            "评价与推理仍可使用多 worker"
+        )
+    benchmark_root, output_dir, backbone_weights, device = resolve_runtime(
+        config, repo_root
+    )
+    command_label = "overfit" if capacity_overfit else "train"
+    gpu_name = (
+        torch.cuda.get_device_name(device) if device.type == "cuda" else None
+    )
+    progress.phase(
+        "[setup] "
+        f"command={command_label} variant={config.variant} "
+        f"device={device.type} output={output_dir} loading runtime"
+    )
+    benchmark_contract = benchmark_contract_from_root(benchmark_root)
+    benchmark_hash = str(benchmark_contract["index_sha256"])
+    set_global_seed(config.seed)
+    subset_sampler = (
+        AuxiliarySubsetSampler(
+            config.seed + 2,
+            config.modality_dropout,
+        )
+        if config.variant == "proposed_dropout" and not capacity_overfit
+        else None
+    )
+    require_local_backbone(backbone_weights)
+    _new_output_directory(output_dir)
+    registry = registry_from_benchmark(benchmark_root)
+    model = OAAuxSegModel(
+        OAAuxSegConfig(
+            variant=config.variant,
+            optical_stochastic_depth=config.optical_stochastic_depth,
+            auxiliary_drop_path=config.auxiliary_drop_path,
+            decoder_dropout=config.decoder_dropout,
+            region_threshold=config.region_threshold,
+            min_region_area=config.min_region_area,
+        ),
+        registry,
+        backbone_weights=backbone_weights,
+        gradient_checkpointing=config.gradient_checkpointing,
+    ).to(device)
+    start_step = 0
+    loss_history: list[float] = []
+    ema_loss: float | None = None
+    initial_ema_loss: float | None = None
+    gradient_max: dict[str, float] = defaultdict(float)
+    parameter_change_max: dict[str, float] = defaultdict(float)
+    training_step_seconds = 0.0
+    training_samples_seen = 0
+    training_steps_timed = 0
+    clipped_steps = 0
+    clip_scale_sum = 0.0
+    clip_scale_min = 1.0
+    validation_trajectory: list[dict[str, Any]] = []
+    best_selection: dict[str, Any] | None = None
+    training_subset_counts: Counter[str] = Counter()
+    training_subset_reason_counts: Counter[str] = Counter()
+    training_native_auxiliary_samples = 0
+    training_active_auxiliary_samples = 0
+    optimizer = make_optimizer(model, config)
+    scheduler = make_scheduler(
+        optimizer,
+        total_steps=config.max_steps,
+        warmup_ratio=config.warmup_ratio,
+        min_lr_ratio=config.min_lr_ratio,
+    )
+    scaler = make_scaler(device)
+    train_batcher = StatefulTrainingBatcher(
+        benchmark_root,
+        batch_size=config.batch_size,
+        normalization=config.normalization,
+        seed=config.seed + 1,
+        policy=config.train_sampler,
+    )
+    val_loader = make_dataloader(
+        benchmark_root,
+        split="val",
+        batch_size=config.batch_size,
+        normalization=config.normalization,
+        shuffle=False,
+        num_workers=config.num_workers,
+    )
+    train_eval_loader = make_dataloader(
+        benchmark_root,
+        split="train",
+        batch_size=config.batch_size,
+        normalization=config.normalization,
+        shuffle=False,
+        num_workers=config.num_workers,
+    )
+    modules = _gradient_modules(model)
+    snapshots = {
+        name: module_parameter_snapshot(module) for name, module in modules.items()
+    }
+    train_log_path = output_dir / "train_log.jsonl"
+    logs: list[dict[str, Any]] = []
+    checkpoint_path = output_dir / "checkpoint_last.pt"
+    best_checkpoint_path = output_dir / "checkpoint_best.pt"
+    checkpoint_total_seconds = 0.0
+    speed_window: deque[tuple[float, int]] = deque(
+        maxlen=max(config.log_interval, 10)
+    )
+    progress.announce_setup(
+        command=command_label,
+        variant=config.variant,
+        device=device.type,
+        gpu_name=gpu_name,
+        train_samples=len(train_batcher.dataset),
+        validation_samples=len(val_loader.dataset),
+        batch_size=config.batch_size,
+        total_steps=config.max_steps,
+        start_step=start_step,
+        eval_interval=config.eval_interval,
+        checkpoint_interval=config.checkpoint_interval,
+        output_dir=output_dir,
+    )
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+    model.train()
+    progress.start_training(
+        variant=config.variant,
+        total_steps=config.max_steps,
+        start_step=start_step,
+    )
+
+    def save_current_checkpoint(
+        path: Path,
+        *,
+        step: int,
+        label: str,
+    ) -> tuple[float, int]:
+        progress.phase(f"[checkpoint] step={step} saving {label} {path}")
+        started = time.perf_counter()
+        save_training_checkpoint(
+            path,
+            model=model,
+            step=step,
+            benchmark_contract=benchmark_contract,
+            selection_metrics={
+                "training_loss": loss_history[-1],
+                "ema_loss": ema_loss,
+                "best_selection": best_selection,
+            },
+        )
+        duration = time.perf_counter() - started
+        size = path.stat().st_size
+        progress.phase(
+            "[checkpoint] "
+            f"step={step} saved {label} "
+            f"time={format_duration(duration)} "
+            f"size={size / (1024**3):.2f} GiB"
+        )
+        return duration, size
+
+    actual_step = 0
+    early_capacity_acceptance: dict[str, bool] | None = None
+    for step in range(1, config.max_steps + 1):
+        actual_step = step
+        step_started = time.perf_counter()
+        prepared = prepare_collated_batch(train_batcher.next()).to(
+            device, non_blocking=device.type == "cuda"
+        )
+        model_batch, available, active = prepare_policy_batch(
+            prepared.model,
+            variant=config.variant,
+            subset_sampler=subset_sampler,
+        )
+        for active_names, available_names in zip(
+            active, available, strict=True
+        ):
+            training_native_auxiliary_samples += int(
+                bool(available_names)
+            )
+            training_active_auxiliary_samples += int(bool(active_names))
+            training_subset_counts[
+                _subset_category(active_names, available_names)
+            ] += 1
+        if subset_sampler is not None:
+            reasons = subset_sampler.last_reasons
+        else:
+            reasons = [
+                (
+                    "native_none"
+                    if not available_names
+                    else (
+                        "active"
+                        if active_names
+                        else "variant_forced_none"
+                    )
+                )
+                for active_names, available_names in zip(
+                    active, available, strict=True
+                )
+            ]
+        training_subset_reason_counts.update(reasons)
+        optimizer.zero_grad(set_to_none=True)
+        with _autocast(config, device):
+            output = model(model_batch)
+            loss, components = bce_dice_loss(output.mask_logits, prepared.mask)
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        current_gradient = _gradient_norms(modules)
+        for name, value in current_gradient.items():
+            gradient_max[name] = max(gradient_max[name], value)
+        gradient_total = float(
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+        )
+        clip_scale = min(
+            1.0,
+            config.grad_clip / (gradient_total + 1e-6),
+        )
+        clipped_steps += int(clip_scale < 1.0)
+        clip_scale_sum += clip_scale
+        clip_scale_min = min(clip_scale_min, clip_scale)
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
+        loss_value = float(loss.detach().item())
+        bce_value = float(components["bce"].detach().item())
+        dice_loss_value = float(components["dice"].detach().item())
+        step_seconds = time.perf_counter() - step_started
+        batch_size = prepared.model.batch_size
+        training_step_seconds += step_seconds
+        training_samples_seen += batch_size
+        training_steps_timed += 1
+        speed_window.append((step_seconds, batch_size))
+        rolling_seconds = sum(item[0] for item in speed_window)
+        rolling_steps_per_second = len(speed_window) / max(
+            rolling_seconds, 1e-12
+        )
+        rolling_samples_per_second = sum(
+            item[1] for item in speed_window
+        ) / max(rolling_seconds, 1e-12)
+        estimated_remaining_seconds = (
+            config.max_steps - step
+        ) / max(rolling_steps_per_second, 1e-12)
+        peak_cuda_memory_bytes = (
+            int(torch.cuda.max_memory_allocated(device))
+            if device.type == "cuda"
+            else None
+        )
+        peak_cuda_memory_gib = (
+            peak_cuda_memory_bytes / (1024**3)
+            if peak_cuda_memory_bytes is not None
+            else None
+        )
+        loss_history.append(loss_value)
+        ema_loss = (
+            loss_value
+            if ema_loss is None
+            else 0.95 * ema_loss + 0.05 * loss_value
+        )
+        if initial_ema_loss is None:
+            initial_ema_loss = ema_loss
+        progress.update_training(
+            step=step,
+            loss=loss_value,
+            ema_loss=float(ema_loss),
+            bce=bce_value,
+            dice_loss=dice_loss_value,
+            learning_rates=optimizer_learning_rates(optimizer),
+            samples_per_second=rolling_samples_per_second,
+            estimated_remaining_seconds=estimated_remaining_seconds,
+            peak_cuda_memory_gib=peak_cuda_memory_gib,
+        )
+        if step == 1 or step % config.log_interval == 0 or step == config.max_steps:
+            active_counts = Counter(_active_label(names) for names in active)
+            available_counts = Counter(_active_label(names) for names in available)
+            conditional_weights = _batch_conditional_weight_diagnostics(
+                model=model,
+                batch=model_batch,
+                output=output,
+                active=active,
+            )
+            logs.append(
+                {
+                    "step": step,
+                    "loss": loss_value,
+                    "bce": bce_value,
+                    "dice_loss": dice_loss_value,
+                    "ema_loss": ema_loss,
+                    "lr": [float(group["lr"]) for group in optimizer.param_groups],
+                    "step_time_seconds": step_seconds,
+                    "rolling_steps_per_second": rolling_steps_per_second,
+                    "rolling_samples_per_second": rolling_samples_per_second,
+                    "estimated_remaining_seconds": estimated_remaining_seconds,
+                    "training_elapsed_seconds": training_step_seconds,
+                    "wall_elapsed_seconds": time.perf_counter() - wall_started,
+                    "peak_cuda_memory_bytes": peak_cuda_memory_bytes,
+                    "peak_cuda_memory_gib": peak_cuda_memory_gib,
+                    "gradient_total_before_clip": gradient_total,
+                    "gradient_clip_scale": clip_scale,
+                    "gradient_was_clipped": clip_scale < 1.0,
+                    "gradient_norms": current_gradient,
+                    "available_subsets": dict(sorted(available_counts.items())),
+                    "active_subsets": dict(sorted(active_counts.items())),
+                    "subset_category_counts_cumulative": dict(
+                        sorted(training_subset_counts.items())
+                    ),
+                    "subset_reason_counts_cumulative": (
+                        dict(
+                            sorted(
+                                training_subset_reason_counts.items()
+                            )
+                        )
+                    ),
+                    "conditional_modality_weights": conditional_weights,
+                    "mean_modality_weights": {
+                        name: float(
+                            output.modality_weights[:, index]
+                            .detach()
+                            .float()
+                            .mean()
+                            .item()
+                        )
+                        for index, name in enumerate(
+                            model.modality_weight_order
+                        )
+                    },
+                    "modality_weight_entropy": float(
+                        (
+                            -output.modality_weights.detach().float()
+                            .clamp_min(1e-12)
+                            * output.modality_weights.detach().float()
+                            .clamp_min(1e-12)
+                            .log()
+                        )
+                        .sum(dim=1)
+                        .mean()
+                        .item()
+                    ),
+                    "stage_modality_weight_entropy": {
+                        f"stride{stride}": float(
+                            (
+                                -weight_map.detach().float()
+                                .clamp_min(1e-12)
+                                * weight_map.detach().float()
+                                .clamp_min(1e-12)
+                                .log()
+                            )
+                            .sum(dim=1)
+                            .mean()
+                            .item()
+                        )
+                        for stride, weight_map in zip(
+                            output.modality_weight_map_strides,
+                            output.modality_weight_maps,
+                            strict=True,
+                        )
+                    },
+                    "stage_null_weight": {
+                        f"stride{stride}": float(
+                            weight_map[:, -1]
+                            .detach()
+                            .float()
+                            .mean()
+                            .item()
+                        )
+                        for stride, weight_map in zip(
+                            output.modality_weight_map_strides,
+                            output.modality_weight_maps,
+                            strict=True,
+                        )
+                    },
+                }
+            )
+            atomic_write_jsonl(train_log_path, logs)
+        should_evaluate = (
+            step % config.eval_interval == 0 or step == config.max_steps
+        )
+        is_new_best = False
+        if should_evaluate:
+            for name, module in modules.items():
+                parameter_change_max[name] = max(
+                    parameter_change_max[name],
+                    maximum_parameter_change(module, snapshots[name]),
+                )
+            capacity_metrics = None
+            if capacity_overfit:
+                capacity_metrics = evaluate_model(
+                    model,
+                    train_eval_loader,
+                    device=device,
+                    config=config,
+                    progress=progress,
+                    progress_label=f"train@step{step}",
+                )
+                early_capacity_acceptance = _capacity_acceptance(
+                    loss_history=loss_history,
+                    metrics=capacity_metrics,
+                    gradient_max=gradient_max,
+                    parameter_updates=parameter_change_max,
+                    required_modules=_required_auxiliary_modules(model),
+                )
+            validation = evaluate_model(
+                model,
+                val_loader,
+                device=device,
+                config=config,
+                progress=progress,
+                progress_label=f"val@step{step}",
+            )
+            overall = validation["overall"]
+            candidate = {
+                "step": step,
+                "dice": float(overall["dice"]),
+                "loss": float(validation["loss"]),
+                "no_target_false_positive_rate": float(
+                    overall["no_target_false_positive_rate"]
+                ),
+            }
+            is_new_best = _validation_is_better(
+                candidate, best_selection
+            )
+            if is_new_best:
+                best_selection = candidate
+            trajectory_item: dict[str, Any] = {
+                "step": step,
+                "validation": validation,
+                "is_new_best": is_new_best,
+            }
+            if capacity_metrics is not None:
+                trajectory_item["capacity_train"] = capacity_metrics
+                trajectory_item["capacity_acceptance"] = dict(
+                    early_capacity_acceptance or {}
+                )
+            validation_trajectory.append(trajectory_item)
+            logs.append(trajectory_item)
+            atomic_write_jsonl(train_log_path, logs)
+        elif step % config.checkpoint_interval == 0:
+            for name, module in modules.items():
+                parameter_change_max[name] = max(
+                    parameter_change_max[name],
+                    maximum_parameter_change(module, snapshots[name]),
+                )
+        if is_new_best:
+            duration, size = save_current_checkpoint(
+                best_checkpoint_path,
+                step=step,
+                label="best",
+            )
+            checkpoint_total_seconds += duration
+            logs.append(
+                {
+                    "step": step,
+                    "checkpoint_best": {
+                        "path": str(best_checkpoint_path),
+                        "duration_seconds": duration,
+                        "size_bytes": size,
+                    },
+                }
+            )
+        capacity_passed = (
+            capacity_overfit
+            and early_capacity_acceptance is not None
+            and all(early_capacity_acceptance.values())
+        )
+        should_checkpoint = (
+            step % config.checkpoint_interval == 0
+            or step == config.max_steps
+            or capacity_passed
+        )
+        if should_checkpoint:
+            duration, size = save_current_checkpoint(
+                checkpoint_path,
+                step=step,
+                label="last",
+            )
+            checkpoint_total_seconds += duration
+            logs.append(
+                {
+                    "step": step,
+                    "checkpoint_last": {
+                        "path": str(checkpoint_path),
+                        "duration_seconds": duration,
+                        "size_bytes": size,
+                    },
+                }
+            )
+        if is_new_best or should_checkpoint:
+            atomic_write_jsonl(train_log_path, logs)
+        if capacity_passed:
+            progress.phase(
+                f"[overfit] all capacity thresholds passed at step={step}"
+            )
+            break
+    progress.finish_training()
+    if not checkpoint_path.is_file():
+        raise RuntimeError("训练结束后缺少 checkpoint")
+    if train_batcher.samples_emitted != training_samples_seen:
+        raise RuntimeError(
+            "训练 batcher 与累计样本计数不一致："
+            f"{train_batcher.samples_emitted} != {training_samples_seen}"
+        )
+    if (
+        sum(training_subset_counts.values()) != training_samples_seen
+        or sum(training_subset_reason_counts.values())
+        != training_samples_seen
+    ):
+        raise RuntimeError("训练子集诊断计数与累计样本数不一致")
+    if (
+        training_active_auxiliary_samples
+        > training_native_auxiliary_samples
+    ):
+        raise RuntimeError("实际激活辅助样本数不能超过原生辅助样本数")
+    for name, module in modules.items():
+        parameter_change_max[name] = max(
+            parameter_change_max[name],
+            maximum_parameter_change(module, snapshots[name]),
+        )
+    updates = dict(parameter_change_max)
+    last_train_metrics = evaluate_model(
+        model,
+        train_eval_loader,
+        device=device,
+        config=config,
+        progress=progress,
+        progress_label="train-last",
+    )
+    last_validation_metrics = evaluate_model(
+        model,
+        val_loader,
+        device=device,
+        config=config,
+        progress=progress,
+        progress_label="val-last",
+    )
+    selected_checkpoint_path = (
+        checkpoint_path
+        if capacity_overfit or not best_checkpoint_path.is_file()
+        else best_checkpoint_path
+    )
+    if selected_checkpoint_path == best_checkpoint_path:
+        selected_payload = read_checkpoint(
+            selected_checkpoint_path,
+            expected_benchmark_contract=benchmark_contract,
+        )
+        model = model_from_checkpoint(selected_payload, device=device)
+        train_metrics = evaluate_model(
+            model,
+            train_eval_loader,
+            device=device,
+            config=config,
+            progress=progress,
+            progress_label="train-best",
+        )
+        validation_metrics = evaluate_model(
+            model,
+            val_loader,
+            device=device,
+            config=config,
+            progress=progress,
+            progress_label="val-best",
+        )
+    else:
+        train_metrics = last_train_metrics
+        validation_metrics = last_validation_metrics
+    progress.phase(
+        "[reload] checking selected checkpoint output consistency"
+    )
+    reload_started = time.perf_counter()
+    reload_difference = checkpoint_reload_difference(
+        checkpoint_path=selected_checkpoint_path,
+        model=model,
+        collated=_acceptance_collated(
+            benchmark_root,
+            normalization=config.normalization,
+            batch_size=config.batch_size,
+        ),
+        benchmark_contract=benchmark_contract,
+        device=device,
+    )
+    reload_seconds = time.perf_counter() - reload_started
+    progress.phase(
+        "[reload] "
+        f"done time={format_duration(reload_seconds)} "
+        f"max_abs_difference={max(reload_difference.values()):.3e}"
+    )
+    initial_window = (
+        sum(loss_history[: min(10, len(loss_history))])
+        / min(10, len(loss_history))
+    )
+    final_window = (
+        sum(loss_history[-min(10, len(loss_history)) :])
+        / min(10, len(loss_history))
+    )
+    peak_memory = (
+        int(torch.cuda.max_memory_allocated(device))
+        if device.type == "cuda"
+        else None
+    )
+    subset_counts = dict(sorted(training_subset_counts.items()))
+    subset_reason_counts = dict(
+        sorted(training_subset_reason_counts.items())
+    )
+    subset_reason_summary = {
+        "native_none": subset_reason_counts.get("native_none", 0),
+        "dropout_restored": subset_reason_counts.get(
+            "dropout_restored", 0
+        ),
+        "variant_forced_none": subset_reason_counts.get(
+            "variant_forced_none", 0
+        ),
+        "single": subset_counts.get("single", 0),
+        "multi": subset_counts.get("multi", 0),
+        "all": subset_counts.get("all", 0),
+    }
+    active_auxiliary_exposures = sum(
+        subset_counts.get(name, 0) for name in ("single", "multi", "all")
+    )
+    if active_auxiliary_exposures != training_active_auxiliary_samples:
+        raise RuntimeError("辅助曝光分类计数与实际激活样本数不一致")
+    subset_total = sum(subset_counts.values())
+    conditional_active_auxiliary_fraction = (
+        training_active_auxiliary_samples
+        / training_native_auxiliary_samples
+        if training_native_auxiliary_samples
+        else None
+    )
+    training_report_path = output_dir / "training_report.json"
+    report: dict[str, Any] = {
+        "command": command_label,
+        "schema_version": CONFIG_SCHEMA_VERSION,
+        "variant": config.variant,
+        "backbone": config.backbone,
+        "architecture": model.model_contract()["architecture"],
+        "gradient_checkpointing": config.gradient_checkpointing,
+        "steps": actual_step,
+        "maximum_steps": config.max_steps,
+        "stopped_early": actual_step < config.max_steps,
+        "benchmark_index_sha256": benchmark_hash,
+        "benchmark_contract": dict(benchmark_contract),
+        "backbone_sha256": model.backbone_sha256,
+        "modality_weight_order": list(model.modality_weight_order),
+        "region_feature_dim": model.region_feature_dim,
+        "checkpoint": str(selected_checkpoint_path),
+        "checkpoint_last": str(checkpoint_path),
+        "checkpoint_best": (
+            str(best_checkpoint_path)
+            if best_checkpoint_path.is_file()
+            else None
+        ),
+        "best_step": (
+            int(best_selection["step"])
+            if best_selection is not None
+            else None
+        ),
+        "best_selection": best_selection,
+        "validation_trajectory": validation_trajectory,
+        "training_report": str(training_report_path),
+        "initial_loss_window_mean": initial_window,
+        "final_loss_window_mean": final_window,
+        "loss_drop_fraction": 1.0 - final_window / max(initial_window, 1e-12),
+        "initial_ema_loss": initial_ema_loss,
+        "final_ema_loss": ema_loss,
+        "ema_drop_fraction": (
+            1.0 - float(ema_loss) / max(float(initial_ema_loss), 1e-12)
+            if ema_loss is not None and initial_ema_loss is not None
+            else None
+        ),
+        "gradient_max_norms": dict(sorted(gradient_max.items())),
+        "parameter_max_changes": updates,
+        "subset_counts": subset_counts,
+        "subset_reason_counts": subset_reason_summary,
+        "subset_reason_events": subset_reason_counts,
+        "subset_sampler_cardinality_counts": (
+            dict(sorted(subset_sampler.cardinality_counts.items()))
+            if subset_sampler is not None
+            else {}
+        ),
+        "subset_sampler_dropout_counts": (
+            dict(sorted(subset_sampler.dropout_counts.items()))
+            if subset_sampler is not None
+            else {}
+        ),
+        "native_auxiliary_sample_count": (
+            training_native_auxiliary_samples
+        ),
+        "active_auxiliary_sample_count": (
+            training_active_auxiliary_samples
+        ),
+        "effective_auxiliary_exposure_fraction": (
+            active_auxiliary_exposures / subset_total
+            if subset_total
+            else None
+        ),
+        "conditional_active_auxiliary_fraction": (
+            conditional_active_auxiliary_fraction
+        ),
+        "train_sampler": config.train_sampler,
+        "actual_batch_size": config.batch_size,
+        "train_metrics": train_metrics,
+        "validation_metrics": validation_metrics,
+        "last_train_metrics": last_train_metrics,
+        "last_validation_metrics": last_validation_metrics,
+        "checkpoint_reload_max_abs_difference": reload_difference,
+        "training_step_seconds": training_step_seconds,
+        "training_steps_timed": training_steps_timed,
+        "training_samples_seen": training_samples_seen,
+        "gradient_clipped_steps": clipped_steps,
+        "gradient_clipped_fraction": (
+            clipped_steps / max(training_steps_timed, 1)
+        ),
+        "gradient_clip_scale_mean": (
+            clip_scale_sum / max(training_steps_timed, 1)
+        ),
+        "gradient_clip_scale_min": clip_scale_min,
+        "average_steps_per_second": (
+            training_steps_timed / training_step_seconds
+            if training_step_seconds > 0
+            else None
+        ),
+        "average_samples_per_second": (
+            training_samples_seen / training_step_seconds
+            if training_step_seconds > 0
+            else None
+        ),
+        "checkpoint_save_seconds": checkpoint_total_seconds,
+        "checkpoint_reload_seconds": reload_seconds,
+        "evaluation_duration_seconds": {
+            "train": train_metrics["duration_seconds"],
+            "validation": validation_metrics["duration_seconds"],
+            "train_last": last_train_metrics["duration_seconds"],
+            "validation_last": last_validation_metrics["duration_seconds"],
+        },
+        "peak_cuda_memory_bytes": peak_memory,
+        "peak_cuda_memory_gib": (
+            peak_memory / (1024**3) if peak_memory is not None else None
+        ),
+    }
+    required_auxiliary_modules = _required_auxiliary_modules(model)
+    if capacity_overfit:
+        report["acceptance"] = _capacity_acceptance(
+            loss_history=loss_history,
+            metrics=train_metrics,
+            gradient_max=gradient_max,
+            parameter_updates=updates,
+            required_modules=required_auxiliary_modules,
+        )
+    else:
+        report["acceptance"] = {
+            "ema_drop_at_least_50_percent": (
+                report["ema_drop_fraction"] is not None
+                and report["ema_drop_fraction"] >= 0.50
+            ),
+            "observed_none": subset_counts.get("none", 0) > 0,
+            "observed_single": subset_counts.get("single", 0) > 0,
+            "observed_all": subset_counts.get("all", 0) > 0,
+            "all_native_auxiliary_samples_remain_active": (
+                report["conditional_active_auxiliary_fraction"] is not None
+                and report["conditional_active_auxiliary_fraction"] == 1.0
+            ),
+            "fixed_batch_sample_count_exact": (
+                training_samples_seen
+                == training_steps_timed * config.batch_size
+            ),
+            "reload_within_1e_6": max(reload_difference.values()) <= 1e-6,
+        }
+    should_enforce = capacity_overfit or (
+        config.variant == "proposed_dropout" and subset_sampler is not None
+    )
+    acceptance_passed = all(report["acceptance"].values())
+    report["acceptance_enforced"] = should_enforce
+    report["acceptance_passed"] = (
+        acceptance_passed if should_enforce else None
+    )
+    report["wall_elapsed_seconds"] = time.perf_counter() - wall_started
+    atomic_write_json(training_report_path, report)
+    if should_enforce and not acceptance_passed:
+        failed = [
+            name
+            for name, passed in report["acceptance"].items()
+            if not passed
+        ]
+        progress.phase(
+            "[done] "
+            f"acceptance=FAIL failed={','.join(failed)} "
+            f"report={training_report_path}"
+        )
+        raise RuntimeError(
+            "训练完成，但未通过 Phase 2 验收阈值："
+            + ", ".join(failed)
+        )
+    return report

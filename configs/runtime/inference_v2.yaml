@@ -1,0 +1,21 @@
+schema_version: oa_groundrag.unified_inference.config.v2
+repository_root: ../..
+spatial:
+  config: ../segmentation/full_proposed_dropout_b16_nockpt_e100.json
+  checkpoint: ../../outputs/phase2_oa_auxseg/full_proposed_dropout_v6_b16_nockpt_e100/checkpoint_best.pt
+  checkpoint_sha256: 672d39ab4220d8e1b4f949ca8d1d5dcd34f58898cecd1553dd56cdd9d84fb038
+semantic_core:
+  config: ../vlm/grounded/runtime_v1.yaml
+  best_pointer_sha256: 368bc48fec6e5303c80e8b2c0d397f4d55eb8c6d51fe70d9da417833ac8a2c1b
+  checkpoint_manifest_sha256: 65ecb7b890f38868ae5a1b7af144ff3dc2befad149bdefb6b6f133b0cfa42bb6
+  adapter_sha256: 858e12ff7e902ce0a3fdfb1a3dfbc2e58ad0892dec870a73fa4fc0a3411f84d7
+  workflow_state_sha256: f1e7fe6b6d3cfe4b86e93fde6d963487b92e696cfd53a3d028cc719f28725155
+retrieval:
+  config: ../retrieval/runtime_v1.yaml
+runtime:
+  device: cuda
+  release_spatial_before_shared: true
+  release_shared_before_rag: true
+  release_retriever_after_query: true
+  release_unused_between_requests: true
+  reject_test_paths: true

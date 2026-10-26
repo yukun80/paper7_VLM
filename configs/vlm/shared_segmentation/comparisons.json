@@ -1,0 +1,18 @@
+{
+  "schema_version": "geo_groundrag.comparisons.v1",
+  "status": "prepared_not_executed",
+  "split": "val",
+  "common": {"image_max_pixels": 262144, "mask_logit_threshold": 0.0, "boundary_tolerance_pixels": 1, "seed": 20261026},
+  "arms": [
+    {"name": "oa_auxseg", "implementation": "existing_segmentation_evaluator", "weights": "owner_frozen_checkpoint"},
+    {"name": "lens_original", "implementation": "official_lens", "weights": "pinned_official_checkpoint", "auxiliaries": []},
+    {"name": "geo_rgb", "implementation": "geo_groundrag", "auxiliaries": [], "description_mode": "joint", "rag": false},
+    {"name": "geo_dem", "implementation": "geo_groundrag", "auxiliaries": ["dem"], "description_mode": "joint", "rag": false},
+    {"name": "geo_feedback", "implementation": "geo_groundrag", "auxiliaries": ["dem"], "description_mode": "feedback", "rag": false},
+    {"name": "geo_rag", "implementation": "geo_groundrag", "auxiliaries": ["dem"], "description_mode": "feedback", "rag": true}
+  ],
+  "description_conditions": ["whole_image", "ground_truth_mask", "predicted_mask", "wrong_mask", "joint_output"],
+  "pairing": {"same_record_ids": true, "same_truth_sha256": true, "rag_reuses_frozen_visual_outputs": true},
+  "report": ["iou", "dice", "boundary_f1", "false_positive_pixels", "false_negative_pixels", "component_recalls", "no_target_correct", "expert_description_score", "unsupported_claim_rate", "cuda_peak_bytes", "elapsed_seconds"],
+  "scientific_acceptance": false
+}

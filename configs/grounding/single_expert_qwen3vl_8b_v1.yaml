@@ -1,0 +1,21 @@
+schema_version: oa_groundrag.mask_grounded_region.draft_config.v1
+model:
+  path: ../../models_zoo/Qwen3-VL-8B-Instruct-r60595eb
+  processor_path: ../../models_zoo/Qwen3-VL-8B-Instruct-r60595eb
+  repository: Qwen/Qwen3-VL-8B-Instruct
+  revision: 60595ebc30ec8e3b1d3b9e65d4943ca011c0006a
+  local_files_only: true
+  trust_remote_code: false
+  dtype: bfloat16
+  attn_implementation: sdpa
+processor:
+  min_pixels: 12544
+  max_pixels: 200704
+  max_images: 3
+  max_input_tokens: 4096
+generation:
+  max_new_tokens: 768
+  do_sample: false
+  temperature: 0.0
+  top_p: 1.0
+  seed: 20260804

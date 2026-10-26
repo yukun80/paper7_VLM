@@ -1,0 +1,37 @@
+schema_version: rs_vlm.mask_grounded_train_config.v3
+base_config: ../rs_general/rs_generaldesc_lora_qwen35_4b_v3.yaml
+run_name: mask_grounded_region_lora_qwen35_4b_rsinit_r851bf6e8_v1
+workflow_root: ../../../outputs/phase4_rs_vlm/mask_grounded_region_lora_qwen35_4b_rsinit_r851bf6e8_v1
+data:
+  compact_training_root: ../../../../benchmark/oa_grounded_stage4_v2/training_messages/mask_grounded_region_compact_training_messages_train_v3_6974
+  split_seed: 20260808
+  train_ratio: 0.9
+  region_micro_ratio: 0.9
+  replay_micro_ratio: 0.1
+  replay_validation_parents: 128
+warm_start:
+  checkpoint_root: ../../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen35_4b_r851bf6e8_b1a16_v1/checkpoints/step-00001000
+  best_pointer_sha256: 9ee78b2c239321ac983ea94e76d254f083e093aebe84928c55438baf8d106a5e
+  checkpoint_step: 1000
+  checkpoint_manifest_sha256: 22cc396e89a8ba84843657b8a9272acc8bcaced7de475c2a831370580cccf98c
+  adapter_sha256: 0be1b656d5646073c54183837e43cbf0c2c45f24d1c9652f4b7a9ccd9d89f6d5
+retention:
+  gate_b_protocol_path: ../rs_general/rs_generaldesc_gate_b_qwen35_4b_v2.yaml
+  gate_b_protocol_file_sha256: 9174b1cddadd67c143b55e43aabe3011cf4a1835ebacad95d86a252b006b61c5
+  gate_b_selection_path: ../../../outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen35_4b_r851bf6e8_v1/selection/gate_b_selection.json
+  gate_b_selection_file_sha256: f67b169c1d40cd42ac8591909e1eee49a92ff7179325daf52a67866386c637b1
+  rs_general_predictions_path: ../../../outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen35_4b_r851bf6e8_v1/adapter/predictions.jsonl
+  rs_general_predictions_file_sha256: 70d730f42fbe8a772b5a6af7e53fdcd2e8ae9e9e0fdceb2bcb41578e972d00be
+  gate_b_report_path: ../../../outputs/phase4_rs_vlm/rs_generaldesc_gate_b_qwen35_4b_r851bf6e8_v1/evaluation/gate_b_report.json
+  gate_b_report_file_sha256: b7c144eee000222b0556838e5bc17ce14dc409ec7704fa51fb0a4e23ad013cd9
+  max_new_tokens: 768
+training:
+  learning_rate: 0.00005
+  warmup_ratio: 0.05
+  max_steps: 1000
+  epochs: 2
+  checkpoint_interval: 100
+  validation_interval: 100
+  max_input_tokens: 4096
+generation:
+  max_new_tokens: 768

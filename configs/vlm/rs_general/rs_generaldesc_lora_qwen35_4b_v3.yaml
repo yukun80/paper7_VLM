@@ -1,0 +1,80 @@
+schema_version: rs_vlm.config.v3
+run:
+  name: rs_vlm_lora_qwen35_4b_r851bf6e8_b1a16_v1
+  seed: 20260730
+  mode: external_generic
+  mask_mode: external_generic
+  output_root: ../../../outputs/phase4_rs_vlm/rs_vlm_lora_qwen35_4b_r851bf6e8_b1a16_v1
+  resume_checkpoint: null
+data:
+  benchmark_root: /home/yukun80/codes/benchmark/rs_generaldesc_v1
+  roles: [external_train]
+  task_families: [global_caption, visual_qa, bbox_region_caption, scene_understanding, object_count, spatial_relation, visible_change_report]
+  expected_manifest_schema: rs_generaldesc.manifest.v1
+  expected_canonical_schema: rs_generaldesc.canonical.v1
+  expected_manifest_sha256: 36875efb59619cf10fa614ce5995afb88f7d7888624267f7ed216f29ae385832
+  expected_validation_sha256: bbc9e75afcdd23d3bd5ec83d724bdd5a1ae4e4507b1a2743a8350631e1fc0e9b
+  expected_build_id: build_3ebc09a4daad10e121fc14c2727d9896e10371a95bbaf6b780d15aa42eaf3c03
+  expected_payload_sha256: 549281f296b357bce256e6af71cec7412fe17e36052d6a8674f4876ae2d06e0b
+  expected_hash_manifest_sha256: 55ac26d9771ce8385318fbd23a10b999afb754ac195e823be659f4e49b0a7090
+  parent_balanced: true
+  source_weights: {}
+  task_weights: {}
+limits:
+  max_parents: 100087
+  max_records: 261646
+  max_assets: 109150
+  max_asset_bytes: 40526900921
+  max_copied_asset_bytes: 0
+  max_images: 5
+  max_input_tokens: 2048
+  max_total_tokens: 535851008
+  min_pixels: 12544
+  max_pixels: 200704
+  max_new_tokens: 768
+  max_probe_shards: 19
+  max_records_per_shard: 256
+  max_probe_records: 4864
+model:
+  path: ../../../models_zoo/Qwen3.5-4B-r851bf6e8
+  processor_path: ../../../models_zoo/Qwen3.5-4B-r851bf6e8
+  local_files_only: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  trust_remote_code: false
+  backend: qwen3_5
+  hub_repo_id: Qwen/Qwen3.5-4B
+  hub_revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  asset_ledger_path: ../assets/qwen3_5_4b_r851bf6e8.asset_ledger.json
+adaptation:
+  strategy: lora
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  rank: 8
+  alpha: 16
+  dropout: 0.05
+  freeze_vision: true
+  freeze_merger: true
+training:
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  gradient_checkpointing: true
+  optimizer: adamw
+  learning_rate: 0.0002
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  scheduler: cosine
+  max_grad_norm: 1.0
+  max_steps: 1000
+  epochs: 1
+  num_workers: 4
+  prefetch_factor: 2
+  pin_memory: true
+  checkpoint_interval: 100
+  log_interval: 10
+  validation_interval: 100
+  validation_max_parents: 128
+generation:
+  max_new_tokens: 768
+  do_sample: false
+  temperature: 0.0
+  top_p: 1.0

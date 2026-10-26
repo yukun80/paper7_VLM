@@ -1,0 +1,505 @@
+"""阶段 1B Benchmark 的六源合成 fixture 与破坏检测测试。"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any
+
+import h5py
+import numpy as np
+
+
+from oa_groundrag.data.oa_auxseg.dataset import (
+    BenchmarkDataset,
+    SOURCE_ORDER,
+    collate_benchmark_samples,
+    read_json,
+    read_jsonl,
+    resize_binary_mask,
+    resize_continuous_with_validity,
+)
+from oa_groundrag.data.oa_auxseg import builder as BUILDER
+from oa_groundrag.data.oa_auxseg import smoke as SMOKE
+from oa_groundrag.data.oa_auxseg import validator as VALIDATOR
+
+
+def _write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _schema(path: Path, version: str, names: list[str]) -> None:
+    _write_json(
+        path,
+        {
+            "schema_version": version,
+            "channels": [
+                {"index": index, "name": name} for index, name in enumerate(names)
+            ],
+        },
+    )
+
+
+def _h5_pair(
+    image_path: Path,
+    mask_path: Path,
+    channels: int,
+    *,
+    pixel_valid: bool = False,
+    label_valid: bool = False,
+) -> None:
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    mask_path.parent.mkdir(parents=True, exist_ok=True)
+    values = np.arange(channels * 16, dtype=np.float32).reshape(channels, 4, 4)
+    values[:, 0, 0] = np.nan
+    valid = np.ones(values.shape, dtype=np.uint8)
+    valid[:, 0, 0] = 0
+    with h5py.File(image_path, "w") as handle:
+        handle.create_dataset("image", data=values)
+        handle.create_dataset("channel_valid", data=np.ones(channels, dtype=np.uint8))
+        if pixel_valid:
+            handle.create_dataset("pixel_valid", data=valid)
+    mask = np.zeros((4, 4), dtype=np.uint8)
+    mask[1:3, 1:3] = 1
+    with h5py.File(mask_path, "w") as handle:
+        handle.create_dataset("mask", data=mask)
+        if label_valid:
+            label = np.ones((4, 4), dtype=np.uint8)
+            label[0, 0] = 0
+            handle.create_dataset("valid_mask", data=label)
+
+
+def build_fixture(root: Path) -> None:
+    gdcld = root / "GDCLD"
+    _schema(
+        gdcld / "hdf5/channel_schema.json",
+        "gdcld_rgb_mask_valid_hdf5_v1",
+        ["Red", "Green", "Blue"],
+    )
+    _h5_pair(
+        gdcld / "hdf5/image/train/gd.h5",
+        gdcld / "hdf5/mask/train/gd.h5",
+        3,
+        label_valid=True,
+    )
+    _write_jsonl(
+        gdcld / "jsonl/sample_index_train.jsonl",
+        [
+            {
+                "sample_key": "gd",
+                "split": "train",
+                "image_hdf5": "hdf5/image/train/gd.h5",
+                "mask_hdf5": "hdf5/mask/train/gd.h5",
+                "has_landslide": True,
+                "positive_pixel_count": 4,
+                "source_origin": "future_work",
+                "region": "fixture",
+                "scene": "scene",
+                "record_sha256": "gd-record",
+            }
+        ],
+    )
+
+    lmhld = root / "LMHLD"
+    _schema(
+        lmhld / "hdf5/channel_schema.json",
+        "lmhld_blue_green_red_nir_v1",
+        ["Blue", "Green", "Red", "NIR"],
+    )
+    _h5_pair(
+        lmhld / "hdf5/image/train/lm.h5",
+        lmhld / "hdf5/mask/train/lm.h5",
+        4,
+    )
+    _write_jsonl(
+        lmhld / "jsonl/sample_index_train.jsonl",
+        [
+            {
+                "sample_key": "lm",
+                "split": "train",
+                "image_hdf5": "hdf5/image/train/lm.h5",
+                "mask_hdf5": "hdf5/mask/train/lm.h5",
+                "has_landslide": True,
+                "positive_pixel_count": 4,
+                "source_index": 0,
+                "record_sha256": "lm-record",
+            }
+        ],
+    )
+
+    landslidebench = root / "LandslideBench_agent"
+    _schema(
+        landslidebench / "hdf5/channel_schema.json",
+        "landslidebench_agent_rgb_mask_text_v1",
+        ["R", "G", "B"],
+    )
+    _h5_pair(
+        landslidebench / "hdf5/image/lb.h5",
+        landslidebench / "hdf5/mask/lb.h5",
+        3,
+    )
+    _write_jsonl(
+        landslidebench / "jsonl/sample_index_train.jsonl",
+        [
+            {
+                "sample_key": "lb",
+                "split": "train",
+                "image_hdf5": "hdf5/image/lb.h5",
+                "mask_hdf5": "hdf5/mask/lb.h5",
+                "has_landslide": True,
+                "mask_positive_pixel_count": 4,
+                "location_key": "location",
+            }
+        ],
+    )
+
+    l4s = root / "landslide4sense"
+    _schema(
+        l4s / "hdf5/channel_schema.json",
+        "landslide4sense_fixed_channels_v1",
+        [f"B{index:02d}" for index in range(1, 13)] + ["slope", "DEM"],
+    )
+    _h5_pair(
+        l4s / "hdf5/image/landslide/l4.h5",
+        l4s / "hdf5/mask/landslide/l4.h5",
+        14,
+    )
+    _write_jsonl(
+        l4s / "hdf5/conversion_manifest.jsonl",
+        [
+            {
+                "sample_key": "l4",
+                "sample_id": 1,
+                "image_hdf5": "image/landslide/l4.h5",
+                "mask_hdf5": "mask/landslide/l4.h5",
+                "positive_pixel_count": 4,
+                "subset": "landslide",
+                "status": "converted",
+            }
+        ],
+    )
+
+    multimodal = root / "multimodal-landslide-dataset"
+    _schema(
+        multimodal / "hdf5/channel_schema.json",
+        "multimodal_landslide_rgb_dem_insar_hdf5_v1",
+        ["Red", "Green", "Blue", "DEM", "InSAR_mean_LOS_velocity_encoded"],
+    )
+    _h5_pair(
+        multimodal / "hdf5/image/train/mm.h5",
+        multimodal / "hdf5/mask/train/mm.h5",
+        5,
+        pixel_valid=True,
+        label_valid=True,
+    )
+    _write_jsonl(
+        multimodal / "jsonl/sample_index_train.jsonl",
+        [
+            {
+                "sample_key": "mm",
+                "source_key": "MM_1",
+                "split": "train",
+                "image_hdf5": "hdf5/image/train/mm.h5",
+                "mask_hdf5": "hdf5/mask/train/mm.h5",
+                "has_landslide": True,
+                "positive_pixel_count": 4,
+                "record_sha256": "mm-record",
+            }
+        ],
+    )
+
+    sen12 = root / "Sen12Landslides"
+    _schema(
+        sen12 / "hdf5/channel_schema.json",
+        "sen12landslides_fixed_channels_v1",
+        [
+            "s2_b02",
+            "s2_b03",
+            "s2_b04",
+            "s2_b05",
+            "s2_b06",
+            "s2_b07",
+            "s2_b08",
+            "s2_b8a",
+            "s2_b11",
+            "s2_b12",
+            "s1asc_vv",
+            "s1asc_vh",
+            "s1dsc_vv",
+            "s1dsc_vh",
+            "dem",
+        ],
+    )
+    _h5_pair(
+        sen12 / "hdf5/post/region_1.h5",
+        sen12 / "hdf5/mask/region_1.h5",
+        15,
+    )
+    _h5_pair(
+        sen12 / "hdf5/pre/region_1.h5",
+        sen12 / "hdf5/mask/pre_unused.h5",
+        15,
+    )
+    with h5py.File(sen12 / "hdf5/post/region_1.h5", "r+") as handle:
+        handle["image"][12:14] = 0
+        handle["channel_valid"][12:14] = 0
+    with h5py.File(sen12 / "hdf5/mask/region_1.h5", "r+") as handle:
+        handle.attrs["positive_pixel_count"] = 4
+    _write_jsonl(
+        sen12 / "hdf5/conversion_manifest.jsonl",
+        [
+            {
+                "sample_key": "region_1",
+                "post_hdf5": "post/region_1.h5",
+                "pre_hdf5": "pre/region_1.h5",
+                "mask_hdf5": "mask/region_1.h5",
+                "available_modalities": ["s1asc", "s2"],
+                "placeholder_channels_post": [12, 13],
+                "placeholder_channels_pre": [12, 13],
+                "status": "converted",
+            }
+        ],
+    )
+
+
+class BenchmarkPipelineTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.datasets = self.root / "datasets"
+        build_fixture(self.datasets)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _build(
+        self,
+        name: str,
+        mode: str = "small",
+        excluded_sources: tuple[str, ...] = (),
+    ) -> Path:
+        return BUILDER.build_benchmark(
+            datasets_root=self.datasets,
+            output_base=self.root / name,
+            mode=mode,
+            patch_size=8,
+            small_per_source=1,
+            seed=20260724,
+            split_seed=20260724,
+            shard_target_mib=1,
+            excluded_sources=excluded_sources,
+        )
+
+    def test_resize_clears_invalid_and_mask_is_binary(self) -> None:
+        values = np.ones((2, 4, 4), dtype=np.float32)
+        values[0, 0, 0] = np.nan
+        valid = np.ones_like(values, dtype=np.uint8)
+        valid[:, 0, 0] = 0
+        resized, resized_valid, _ = resize_continuous_with_validity(
+            values, valid, np.ones(2, dtype=np.uint8), 8
+        )
+        self.assertTrue(np.isfinite(resized).all())
+        self.assertTrue(np.all(resized[resized_valid == 0] == 0))
+        mask = resize_binary_mask(
+            np.array([[0, 1], [1, 0]], dtype=np.uint8), None, 8
+        )
+        self.assertEqual(mask.shape, (1, 8, 8))
+        self.assertLessEqual(set(np.unique(mask).tolist()), {0, 1})
+
+    def test_six_source_build_is_deterministic_and_loadable(self) -> None:
+        first = self._build("first")
+        second = self._build("second")
+        first_rows = read_jsonl(first / "index.jsonl")
+        second_rows = read_jsonl(second / "index.jsonl")
+        self.assertEqual(
+            [row["sample_id"] for row in first_rows],
+            [row["sample_id"] for row in second_rows],
+        )
+        self.assertEqual(
+            (first / "index.jsonl").read_bytes(),
+            (second / "index.jsonl").read_bytes(),
+        )
+        report = VALIDATOR.validate_benchmark(first, deep=True)
+        self.assertEqual(report["errors"], [])
+        discovered, _ = BUILDER.discover_all_sources(
+            self.datasets, 20260724, SOURCE_ORDER[:-1]
+        )
+        estimate = BUILDER.estimate_logical_bytes(discovered, 8)
+        self.assertNotIn("sen12landslides", estimate["by_source"])
+        self.assertEqual(report["checked_samples"], 6)
+        dataset = BenchmarkDataset(first)
+        batch = collate_benchmark_samples([dataset[index] for index in range(6)])
+        self.assertEqual(tuple(batch["mask"].shape), (6, 1, 8, 8))
+        self.assertEqual(
+            sorted(batch["auxiliaries"]),
+            ["dem", "insar_velocity", "sar_ascending", "slope"],
+        )
+        smoke = SMOKE.smoke(first)
+        self.assertEqual(smoke["status"], "pass")
+        sen12_post = (
+            self.datasets
+            / "Sen12Landslides/hdf5/post/region_1.h5"
+        )
+        with h5py.File(sen12_post, "r+") as handle:
+            handle["channel_valid"][12:14] = 1
+        with self.assertRaisesRegex(
+            ValueError, "manifest 模态与 post /channel_valid 不一致"
+        ):
+            self._build("sen12-validity-mismatch")
+        with self.assertRaises(FileExistsError):
+            self._build("first")
+
+    def test_small_and_full_share_schema(self) -> None:
+        small = self._build("small-build", "small")
+        full = self._build("full-build", "full")
+        small_keys = set(read_jsonl(small / "index.jsonl")[0])
+        full_keys = set(read_jsonl(full / "index.jsonl")[0])
+        self.assertEqual(small_keys, full_keys)
+
+    def test_source_exclusion_is_early_deterministic_and_recorded(self) -> None:
+        shutil.rmtree(self.datasets / "Sen12Landslides")
+        excluded = ("sen12landslides", "sen12landslides")
+        first = self._build("five-source-first", excluded_sources=excluded)
+        second = self._build("five-source-second", excluded_sources=excluded)
+        rows = read_jsonl(first / "index.jsonl")
+        self.assertEqual(len(rows), 5)
+        self.assertNotIn("sen12landslides", {row["source"] for row in rows})
+        self.assertEqual(
+            (first / "index.jsonl").read_bytes(),
+            (second / "index.jsonl").read_bytes(),
+        )
+        config = read_json(first / "build_config.json")
+        manifest = read_json(first / "manifest.json")
+        expected_included = list(SOURCE_ORDER[:-1])
+        self.assertEqual(config["source_selection"], "subset")
+        self.assertEqual(config["included_sources"], expected_included)
+        self.assertEqual(config["excluded_sources"], ["sen12landslides"])
+        self.assertEqual(manifest["included_sources"], expected_included)
+        self.assertEqual(set(manifest["source_counts"]), set(expected_included))
+        self.assertFalse(
+            any("sen12landslides" in path.as_posix() for path in first.rglob("*"))
+        )
+        report = VALIDATOR.validate_benchmark(first, deep=True)
+        self.assertEqual(report["errors"], [])
+
+        multiple = self._build(
+            "four-source",
+            excluded_sources=("landslidebench_agent", "sen12landslides"),
+        )
+        multiple_manifest = read_json(multiple / "manifest.json")
+        self.assertEqual(len(read_jsonl(multiple / "index.jsonl")), 4)
+        self.assertEqual(
+            multiple_manifest["excluded_sources"],
+            ["landslidebench_agent", "sen12landslides"],
+        )
+        self.assertEqual(multiple_manifest["approved_group_split_exceptions"], {})
+        self.assertEqual(multiple_manifest["warnings"], [])
+
+        small = self._build(
+            "subset-small", "small", ("sen12landslides",)
+        )
+        full = self._build(
+            "subset-full", "full", ("sen12landslides",)
+        )
+        self.assertEqual(
+            set(read_jsonl(small / "index.jsonl")[0]),
+            set(read_jsonl(full / "index.jsonl")[0]),
+        )
+
+    def test_invalid_source_exclusion_fails(self) -> None:
+        with self.assertRaisesRegex(ValueError, "未知 --exclude-source"):
+            self._build("unknown-source", excluded_sources=("unknown",))
+        with self.assertRaisesRegex(ValueError, "不能排除全部数据源"):
+            self._build("no-source", excluded_sources=SOURCE_ORDER)
+
+    def test_validator_detects_source_selection_tampering(self) -> None:
+        valid = self._build("valid-selection")
+        manifest_path = valid / "manifest.json"
+        manifest = read_json(manifest_path)
+        manifest["source_selection"] = "subset"
+        manifest["excluded_sources"] = ["sen12landslides"]
+        _write_json(manifest_path, manifest)
+        report = VALIDATOR.validate_benchmark(valid, deep=False)
+        self.assertTrue(
+            any("source selection" in error for error in report["errors"])
+        )
+
+    def test_validator_accepts_pre_selection_complete_six_source_metadata(
+        self,
+    ) -> None:
+        valid = self._build("implicit-all")
+        manifest = read_json(valid / "manifest.json")
+        config = read_json(valid / "build_config.json")
+        rows = read_jsonl(valid / "index.jsonl")
+        for document in (manifest, config):
+            document.pop("source_selection")
+            document.pop("included_sources")
+            document.pop("excluded_sources")
+        report = {"errors": [], "warnings": []}
+        included, excluded = VALIDATOR._validate_source_selection(
+            report, manifest, config, rows
+        )
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(included, SOURCE_ORDER)
+        self.assertEqual(excluded, ())
+
+    def test_validator_detects_missing_shard_and_illegal_mask(self) -> None:
+        valid = self._build("valid")
+        missing = self.root / "missing"
+        shutil.copytree(valid, missing)
+        first_row = read_jsonl(missing / "index.jsonl")[0]
+        (missing / first_row["storage"]["shard"]).unlink()
+        report = VALIDATOR.validate_benchmark(missing, deep=True)
+        self.assertTrue(any("不存在" in error or "缺失" in error for error in report["errors"]))
+
+        illegal = self.root / "illegal"
+        shutil.copytree(valid, illegal)
+        first_row = read_jsonl(illegal / "index.jsonl")[0]
+        with h5py.File(illegal / first_row["storage"]["shard"], "r+") as handle:
+            handle["mask"][int(first_row["storage"]["row"]), 0, 0, 0] = 2
+        report = VALIDATOR.validate_benchmark(illegal, deep=True)
+        self.assertTrue(any("mask" in error for error in report["errors"]))
+
+    def test_validator_detects_shape_and_validity_errors(self) -> None:
+        valid = self._build("valid-shape")
+        corrupt = self.root / "corrupt-shape"
+        shutil.copytree(valid, corrupt)
+        first_row = read_jsonl(corrupt / "index.jsonl")[0]
+        first_row["optical"]["shape"] = [99, 8, 8]
+        index_rows = read_jsonl(corrupt / "index.jsonl")
+        index_rows[0] = first_row
+        _write_jsonl(corrupt / "index.jsonl", index_rows)
+        shard_path = corrupt / first_row["storage"]["shard"]
+        with h5py.File(shard_path, "r+") as handle:
+            handle["optical_pixel_valid"][
+                int(first_row["storage"]["row"]), 0, 0, 0
+            ] = 2
+        report = VALIDATOR.validate_benchmark(corrupt, deep=True)
+        self.assertTrue(any("shape" in error for error in report["errors"]))
+        self.assertTrue(any("validity" in error for error in report["errors"]))
+
+    def test_validator_detects_corrupt_index(self) -> None:
+        valid = self._build("valid-index")
+        corrupt = self.root / "corrupt-index"
+        shutil.copytree(valid, corrupt)
+        (corrupt / "index.jsonl").write_text("{broken\n", encoding="utf-8")
+        report = VALIDATOR.validate_benchmark(corrupt, deep=True)
+        self.assertTrue(report["errors"])
+
+
+if __name__ == "__main__":
+    unittest.main()
